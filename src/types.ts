@@ -1,7 +1,7 @@
 // Single source of truth for the engine version the bundle reports. Kept in
 // lockstep with package.json by the release pipeline. Do not edit by hand
 // outside a release.
-export const ENGINE_VERSION = "2.0.1";
+export const ENGINE_VERSION = "2.1.0";
 
 // Bumped whenever the on-disk artifact shape changes, so a consumer can reject
 // an index written by an incompatible engine instead of misreading it. The
