@@ -45,9 +45,22 @@ the engine silently uses its regex tier. Only tools that want AST precision
 ## Use as a CLI
 
 ```sh
-node scripts/cli.mjs index   --repo . --out .codeindex   # graph + symbols + cache
-node scripts/cli.mjs graph   --repo . > graph.json
-node scripts/cli.mjs mcp                                  # MCP server over stdio
+brew install maxgfr/tap/codeindex        # or run scripts/cli.mjs directly
+
+codeindex index   --repo . --out .codeindex   # graph + symbols + incremental cache
+codeindex graph   --repo . > graph.json
+codeindex callers --repo .                    # per-symbol caller index
+codeindex grep    'pattern' --repo .
+```
+
+## Use as an MCP server
+
+`codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio —
+tools: `scan_summary`, `graph`, `symbols`, `callers`, `workspaces`, `churn`,
+`grep`. Register it in Claude Code with:
+
+```sh
+claude mcp add codeindex -- codeindex mcp
 ```
 
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
