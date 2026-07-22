@@ -13,6 +13,9 @@ import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
+import { findDeadCode } from "./deadcode.js";
+import { symbolComplexity, riskHotspots } from "./complexity.js";
+import { renderMermaid } from "./viz.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 
@@ -247,6 +250,18 @@ export async function runCli(argv: string[]): Promise<void> {
   } else if (cmd === "coupling") {
     const { ok, couplings } = changeCoupling(flags.repo, { since: flags.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
+  } else if (cmd === "deadcode") {
+    emit(JSON.stringify(findDeadCode(scanRepo(flags.repo, scanOptions(flags))), null, 2) + "\n", flags.out);
+  } else if (cmd === "complexity") {
+    const scan = scanRepo(flags.repo, scanOptions(flags));
+    emit(JSON.stringify(symbolComplexity(scan, flags.positional), null, 2) + "\n", flags.out);
+  } else if (cmd === "risk") {
+    const scan = scanRepo(flags.repo, scanOptions(flags));
+    const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
+    emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2) + "\n", flags.out);
+  } else if (cmd === "mermaid") {
+    const { graph } = buildIndexArtifacts(flags.repo, scanOptions(flags));
+    emit(renderMermaid(graph, { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
     const globs = [...flags.include, ...flags.exclude.map((g) => `!${g}`)];

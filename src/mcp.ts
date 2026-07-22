@@ -17,6 +17,9 @@ import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
+import { findDeadCode } from "./deadcode.js";
+import { symbolComplexity, riskHotspots } from "./complexity.js";
+import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
@@ -219,6 +222,32 @@ const TOOLS = [
     },
   },
   {
+    name: "dead_code",
+    description:
+      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere — re-export, type position — but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots.",
+    inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] },
+  },
+  {
+    name: "complexity",
+    description:
+      "Cyclomatic-complexity estimates (branch-token counting over AST line spans), most-complex first. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, file: { type: "string" }, risk: { type: "boolean", description: "Return complexity × git-churn risk ranking instead" } },
+      required: ["repo"],
+    },
+  },
+  {
+    name: "mermaid",
+    description:
+      "Mermaid diagram of the module graph (renders inline in Claude/GitHub — no graph database). Optionally scoped to one module's neighborhood.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, module: { type: "string", description: "Module slug to focus on" } },
+      required: ["repo"],
+    },
+  },
+  {
     name: "grep",
     description:
       "Search file contents (ripgrep when available, deterministic JS fallback otherwise). Returns sorted (file, line, text) hits.",
@@ -364,6 +393,21 @@ function callTool(name: string, args: Record<string, unknown>): string {
     const memName = str(args.name);
     if (!memName) throw new Error("`name` is required");
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
+  }
+  if (name === "dead_code") {
+    return JSON.stringify(findDeadCode(scanRepo(repo, scanOpts)), null, 2);
+  }
+  if (name === "complexity") {
+    const scan = scanRepo(repo, scanOpts);
+    if (args.risk === true) {
+      const { churn, ok } = gitChurn(repo);
+      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2);
+    }
+    return JSON.stringify(symbolComplexity(scan, str(args.file)), null, 2);
+  }
+  if (name === "mermaid") {
+    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    return renderMermaid(graph, { module: str(args.module) });
   }
   if (name === "repo_map") {
     const { scan, graph } = buildIndexArtifacts(repo, scanOpts);

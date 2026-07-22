@@ -9214,6 +9214,117 @@ var init_repomap = __esm({
   }
 });
 
+// src/deadcode.ts
+function findDeadCode(scan2) {
+  const callers = buildCallerIndex(scan2);
+  const refs = computeSymbolRefs(scan2);
+  const out2 = [];
+  const consider = (s) => s.exported && !REFERENCE_KINDS5.has(s.kind) && !isTestPath(s.file) && !ENTRYPOINT_RE.test(s.file);
+  for (const f of scan2.files) {
+    for (const s of f.symbols) {
+      if (!consider(s)) continue;
+      const entry = callers.get(s.name) ?? callers.get(`${s.name}@${s.file}`);
+      const hasCallers = !!entry && entry.def.file === s.file && entry.callers.length > 0;
+      if (hasCallers) continue;
+      const referenced = (refs.get(s.name)?.size ?? 0) > 0;
+      out2.push({ name: s.name, file: s.file, line: s.line, kind: s.kind, tier: referenced ? "uncalled" : "unreferenced" });
+    }
+  }
+  return out2.sort((a, b) => byStr(a.tier, b.tier) || byStr(a.file, b.file) || a.line - b.line);
+}
+var REFERENCE_KINDS5, ENTRYPOINT_RE;
+var init_deadcode = __esm({
+  "src/deadcode.ts"() {
+    "use strict";
+    init_callers();
+    init_symbols_json();
+    init_tests_map();
+    init_sort();
+    REFERENCE_KINDS5 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
+    ENTRYPOINT_RE = /(^|\/)(index|main|cli|app|server|engine)\.[a-z]+$/;
+  }
+});
+
+// src/complexity.ts
+import { join as join9 } from "path";
+function complexityOfSource(source) {
+  return 1 + (source.match(BRANCH_RE) ?? []).length;
+}
+function symbolComplexity(scan2, rel, top = 50) {
+  const out2 = [];
+  for (const f of scan2.files) {
+    if (f.kind !== "code") continue;
+    if (rel && f.rel !== rel) continue;
+    if (!f.symbols.length) continue;
+    const lines = readText(join9(scan2.root, f.rel)).split("\n");
+    for (const s of f.symbols) {
+      if (s.kind === "reexport" || s.kind === "reexport-all") continue;
+      const end = s.endLine ?? s.line;
+      const body2 = lines.slice(s.line - 1, end).join("\n");
+      const entry = { file: f.rel, name: s.name, line: s.line, complexity: complexityOfSource(body2) };
+      if (s.endLine !== void 0) entry.endLine = s.endLine;
+      out2.push(entry);
+    }
+  }
+  out2.sort((a, b) => b.complexity - a.complexity || byStr(a.file, b.file) || a.line - b.line);
+  return out2.slice(0, top);
+}
+function riskHotspots(scan2, churn, top = 20) {
+  const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
+    const complexity = complexityOfSource(readText(join9(scan2.root, f.rel)));
+    const commits = churn.get(f.rel) ?? 0;
+    return { file: f.rel, complexity, commits, score: (commits + 1) * complexity };
+  });
+  out2.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
+  return out2.slice(0, top);
+}
+var BRANCH_RE;
+var init_complexity = __esm({
+  "src/complexity.ts"() {
+    "use strict";
+    init_walk();
+    init_sort();
+    BRANCH_RE = /\b(if|elif|elsif|else\s+if|for|foreach|while|until|unless|case|when|match|catch|rescue|except)\b|&&|\|\||(?<![?:])\?(?![?.:])/g;
+  }
+});
+
+// src/viz.ts
+function renderMermaid(graph, opts = {}) {
+  const maxEdges = opts.maxEdges ?? 80;
+  let edges = [...graph.moduleEdges].filter((e) => !e.dangling);
+  if (opts.module) {
+    edges = edges.filter((e) => e.from === opts.module || e.to === opts.module);
+  }
+  edges.sort((a, b) => b.weight - a.weight || byStr(a.from, b.from) || byStr(a.to, b.to));
+  const dropped = Math.max(0, edges.length - maxEdges);
+  edges = edges.slice(0, maxEdges);
+  const shown = /* @__PURE__ */ new Set();
+  for (const e of edges) {
+    shown.add(e.from);
+    shown.add(e.to);
+  }
+  if (opts.module) shown.add(opts.module);
+  const lines = ["graph LR"];
+  for (const m of [...graph.modules].sort((a, b) => byStr(a.slug, b.slug))) {
+    if (!shown.has(m.slug)) continue;
+    lines.push(`  ${sanitizeId(m.slug)}["${m.slug}${m.tier === 0 ? " (core)" : ""}"]`);
+  }
+  for (const e of edges) {
+    const label = e.kind === "import" ? "" : `|${e.kind}|`;
+    lines.push(`  ${sanitizeId(e.from)} -->${label} ${sanitizeId(e.to)}`);
+  }
+  if (dropped) lines.push(`  %% ${dropped} lighter edges omitted (maxEdges=${maxEdges})`);
+  return lines.join("\n") + "\n";
+}
+var sanitizeId;
+var init_viz = __esm({
+  "src/viz.ts"() {
+    "use strict";
+    init_sort();
+    sanitizeId = (slug) => slug.replace(/[^\w]/g, "_");
+  }
+});
+
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
@@ -9317,6 +9428,21 @@ function callTool(name2, args2) {
     const memName = str(args2.name);
     if (!memName) throw new Error("`name` is required");
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
+  }
+  if (name2 === "dead_code") {
+    return JSON.stringify(findDeadCode(scanRepo(repo, scanOpts)), null, 2);
+  }
+  if (name2 === "complexity") {
+    const scan2 = scanRepo(repo, scanOpts);
+    if (args2.risk === true) {
+      const { churn, ok } = gitChurn(repo);
+      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2);
+    }
+    return JSON.stringify(symbolComplexity(scan2, str(args2.file)), null, 2);
+  }
+  if (name2 === "mermaid") {
+    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    return renderMermaid(graph, { module: str(args2.module) });
   }
   if (name2 === "repo_map") {
     const { scan: scan2, graph } = buildIndexArtifacts(repo, scanOpts);
@@ -9427,6 +9553,9 @@ var init_mcp = __esm({
     init_grep();
     init_coupling();
     init_repomap();
+    init_deadcode();
+    init_complexity();
+    init_viz();
     init_query();
     init_edit();
     init_memory();
@@ -9602,6 +9731,29 @@ var init_mcp = __esm({
           type: "object",
           properties: { ...repoProp, name: { type: "string" } },
           required: ["repo", "name"]
+        }
+      },
+      {
+        name: "dead_code",
+        description: "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere \u2014 re-export, type position \u2014 but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots.",
+        inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] }
+      },
+      {
+        name: "complexity",
+        description: "Cyclomatic-complexity estimates (branch-token counting over AST line spans), most-complex first. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity \xD7 churn.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, file: { type: "string" }, risk: { type: "boolean", description: "Return complexity \xD7 git-churn risk ranking instead" } },
+          required: ["repo"]
+        }
+      },
+      {
+        name: "mermaid",
+        description: "Mermaid diagram of the module graph (renders inline in Claude/GitHub \u2014 no graph database). Optionally scoped to one module's neighborhood.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, module: { type: "string", description: "Module slug to focus on" } },
+          required: ["repo"]
         }
       },
       {
@@ -9790,6 +9942,9 @@ init_bm25();
 init_rules();
 init_coupling();
 init_repomap();
+init_deadcode();
+init_complexity();
+init_viz();
 init_mcp();
 init_hash();
 init_sort();
@@ -9809,10 +9964,13 @@ init_git();
 init_grep();
 init_coupling();
 init_repomap();
+init_deadcode();
+init_complexity();
+init_viz();
 init_bm25();
 init_rules();
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "fs";
-import { join as join9, resolve } from "path";
+import { join as join10, resolve } from "path";
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
 
 Usage: engine.mjs <command> [flags]
@@ -9927,7 +10085,7 @@ async function runCli(argv) {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync2(outDir, { recursive: true });
-    const cachePath = join9(outDir, "cache.json");
+    const cachePath = join10(outDir, "cache.json");
     let cache;
     try {
       const parsed = JSON.parse(readFileSync5(cachePath, "utf8"));
@@ -9937,8 +10095,8 @@ async function runCli(argv) {
     } catch {
     }
     const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
-    writeFileSync3(join9(outDir, "graph.json"), renderGraphJson(graph));
-    writeFileSync3(join9(outDir, "symbols.json"), renderSymbolsJson(symbols));
+    writeFileSync3(join10(outDir, "graph.json"), renderGraphJson(graph));
+    writeFileSync3(join10(outDir, "symbols.json"), renderSymbolsJson(symbols));
     const files = {};
     for (const f of scan2.files) {
       const entry = { hash: f.hash, record: f, size: f.size };
@@ -10012,6 +10170,18 @@ async function runCli(argv) {
   } else if (cmd === "coupling") {
     const { ok, couplings } = changeCoupling(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags2.out);
+  } else if (cmd === "deadcode") {
+    emit(JSON.stringify(findDeadCode(scanRepo(flags2.repo, scanOptions(flags2))), null, 2) + "\n", flags2.out);
+  } else if (cmd === "complexity") {
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    emit(JSON.stringify(symbolComplexity(scan2, flags2.positional), null, 2) + "\n", flags2.out);
+  } else if (cmd === "risk") {
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
+    emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2) + "\n", flags2.out);
+  } else if (cmd === "mermaid") {
+    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    emit(renderMermaid(graph, { module: flags2.positional }), flags2.out);
   } else if (cmd === "grep") {
     if (!flags2.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
     const globs = [...flags2.include, ...flags2.exclude.map((g) => `!${g}`)];
@@ -10054,6 +10224,7 @@ export {
   clipInline,
   communityOf,
   compileGlobs,
+  complexityOfSource,
   computeImportPairs,
   computeSurprises,
   computeSymbolRefs,
@@ -10071,6 +10242,7 @@ export {
   extractCode,
   extractMarkdown,
   extractSymbols,
+  findDeadCode,
   findReferences,
   findSymbol,
   foldText,
@@ -10100,6 +10272,7 @@ export {
   readMemory,
   readText,
   renderGraphJson,
+  renderMermaid,
   renderRepoMap,
   renderSymbolsJson,
   replaceSymbolBody,
@@ -10108,6 +10281,7 @@ export {
   resolveDocLink,
   resolveImport,
   resolveUniqueSymbol,
+  riskHotspots,
   rrf,
   runCli,
   runMcpServer,
@@ -10118,6 +10292,7 @@ export {
   shortHash,
   slugify,
   subtokens,
+  symbolComplexity,
   symbolsOverview,
   testsForModule,
   tierForPath,

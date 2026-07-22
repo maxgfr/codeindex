@@ -15,6 +15,9 @@ import { symbolsOverview, findSymbol, findReferences } from "../src/query.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol, resolveUniqueSymbol } from "../src/edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "../src/memory.js";
 import { readText as engineRead } from "../src/walk.js";
+import { findDeadCode } from "../src/deadcode.js";
+import { symbolComplexity, riskHotspots } from "../src/complexity.js";
+import { renderMermaid } from "../src/viz.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { grepRepo } from "../src/grep.js";
 import { extractCode } from "../src/extract/code.js";
@@ -410,5 +413,51 @@ describe("project memories", () => {
     expect(listMemories(root)).toEqual(["topics/build"]);
     expect(() => writeMemory(root, "../escape", "x")).toThrow(/invalid memory name/);
     expect(() => writeMemory(root, "a/../../b", "x")).toThrow(/invalid memory name/);
+  });
+});
+
+describe("dead code, complexity, mermaid", () => {
+  function makeRepo(): string {
+    const root = mkdtempSync(join(tmpdir(), "ci-dead-"));
+    writeFileSync(join(root, "used.ts"), "export function used(): number {\n  return 1;\n}\n");
+    writeFileSync(
+      join(root, "dead.ts"),
+      "export function neverCalled(): number {\n  if (Math.random() > 0.5 && Date.now() > 0) {\n    return 2;\n  }\n  return 3;\n}\n",
+    );
+    writeFileSync(join(root, "consumer.ts"), 'import { used } from "./used";\nexport const v = used();\n');
+    return root;
+  }
+
+  it("findDeadCode tiers unreferenced exports and spares called ones", () => {
+    const scan = scanRepo(makeRepo());
+    const dead = findDeadCode(scan);
+    const names = dead.map((d) => d.name);
+    expect(names).toContain("neverCalled");
+    expect(names).not.toContain("used");
+    expect(dead.find((d) => d.name === "neverCalled")!.tier).toBe("unreferenced");
+  });
+
+  it("symbolComplexity counts branches; riskHotspots multiplies by churn", () => {
+    const root = makeRepo();
+    const scan = scanRepo(root);
+    const cx = symbolComplexity(scan);
+    const dead = cx.find((c) => c.name === "neverCalled")!;
+    expect(dead.complexity).toBeGreaterThanOrEqual(3); // if + && + ternary-free base
+    const risks = riskHotspots(scan, new Map([["dead.ts", 10]]));
+    expect(risks[0]!.file).toBe("dead.ts");
+    expect(risks[0]!.score).toBe(11 * risks[0]!.complexity);
+  });
+
+  it("renderMermaid emits a deterministic module diagram", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-mmd-"));
+    mkdirSync(join(root, "src"));
+    mkdirSync(join(root, "lib"));
+    writeFileSync(join(root, "lib", "core.ts"), "export const core = 1;\n");
+    writeFileSync(join(root, "src", "app.ts"), 'import { core } from "../lib/core";\nexport const a = core;\n');
+    const { graph } = buildIndexArtifacts(root);
+    const mmd = renderMermaid(graph);
+    expect(mmd).toContain("graph LR");
+    expect(mmd).toContain("-->");
+    expect(renderMermaid(graph)).toBe(mmd);
   });
 });

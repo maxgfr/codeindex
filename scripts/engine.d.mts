@@ -546,6 +546,38 @@ interface RepoMapOptions {
 }
 declare function renderRepoMap(scan: RepoScan, graph: Graph, opts?: RepoMapOptions): string;
 
+interface DeadSymbol {
+    name: string;
+    file: string;
+    line: number;
+    kind: string;
+    tier: "unreferenced" | "uncalled";
+}
+declare function findDeadCode(scan: RepoScan): DeadSymbol[];
+
+declare function complexityOfSource(source: string): number;
+interface SymbolComplexity {
+    file: string;
+    name: string;
+    line: number;
+    endLine?: number;
+    complexity: number;
+}
+declare function symbolComplexity(scan: RepoScan, rel?: string, top?: number): SymbolComplexity[];
+interface RiskHotspot {
+    file: string;
+    complexity: number;
+    commits: number;
+    score: number;
+}
+declare function riskHotspots(scan: RepoScan, churn: Map<string, number>, top?: number): RiskHotspot[];
+
+interface MermaidOptions {
+    module?: string;
+    maxEdges?: number;
+}
+declare function renderMermaid(graph: Graph, opts?: MermaidOptions): string;
+
 declare function runMcpServer(): Promise<void>;
 
 declare function sha1(s: string): string;
@@ -579,4 +611,4 @@ declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): M
 
 declare function runCli(argv: string[]): Promise<void>;
 
-export { type ArchRule, type BuildIndexOptions, type BuiltinRule, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type ModuleInfo, type ModuleNode, type RawRef, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type SearchHit, type SearchOptions, type SearchResult, type ShResult, type SurpriseEdge, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, insertAfterSymbol, insertBeforeSymbol, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, listMemories, pagerankOf, parseGitignore, parseRules, rankHotspots, rankedKeywords, readMemory, readText, renderGraphJson, renderRepoMap, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, resolveUniqueSymbol, rrf, runCli, runMcpServer, scanRepo, searchIndex, sh, sha1, shortHash, slugify, subtokens, symbolsOverview, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, writeMemory };
+export { type ArchRule, type BuildIndexOptions, type BuiltinRule, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DeadSymbol, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type MermaidOptions, type ModuleInfo, type ModuleNode, type RawRef, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type SearchHit, type SearchOptions, type SearchResult, type ShResult, type SurpriseEdge, type SymbolComplexity, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, complexityOfSource, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, findDeadCode, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, insertAfterSymbol, insertBeforeSymbol, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, listMemories, pagerankOf, parseGitignore, parseRules, rankHotspots, rankedKeywords, readMemory, readText, renderGraphJson, renderMermaid, renderRepoMap, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, resolveUniqueSymbol, riskHotspots, rrf, runCli, runMcpServer, scanRepo, searchIndex, sh, sha1, shortHash, slugify, subtokens, symbolComplexity, symbolsOverview, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, writeMemory };

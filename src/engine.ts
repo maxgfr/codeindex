@@ -112,6 +112,12 @@ export type { CallerIndexOptions } from "./callers.js";
 export { changeCoupling, rankHotspots } from "./coupling.js";
 export type { ChangeCoupling, CouplingOptions, Hotspot } from "./coupling.js";
 export { renderRepoMap } from "./repomap.js";
+export { findDeadCode } from "./deadcode.js";
+export type { DeadSymbol } from "./deadcode.js";
+export { symbolComplexity, riskHotspots, complexityOfSource } from "./complexity.js";
+export type { SymbolComplexity, RiskHotspot } from "./complexity.js";
+export { renderMermaid } from "./viz.js";
+export type { MermaidOptions } from "./viz.js";
 export type { RepoMapOptions } from "./repomap.js";
 
 // MCP server over stdio (also reachable as `engine.mjs mcp`).
