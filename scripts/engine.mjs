@@ -8468,6 +8468,94 @@ var init_grep = __esm({
   }
 });
 
+// src/coupling.ts
+function changeCoupling(dir, opts = {}) {
+  const maxCommitFiles = opts.maxCommitFiles ?? 30;
+  const minTogether = opts.minTogether ?? 3;
+  const maxPairs = opts.maxPairs ?? 100;
+  const range = opts.since ? [`${opts.since}..HEAD`] : [];
+  const res = sh("git", ["-C", dir, "-c", "core.quotePath=false", "log", ...range, "--pretty=format:%x1e", "--name-only"]);
+  if (!res.ok) return { ok: false, couplings: [] };
+  const totals = /* @__PURE__ */ new Map();
+  const pairs = /* @__PURE__ */ new Map();
+  for (const block of res.stdout.split("")) {
+    const files = block.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!files.length || files.length > maxCommitFiles) continue;
+    const unique = [...new Set(files)].sort(byStr);
+    for (const f of unique) totals.set(f, (totals.get(f) ?? 0) + 1);
+    for (let i2 = 0; i2 < unique.length; i2++) {
+      for (let j = i2 + 1; j < unique.length; j++) {
+        const key = `${unique[i2]}\0${unique[j]}`;
+        pairs.set(key, (pairs.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  const out2 = [];
+  for (const [key, together] of pairs) {
+    if (together < minTogether) continue;
+    const [a, b] = key.split("\0");
+    const totalA = totals.get(a) ?? together;
+    const totalB = totals.get(b) ?? together;
+    out2.push({ a, b, together, totalA, totalB, strength: Number((together / Math.min(totalA, totalB)).toFixed(3)) });
+  }
+  out2.sort((x, y) => y.strength - x.strength || y.together - x.together || byStr(x.a, y.a) || byStr(x.b, y.b));
+  return { ok: true, couplings: out2.slice(0, maxPairs) };
+}
+function rankHotspots(scan2, churn, top = 20) {
+  const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
+    const commits = churn.get(f.rel) ?? 0;
+    return { rel: f.rel, lines: f.lines, commits, score: Number((commits * Math.log2(f.lines + 1)).toFixed(2)) };
+  });
+  out2.sort((a, b) => b.score - a.score || b.lines - a.lines || byStr(a.rel, b.rel));
+  return out2.slice(0, top);
+}
+var init_coupling = __esm({
+  "src/coupling.ts"() {
+    "use strict";
+    init_util();
+    init_sort();
+  }
+});
+
+// src/repomap.ts
+function renderRepoMap(scan2, graph, opts = {}) {
+  const budgetChars = (opts.budgetTokens ?? 1024) * CHARS_PER_TOKEN;
+  const maxSymbols = opts.maxSymbolsPerFile ?? 8;
+  const ranked = [...graph.files].filter((f) => f.fileKind === "code").sort((a, b) => (b.pagerank ?? 0) - (a.pagerank ?? 0) || b.symbols - a.symbols || byStr(a.rel, b.rel));
+  const records = new Map(scan2.files.map((f) => [f.rel, f]));
+  const header = `# repo map \u2014 ${graph.fileCount} files
+`;
+  let out2 = header;
+  let files = 0;
+  for (const node of ranked) {
+    const rec = records.get(node.rel);
+    if (!rec) continue;
+    const symbols = [...rec.symbols].filter((s) => s.kind !== "reexport" && s.kind !== "reexport-all").sort((a, b) => Number(b.exported) - Number(a.exported) || a.line - b.line).slice(0, maxSymbols);
+    let block = `
+${node.rel}:
+`;
+    for (const s of symbols) {
+      const sig = (s.signature ?? `${s.kind} ${s.name}`).replace(/\s+/g, " ").trim().slice(0, 120);
+      block += `  ${s.line}: ${sig}
+`;
+    }
+    if (out2.length + block.length > budgetChars) break;
+    out2 += block;
+    files++;
+  }
+  return `${out2}
+(${files} of ${ranked.length} code files shown, ~${Math.ceil(out2.length / CHARS_PER_TOKEN)} tokens)
+`;
+}
+var CHARS_PER_TOKEN;
+var init_repomap = __esm({
+  "src/repomap.ts"() {
+    "use strict";
+    init_sort();
+    CHARS_PER_TOKEN = 4;
+  }
+});
+
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
@@ -8523,6 +8611,19 @@ function callTool(name2, args2) {
     const sorted = {};
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
     return JSON.stringify({ ok, churn: sorted }, null, 2);
+  }
+  if (name2 === "repo_map") {
+    const { scan: scan2, graph } = buildIndexArtifacts(repo, scanOpts);
+    return renderRepoMap(scan2, graph, { budgetTokens: typeof args2.budgetTokens === "number" ? args2.budgetTokens : void 0 });
+  }
+  if (name2 === "hotspots") {
+    const scan2 = scanRepo(repo, scanOpts);
+    const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
+    return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2);
+  }
+  if (name2 === "coupling") {
+    const { ok, couplings } = changeCoupling(repo, { since: str(args2.since) });
+    return JSON.stringify({ ok, couplings }, null, 2);
   }
   if (name2 === "grep") {
     const pattern = str(args2.pattern);
@@ -8605,6 +8706,8 @@ var init_mcp = __esm({
     init_workspaces();
     init_git();
     init_grep();
+    init_coupling();
+    init_repomap();
     repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
     scopeProps = {
       scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -8651,6 +8754,33 @@ var init_mcp = __esm({
         inputSchema: {
           type: "object",
           properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+          required: ["repo"]
+        }
+      },
+      {
+        name: "repo_map",
+        description: "Token-budgeted map of the repository: the highest-PageRank files with their key exported signatures, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, budgetTokens: { type: "number", description: "Approximate token budget (default 1024)" } },
+          required: ["repo"]
+        }
+      },
+      {
+        name: "hotspots",
+        description: "Where does work concentrate? Files ranked by git churn \xD7 size (commits \xD7 log2 lines). High-scoring files are where changes and defects cluster.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+          required: ["repo"]
+        }
+      },
+      {
+        name: "coupling",
+        description: "Change coupling: pairs of files that repeatedly change in the same commits \u2014 hidden dependencies no import shows. strength 1.0 = every change to one touched the other.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, since: { type: "string", description: "Only mine commits after this ref" } },
           required: ["repo"]
         }
       },
@@ -8806,6 +8936,8 @@ init_graph_json();
 init_pipeline();
 init_git();
 init_grep();
+init_coupling();
+init_repomap();
 init_mcp();
 init_hash();
 init_sort();
@@ -8823,6 +8955,8 @@ init_callers();
 init_workspaces();
 init_git();
 init_grep();
+init_coupling();
+init_repomap();
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
 import { join as join6, resolve } from "path";
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
@@ -8838,7 +8972,10 @@ Commands:
   callers     Per-symbol caller index (JSON)
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
-  grep        Search: engine.mjs grep <pattern> --repo <dir> (JSON hits)
+  grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
+  repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
+  hotspots    Churn \xD7 size ranking of the files where work concentrates (JSON)
+  coupling    Change coupling: files that change together (JSON; --since <ref>)
   mcp         Run as an MCP server over stdio (tools: scan_summary, graph,
               symbols, callers, workspaces, churn, grep)
   version     Print the engine version
@@ -8879,6 +9016,7 @@ function parseFlags(args2) {
     else if (a === "--max-bytes") flags2.maxBytes = num();
     else if (a === "--ignore-case") flags2.ignoreCase = true;
     else if (a === "--max-hits") flags2.maxHits = num();
+    else if (a === "--budget-tokens") flags2.budgetTokens = num();
     else if (a === "--no-ast") flags2.noAst = true;
     else if (a === "--since") flags2.since = next();
     else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
@@ -8984,6 +9122,16 @@ async function runCli(argv) {
     const sorted = {};
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags2.out);
+  } else if (cmd === "repomap") {
+    const { scan: scan2, graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    emit(renderRepoMap(scan2, graph, { budgetTokens: flags2.budgetTokens }), flags2.out);
+  } else if (cmd === "hotspots") {
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
+    emit(JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2) + "\n", flags2.out);
+  } else if (cmd === "coupling") {
+    const { ok, couplings } = changeCoupling(flags2.repo, { since: flags2.since });
+    emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags2.out);
   } else if (cmd === "grep") {
     if (!flags2.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
     const globs = [...flags2.include, ...flags2.exclude.map((g) => `!${g}`)];
@@ -9018,6 +9166,7 @@ export {
   byKey,
   byStr,
   categorize,
+  changeCoupling,
   changedSince,
   classify,
   clip,
@@ -9058,9 +9207,11 @@ export {
   languageOf,
   pagerankOf,
   parseGitignore,
+  rankHotspots,
   rankedKeywords,
   readText,
   renderGraphJson,
+  renderRepoMap,
   renderSymbolsJson,
   resolveBaseRef,
   resolveCallEdges,

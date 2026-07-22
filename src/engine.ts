@@ -92,6 +92,12 @@ export type { DiffFile, DiffSpec, Hunk } from "./git.js";
 export { grepRepo } from "./grep.js";
 export type { SearchHit, GrepOptions } from "./grep.js";
 
+// Behavioral analytics (git-history mining) + the token-budgeted repo map.
+export { changeCoupling, rankHotspots } from "./coupling.js";
+export type { ChangeCoupling, CouplingOptions, Hotspot } from "./coupling.js";
+export { renderRepoMap } from "./repomap.js";
+export type { RepoMapOptions } from "./repomap.js";
+
 // MCP server over stdio (also reachable as `engine.mjs mcp`).
 export { runMcpServer } from "./mcp.js";
 

@@ -15,6 +15,8 @@ import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
+import { changeCoupling, rankHotspots } from "./coupling.js";
+import { renderRepoMap } from "./repomap.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -75,6 +77,36 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+      required: ["repo"],
+    },
+  },
+  {
+    name: "repo_map",
+    description:
+      "Token-budgeted map of the repository: the highest-PageRank files with their key exported signatures, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, budgetTokens: { type: "number", description: "Approximate token budget (default 1024)" } },
+      required: ["repo"],
+    },
+  },
+  {
+    name: "hotspots",
+    description:
+      "Where does work concentrate? Files ranked by git churn × size (commits × log2 lines). High-scoring files are where changes and defects cluster.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+      required: ["repo"],
+    },
+  },
+  {
+    name: "coupling",
+    description:
+      "Change coupling: pairs of files that repeatedly change in the same commits — hidden dependencies no import shows. strength 1.0 = every change to one touched the other.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, since: { type: "string", description: "Only mine commits after this ref" } },
       required: ["repo"],
     },
   },
@@ -147,6 +179,19 @@ function callTool(name: string, args: Record<string, unknown>): string {
     const sorted: Record<string, number> = {};
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     return JSON.stringify({ ok, churn: sorted }, null, 2);
+  }
+  if (name === "repo_map") {
+    const { scan, graph } = buildIndexArtifacts(repo, scanOpts);
+    return renderRepoMap(scan, graph, { budgetTokens: typeof args.budgetTokens === "number" ? args.budgetTokens : undefined });
+  }
+  if (name === "hotspots") {
+    const scan = scanRepo(repo, scanOpts);
+    const { churn, ok } = gitChurn(repo, { since: str(args.since) });
+    return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2);
+  }
+  if (name === "coupling") {
+    const { ok, couplings } = changeCoupling(repo, { since: str(args.since) });
+    return JSON.stringify({ ok, couplings }, null, 2);
   }
   if (name === "grep") {
     const pattern = str(args.pattern);

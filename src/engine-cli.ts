@@ -11,6 +11,8 @@ import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
+import { changeCoupling, rankHotspots } from "./coupling.js";
+import { renderRepoMap } from "./repomap.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
@@ -25,7 +27,10 @@ Commands:
   callers     Per-symbol caller index (JSON)
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
-  grep        Search: engine.mjs grep <pattern> --repo <dir> (JSON hits)
+  grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
+  repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
+  hotspots    Churn × size ranking of the files where work concentrates (JSON)
+  coupling    Change coupling: files that change together (JSON; --since <ref>)
   mcp         Run as an MCP server over stdio (tools: scan_summary, graph,
               symbols, callers, workspaces, churn, grep)
   version     Print the engine version
@@ -55,6 +60,7 @@ interface CliFlags {
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
+  budgetTokens?: number;
   positional?: string; // e.g. the grep pattern
 }
 
@@ -83,6 +89,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--max-bytes") flags.maxBytes = num();
     else if (a === "--ignore-case") flags.ignoreCase = true;
     else if (a === "--max-hits") flags.maxHits = num();
+    else if (a === "--budget-tokens") flags.budgetTokens = num();
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--since") flags.since = next();
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
@@ -199,6 +206,16 @@ export async function runCli(argv: string[]): Promise<void> {
     const sorted: Record<string, number> = {};
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
+  } else if (cmd === "repomap") {
+    const { scan, graph } = buildIndexArtifacts(flags.repo, scanOptions(flags));
+    emit(renderRepoMap(scan, graph, { budgetTokens: flags.budgetTokens }), flags.out);
+  } else if (cmd === "hotspots") {
+    const scan = scanRepo(flags.repo, scanOptions(flags));
+    const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
+    emit(JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2) + "\n", flags.out);
+  } else if (cmd === "coupling") {
+    const { ok, couplings } = changeCoupling(flags.repo, { since: flags.since });
+    emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
     const globs = [...flags.include, ...flags.exclude.map((g) => `!${g}`)];

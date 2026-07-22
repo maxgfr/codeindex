@@ -84,6 +84,9 @@ const CONTRACT = [
   "gitChurn",
   "changedSince",
   "grepRepo",
+  "changeCoupling",
+  "rankHotspots",
+  "renderRepoMap",
   // helpers
   "sha1",
   "shortHash",

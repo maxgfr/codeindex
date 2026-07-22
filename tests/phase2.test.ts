@@ -9,6 +9,9 @@ import { buildCallerIndex, enclosingSymbol } from "../src/callers.js";
 import { categorize } from "../src/categorize.js";
 import { detectWorkspaces } from "../src/workspaces.js";
 import { gitChurn, changedSince } from "../src/git.js";
+import { changeCoupling, rankHotspots } from "../src/coupling.js";
+import { renderRepoMap } from "../src/repomap.js";
+import { buildIndexArtifacts } from "../src/pipeline.js";
 import { grepRepo } from "../src/grep.js";
 import { extractCode } from "../src/extract/code.js";
 import { extractAst } from "../src/ast/extract.js";
@@ -253,5 +256,56 @@ describe("C/C++ AST tier", () => {
     expect(names).toContain("namespace:app");
     expect(names).toContain("class:Widget");
     expect(names).toContain("function:use");
+  });
+});
+
+describe("change coupling + hotspots", () => {
+  it("mines co-change pairs and ranks hotspots deterministically", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-coupling-"));
+    git(root, "init", "-q");
+    const w = (rel: string, content: string) => {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), content);
+    };
+    w("a.ts", "export const a = 1;\n");
+    w("b.ts", "export const b = 1;\n");
+    w("c.ts", "export const c = 1;\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "init");
+    for (let i = 0; i < 4; i++) {
+      w("a.ts", `export const a = ${i + 2};\n`);
+      w("b.ts", `export const b = ${i + 2};\n`);
+      git(root, "add", "-A");
+      git(root, "commit", "-qm", `pair ${i}`);
+    }
+    const { ok, couplings } = changeCoupling(root, { minTogether: 3 });
+    expect(ok).toBe(true);
+    expect(couplings[0]).toMatchObject({ a: "a.ts", b: "b.ts", together: 5, strength: 1 });
+    expect(couplings.some((c) => c.a === "c.ts" || c.b === "c.ts")).toBe(false); // only co-changed once
+
+    const scan = scanRepo(root);
+    const { churn } = gitChurn(root);
+    const hotspots = rankHotspots(scan, churn);
+    expect(hotspots[0]!.rel).toBe("a.ts");
+    expect(hotspots[0]!.commits).toBe(5);
+  });
+
+  it("degrades loudly outside a git repo", () => {
+    const { ok, couplings } = changeCoupling(mkdtempSync(join(tmpdir(), "ci-nocoup-")));
+    expect(ok).toBe(false);
+    expect(couplings).toEqual([]);
+  });
+});
+
+describe("repo map", () => {
+  it("renders a deterministic, budget-bounded map led by high-PageRank files", () => {
+    const { scan, graph } = buildIndexArtifacts(join(FIXTURES, "mini-repo"));
+    const map = renderRepoMap(scan, graph, { budgetTokens: 400 });
+    expect(map).toBe(renderRepoMap(scan, graph, { budgetTokens: 400 }));
+    expect(map.length).toBeLessThanOrEqual(400 * 4 + 200); // budget + footer slack
+    expect(map).toContain("repo map");
+    expect(map).toMatch(/\d+: /); // line-numbered signatures
+    const tiny = renderRepoMap(scan, graph, { budgetTokens: 60 });
+    expect(tiny.length).toBeLessThan(map.length);
   });
 });
