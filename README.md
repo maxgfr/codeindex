@@ -45,7 +45,7 @@ the engine silently uses its regex tier. Only tools that want AST precision
 ## Use as a CLI
 
 ```sh
-brew install maxgfr/tap/codeindex        # or run scripts/cli.mjs directly
+brew install maxgfr/tap/codeindex        # or: npm i -g @maxgfr/codeindex
 
 codeindex index   --repo . --out .codeindex   # graph + symbols + incremental cache
 codeindex graph   --repo . > graph.json
