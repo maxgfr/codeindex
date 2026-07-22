@@ -4,12 +4,26 @@
   "description": "Self-contained, deterministic repo-indexing engine: walk + language detection + symbol/import extraction (tree-sitter AST with regex fallback) + import resolution + typed cross-file link-graph + analytics. Ships as a single zero-dependency engine.mjs that consumer tools vendor.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
+  "main": "./scripts/engine.mjs",
+  "types": "./scripts/engine.d.mts",
+  "exports": {
+    ".": {
+      "types": "./scripts/engine.d.mts",
+      "import": "./scripts/engine.mjs",
+      "default": "./scripts/engine.mjs"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "codeindex": "scripts/cli.mjs"
   },
   "files": [
-    "scripts",
-    "src"
+    "scripts/engine.mjs",
+    "scripts/engine.d.mts",
+    "scripts/cli.mjs",
+    "scripts/grammars",
+    "src",
+    "docs/MIGRATION.md"
   ],
   "engines": {
     "node": ">=18"

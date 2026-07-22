@@ -42,6 +42,25 @@ The AST tier is optional: without a `grammars/` directory next to the bundle
 the engine silently uses its regex tier. Only tools that want AST precision
 (e.g. ultraindex) also vendor `scripts/grammars/` (~17 MiB of wasm).
 
+## Use from npm
+
+For consumers who don't want to vendor the bundle, `@maxgfr/codeindex` also
+resolves as a regular package:
+
+```sh
+npm i @maxgfr/codeindex
+```
+
+```ts
+import { scanRepo, ENGINE_VERSION } from "@maxgfr/codeindex";
+
+const scan = scanRepo("/path/to/repo");
+```
+
+The CLI ships in the same package (`npm i -g @maxgfr/codeindex`, see below).
+Skills should still prefer vendoring: it keeps their own bundle single-file and
+pinned to an exact commit without an npm dependency.
+
 ## Use as a CLI
 
 ```sh
