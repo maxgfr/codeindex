@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.7.0](https://github.com/maxgfr/codeindex/compare/v2.6.0...v2.7.0) (2026-07-22)
+
+
+### Bug Fixes
+
+* **types:** drop the NodeJS namespace reference from the public declarations ([cc38559](https://github.com/maxgfr/codeindex/commit/cc385592fbf2767251f5be4183a3c23e23a6ffb3))
+
+
+### Features
+
+* **pkg:** expose the engine as an importable npm library ([1ab3020](https://github.com/maxgfr/codeindex/commit/1ab30208116e82dbc5e0e00c9f70e3645c3d7f30))
+
 # [2.6.0](https://github.com/maxgfr/codeindex/compare/v2.5.0...v2.6.0) (2026-07-22)
 
 
