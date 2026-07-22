@@ -7473,7 +7473,7 @@ function findSymbol(scan2, namePath, opts = {}) {
       if (!matchName(s.name, leaf)) continue;
       if (parents.length) {
         const parent = parents[parents.length - 1];
-        if (!s.parent || !matchName(s.parent, parent)) continue;
+        if (!s.parent || s.parent !== parent) continue;
       }
       out2.push({ ...s });
     }
@@ -7531,9 +7531,134 @@ var init_query = __esm({
   }
 });
 
-// src/workspaces.ts
-import { existsSync as existsSync2, readdirSync as readdirSync2 } from "fs";
+// src/edit.ts
+import { readFileSync as readFileSync3, writeFileSync } from "fs";
 import { join as join6 } from "path";
+function resolveUniqueSymbol(scan2, namePath, file) {
+  let matches = findSymbol(scan2, namePath);
+  if (file) matches = matches.filter((m) => m.file === file);
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    const near = findSymbol(scan2, namePath, { substring: true, maxResults: 5 }).map((m) => `${m.file}:${m.line} ${m.parent ? m.parent + "/" : ""}${m.name}`).join(", ");
+    throw new Error(`no symbol matches "${namePath}"${file ? ` in ${file}` : ""}${near ? ` \u2014 near matches: ${near}` : ""}`);
+  }
+  const list = matches.map((m) => `${m.file}:${m.line}`).join(", ");
+  throw new Error(`"${namePath}" is ambiguous (${matches.length} matches: ${list}) \u2014 qualify with \`file\` or a Parent/name path`);
+}
+function readLines(abs) {
+  return readFileSync3(abs, "utf8").split("\n");
+}
+function replaceSymbolBody(scan2, namePath, body2, file) {
+  const sym = resolveUniqueSymbol(scan2, namePath, file);
+  const end = sym.endLine ?? sym.line;
+  const abs = join6(scan2.root, sym.file);
+  const lines = readLines(abs);
+  const newLines = body2.replace(/^\n+|\n+$/g, "").split("\n");
+  lines.splice(sym.line - 1, end - sym.line + 1, ...newLines);
+  writeFileSync(abs, lines.join("\n"));
+  return { file: sym.file, startLine: sym.line, endLine: sym.line + newLines.length - 1, lines: newLines.length };
+}
+function insertAt(scan2, sym, body2, index, blankBefore, blankAfter) {
+  const abs = join6(scan2.root, sym.file);
+  const lines = readLines(abs);
+  const minGap = SEPARATED_KINDS.has(sym.kind) ? 1 : 0;
+  const newLines = body2.replace(/^\n+|\n+$/g, "").split("\n");
+  const block = [];
+  if (blankBefore && minGap && lines[index - 1]?.trim() !== "") block.push("");
+  block.push(...newLines);
+  if (blankAfter && minGap && lines[index]?.trim() !== "") block.push("");
+  lines.splice(index, 0, ...block);
+  writeFileSync(abs, lines.join("\n"));
+  return { file: sym.file, startLine: index + 1, endLine: index + block.length, lines: block.length };
+}
+function insertAfterSymbol(scan2, namePath, body2, file) {
+  const sym = resolveUniqueSymbol(scan2, namePath, file);
+  const end = sym.endLine ?? sym.line;
+  return insertAt(scan2, sym, body2, end, true, true);
+}
+function insertBeforeSymbol(scan2, namePath, body2, file) {
+  const sym = resolveUniqueSymbol(scan2, namePath, file);
+  return insertAt(scan2, sym, body2, sym.line - 1, true, true);
+}
+var SEPARATED_KINDS;
+var init_edit = __esm({
+  "src/edit.ts"() {
+    "use strict";
+    init_query();
+    SEPARATED_KINDS = /* @__PURE__ */ new Set(["function", "method", "class", "interface", "struct", "trait", "enum", "def"]);
+  }
+});
+
+// src/memory.ts
+import { mkdirSync, readdirSync as readdirSync2, readFileSync as readFileSync4, rmSync, statSync as statSync2, writeFileSync as writeFileSync2 } from "fs";
+import { dirname as dirname2, join as join7 } from "path";
+function sanitize(name2) {
+  const clean = name2.replace(/^mem:/, "").replace(/\.md$/, "");
+  if (!clean) throw new Error("memory name is empty");
+  const segments = clean.split("/");
+  for (const seg of segments) {
+    if (!seg || seg === "." || seg === ".." || seg.includes("\\")) {
+      throw new Error(`invalid memory name: "${name2}"`);
+    }
+    if (!/^[\w][\w.-]*$/.test(seg)) throw new Error(`invalid memory name segment: "${seg}"`);
+  }
+  return clean;
+}
+function memoryPath(repo, name2) {
+  return join7(repo, ...MEMORY_DIR, `${sanitize(name2)}.md`);
+}
+function writeMemory(repo, name2, content) {
+  const path = memoryPath(repo, name2);
+  mkdirSync(dirname2(path), { recursive: true });
+  writeFileSync2(path, content.endsWith("\n") ? content : content + "\n");
+  return sanitize(name2);
+}
+function readMemory(repo, name2) {
+  try {
+    return readFileSync4(memoryPath(repo, name2), "utf8");
+  } catch {
+    return void 0;
+  }
+}
+function deleteMemory(repo, name2) {
+  const path = memoryPath(repo, name2);
+  try {
+    statSync2(path);
+  } catch {
+    return false;
+  }
+  rmSync(path);
+  return true;
+}
+function listMemories(repo) {
+  const root = join7(repo, ...MEMORY_DIR);
+  const out2 = [];
+  const walk2 = (dir, prefix) => {
+    let entries;
+    try {
+      entries = readdirSync2(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) walk2(join7(dir, e.name), prefix ? `${prefix}/${e.name}` : e.name);
+      else if (e.name.endsWith(".md")) out2.push(prefix ? `${prefix}/${e.name.slice(0, -3)}` : e.name.slice(0, -3));
+    }
+  };
+  walk2(root, "");
+  return out2.sort();
+}
+var MEMORY_DIR;
+var init_memory = __esm({
+  "src/memory.ts"() {
+    "use strict";
+    MEMORY_DIR = [".codeindex", "memories"];
+  }
+});
+
+// src/workspaces.ts
+import { existsSync as existsSync2, readdirSync as readdirSync3 } from "fs";
+import { join as join8 } from "path";
 function readJson(path) {
   const raw = readText(path);
   if (!raw) return void 0;
@@ -7575,25 +7700,25 @@ function wsGlobToRegExp(pat) {
   return new RegExp(`^${re}($|/)`);
 }
 function packageAt(root, dir, kind) {
-  const abs = join6(root, dir);
-  const pkgJson = join6(abs, "package.json");
+  const abs = join8(root, dir);
+  const pkgJson = join8(abs, "package.json");
   if (existsSync2(pkgJson)) {
     const pkg = readJson(pkgJson);
     const name2 = typeof pkg?.name === "string" && pkg.name ? pkg.name : dir.split("/").pop();
     return { name: name2, dir, kind, manifest: `${dir}/package.json` };
   }
-  const cargo = join6(abs, "Cargo.toml");
+  const cargo = join8(abs, "Cargo.toml");
   if (existsSync2(cargo)) {
     const body2 = tomlSectionBody(readText(cargo), "package");
     const name2 = body2?.match(/name\s*=\s*["']([^"']+)["']/)?.[1] ?? dir.split("/").pop();
     return { name: name2, dir, kind: "cargo", manifest: `${dir}/Cargo.toml` };
   }
-  const gomod = join6(abs, "go.mod");
+  const gomod = join8(abs, "go.mod");
   if (existsSync2(gomod)) {
     const name2 = readText(gomod).match(/^module\s+(\S+)/m)?.[1] ?? dir.split("/").pop();
     return { name: name2, dir, kind: "go", manifest: `${dir}/go.mod` };
   }
-  const pom = join6(abs, "pom.xml");
+  const pom = join8(abs, "pom.xml");
   if (existsSync2(pom)) {
     const name2 = ownArtifactId(readText(pom)) ?? dir.split("/").pop();
     return { name: name2, dir, kind: "maven", manifest: `${dir}/pom.xml` };
@@ -7614,7 +7739,7 @@ function collectRecursive(root, base, found, kind, depth) {
   if (depth > MAX_RECURSE_DEPTH) return;
   let entries;
   try {
-    entries = readdirSync2(join6(root, base), { withFileTypes: true });
+    entries = readdirSync3(join8(root, base), { withFileTypes: true });
   } catch {
     return;
   }
@@ -7633,7 +7758,7 @@ function expandPattern(root, raw, found, kind) {
     const base = pat.slice(0, -2);
     let entries;
     try {
-      entries = readdirSync2(join6(root, base), { withFileTypes: true });
+      entries = readdirSync3(join8(root, base), { withFileTypes: true });
     } catch {
       return;
     }
@@ -7653,14 +7778,14 @@ function npmFamilyPatterns(root) {
     if (t.startsWith("!")) negations.push(t.slice(1));
     else positives.push({ pattern: t, kind });
   };
-  const pkg = readJson(join6(root, "package.json"));
+  const pkg = readJson(join8(root, "package.json"));
   const ws = pkg?.workspaces;
   if (Array.isArray(ws)) {
     for (const x of ws) if (typeof x === "string") push(x, "npm");
   } else if (ws && typeof ws === "object" && Array.isArray(ws.packages)) {
     for (const x of ws.packages) if (typeof x === "string") push(x, "npm");
   }
-  const pnpm = readText(join6(root, "pnpm-workspace.yaml"));
+  const pnpm = readText(join8(root, "pnpm-workspace.yaml"));
   let inPackages = false;
   for (const line of pnpm.split(/\r?\n/)) {
     if (/^\S/.test(line)) {
@@ -7674,11 +7799,11 @@ function npmFamilyPatterns(root) {
   return { positives, negations };
 }
 function fallbackNpmPatterns(root) {
-  const lerna = readJson(join6(root, "lerna.json"));
+  const lerna = readJson(join8(root, "lerna.json"));
   if (lerna && Array.isArray(lerna.packages)) {
     return lerna.packages.filter((x) => typeof x === "string").map((pattern) => ({ pattern, kind: "lerna" }));
   }
-  const nx = readJson(join6(root, "nx.json"));
+  const nx = readJson(join8(root, "nx.json"));
   if (nx) {
     const layout = nx.workspaceLayout ?? {};
     const appsDir = typeof layout.appsDir === "string" ? layout.appsDir : "apps";
@@ -7688,7 +7813,7 @@ function fallbackNpmPatterns(root) {
   return [];
 }
 function detectCargoMembers(root, found) {
-  const toml = readText(join6(root, "Cargo.toml"));
+  const toml = readText(join8(root, "Cargo.toml"));
   if (!toml) return;
   const body2 = tomlSectionBody(toml, "workspace");
   if (!body2) return;
@@ -7703,7 +7828,7 @@ function detectCargoMembers(root, found) {
   }
 }
 function detectGoWork(root, found) {
-  const gowork = readText(join6(root, "go.work"));
+  const gowork = readText(join8(root, "go.work"));
   if (!gowork) return;
   const dirs = [];
   for (const block of gowork.matchAll(/^use\s*\(([\s\S]*?)\)/gm)) {
@@ -7719,7 +7844,7 @@ function detectGoWork(root, found) {
   }
 }
 function detectMavenModules(root, found) {
-  const pom = readText(join6(root, "pom.xml"));
+  const pom = readText(join8(root, "pom.xml"));
   if (!pom) return;
   const modules = pom.match(/<modules>([\s\S]*?)<\/modules>/)?.[1];
   if (!modules) return;
@@ -7728,7 +7853,7 @@ function detectMavenModules(root, found) {
   }
 }
 function npmEdges(root, pkg, byName) {
-  const manifest = readJson(join6(root, pkg.dir, "package.json"));
+  const manifest = readJson(join8(root, pkg.dir, "package.json"));
   if (!manifest) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
@@ -7751,7 +7876,7 @@ function normalizeDepPath(fromDir, rel) {
   return out2.join("/");
 }
 function cargoEdges(root, pkg, byName, byDir) {
-  const toml = readText(join6(root, pkg.dir, "Cargo.toml"));
+  const toml = readText(join8(root, pkg.dir, "Cargo.toml"));
   if (!toml) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const section of ["dependencies", "dev-dependencies", "build-dependencies"]) {
@@ -7775,7 +7900,7 @@ function cargoEdges(root, pkg, byName, byDir) {
   return [...edges];
 }
 function goPkgEdges(root, pkg, byName, byDir) {
-  const gomod = readText(join6(root, pkg.dir, "go.mod"));
+  const gomod = readText(join8(root, pkg.dir, "go.mod"));
   if (!gomod) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const m of gomod.matchAll(/^\s*(?:require\s+)?([^\s/(][^\s]*)\s+v[^\s]+/gm)) {
@@ -7789,7 +7914,7 @@ function goPkgEdges(root, pkg, byName, byDir) {
   return [...edges];
 }
 function mavenEdges(root, pkg, byName) {
-  const pom = readText(join6(root, pkg.dir, "pom.xml"));
+  const pom = readText(join8(root, pkg.dir, "pom.xml"));
   if (!pom) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const m of pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
@@ -8709,6 +8834,35 @@ function callTool(name2, args2) {
     if (!symName) throw new Error("`name` is required");
     return JSON.stringify(findReferences(scanRepo(repo, scanOpts), symName), null, 2);
   }
+  if (name2 === "replace_symbol_body" || name2 === "insert_after_symbol" || name2 === "insert_before_symbol") {
+    const namePath = str(args2.namePath);
+    const body2 = typeof args2.body === "string" ? args2.body : void 0;
+    if (!namePath || body2 === void 0) throw new Error("`namePath` and `body` are required");
+    const scan2 = scanRepo(repo, scanOpts);
+    const fn = name2 === "replace_symbol_body" ? replaceSymbolBody : name2 === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
+    return JSON.stringify(fn(scan2, namePath, body2, str(args2.file)), null, 2);
+  }
+  if (name2 === "write_memory") {
+    const memName = str(args2.name);
+    const content = typeof args2.content === "string" ? args2.content : void 0;
+    if (!memName || content === void 0) throw new Error("`name` and `content` are required");
+    return JSON.stringify({ written: writeMemory(repo, memName, content) }, null, 2);
+  }
+  if (name2 === "read_memory") {
+    const memName = str(args2.name);
+    if (!memName) throw new Error("`name` is required");
+    const content = readMemory(repo, memName);
+    if (content === void 0) throw new Error(`no memory named "${memName}" \u2014 see list_memories`);
+    return content;
+  }
+  if (name2 === "list_memories") {
+    return JSON.stringify(listMemories(repo), null, 2);
+  }
+  if (name2 === "delete_memory") {
+    const memName = str(args2.name);
+    if (!memName) throw new Error("`name` is required");
+    return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
+  }
   if (name2 === "repo_map") {
     const { scan: scan2, graph } = buildIndexArtifacts(repo, scanOpts);
     return renderRepoMap(scan2, graph, { budgetTokens: typeof args2.budgetTokens === "number" ? args2.budgetTokens : void 0 });
@@ -8806,6 +8960,8 @@ var init_mcp = __esm({
     init_coupling();
     init_repomap();
     init_query();
+    init_edit();
+    init_memory();
     repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
     scopeProps = {
       scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -8912,6 +9068,70 @@ var init_mcp = __esm({
           type: "object",
           properties: { ...repoProp, since: { type: "string", description: "Only mine commits after this ref" } },
           required: ["repo"]
+        }
+      },
+      {
+        name: "replace_symbol_body",
+        description: "WRITE: replace a symbol's whole declaration with `body` (verbatim, supply full indentation). The symbol is resolved by name path ('Class/method'); ambiguity errors list the candidates \u2014 qualify with `file`. Line spans come from the AST index.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ...repoProp,
+            namePath: { type: "string" },
+            body: { type: "string" },
+            file: { type: "string", description: "Disambiguate: repo-relative file containing the symbol" }
+          },
+          required: ["repo", "namePath", "body"]
+        }
+      },
+      {
+        name: "insert_after_symbol",
+        description: "WRITE: insert `body` after a symbol's declaration (blank-line separation preserved for definition-like kinds). Resolved like replace_symbol_body.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
+          required: ["repo", "namePath", "body"]
+        }
+      },
+      {
+        name: "insert_before_symbol",
+        description: "WRITE: insert `body` before a symbol's declaration (blank-line separation preserved). Resolved like replace_symbol_body.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
+          required: ["repo", "namePath", "body"]
+        }
+      },
+      {
+        name: "write_memory",
+        description: "Persist a named markdown note under <repo>/.codeindex/memories/ (names may use topic/name form). Write small, focused notes: project map, build commands, conventions.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, name: { type: "string" }, content: { type: "string" } },
+          required: ["repo", "name", "content"]
+        }
+      },
+      {
+        name: "read_memory",
+        description: "Read one persisted memory by name.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, name: { type: "string" } },
+          required: ["repo", "name"]
+        }
+      },
+      {
+        name: "list_memories",
+        description: "List persisted memory names \u2014 load this first, then read individual memories on relevance.",
+        inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] }
+      },
+      {
+        name: "delete_memory",
+        description: "Delete one persisted memory by name.",
+        inputSchema: {
+          type: "object",
+          properties: { ...repoProp, name: { type: "string" } },
+          required: ["repo", "name"]
         }
       },
       {
@@ -9057,6 +9277,8 @@ init_graph();
 init_calls();
 init_callers();
 init_query();
+init_edit();
+init_memory();
 init_workspaces();
 init_centrality();
 init_community();
@@ -9088,8 +9310,8 @@ init_git();
 init_grep();
 init_coupling();
 init_repomap();
-import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
-import { join as join7, resolve } from "path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "fs";
+import { join as join9, resolve } from "path";
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
 
 Usage: engine.mjs <command> [flags]
@@ -9156,7 +9378,7 @@ function parseFlags(args2) {
   return flags2;
 }
 function emit(content, out2) {
-  if (out2) writeFileSync(out2, content);
+  if (out2) writeFileSync3(out2, content);
   else process.stdout.write(content);
 }
 function scanOptions(flags2) {
@@ -9190,19 +9412,19 @@ async function runCli(argv) {
   if (cmd === "index") {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
-    mkdirSync(outDir, { recursive: true });
-    const cachePath = join7(outDir, "cache.json");
+    mkdirSync2(outDir, { recursive: true });
+    const cachePath = join9(outDir, "cache.json");
     let cache;
     try {
-      const parsed = JSON.parse(readFileSync3(cachePath, "utf8"));
+      const parsed = JSON.parse(readFileSync5(cachePath, "utf8"));
       if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
         cache = new Map(Object.entries(parsed.files));
       }
     } catch {
     }
     const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
-    writeFileSync(join7(outDir, "graph.json"), renderGraphJson(graph));
-    writeFileSync(join7(outDir, "symbols.json"), renderSymbolsJson(symbols));
+    writeFileSync3(join9(outDir, "graph.json"), renderGraphJson(graph));
+    writeFileSync3(join9(outDir, "symbols.json"), renderSymbolsJson(symbols));
     const files = {};
     for (const f of scan2.files) {
       const entry = { hash: f.hash, record: f, size: f.size };
@@ -9210,7 +9432,7 @@ async function runCli(argv) {
       if (mtime !== void 0) entry.mtimeMs = mtime;
       files[f.rel] = entry;
     }
-    writeFileSync(
+    writeFileSync3(
       cachePath,
       JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n"
     );
@@ -9308,6 +9530,7 @@ export {
   computeSurprises,
   computeSymbolRefs,
   computeTestMap,
+  deleteMemory,
   detectCommunities,
   detectWorkspaces,
   diffFiles,
@@ -9329,6 +9552,8 @@ export {
   grepRepo,
   have,
   headCommit,
+  insertAfterSymbol,
+  insertBeforeSymbol,
   isCode,
   isDoc,
   isGitWorktree,
@@ -9338,18 +9563,22 @@ export {
   isTestPath,
   keywords,
   languageOf,
+  listMemories,
   pagerankOf,
   parseGitignore,
   rankHotspots,
   rankedKeywords,
+  readMemory,
   readText,
   renderGraphJson,
   renderRepoMap,
   renderSymbolsJson,
+  replaceSymbolBody,
   resolveBaseRef,
   resolveCallEdges,
   resolveDocLink,
   resolveImport,
+  resolveUniqueSymbol,
   rrf,
   runCli,
   runMcpServer,
@@ -9364,6 +9593,7 @@ export {
   uniqueSymbolDefs,
   untestedModules,
   untrackedFiles,
-  walk
+  walk,
+  writeMemory
 };
 // "Copyright" and "@license" are already caught by DIRECTIVE_RE.

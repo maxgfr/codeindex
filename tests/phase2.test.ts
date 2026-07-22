@@ -12,6 +12,9 @@ import { gitChurn, changedSince } from "../src/git.js";
 import { changeCoupling, rankHotspots } from "../src/coupling.js";
 import { renderRepoMap } from "../src/repomap.js";
 import { symbolsOverview, findSymbol, findReferences } from "../src/query.js";
+import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol, resolveUniqueSymbol } from "../src/edit.js";
+import { writeMemory, readMemory, deleteMemory, listMemories } from "../src/memory.js";
+import { readText as engineRead } from "../src/walk.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { grepRepo } from "../src/grep.js";
 import { extractCode } from "../src/extract/code.js";
@@ -348,5 +351,64 @@ describe("symbol query API", () => {
     expect(refs.callSites).toEqual([{ file: "app.ts", line: 2 }]);
     expect(refs.referencingFiles).toContain("app.ts");
     expect(refs.referencingFiles).toContain("README.md"); // doc mention tier
+  });
+});
+
+describe("symbolic editing", () => {
+  function makeRepo(): string {
+    const root = mkdtempSync(join(tmpdir(), "ci-edit-"));
+    writeFileSync(
+      join(root, "calc.ts"),
+      "export function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function sub(a: number, b: number): number {\n  return a - b;\n}\n",
+    );
+    return root;
+  }
+
+  it("replaceSymbolBody swaps exactly the declaration's line span", () => {
+    const root = makeRepo();
+    const scan = scanRepo(root);
+    const res = replaceSymbolBody(scan, "add", "export function add(a: number, b: number): number {\n  return b + a;\n}");
+    expect(res).toMatchObject({ file: "calc.ts", startLine: 1, endLine: 3 });
+    const content = engineRead(join(root, "calc.ts"));
+    expect(content).toContain("return b + a;");
+    expect(content).toContain("return a - b;"); // neighbour untouched
+    expect(content).not.toContain("return a + b;");
+  });
+
+  it("insertAfterSymbol keeps a blank line and insertBeforeSymbol pushes down", () => {
+    const root = makeRepo();
+    let scan = scanRepo(root);
+    insertAfterSymbol(scan, "add", "export function mul(a: number, b: number): number {\n  return a * b;\n}");
+    const afterInsert = engineRead(join(root, "calc.ts"));
+    expect(afterInsert).toMatch(/}\n\nexport function mul/);
+    expect(afterInsert.indexOf("mul")).toBeLessThan(afterInsert.indexOf("sub"));
+    scan = scanRepo(root); // re-scan: spans moved
+    insertBeforeSymbol(scan, "sub", "// subtraction below\n");
+    expect(engineRead(join(root, "calc.ts"))).toMatch(/subtraction below[\s\S]*function sub/);
+  });
+
+  it("ambiguity and misses error with actionable candidates", () => {
+    const root = makeRepo();
+    writeFileSync(join(root, "calc2.ts"), "export function add(a: number, b: number): number {\n  return a + b;\n}\n");
+    const scan = scanRepo(root);
+    expect(() => resolveUniqueSymbol(scan, "add")).toThrow(/ambiguous.*calc/s);
+    expect(resolveUniqueSymbol(scan, "add", "calc2.ts").file).toBe("calc2.ts");
+    expect(() => resolveUniqueSymbol(scan, "nonexistent")).toThrow(/no symbol matches/);
+  });
+});
+
+describe("project memories", () => {
+  it("write/list/read/delete with topic subdirectories and traversal defense", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-mem-"));
+    writeMemory(root, "core", "# Core\nThe project map.\n");
+    writeMemory(root, "topics/build", "pnpm build");
+    expect(listMemories(root)).toEqual(["core", "topics/build"]);
+    expect(readMemory(root, "core")).toContain("project map");
+    expect(readMemory(root, "mem:topics/build.md")).toBe("pnpm build\n"); // prefix/suffix tolerated
+    expect(readMemory(root, "missing")).toBeUndefined();
+    expect(deleteMemory(root, "core")).toBe(true);
+    expect(listMemories(root)).toEqual(["topics/build"]);
+    expect(() => writeMemory(root, "../escape", "x")).toThrow(/invalid memory name/);
+    expect(() => writeMemory(root, "a/../../b", "x")).toThrow(/invalid memory name/);
   });
 });

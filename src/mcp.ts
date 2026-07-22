@@ -18,6 +18,8 @@ import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
+import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
+import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -147,6 +149,74 @@ const TOOLS = [
     },
   },
   {
+    name: "replace_symbol_body",
+    description:
+      "WRITE: replace a symbol's whole declaration with `body` (verbatim, supply full indentation). The symbol is resolved by name path ('Class/method'); ambiguity errors list the candidates — qualify with `file`. Line spans come from the AST index.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        namePath: { type: "string" },
+        body: { type: "string" },
+        file: { type: "string", description: "Disambiguate: repo-relative file containing the symbol" },
+      },
+      required: ["repo", "namePath", "body"],
+    },
+  },
+  {
+    name: "insert_after_symbol",
+    description:
+      "WRITE: insert `body` after a symbol's declaration (blank-line separation preserved for definition-like kinds). Resolved like replace_symbol_body.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
+      required: ["repo", "namePath", "body"],
+    },
+  },
+  {
+    name: "insert_before_symbol",
+    description:
+      "WRITE: insert `body` before a symbol's declaration (blank-line separation preserved). Resolved like replace_symbol_body.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
+      required: ["repo", "namePath", "body"],
+    },
+  },
+  {
+    name: "write_memory",
+    description:
+      "Persist a named markdown note under <repo>/.codeindex/memories/ (names may use topic/name form). Write small, focused notes: project map, build commands, conventions.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, name: { type: "string" }, content: { type: "string" } },
+      required: ["repo", "name", "content"],
+    },
+  },
+  {
+    name: "read_memory",
+    description: "Read one persisted memory by name.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, name: { type: "string" } },
+      required: ["repo", "name"],
+    },
+  },
+  {
+    name: "list_memories",
+    description: "List persisted memory names — load this first, then read individual memories on relevance.",
+    inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
+  },
+  {
+    name: "delete_memory",
+    description: "Delete one persisted memory by name.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, name: { type: "string" } },
+      required: ["repo", "name"],
+    },
+  },
+  {
     name: "grep",
     description:
       "Search file contents (ripgrep when available, deterministic JS fallback otherwise). Returns sorted (file, line, text) hits.",
@@ -234,6 +304,35 @@ function callTool(name: string, args: Record<string, unknown>): string {
     const symName = str(args.name);
     if (!symName) throw new Error("`name` is required");
     return JSON.stringify(findReferences(scanRepo(repo, scanOpts), symName), null, 2);
+  }
+  if (name === "replace_symbol_body" || name === "insert_after_symbol" || name === "insert_before_symbol") {
+    const namePath = str(args.namePath);
+    const body = typeof args.body === "string" ? args.body : undefined;
+    if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
+    const scan = scanRepo(repo, scanOpts);
+    const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
+    return JSON.stringify(fn(scan, namePath, body, str(args.file)), null, 2);
+  }
+  if (name === "write_memory") {
+    const memName = str(args.name);
+    const content = typeof args.content === "string" ? args.content : undefined;
+    if (!memName || content === undefined) throw new Error("`name` and `content` are required");
+    return JSON.stringify({ written: writeMemory(repo, memName, content) }, null, 2);
+  }
+  if (name === "read_memory") {
+    const memName = str(args.name);
+    if (!memName) throw new Error("`name` is required");
+    const content = readMemory(repo, memName);
+    if (content === undefined) throw new Error(`no memory named "${memName}" — see list_memories`);
+    return content;
+  }
+  if (name === "list_memories") {
+    return JSON.stringify(listMemories(repo), null, 2);
+  }
+  if (name === "delete_memory") {
+    const memName = str(args.name);
+    if (!memName) throw new Error("`name` is required");
+    return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name === "repo_map") {
     const { scan, graph } = buildIndexArtifacts(repo, scanOpts);

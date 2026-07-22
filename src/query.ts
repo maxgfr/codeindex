@@ -49,10 +49,12 @@ export function findSymbol(scan: RepoScan, namePath: string, opts: FindSymbolOpt
       if (REFERENCE_KINDS.has(s.kind)) continue;
       if (!matchName(s.name, leaf)) continue;
       // Walk the parent chain (single level in practice — extractor records the
-      // enclosing symbol name) against the requested path suffix.
+      // enclosing symbol name) against the requested path suffix. Substring
+      // matching applies to the LAST segment only (Serena's contract): parent
+      // segments always match exactly.
       if (parents.length) {
         const parent = parents[parents.length - 1]!;
-        if (!s.parent || !matchName(s.parent, parent)) continue;
+        if (!s.parent || s.parent !== parent) continue;
       }
       out.push({ ...s });
     }
