@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.6.0](https://github.com/maxgfr/codeindex/compare/v2.5.0...v2.6.0) (2026-07-22)
+
+
+### Features
+
+* **ast:** tree-sitter grammars for scala, bash, and lua ([c9cb760](https://github.com/maxgfr/codeindex/commit/c9cb760af831b7acdd9468f3b39293097492ee24))
+
 # [2.5.0](https://github.com/maxgfr/codeindex/compare/v2.4.0...v2.5.0) (2026-07-22)
 
 
