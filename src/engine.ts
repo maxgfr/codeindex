@@ -97,6 +97,17 @@ export type { DiffFile, DiffSpec, Hunk } from "./git.js";
 export { grepRepo } from "./grep.js";
 export type { SearchHit, GrepOptions } from "./grep.js";
 
+// Keyless BM25 lexical search over symbols/paths/headings/summaries (issue #4).
+export { searchIndex, subtokens } from "./bm25.js";
+export type { SearchOptions, SearchResult } from "./bm25.js";
+
+// Architecture rules: forbidden edges + cycles/orphans builtins (issue #4).
+export { checkRules, parseRules } from "./rules.js";
+export type { ArchRule, ForbiddenEdgeRule, BuiltinRule, RuleSeverity, RuleViolation } from "./rules.js";
+
+// Caller-index recall mode (issue #7) — options for buildCallerIndex above.
+export type { CallerIndexOptions } from "./callers.js";
+
 // Behavioral analytics (git-history mining) + the token-budgeted repo map.
 export { changeCoupling, rankHotspots } from "./coupling.js";
 export type { ChangeCoupling, CouplingOptions, Hotspot } from "./coupling.js";

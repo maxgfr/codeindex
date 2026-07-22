@@ -94,11 +94,20 @@ describe("MCP server", () => {
       { id: 4, method: "tools/call", params: { name: "grep", arguments: { repo: REPO, pattern: "func" } } },
       { id: 5, method: "tools/call", params: { name: "callers", arguments: { repo: REPO } } },
       { id: 6, method: "tools/call", params: { name: "nope", arguments: { repo: REPO } } },
+      { id: 7, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "http client retry" } } },
+      {
+        id: 8,
+        method: "tools/call",
+        params: {
+          name: "check_rules",
+          arguments: { repo: REPO, rules: [{ name: "no-src-from-pkg", from: "pkg/**", to: "src/**" }] },
+        },
+      },
     ]);
 
     expect(res.get(1)!.result!.serverInfo!.name).toBe("codeindex");
     const toolNames = res.get(2)!.result!.tools!.map((t) => t.name);
-    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "grep"]);
+    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "grep", "search", "check_rules"]);
 
     const summary = JSON.parse(res.get(3)!.result!.content![0]!.text) as { fileCount: number };
     expect(summary.fileCount).toBeGreaterThan(0);
@@ -108,6 +117,13 @@ describe("MCP server", () => {
 
     expect(res.get(5)!.result!.isError).toBeUndefined();
     expect(res.get(6)!.result!.isError).toBe(true);
+
+    const search = JSON.parse(res.get(7)!.result!.content![0]!.text) as { file: string }[];
+    expect(search.length).toBeGreaterThan(0);
+    expect(search[0]!.file).toBe("src/client.ts");
+
+    const violations = JSON.parse(res.get(8)!.result!.content![0]!.text) as unknown[];
+    expect(Array.isArray(violations)).toBe(true);
   }, 20_000);
 
   it("answers every member of a JSON-RPC batch", async () => {

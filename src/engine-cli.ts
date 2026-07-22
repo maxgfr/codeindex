@@ -13,6 +13,8 @@ import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
+import { searchIndex } from "./bm25.js";
+import { checkRules, parseRules } from "./rules.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
@@ -28,6 +30,11 @@ Commands:
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
+  search      Keyless BM25 lexical search over symbol names, path segments,
+              markdown headings and summaries: cli.mjs search "<query>" --repo <dir>
+  rules       Architecture rules (forbidden edges, cycles, orphans) validated
+              against the link-graph: --config <codeindex.rules.json>; exits 1
+              on any error-severity violation (a CI gate)
   repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
   hotspots    Churn × size ranking of the files where work concentrates (JSON)
   coupling    Change coupling: files that change together (JSON; --since <ref>)
@@ -45,6 +52,11 @@ Flags:
   --max-files <n>     Cap walked files (default 20000)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
+  --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
+  --limit <n>         Max results for \`search\` (default 20)
+  --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
+                      the JS/TS import gate to unique repo-wide names and labels
+                      each site corroborated|unique-name
 `;
 
 interface CliFlags {
@@ -61,7 +73,10 @@ interface CliFlags {
   ignoreCase?: boolean;
   maxHits?: number;
   budgetTokens?: number;
-  positional?: string; // e.g. the grep pattern
+  config?: string; // rules config path
+  limit?: number; // search result cap
+  recall?: boolean; // callers: recall-oriented binding
+  positional?: string; // e.g. the grep pattern or search query
 }
 
 function parseFlags(args: string[]): CliFlags {
@@ -92,6 +107,9 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--budget-tokens") flags.budgetTokens = num();
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--since") flags.since = next();
+    else if (a === "--config") flags.config = resolve(next());
+    else if (a === "--limit") flags.limit = num();
+    else if (a === "--recall") flags.recall = true;
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -187,10 +205,23 @@ export async function runCli(argv: string[]): Promise<void> {
     emit(renderSymbolsJson(symbols), flags.out);
   } else if (cmd === "callers") {
     const scan = scanRepo(flags.repo, scanOptions(flags));
-    const index = buildCallerIndex(scan);
+    const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
     const obj: Record<string, unknown> = {};
     for (const [name, entry] of index) obj[name] = entry;
     emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
+  } else if (cmd === "search") {
+    if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
+    const scan = scanRepo(flags.repo, scanOptions(flags));
+    const results = searchIndex(scan, flags.positional, { limit: flags.limit });
+    emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+  } else if (cmd === "rules") {
+    if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
+    const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));
+    const { graph } = buildIndexArtifacts(flags.repo, scanOptions(flags));
+    const violations = checkRules(graph, rules);
+    const errors = violations.filter((v) => v.severity === "error").length;
+    emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
+    if (errors > 0) process.exitCode = 1; // the CI gate
   } else if (cmd === "workspaces") {
     const info = detectWorkspaces(flags.repo);
     emit(

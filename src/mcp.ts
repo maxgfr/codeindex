@@ -20,6 +20,8 @@ import { renderRepoMap } from "./repomap.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
+import { searchIndex } from "./bm25.js";
+import { checkRules, parseRules } from "./rules.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -232,6 +234,35 @@ const TOOLS = [
       required: ["repo", "pattern"],
     },
   },
+  {
+    name: "search",
+    description:
+      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...scopeProps,
+        query: { type: "string", description: "Natural-language or identifier query" },
+        limit: { type: "number", description: "Max results (default 20)" },
+      },
+      required: ["repo", "query"],
+    },
+  },
+  {
+    name: "check_rules",
+    description:
+      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"} (module-level import cycles; edge-less code files). Returns deterministic violations with severity error|warn — a CI gate.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...scopeProps,
+        rules: { type: "array", description: "Rules array (inline JSON — see description)" },
+      },
+      required: ["repo", "rules"],
+    },
+  },
 ] as const;
 
 function str(v: unknown): string | undefined {
@@ -356,6 +387,19 @@ function callTool(name: string, args: Record<string, unknown>): string {
       maxHits: typeof args.maxHits === "number" ? args.maxHits : undefined,
     });
     return JSON.stringify(hits, null, 2);
+  }
+  if (name === "search") {
+    const query = str(args.query);
+    if (!query) throw new Error("`query` is required");
+    const results = searchIndex(scanRepo(repo, scanOpts), query, {
+      limit: typeof args.limit === "number" ? args.limit : undefined,
+    });
+    return JSON.stringify(results, null, 2);
+  }
+  if (name === "check_rules") {
+    const rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
+    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    return JSON.stringify(checkRules(graph, rules), null, 2);
   }
   throw new Error(`unknown tool: ${name}`);
 }
