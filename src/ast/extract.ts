@@ -25,8 +25,9 @@ export interface AstResult {
   idents: string[];
   // Unresolved call-site callee names — raw material for the cross-file call
   // graph, resolved globally later. Always present (empty when the grammar has no
-  // `calls` mapping), mirroring how `idents` is always present.
-  calls: { name: string; line: number }[];
+  // `calls` mapping), mirroring how `idents` is always present. `receiver` is the
+  // immediate receiver of a qualified call (`axios.get(...)` → "axios").
+  calls: { name: string; line: number; receiver?: string }[];
   // JS/TS named-import bindings — always present (empty for non-JS/TS).
   importedNames: string[];
 }
@@ -34,6 +35,15 @@ export interface AstResult {
 const MAX_REF_IDENTS = 256;
 const MAX_CALLS = 512;
 const MAX_IMPORTED_NAMES = 256;
+
+// JS/TS node types an anonymous `export default` can wrap ("function" and
+// "class" are the expression forms; the _declaration forms cover grammars that
+// keep the declaration node but omit the name).
+const ANON_DEFAULT_FN = new Set([
+  "function", "function_expression", "function_declaration",
+  "generator_function", "generator_function_declaration", "arrow_function",
+]);
+const ANON_DEFAULT_CLASS = new Set(["class", "class_declaration", "abstract_class_declaration"]);
 
 // Collect distinctive referenced identifiers across the whole tree, minus the
 // file's own definition names. Deterministic (sorted) and capped.
@@ -304,32 +314,59 @@ function readName(node: TSNode | null): string | undefined {
   return last && last !== node ? readName(last) : undefined;
 }
 
+// The IMMEDIATE receiver of a qualified call: the rightmost name segment of the
+// object the callee is read from (`axios.get(...)` → "axios"; `a.b.c(...)` →
+// "b"). Grammars name the object field differently — `object` (JS/TS
+// member_expression, python attribute, java method_invocation, php member call),
+// go selector_expression's `operand`, rust field_expression's `value` and
+// scoped_identifier's `path`, c# member_access_expression's `expression`, c/c++
+// field_expression's `argument`, ruby call's `receiver`. Undefined for a bare
+// callee or a computed/complex receiver (`fetch().then(...)`, `arr[0].map(...)`).
+function readReceiver(node: TSNode | null): string | undefined {
+  if (!node || node.namedChildCount === 0) return undefined;
+  const obj =
+    node.childForFieldName("object") ??
+    node.childForFieldName("operand") ??
+    node.childForFieldName("value") ??
+    node.childForFieldName("path") ??
+    node.childForFieldName("expression") ??
+    node.childForFieldName("argument") ??
+    node.childForFieldName("receiver");
+  const name = obj ? readName(obj) : undefined;
+  return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
+}
+
 // Collect callee names for every call-expression node the grammar maps. "function"
 // reads the callee/function field (grammars that name it differently — Java's
 // `method_invocation` — expose the callee under `name`); "member" reads the
 // dedicated member-call node's `name`; "constructor" reads the constructed type.
+// A qualified call also carries the immediate `receiver` name (see readReceiver).
 // Names are filtered to plausible identifiers (≥ 2 chars), deduped by name+line,
 // sorted, and capped, so the set stays small and deterministic.
-function collectCalls(root: TSNode, spec: LangSpec): { name: string; line: number }[] {
+function collectCalls(root: TSNode, spec: LangSpec): { name: string; line: number; receiver?: string }[] {
   if (!spec.calls) return [];
-  const out: { name: string; line: number }[] = [];
+  const out: { name: string; line: number; receiver?: string }[] = [];
   const seen = new Set<string>();
-  const add = (name: string | undefined, node: TSNode): void => {
+  const add = (name: string | undefined, node: TSNode, receiver?: string): void => {
     if (!name || name.length < 2 || !/^[A-Za-z_]\w*$/.test(name)) return;
     const line = node.startPosition.row + 1;
     const key = `${name} ${line}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ name, line });
+    out.push(receiver ? { name, line, receiver } : { name, line });
   };
   const visit = (node: TSNode): void => {
     const how = spec.calls![node.type];
     if (how === "function") {
       // Grammars name the callee field differently: `function` (TS/py/go/rust/
-      // c#/php), `name` (Java's method_invocation), `method` (Ruby's call).
-      add(readName(node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name")), node);
+      // c#/php), `name` (Java's method_invocation), `method` (Ruby's call). The
+      // receiver lives on the qualified callee node, or (java/ruby) on the call
+      // node itself.
+      const callee =
+        node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
+      add(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
     } else if (how === "member") {
-      add(readName(node.childForFieldName("name")), node);
+      add(readName(node.childForFieldName("name")), node, readReceiver(node));
     } else if (how === "constructor") {
       // TS/Java/C# expose the type under a `constructor`/`type` field; PHP's
       // object_creation_expression carries it as a bare `name` child, so fall
@@ -339,7 +376,7 @@ function collectCalls(root: TSNode, spec: LangSpec): { name: string; line: numbe
         const c = node.namedChild(i)!;
         if (IDENT_LEAF.test(c.type)) t = c;
       }
-      add(readName(t), node);
+      add(readName(t), node, readReceiver(t ?? null));
     }
     for (let i = 0; i < node.namedChildCount; i++) visit(node.namedChild(i)!);
   };
@@ -396,6 +433,8 @@ export function extractAst(rel: string, ext: string, content: string): AstResult
     if (!tree) return undefined;
     const symbols: CodeSymbol[] = [];
     const root = tree.rootNode;
+    // The file stem names an anonymous `export default` (Button.tsx → "Button").
+    const stem = (rel.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
     // `export default Foo;` / `export { Foo }` re-export a declaration made
     // earlier in the file; record those names and mark the matching symbols
     // exported after the walk (the declaration node itself is not wrapped).
@@ -416,6 +455,29 @@ export function extractAst(rel: string, ext: string, content: string): AstResult
             }
           }
         }
+        // An anonymous `export default function/class/arrow` has no name node the
+        // declaration walk could pick up — name it after the file stem (ultradoc
+        // parity), so the module's default export is a real, referencable symbol.
+        if (stem && node.children.some((c) => c.type === "default")) {
+          for (let i = 0; i < node.namedChildCount; i++) {
+            const c = node.namedChild(i)!;
+            const fnLike = ANON_DEFAULT_FN.has(c.type);
+            const classLike = ANON_DEFAULT_CLASS.has(c.type);
+            if ((fnLike || classLike) && !c.childForFieldName("name")) {
+              symbols.push({
+                name: stem,
+                kind: classLike ? "class" : "function",
+                file: rel,
+                line: node.startPosition.row + 1,
+                endLine: node.endPosition.row + 1,
+                signature: firstLine(node),
+                exported: true,
+                lang: spec.lang,
+              });
+              break;
+            }
+          }
+        }
       }
       // CommonJS-style definition: a top-level `<target> = <function|class>`
       // expression. Named after the assigned property (or identifier); only
@@ -426,6 +488,29 @@ export function extractAst(rel: string, ext: string, content: string): AstResult
         if (expr?.type === "assignment_expression") {
           const left = expr.childForFieldName("left");
           const right = expr.childForFieldName("right");
+          if (left?.type === "member_expression" && left.text === "module.exports" && right) {
+            // `module.exports = { foo, bar: baz }` — a CJS export list: mark the
+            // shorthand names, keys and identifier values as exported (key = the
+            // exported surface, identifier value = the local declaration).
+            if (right.type === "object") {
+              for (let i = 0; i < right.namedChildCount; i++) {
+                const p = right.namedChild(i)!;
+                if (p.type === "shorthand_property_identifier") exportedNames.add(p.text);
+                else if (p.type === "pair") {
+                  const k = p.childForFieldName("key");
+                  const v = p.childForFieldName("value");
+                  if (k?.type === "property_identifier") exportedNames.add(k.text);
+                  if (v?.type === "identifier") exportedNames.add(v.text);
+                }
+              }
+              return;
+            }
+            // `module.exports = Foo;` — the CJS default export of a local decl.
+            if (right.type === "identifier") {
+              exportedNames.add(right.text);
+              return;
+            }
+          }
           const funcy = right && ["function_expression", "function", "generator_function", "arrow_function", "class"].includes(right.type);
           if (left && right && funcy) {
             let name: string | undefined;
@@ -453,6 +538,32 @@ export function extractAst(rel: string, ext: string, content: string): AstResult
                 lang: spec.lang,
               });
               return;
+            }
+          } else if (left?.type === "member_expression" && right) {
+            // CJS named VALUE export — `exports.foo = 42`, `exports.foo = bar`:
+            // emit `foo` as an exported const (ultradoc parity); when the RHS is
+            // a bare identifier, mark that local declaration exported too (and
+            // skip the emission when it would only duplicate the same name).
+            const prop = left.childForFieldName("property");
+            if (prop?.type === "property_identifier") {
+              const obj = left.text.slice(0, left.text.length - prop.text.length - 1);
+              if (obj === "exports" || obj === "module.exports") {
+                if (right.type === "identifier") exportedNames.add(right.text);
+                if (right.type !== "identifier" || right.text !== prop.text) {
+                  symbols.push({
+                    name: prop.text,
+                    kind: "const",
+                    file: rel,
+                    line: expr.startPosition.row + 1,
+                    endLine: expr.endPosition.row + 1,
+                    ...(parent ? { parent } : {}),
+                    signature: firstLine(expr),
+                    exported: true,
+                    lang: spec.lang,
+                  });
+                }
+                return;
+              }
             }
           }
         }

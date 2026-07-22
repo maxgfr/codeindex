@@ -8,7 +8,9 @@ export interface CodeInfo {
   refs: RawRef[]; // import refs (raw specifiers, unresolved)
   pkg?: string; // Java: the file's own `package x.y.z;` — used to derive source roots
   idents?: string[]; // distinctive identifiers referenced (AST path) — feeds `use` edges
-  calls?: { name: string; line: number }[]; // call-site callee names (AST path) — feeds call edges
+  // Call-site callee names (+ immediate receiver for qualified calls) — feeds
+  // call edges and receiver-gated sink catalogs.
+  calls?: { name: string; line: number; receiver?: string }[];
   importedNames?: string[]; // JS/TS named-import bindings (AST path) — feeds the call gate
 }
 
@@ -313,11 +315,14 @@ const DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bm
 // Regex-tier call-site collection for files with no AST grammar — a
 // conservative `identifier(` scan so call data exists wasm-free (the AST tier
 // stays authoritative when available). Same contract as ast/extract's
-// collector: cap 512, deduped by name+line, sorted by name then line.
-function collectCallsRegex(content: string): { name: string; line: number }[] {
-  const out = new Map<string, { name: string; line: number }>();
+// collector: cap 512, deduped by name+line, sorted by name then line. An
+// immediate `receiver.` prefix is captured too (`axios.get(` → receiver
+// "axios"; `a.b.c(` → receiver "b" — the group anchors to the segment right
+// before the called name); bare calls carry no receiver.
+function collectCallsRegex(content: string): { name: string; line: number; receiver?: string }[] {
+  const out = new Map<string, { name: string; line: number; receiver?: string }>();
   const lines = content.split("\n");
-  const CALL_RE = /(?:\bnew\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
+  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i = 0; i < lines.length && out.size < 512; i++) {
     const line = lines[i]!;
     // Cheap comment guard: a line-leading comment marker means no calls here
@@ -328,11 +333,12 @@ function collectCallsRegex(content: string): { name: string; line: number }[] {
     CALL_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = CALL_RE.exec(line)) !== null && out.size < 512) {
-      const name = m[1]!;
+      const receiver = m[1];
+      const name = m[2]!;
       if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
       if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
       const key = `${name} ${i + 1}`;
-      if (!out.has(key)) out.set(key, { name, line: i + 1 });
+      if (!out.has(key)) out.set(key, receiver ? { name, line: i + 1, receiver } : { name, line: i + 1 });
     }
   }
   return [...out.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line));

@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "2.4.0";
 declare const SCHEMA_VERSION = 4;
-declare const EXTRACTOR_VERSION = 5;
+declare const EXTRACTOR_VERSION = 6;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "use" | "mention";
 type Tier = 0 | 1 | 2;
@@ -37,6 +37,7 @@ interface FileRecord {
     calls?: {
         name: string;
         line: number;
+        receiver?: string;
     }[];
     importedNames?: string[];
 }
@@ -195,6 +196,7 @@ interface CodeInfo {
     calls?: {
         name: string;
         line: number;
+        receiver?: string;
     }[];
     importedNames?: string[];
 }
@@ -221,6 +223,7 @@ interface AstResult {
     calls: {
         name: string;
         line: number;
+        receiver?: string;
     }[];
     importedNames: string[];
 }

@@ -16,7 +16,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.4.0";
     SCHEMA_VERSION = 4;
-    EXTRACTOR_VERSION = 5;
+    EXTRACTOR_VERSION = 6;
   }
 });
 
@@ -786,7 +786,45 @@ var init_common = __esm({
 });
 
 // src/lang/js-ts.ts
-var RULES, jsTs;
+function stemOf(rel) {
+  return (rel.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
+}
+function applyExportLists(content, symbols) {
+  const markExported = (name2) => {
+    if (!name2 || name2 === "default") return;
+    for (const s of symbols) if (s.name === name2) s.exported = true;
+  };
+  const handleList = (inner, cjs) => {
+    for (const raw of inner.split(",")) {
+      const part = raw.trim().replace(/^type\s+/, "");
+      if (!part) continue;
+      const asMatch = /^([\w$]+)\s+as\s+([\w$]+)$/.exec(part);
+      if (asMatch) {
+        if (asMatch[2] !== "default") markExported(asMatch[1]);
+        continue;
+      }
+      if (cjs) {
+        const kv = /^([\w$]+)\s*:\s*([\w$]+)$/.exec(part);
+        if (kv) {
+          markExported(kv[1]);
+          markExported(kv[2]);
+          continue;
+        }
+      }
+      markExported(/^([\w$]+)/.exec(part)?.[1]);
+    }
+  };
+  let m;
+  EXPORT_LIST_RE.lastIndex = 0;
+  while (m = EXPORT_LIST_RE.exec(content)) {
+    if (!m[2]) handleList(m[1] ?? "", false);
+  }
+  CJS_OBJECT_RE.lastIndex = 0;
+  while (m = CJS_OBJECT_RE.exec(content)) handleList(m[1] ?? "", true);
+  DEFAULT_ID_RE.lastIndex = 0;
+  while (m = DEFAULT_ID_RE.exec(content)) markExported(m[2]);
+}
+var RULES, ANON_DEFAULT_RE, NAMED_DEFAULT_RE, EXPORT_LIST_RE, CJS_OBJECT_RE, DEFAULT_ID_RE, jsTs;
 var init_js_ts = __esm({
   "src/lang/js-ts.ts"() {
     "use strict";
@@ -806,17 +844,43 @@ var init_js_ts = __esm({
       { re: /^\s*export\s+const\s+enum\s+(?<name>[\w$]+)/, kind: "enum", exported: true },
       // exported const/let bound to an arrow fn or value
       { re: /^\s*export\s+(?:const|let|var)\s+(?<name>[\w$]+)\s*[:=]/, kind: "const", exported: true },
+      // CommonJS named exports: `exports.foo = …`, `module.exports.foo = …`
+      { re: /^\s*exports\.(?<name>[\w$]+)\s*=/, kind: "const", exported: true },
+      { re: /^\s*module\.exports\.(?<name>[\w$]+)\s*=/, kind: "const", exported: true },
       // top-level const arrow function (not exported)
       { re: /^\s*(?:const|let)\s+(?<name>[\w$]+)\s*=\s*(?:async\s*)?\([^)]*\)\s*(?::[^=]+)?=>/, kind: "const", exported: false },
       // `export default Foo;` — a class/const declared above and exported by reference.
       { re: /^\s*export\s+default\s+(?<name>[A-Za-z_$][\w$]*)\s*;?\s*$/, kind: "default", exported: true }
     ];
+    ANON_DEFAULT_RE = /^\s*export\s+default\s+(?:async\s+)?(?:function|class)?\s*(?:\(|\{|extends\b)/;
+    NAMED_DEFAULT_RE = /^\s*export\s+default\s+(?:async\s+)?(?:function|class)\s+(?!extends\b)[\w$]+/;
+    EXPORT_LIST_RE = /export\s*\{([^}]*)\}\s*(from\b)?/g;
+    CJS_OBJECT_RE = /module\.exports\s*=\s*\{([^}]*)\}/g;
+    DEFAULT_ID_RE = /(^|\n)\s*export\s+default\s+([A-Za-z_$][\w$]*)\s*;?\s*(?=\n|$)/g;
     jsTs = {
       lang: "javascript/typescript",
       exts: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
       extract(rel, content) {
         const lang = rel.match(/\.(ts|tsx|mts|cts)$/) ? "typescript" : "javascript";
-        return scan(rel, content, lang, RULES);
+        const symbols = scan(rel, content, lang, RULES);
+        const lines = content.split(/\r?\n/);
+        for (let i2 = 0; i2 < lines.length; i2++) {
+          const line = lines[i2];
+          if (ANON_DEFAULT_RE.test(line) && !NAMED_DEFAULT_RE.test(line)) {
+            symbols.push({
+              name: stemOf(rel),
+              kind: "default",
+              file: rel,
+              line: i2 + 1,
+              signature: line.trim().slice(0, 200),
+              exported: true,
+              lang
+            });
+            break;
+          }
+        }
+        applyExportLists(content, symbols);
+        return symbols;
       }
     };
   }
@@ -5558,31 +5622,38 @@ function readName(node) {
   const last = node.namedChild(node.namedChildCount - 1);
   return last && last !== node ? readName(last) : void 0;
 }
+function readReceiver(node) {
+  if (!node || node.namedChildCount === 0) return void 0;
+  const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver");
+  const name2 = obj ? readName(obj) : void 0;
+  return name2 && /^[A-Za-z_]\w*$/.test(name2) ? name2 : void 0;
+}
 function collectCalls(root, spec) {
   if (!spec.calls) return [];
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
-  const add = (name2, node) => {
+  const add = (name2, node, receiver) => {
     if (!name2 || name2.length < 2 || !/^[A-Za-z_]\w*$/.test(name2)) return;
     const line = node.startPosition.row + 1;
     const key = `${name2} ${line}`;
     if (seen.has(key)) return;
     seen.add(key);
-    out2.push({ name: name2, line });
+    out2.push(receiver ? { name: name2, line, receiver } : { name: name2, line });
   };
   const visit = (node) => {
     const how = spec.calls[node.type];
     if (how === "function") {
-      add(readName(node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name")), node);
+      const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
+      add(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
     } else if (how === "member") {
-      add(readName(node.childForFieldName("name")), node);
+      add(readName(node.childForFieldName("name")), node, readReceiver(node));
     } else if (how === "constructor") {
       let t = node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
       for (let i2 = 0; !t && i2 < node.namedChildCount; i2++) {
         const c2 = node.namedChild(i2);
         if (IDENT_LEAF.test(c2.type)) t = c2;
       }
-      add(readName(t), node);
+      add(readName(t), node, readReceiver(t ?? null));
     }
     for (let i2 = 0; i2 < node.namedChildCount; i2++) visit(node.namedChild(i2));
   };
@@ -5628,6 +5699,7 @@ function extractAst(rel, ext, content) {
     if (!tree) return void 0;
     const symbols = [];
     const root = tree.rootNode;
+    const stem = (rel.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
     const exportedNames = /* @__PURE__ */ new Set();
     const walk2 = (node, parent, exported) => {
       const nowExported = exported || node.type === "export_statement";
@@ -5643,12 +5715,51 @@ function extractAst(rel, ext, content) {
             }
           }
         }
+        if (stem && node.children.some((c2) => c2.type === "default")) {
+          for (let i2 = 0; i2 < node.namedChildCount; i2++) {
+            const c2 = node.namedChild(i2);
+            const fnLike = ANON_DEFAULT_FN.has(c2.type);
+            const classLike = ANON_DEFAULT_CLASS.has(c2.type);
+            if ((fnLike || classLike) && !c2.childForFieldName("name")) {
+              symbols.push({
+                name: stem,
+                kind: classLike ? "class" : "function",
+                file: rel,
+                line: node.startPosition.row + 1,
+                endLine: node.endPosition.row + 1,
+                signature: firstLine(node),
+                exported: true,
+                lang: spec.lang
+              });
+              break;
+            }
+          }
+        }
       }
       if (spec.assignments && node.type === "expression_statement") {
         const expr = node.namedChild(0);
         if (expr?.type === "assignment_expression") {
           const left = expr.childForFieldName("left");
           const right = expr.childForFieldName("right");
+          if (left?.type === "member_expression" && left.text === "module.exports" && right) {
+            if (right.type === "object") {
+              for (let i2 = 0; i2 < right.namedChildCount; i2++) {
+                const p = right.namedChild(i2);
+                if (p.type === "shorthand_property_identifier") exportedNames.add(p.text);
+                else if (p.type === "pair") {
+                  const k = p.childForFieldName("key");
+                  const v = p.childForFieldName("value");
+                  if (k?.type === "property_identifier") exportedNames.add(k.text);
+                  if (v?.type === "identifier") exportedNames.add(v.text);
+                }
+              }
+              return;
+            }
+            if (right.type === "identifier") {
+              exportedNames.add(right.text);
+              return;
+            }
+          }
           const funcy = right && ["function_expression", "function", "generator_function", "arrow_function", "class"].includes(right.type);
           if (left && right && funcy) {
             let name2;
@@ -5676,6 +5787,28 @@ function extractAst(rel, ext, content) {
                 lang: spec.lang
               });
               return;
+            }
+          } else if (left?.type === "member_expression" && right) {
+            const prop = left.childForFieldName("property");
+            if (prop?.type === "property_identifier") {
+              const obj = left.text.slice(0, left.text.length - prop.text.length - 1);
+              if (obj === "exports" || obj === "module.exports") {
+                if (right.type === "identifier") exportedNames.add(right.text);
+                if (right.type !== "identifier" || right.text !== prop.text) {
+                  symbols.push({
+                    name: prop.text,
+                    kind: "const",
+                    file: rel,
+                    line: expr.startPosition.row + 1,
+                    endLine: expr.endPosition.row + 1,
+                    ...parent ? { parent } : {},
+                    signature: firstLine(expr),
+                    exported: true,
+                    lang: spec.lang
+                  });
+                }
+                return;
+              }
             }
           }
         }
@@ -5731,7 +5864,7 @@ function extractAst(rel, ext, content) {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, byPublicKeyword, byPub, byCapital, byPyConvention, always, neverExport, TS_SPEC, SPECS, IDENT_LEAF;
+var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, byPublicKeyword, byPub, byCapital, byPyConvention, always, neverExport, TS_SPEC, SPECS, IDENT_LEAF;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
@@ -5740,6 +5873,15 @@ var init_extract = __esm({
     MAX_REF_IDENTS = 256;
     MAX_CALLS = 512;
     MAX_IMPORTED_NAMES = 256;
+    ANON_DEFAULT_FN = /* @__PURE__ */ new Set([
+      "function",
+      "function_expression",
+      "function_declaration",
+      "generator_function",
+      "generator_function_declaration",
+      "arrow_function"
+    ]);
+    ANON_DEFAULT_CLASS = /* @__PURE__ */ new Set(["class", "class_declaration", "abstract_class_declaration"]);
     byPublicKeyword = (line) => /\b(public|internal)\b/.test(line);
     byPub = (line) => /\bpub\b/.test(line);
     byCapital = (_l, name2) => /^[A-Z]/.test(name2);
@@ -6145,7 +6287,7 @@ function extractReexports(rel, content) {
 function collectCallsRegex(content) {
   const out2 = /* @__PURE__ */ new Map();
   const lines = content.split("\n");
-  const CALL_RE = /(?:\bnew\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
+  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i2 = 0; i2 < lines.length && out2.size < 512; i2++) {
     const line = lines[i2];
     const trimmed = line.trimStart();
@@ -6153,11 +6295,12 @@ function collectCallsRegex(content) {
     CALL_RE.lastIndex = 0;
     let m;
     while ((m = CALL_RE.exec(line)) !== null && out2.size < 512) {
-      const name2 = m[1];
+      const receiver = m[1];
+      const name2 = m[2];
       if (name2.length < 2 || CALL_KEYWORDS.has(name2)) continue;
       if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
       const key = `${name2} ${i2 + 1}`;
-      if (!out2.has(key)) out2.set(key, { name: name2, line: i2 + 1 });
+      if (!out2.has(key)) out2.set(key, receiver ? { name: name2, line: i2 + 1, receiver } : { name: name2, line: i2 + 1 });
     }
   }
   return [...out2.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line);

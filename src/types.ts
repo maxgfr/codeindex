@@ -20,8 +20,12 @@ export const SCHEMA_VERSION = 4;
 // added FileRecord.calls (call-site callee names) and importedNames; v4 added
 // CommonJS assignment-style JS/TS definitions (`x.y = function () {}`); v5
 // populates `calls` on the regex tier too (files without an AST grammar), so
-// caller indexes work without the wasm sidecar.
-export const EXTRACTOR_VERSION = 5;
+// caller indexes work without the wasm sidecar; v6 added call-site `receiver`
+// (the immediate receiver of a qualified call, both tiers) and JS/TS export
+// parity with ultradoc (CJS `exports.foo =` / `module.exports = {…}` named
+// exports, `export { a, b as c }` local marking, anonymous `export default`
+// named after the file stem, `export default Foo` marking the declaration).
+export const EXTRACTOR_VERSION = 6;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
@@ -80,8 +84,12 @@ export interface FileRecord {
   idents?: string[]; // distinctive identifiers referenced (transient — feeds `use` edges, not persisted)
   // Unresolved call-site callee names (cap 512, deduped by name+line, sorted by
   // name then line). Transient-ish: consumed by the graph builder's global call
-  // resolution pass, not surfaced in the graph itself.
-  calls?: { name: string; line: number }[];
+  // resolution pass, not surfaced in the graph itself. `receiver` is the simple
+  // name of the IMMEDIATE receiver of a qualified call — `axios.get(...)` →
+  // {name: "get", receiver: "axios"}, `a.b.c(...)` → {name: "c", receiver: "b"}
+  // — absent for a bare call (`get()`) or a computed/complex receiver
+  // (`fetch().then(...)`). Receiver-gated sink catalogs (ultrasec) key on it.
+  calls?: { name: string; line: number; receiver?: string }[];
   // JS/TS named-import bindings (cap 256, deduped, sorted) — feeds the JS/TS
   // import-evidence gate in call resolution.
   importedNames?: string[];
