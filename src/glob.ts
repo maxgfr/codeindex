@@ -42,3 +42,15 @@ export function compileGlobs(globs: string[] | undefined): ((rel: string) => boo
   const res = globs.map(globToRegExp);
   return (rel: string) => res.some((r) => r.test(rel));
 }
+
+// Negation-aware variant: `!`-prefixed globs EXCLUDE. A path passes when it
+// matches at least one positive glob (or none are given — negations alone
+// mean "everything but") AND matches no negated glob. Exclusion wins over
+// inclusion regardless of list order — grep.ts feeds ripgrep the same way
+// (positives first, negations last) so both backends agree.
+export function compileGlobFilter(globs: string[] | undefined): ((rel: string) => boolean) | null {
+  if (!globs || globs.length === 0) return null;
+  const include = compileGlobs(globs.filter((g) => !g.startsWith("!")));
+  const exclude = compileGlobs(globs.filter((g) => g.startsWith("!")).map((g) => g.slice(1)));
+  return (rel: string) => (!include || include(rel)) && !exclude?.(rel);
+}

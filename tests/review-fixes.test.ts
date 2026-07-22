@@ -9,6 +9,7 @@ import { walk } from "../src/walk.js";
 import { parseGitignore, isIgnored } from "../src/ignore.js";
 import { detectWorkspaces } from "../src/workspaces.js";
 import { grepRepo } from "../src/grep.js";
+import { compileGlobFilter } from "../src/glob.js";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 
@@ -132,5 +133,63 @@ describe("F9: mid-segment ** behaves like a single-segment *", () => {
     expect(isIgnored(r, "axb", false)).toBe(true);
     expect(isIgnored(r, "ab", false)).toBe(true);
     expect(isIgnored(r, "a/deep/zb", false)).toBe(false);
+  });
+});
+
+describe("issue #3: grepRepo negation globs", () => {
+  function makeRepo(): string {
+    const root = mkdtempSync(join(tmpdir(), "ci-grepneg-"));
+    mkdirSync(join(root, "sub", "gen"), { recursive: true });
+    writeFileSync(join(root, "a.ts"), "NEEDLE root\n");
+    writeFileSync(join(root, "sub", "b.ts"), "NEEDLE sub\n");
+    writeFileSync(join(root, "sub", "gen", "c.ts"), "NEEDLE gen\n");
+    return root;
+  }
+
+  function files(root: string, globs: string[], noRipgrep: boolean): string[] {
+    return grepRepo(root, "NEEDLE", { globs, noRipgrep }).map((h) => h.file);
+  }
+
+  it("a lone negation glob means `everything but`, on both backends", () => {
+    const root = makeRepo();
+    expect(files(root, ["!sub/**"], true)).toEqual(["a.ts"]);
+    expect(files(root, ["!sub/**"], false)).toEqual(files(root, ["!sub/**"], true));
+  });
+
+  it("mixes positive and negated globs with exclusion winning, on both backends", () => {
+    const root = makeRepo();
+    expect(files(root, ["sub/**", "!sub/gen/**"], true)).toEqual(["sub/b.ts"]);
+    expect(files(root, ["sub/**", "!sub/gen/**"], false)).toEqual(["sub/b.ts"]);
+  });
+
+  it("exclusion beats inclusion regardless of the caller's glob order", () => {
+    const root = makeRepo();
+    expect(files(root, ["!sub/gen/**", "sub/**"], true)).toEqual(["sub/b.ts"]);
+    expect(files(root, ["!sub/gen/**", "sub/**"], false)).toEqual(["sub/b.ts"]);
+  });
+
+  it("accepts the `/`-anchored spelling after the negation, on both backends", () => {
+    const root = makeRepo();
+    expect(files(root, ["!/sub/**"], true)).toEqual(["a.ts"]);
+    expect(files(root, ["!/sub/**"], false)).toEqual(["a.ts"]);
+  });
+
+  it("compileGlobFilter exposes the same semantics for library callers", () => {
+    const f = compileGlobFilter(["src/**", "!src/gen/**"])!;
+    expect(f("src/a.ts")).toBe(true);
+    expect(f("src/gen/a.ts")).toBe(false);
+    expect(f("lib/a.ts")).toBe(false);
+    expect(compileGlobFilter([])).toBeNull();
+    const only = compileGlobFilter(["!dist/**"])!;
+    expect(only("src/a.ts")).toBe(true);
+    expect(only("dist/a.js")).toBe(false);
+  });
+
+  it("the CLI --exclude flag rides the negation path end to end", () => {
+    const root = makeRepo();
+    const out = execFileSync(process.execPath, [CLI, "grep", "NEEDLE", "--repo", root, "--exclude", "sub/**"], {
+      encoding: "utf8",
+    });
+    expect((JSON.parse(out) as { file: string }[]).map((h) => h.file)).toEqual(["a.ts"]);
   });
 });

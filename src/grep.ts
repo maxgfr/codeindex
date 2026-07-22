@@ -3,7 +3,7 @@
 // sorted by (file, line) with the cap applied after sorting, so a consumer
 // cannot tell which backend ran — asserted by the backend-parity test.
 import { walk, readText, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
-import { compileGlobs } from "./glob.js";
+import { compileGlobFilter } from "./glob.js";
 import { sh, have } from "./util.js";
 import { byStr } from "./sort.js";
 
@@ -14,7 +14,10 @@ export interface SearchHit {
 }
 
 export interface GrepOptions {
-  globs?: string[]; // restrict to matching paths (repo-relative)
+  // Restrict to matching paths (repo-relative, rooted dialect). A `!` prefix
+  // NEGATES the glob: `!sub/**` excludes that tree; exclusion beats inclusion
+  // regardless of list order, identically on both backends.
+  globs?: string[];
   maxHits?: number; // cap AFTER sorting (default 200)
   ignoreCase?: boolean;
   // Force the JS backend even when ripgrep is available (tests, determinism).
@@ -53,10 +56,16 @@ function rgBackend(root: string, pattern: string, opts: GrepOptions): SearchHit[
   for (const ext of BINARY_EXT) args.push("--iglob", `!**/*${ext}`);
   args.push("--glob", "!*.min.js", "--glob", "!*.min.css");
   if (opts.ignoreCase) args.push("--ignore-case");
-  // User globs use the engine's rooted dialect (compileGlobs anchors at the
-  // repo root); a leading `/` makes rg anchor the same way instead of
-  // basename-matching slash-less patterns.
-  for (const g of opts.globs ?? []) args.push("--glob", g.startsWith("/") ? g : `/${g}`);
+  // User globs use the engine's rooted dialect (compileGlobFilter anchors at
+  // the repo root); a leading `/` makes rg anchor the same way instead of
+  // basename-matching slash-less patterns. Positives go first and `!`-negated
+  // globs LAST: rg resolves overlapping globs by last-match-wins, so this
+  // ordering makes exclusion beat inclusion — the JS backend's semantics —
+  // regardless of how the caller ordered the list.
+  const user = opts.globs ?? [];
+  const anchor = (g: string): string => (g.startsWith("/") ? g : `/${g}`);
+  for (const g of user.filter((g) => !g.startsWith("!"))) args.push("--glob", anchor(g));
+  for (const g of user.filter((g) => g.startsWith("!"))) args.push("--glob", `!${anchor(g.slice(1))}`);
   args.push("--regexp", pattern, "./");
   const res = sh("rg", args, { cwd: root });
   // status 1 = no matches (fine); anything else (crash, unsupported flag on an
@@ -77,8 +86,9 @@ function rgBackend(root: string, pattern: string, opts: GrepOptions): SearchHit[
 }
 
 function jsBackend(root: string, re: RegExp, opts: GrepOptions): SearchHit[] {
-  // Accept the same optionally-`/`-anchored spelling the rg path takes.
-  const filter = compileGlobs(opts.globs?.map((g) => g.replace(/^\//, "")));
+  // Accept the same optionally-`/`-anchored spelling the rg path takes (the
+  // anchor may follow the `!` of a negated glob: `!/sub/**` ≡ `!sub/**`).
+  const filter = compileGlobFilter(opts.globs?.map((g) => g.replace(/^(!?)\//, "$1")));
   const hits: SearchHit[] = [];
   for (const f of walk(root).files) {
     if (filter && !filter(f.rel)) continue;

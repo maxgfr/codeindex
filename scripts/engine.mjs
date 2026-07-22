@@ -322,11 +322,12 @@ function walk(root, opts = {}) {
   const useGitignore = opts.gitignore !== false;
   const out2 = [];
   let capped = false;
+  let excluded = 0;
   let rootReal;
   try {
     rootReal = realpathSync(root);
   } catch {
-    return { files: out2, capped };
+    return { files: out2, capped, excluded };
   }
   const contained = (real) => real === rootReal || real.startsWith(rootReal + sep);
   const stack = [
@@ -374,12 +375,27 @@ function walk(root, opts = {}) {
         continue;
       }
       if (!st.isFile()) continue;
-      if (st.size > maxFileBytes) continue;
-      if (LOCKFILES.has(name2.toLowerCase())) continue;
+      if (st.size > maxFileBytes) {
+        excluded++;
+        continue;
+      }
+      if (LOCKFILES.has(name2.toLowerCase())) {
+        excluded++;
+        continue;
+      }
       const ext = extname(name2).toLowerCase();
-      if (BINARY_EXT.has(ext)) continue;
-      if (name2.endsWith(".min.js") || name2.endsWith(".min.css")) continue;
-      if (useGitignore && rules.length && isIgnored(rules, rel, false)) continue;
+      if (BINARY_EXT.has(ext)) {
+        excluded++;
+        continue;
+      }
+      if (name2.endsWith(".min.js") || name2.endsWith(".min.css")) {
+        excluded++;
+        continue;
+      }
+      if (useGitignore && rules.length && isIgnored(rules, rel, false)) {
+        excluded++;
+        continue;
+      }
       if (isLink) {
         try {
           if (!contained(realpathSync(abs))) continue;
@@ -394,7 +410,7 @@ function walk(root, opts = {}) {
       out2.push({ rel: rel.split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
     }
   }
-  return { files: out2, capped };
+  return { files: out2, capped, excluded };
 }
 function readText(abs) {
   try {
@@ -780,7 +796,8 @@ var init_common = __esm({
       ".css": "css",
       ".scss": "scss",
       ".vue": "vue",
-      ".svelte": "svelte"
+      ".svelte": "svelte",
+      ".astro": "astro"
     };
   }
 });
@@ -1366,6 +1383,12 @@ function compileGlobs(globs) {
   if (!globs || globs.length === 0) return null;
   const res = globs.map(globToRegExp);
   return (rel) => res.some((r) => r.test(rel));
+}
+function compileGlobFilter(globs) {
+  if (!globs || globs.length === 0) return null;
+  const include = compileGlobs(globs.filter((g) => !g.startsWith("!")));
+  const exclude = compileGlobs(globs.filter((g) => g.startsWith("!")).map((g) => g.slice(1)));
+  return (rel) => (!include || include(rel)) && !exclude?.(rel);
 }
 var init_glob = __esm({
   "src/glob.ts"() {
@@ -6388,7 +6411,7 @@ function scanRepo(root, opts = {}) {
   const scoped = opts.scope ? [...opts.include ?? [], `${opts.scope.replace(/\/+$/, "")}/**`] : opts.include;
   const include = compileGlobs(scoped);
   const exclude = compileGlobs(opts.exclude);
-  const { files: walked, capped } = walk(root, {
+  const { files: walked, capped, excluded } = walk(root, {
     maxFileBytes: opts.maxBytes,
     maxFiles: opts.maxFiles,
     gitignore: opts.gitignore
@@ -6459,7 +6482,7 @@ function scanRepo(root, opts = {}) {
     files.push(record);
   }
   files.sort(byKey((f) => f.rel));
-  return { root, commit: headCommit(root), files, languages, docText, mtimes, capped };
+  return { root, commit: headCommit(root), files, languages, docText, mtimes, capped, excluded };
 }
 var init_scan = __esm({
   "src/scan.ts"() {
@@ -7825,27 +7848,36 @@ var init_memory = __esm({
 });
 
 // src/workspaces.ts
-import { existsSync as existsSync2, readdirSync as readdirSync3 } from "fs";
+import { existsSync as existsSync2, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
 import { join as join8 } from "path";
-function readJson(path) {
+function readJson(path, label, warnings) {
   const raw = readText(path);
   if (!raw) return void 0;
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : void 0;
-  } catch {
+    if (parsed && typeof parsed === "object") return parsed;
+    if (label && warnings) warnings.push(`malformed ${label}: not a JSON object`);
+    return void 0;
+  } catch (e) {
+    if (label && warnings) {
+      const reason = String(e instanceof Error ? e.message : e).split("\n")[0];
+      warnings.push(`malformed ${label}: ${reason}`);
+    }
     return void 0;
   }
 }
 function tomlSectionBody(toml, section) {
-  const re = new RegExp(`^\\[${section}\\]\\s*$([\\s\\S]*?)(?=^\\[|$(?![\\s\\S]))`, "m");
+  const re = new RegExp(`^\\[${escapeRegExp(section)}\\]\\s*$([\\s\\S]*?)(?=^\\[|$(?![\\s\\S]))`, "m");
   const m = toml.match(re);
   return m ? m[1] : null;
 }
 function tomlStringArray(body2, key) {
-  const m = body2.match(new RegExp(`${key}\\s*=\\s*\\[([^\\]]*)\\]`));
+  const m = body2.match(new RegExp(`${escapeRegExp(key)}\\s*=\\s*\\[([^\\]]*)\\]`));
   if (!m) return [];
   return m[1].split(/\r?\n/).map((line) => line.replace(/#.*$/, "")).join("\n").split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+}
+function tomlString(body2, key) {
+  return body2?.match(new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*["']([^"']+)["']`, "m"))?.[1];
 }
 function wsGlobToRegExp(pat) {
   let re = "";
@@ -7867,29 +7899,108 @@ function wsGlobToRegExp(pat) {
   }
   return new RegExp(`^${re}($|/)`);
 }
-function packageAt(root, dir, kind) {
-  const abs = join8(root, dir);
-  const pkgJson = join8(abs, "package.json");
-  if (existsSync2(pkgJson)) {
-    const pkg = readJson(pkgJson);
-    const name2 = typeof pkg?.name === "string" && pkg.name ? pkg.name : dir.split("/").pop();
-    return { name: name2, dir, kind, manifest: `${dir}/package.json` };
+function probeNodePkg(root, dir, kind, warnings) {
+  const path = join8(root, dir, "package.json");
+  if (!existsSync2(path)) return void 0;
+  const manifest = `${dir}/package.json`;
+  const pkg = readJson(path, manifest, warnings);
+  const out2 = {
+    name: typeof pkg?.name === "string" && pkg.name ? pkg.name : dir,
+    dir,
+    kind,
+    manifest
+  };
+  if (typeof pkg?.description === "string" && pkg.description) out2.description = pkg.description;
+  return out2;
+}
+function probeCargo(root, dir) {
+  const path = join8(root, dir, "Cargo.toml");
+  if (!existsSync2(path)) return void 0;
+  const body2 = tomlSectionBody(readText(path), "package");
+  const out2 = {
+    name: tomlString(body2, "name") ?? dir,
+    dir,
+    kind: "cargo",
+    manifest: `${dir}/Cargo.toml`
+  };
+  const description = tomlString(body2, "description");
+  if (description) out2.description = description;
+  return out2;
+}
+function probeGoMod(root, dir) {
+  const path = join8(root, dir, "go.mod");
+  if (!existsSync2(path)) return void 0;
+  const name2 = readText(path).match(/^module\s+(\S+)/m)?.[1] ?? dir;
+  return { name: name2, dir, kind: "go", manifest: `${dir}/go.mod` };
+}
+function probeMaven(root, dir) {
+  const path = join8(root, dir, "pom.xml");
+  if (!existsSync2(path)) return void 0;
+  return { name: ownArtifactId(readText(path)) ?? dir, dir, kind: "maven", manifest: `${dir}/pom.xml` };
+}
+function probePyproject(root, dir) {
+  const path = join8(root, dir, "pyproject.toml");
+  if (!existsSync2(path)) return void 0;
+  const toml = readText(path);
+  const project = tomlSectionBody(toml, "project");
+  const poetry = tomlSectionBody(toml, "tool.poetry");
+  const out2 = {
+    name: tomlString(project, "name") ?? tomlString(poetry, "name") ?? dir,
+    dir,
+    kind: "uv",
+    manifest: `${dir}/pyproject.toml`
+  };
+  const description = tomlString(project, "description") ?? tomlString(poetry, "description");
+  if (description) out2.description = description;
+  return out2;
+}
+function probeComposer(root, dir, warnings) {
+  const path = join8(root, dir, "composer.json");
+  if (!existsSync2(path)) return void 0;
+  const manifest = `${dir}/composer.json`;
+  const pkg = readJson(path, manifest, warnings);
+  const out2 = {
+    name: typeof pkg?.name === "string" && pkg.name ? pkg.name : dir,
+    dir,
+    kind: "composer",
+    manifest
+  };
+  if (typeof pkg?.description === "string" && pkg.description) out2.description = pkg.description;
+  return out2;
+}
+function probeNxProject(root, dir, warnings) {
+  const path = join8(root, dir, "project.json");
+  if (!existsSync2(path)) return void 0;
+  const manifest = `${dir}/project.json`;
+  const proj = readJson(path, manifest, warnings);
+  return {
+    name: typeof proj?.name === "string" && proj.name ? proj.name : dir,
+    dir,
+    kind: "nx",
+    manifest
+  };
+}
+function probeGradle(root, dir) {
+  for (const f of ["build.gradle", "build.gradle.kts"]) {
+    if (existsSync2(join8(root, dir, f))) {
+      return { name: dir, dir, kind: "gradle", manifest: `${dir}/${f}` };
+    }
   }
-  const cargo = join8(abs, "Cargo.toml");
-  if (existsSync2(cargo)) {
-    const body2 = tomlSectionBody(readText(cargo), "package");
-    const name2 = body2?.match(/name\s*=\s*["']([^"']+)["']/)?.[1] ?? dir.split("/").pop();
-    return { name: name2, dir, kind: "cargo", manifest: `${dir}/Cargo.toml` };
-  }
-  const gomod = join8(abs, "go.mod");
-  if (existsSync2(gomod)) {
-    const name2 = readText(gomod).match(/^module\s+(\S+)/m)?.[1] ?? dir.split("/").pop();
-    return { name: name2, dir, kind: "go", manifest: `${dir}/go.mod` };
-  }
-  const pom = join8(abs, "pom.xml");
-  if (existsSync2(pom)) {
-    const name2 = ownArtifactId(readText(pom)) ?? dir.split("/").pop();
-    return { name: name2, dir, kind: "maven", manifest: `${dir}/pom.xml` };
+  return void 0;
+}
+function packageAt(root, dir, kind, warnings) {
+  const node = () => probeNodePkg(root, dir, kind, warnings);
+  const cargo = () => probeCargo(root, dir);
+  const gomod = () => probeGoMod(root, dir);
+  const maven = () => probeMaven(root, dir);
+  const py = () => probePyproject(root, dir);
+  const composer = () => probeComposer(root, dir, warnings);
+  const nx = () => probeNxProject(root, dir, warnings);
+  const gradle = () => probeGradle(root, dir);
+  const probes = kind === "go" ? [gomod, node, cargo, maven, py, composer, nx] : kind === "uv" ? [py, node, cargo, gomod, maven, composer, nx] : kind === "composer" ? [composer, node, py, cargo, gomod, maven, nx] : kind === "gradle" ? [node, maven, cargo, gomod, py, composer, nx, gradle] : [node, cargo, gomod, maven, py, composer, nx];
+  for (const probe of probes) {
+    const pkg = probe();
+    if (pkg) return pkg;
   }
   return void 0;
 }
@@ -7897,47 +8008,77 @@ function ownArtifactId(pom) {
   const stripped = pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").replace(/<dependencies>[\s\S]*?<\/dependencies>/g, "");
   return stripped.match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1];
 }
-function addPackage(root, dir, found, kind) {
+function addPackage(root, dir, found, kind, warnings) {
   const clean = dir.replace(/^\.\//, "").replace(/\/+$/, "");
-  if (!clean || found.has(clean)) return;
-  const pkg = packageAt(root, clean, kind);
+  if (!clean || clean === "." || found.has(clean)) return;
+  if (clean.split("/").includes("..")) return;
+  const pkg = packageAt(root, clean, kind, warnings);
   if (pkg) found.set(clean, pkg);
 }
-function collectRecursive(root, base, found, kind, depth) {
-  if (depth > MAX_RECURSE_DEPTH) return;
+function isDirAt(root, rel) {
+  try {
+    return statSync3(join8(root, rel)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function subdirsOf(root, base) {
   let entries;
   try {
-    entries = readdirSync3(join8(root, base), { withFileTypes: true });
+    entries = readdirSync3(base ? join8(root, base) : root, { withFileTypes: true });
   } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isDirectory() && !e.name.startsWith(".") && !WS_SKIP_DIRS.has(e.name)).map((e) => base ? `${base}/${e.name}` : e.name).sort(byStr);
+}
+function descendantsOf(root, base, depth, out2) {
+  if (depth > MAX_RECURSE_DEPTH) return;
+  for (const sub of subdirsOf(root, base)) {
+    out2.push(sub);
+    descendantsOf(root, sub, depth + 1, out2);
+  }
+}
+function expandGlobDirs(root, pat) {
+  const segs = pat.split("/").filter((s) => s && s !== ".");
+  if (segs.includes("..")) return [];
+  let dirs = [""];
+  for (const seg of segs) {
+    const next = /* @__PURE__ */ new Set();
+    if (seg === "**") {
+      for (const d of dirs) {
+        if (d) next.add(d);
+        const desc = [];
+        descendantsOf(root, d, 0, desc);
+        for (const s of desc) next.add(s);
+      }
+    } else if (seg.includes("*")) {
+      const re = new RegExp(`^${seg.split("*").map(escapeRegExp).join("[^/]*")}$`);
+      for (const d of dirs) {
+        for (const sub of subdirsOf(root, d)) {
+          if (re.test(sub.split("/").pop())) next.add(sub);
+        }
+      }
+    } else {
+      for (const d of dirs) {
+        const cand = d ? `${d}/${seg}` : seg;
+        if (isDirAt(root, cand)) next.add(cand);
+      }
+    }
+    dirs = [...next];
+    if (!dirs.length) return [];
+  }
+  return dirs.filter(Boolean);
+}
+function expandPattern(root, raw, found, kind, warnings) {
+  const pat = raw.replace(/^\.\//, "").replace(/\/+$/, "");
+  if (!pat) return;
+  if (!pat.includes("*")) {
+    addPackage(root, pat, found, kind, warnings);
     return;
   }
-  for (const ent of entries) {
-    if (!ent.isDirectory() || WS_SKIP_DIRS.has(ent.name)) continue;
-    const sub = base ? `${base}/${ent.name}` : ent.name;
-    addPackage(root, sub, found, kind);
-    collectRecursive(root, sub, found, kind, depth + 1);
-  }
+  for (const dir of expandGlobDirs(root, pat)) addPackage(root, dir, found, kind, warnings);
 }
-function expandPattern(root, raw, found, kind) {
-  const pat = raw.replace(/\/+$/, "");
-  if (pat.endsWith("/**")) {
-    collectRecursive(root, pat.slice(0, -3), found, kind, 0);
-  } else if (pat.endsWith("/*")) {
-    const base = pat.slice(0, -2);
-    let entries;
-    try {
-      entries = readdirSync3(join8(root, base), { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const ent of entries) {
-      if (ent.isDirectory()) addPackage(root, `${base}/${ent.name}`, found, kind);
-    }
-  } else {
-    addPackage(root, pat, found, kind);
-  }
-}
-function npmFamilyPatterns(root) {
+function npmFamilyPatterns(root, warnings) {
   const positives = [];
   const negations = [];
   const push = (raw, kind) => {
@@ -7946,7 +8087,7 @@ function npmFamilyPatterns(root) {
     if (t.startsWith("!")) negations.push(t.slice(1));
     else positives.push({ pattern: t, kind });
   };
-  const pkg = readJson(join8(root, "package.json"));
+  const pkg = readJson(join8(root, "package.json"), "package.json", warnings);
   const ws = pkg?.workspaces;
   if (Array.isArray(ws)) {
     for (const x of ws) if (typeof x === "string") push(x, "npm");
@@ -7966,12 +8107,12 @@ function npmFamilyPatterns(root) {
   }
   return { positives, negations };
 }
-function fallbackNpmPatterns(root) {
-  const lerna = readJson(join8(root, "lerna.json"));
+function fallbackNpmPatterns(root, warnings) {
+  const lerna = readJson(join8(root, "lerna.json"), "lerna.json", warnings);
   if (lerna && Array.isArray(lerna.packages)) {
     return lerna.packages.filter((x) => typeof x === "string").map((pattern) => ({ pattern, kind: "lerna" }));
   }
-  const nx = readJson(join8(root, "nx.json"));
+  const nx = readJson(join8(root, "nx.json"), "nx.json", warnings);
   if (nx) {
     const layout = nx.workspaceLayout ?? {};
     const appsDir = typeof layout.appsDir === "string" ? layout.appsDir : "apps";
@@ -7980,7 +8121,7 @@ function fallbackNpmPatterns(root) {
   }
   return [];
 }
-function detectCargoMembers(root, found) {
+function detectCargoMembers(root, found, warnings) {
   const toml = readText(join8(root, "Cargo.toml"));
   if (!toml) return;
   const body2 = tomlSectionBody(toml, "workspace");
@@ -7989,13 +8130,13 @@ function detectCargoMembers(root, found) {
   if (!members.length) return;
   const excludes = tomlStringArray(body2, "exclude").map(wsGlobToRegExp);
   const candidates = /* @__PURE__ */ new Map();
-  for (const pat of members) expandPattern(root, pat, candidates, "cargo");
+  for (const pat of members) expandPattern(root, pat, candidates, "cargo", warnings);
   for (const [dir, pkg] of candidates) {
     if (excludes.some((re) => re.test(dir))) continue;
     if (!found.has(dir)) found.set(dir, pkg);
   }
 }
-function detectGoWork(root, found) {
+function detectGoWork(root, found, warnings) {
   const gowork = readText(join8(root, "go.work"));
   if (!gowork) return;
   const dirs = [];
@@ -8008,20 +8149,58 @@ function detectGoWork(root, found) {
   for (const m of gowork.matchAll(/^use\s+([^\s(]+)/gm)) dirs.push(m[1]);
   for (const dir of dirs) {
     if (dir === "." || dir === "./") continue;
-    addPackage(root, dir, found, "go");
+    addPackage(root, dir, found, "go", warnings);
   }
 }
-function detectMavenModules(root, found) {
+function detectMavenModules(root, found, warnings) {
   const pom = readText(join8(root, "pom.xml"));
   if (!pom) return;
   const modules = pom.match(/<modules>([\s\S]*?)<\/modules>/)?.[1];
   if (!modules) return;
   for (const m of modules.matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)) {
-    addPackage(root, m[1], found, "maven");
+    addPackage(root, m[1], found, "maven", warnings);
   }
 }
-function npmEdges(root, pkg, byName) {
-  const manifest = readJson(join8(root, pkg.dir, "package.json"));
+function detectUvMembers(root, found, warnings) {
+  const toml = readText(join8(root, "pyproject.toml"));
+  if (!toml) return;
+  const body2 = tomlSectionBody(toml, "tool.uv.workspace");
+  if (!body2) return;
+  const members = tomlStringArray(body2, "members");
+  if (!members.length) return;
+  const excludes = tomlStringArray(body2, "exclude").map(wsGlobToRegExp);
+  const candidates = /* @__PURE__ */ new Map();
+  for (const pat of members) expandPattern(root, pat, candidates, "uv", warnings);
+  for (const [dir, pkg] of candidates) {
+    if (excludes.some((re) => re.test(dir))) continue;
+    if (!found.has(dir)) found.set(dir, pkg);
+  }
+}
+function detectComposerPathRepos(root, found, warnings) {
+  const composer = readJson(join8(root, "composer.json"), "composer.json", warnings);
+  const repos = composer?.repositories;
+  if (!Array.isArray(repos)) return;
+  for (const r of repos) {
+    if (!r || typeof r !== "object") continue;
+    const { type, url } = r;
+    if (type === "path" && typeof url === "string" && url) expandPattern(root, url, found, "composer", warnings);
+  }
+}
+function detectGradleIncludes(root, found, warnings) {
+  for (const f of ["settings.gradle", "settings.gradle.kts"]) {
+    const text = readText(join8(root, f));
+    if (!text) continue;
+    for (const line of text.split(/\r?\n/)) {
+      if (!/^\s*include[\s(]/.test(line)) continue;
+      for (const m of line.matchAll(/["']([^"']+)["']/g)) {
+        const dir = m[1].replace(/^:/, "").replace(/:/g, "/");
+        if (dir) addPackage(root, dir, found, "gradle", warnings);
+      }
+    }
+  }
+}
+function npmEdges(root, pkg, byName, warnings) {
+  const manifest = readJson(join8(root, pkg.dir, "package.json"), `${pkg.dir}/package.json`, warnings);
   if (!manifest) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
@@ -8091,6 +8270,71 @@ function mavenEdges(root, pkg, byName) {
   }
   return [...edges];
 }
+function uvEdges(root, pkg, byName) {
+  const toml = readText(join8(root, pkg.dir, "pyproject.toml"));
+  if (!toml) return [];
+  const edges = /* @__PURE__ */ new Set();
+  const project = tomlSectionBody(toml, "project");
+  if (project) {
+    for (const dep of tomlStringArray(project, "dependencies")) {
+      const name2 = dep.match(/^[A-Za-z0-9_.-]+/)?.[0];
+      if (name2 && name2 !== pkg.name && byName.has(name2)) edges.add(name2);
+    }
+  }
+  const sources = tomlSectionBody(toml, "tool.uv.sources");
+  if (sources) {
+    for (const line of sources.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*\{[^}]*workspace\s*=\s*true/);
+      if (m && m[1] !== pkg.name && byName.has(m[1])) edges.add(m[1]);
+    }
+  }
+  return [...edges];
+}
+function composerEdges(root, pkg, byName, warnings) {
+  const manifest = readJson(join8(root, pkg.dir, "composer.json"), `${pkg.dir}/composer.json`, warnings);
+  if (!manifest) return [];
+  const edges = /* @__PURE__ */ new Set();
+  for (const field of ["require", "require-dev"]) {
+    const deps = manifest[field];
+    if (!deps || typeof deps !== "object") continue;
+    for (const dep of Object.keys(deps)) {
+      if (dep !== pkg.name && byName.has(dep)) edges.add(dep);
+    }
+  }
+  return [...edges];
+}
+function gradleEdges(root, pkg, byName, byDir) {
+  for (const f of ["build.gradle", "build.gradle.kts"]) {
+    const text = readText(join8(root, pkg.dir, f));
+    if (!text) continue;
+    const edges = /* @__PURE__ */ new Set();
+    for (const m of text.matchAll(/project\s*\(\s*["']:?([^"']+)["']\s*\)/g)) {
+      const path = m[1].replace(/:/g, "/");
+      const target = byDir.get(path) ?? (byName.has(path) ? path : void 0);
+      if (target && target !== pkg.name) edges.add(target);
+    }
+    return [...edges];
+  }
+  return [];
+}
+function edgesFor(root, pkg, byName, byDir, warnings) {
+  switch (pkg.kind) {
+    case "cargo":
+      return cargoEdges(root, pkg, byName, byDir);
+    case "go":
+      return goPkgEdges(root, pkg, byName, byDir);
+    case "maven":
+      return mavenEdges(root, pkg, byName);
+    case "uv":
+      return uvEdges(root, pkg, byName);
+    case "composer":
+      return composerEdges(root, pkg, byName, warnings);
+    case "gradle":
+      return gradleEdges(root, pkg, byName, byDir);
+    default:
+      return npmEdges(root, pkg, byName, warnings);
+  }
+}
 function findCycle(packages) {
   const deps = new Map(packages.map((p) => [p.name, [...p.dependsOn ?? []].sort(byStr)]));
   const state = /* @__PURE__ */ new Map();
@@ -8135,26 +8379,30 @@ function topoOrder(packages) {
   return order;
 }
 function detectWorkspaces(root) {
+  const warnings = [];
   const found = /* @__PURE__ */ new Map();
-  const { positives, negations } = npmFamilyPatterns(root);
-  const npmPatterns = positives.length ? positives : fallbackNpmPatterns(root);
+  const { positives, negations } = npmFamilyPatterns(root, warnings);
+  const npmPatterns = positives.length ? positives : fallbackNpmPatterns(root, warnings);
   if (npmPatterns.length) {
     const candidates = /* @__PURE__ */ new Map();
-    for (const { pattern, kind } of npmPatterns) expandPattern(root, pattern, candidates, kind);
+    for (const { pattern, kind } of npmPatterns) expandPattern(root, pattern, candidates, kind, warnings);
     const negRes = negations.map(wsGlobToRegExp);
     for (const [dir, pkg] of candidates) {
       if (negRes.some((re) => re.test(dir))) continue;
       found.set(dir, pkg);
     }
   }
-  detectCargoMembers(root, found);
-  detectGoWork(root, found);
-  detectMavenModules(root, found);
+  detectCargoMembers(root, found, warnings);
+  detectGoWork(root, found, warnings);
+  detectMavenModules(root, found, warnings);
+  detectUvMembers(root, found, warnings);
+  detectComposerPathRepos(root, found, warnings);
+  detectGradleIncludes(root, found, warnings);
   const packages = [...found.values()].sort((a, b) => byStr(a.dir, b.dir));
   const byName = new Set(packages.map((p) => p.name));
   const byDir = new Map(packages.map((p) => [p.dir, p.name]));
   for (const pkg of packages) {
-    const edges = pkg.kind === "cargo" ? cargoEdges(root, pkg, byName, byDir) : pkg.kind === "go" ? goPkgEdges(root, pkg, byName, byDir) : pkg.kind === "maven" ? mavenEdges(root, pkg, byName) : npmEdges(root, pkg, byName);
+    const edges = edgesFor(root, pkg, byName, byDir, warnings);
     if (edges.length) pkg.dependsOn = edges.sort(byStr);
   }
   const byDepth = [...packages].sort((a, b) => b.dir.length - a.dir.length);
@@ -8162,6 +8410,7 @@ function detectWorkspaces(root) {
     packages,
     cycle: findCycle(packages),
     topoOrder: topoOrder(packages),
+    warnings: [...new Set(warnings)].sort(byStr),
     packageOf: (rel) => byDepth.find((p) => rel === p.dir || rel.startsWith(p.dir + "/"))
   };
 }
@@ -8171,6 +8420,7 @@ var init_workspaces = __esm({
     "use strict";
     init_walk();
     init_sort();
+    init_util();
     WS_SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", "dist", "build", "target", "coverage"]);
     MAX_RECURSE_DEPTH = 4;
   }
@@ -8788,7 +9038,10 @@ function rgBackend(root, pattern, opts) {
   for (const ext of BINARY_EXT) args2.push("--iglob", `!**/*${ext}`);
   args2.push("--glob", "!*.min.js", "--glob", "!*.min.css");
   if (opts.ignoreCase) args2.push("--ignore-case");
-  for (const g of opts.globs ?? []) args2.push("--glob", g.startsWith("/") ? g : `/${g}`);
+  const user = opts.globs ?? [];
+  const anchor = (g) => g.startsWith("/") ? g : `/${g}`;
+  for (const g of user.filter((g2) => !g2.startsWith("!"))) args2.push("--glob", anchor(g));
+  for (const g of user.filter((g2) => g2.startsWith("!"))) args2.push("--glob", `!${anchor(g.slice(1))}`);
   args2.push("--regexp", pattern, "./");
   const res = sh("rg", args2, { cwd: root });
   if (res.missing || !res.ok && res.status !== 1) return void 0;
@@ -8806,7 +9059,7 @@ function rgBackend(root, pattern, opts) {
   return hits;
 }
 function jsBackend(root, re, opts) {
-  const filter = compileGlobs(opts.globs?.map((g) => g.replace(/^\//, "")));
+  const filter = compileGlobFilter(opts.globs?.map((g) => g.replace(/^(!?)\//, "$1")));
   const hits = [];
   for (const f of walk(root).files) {
     if (filter && !filter(f.rel)) continue;
@@ -9874,7 +10127,25 @@ var ASSET_EXTS = /* @__PURE__ */ new Set([
   ".mp4",
   ".mov",
   ".avi",
-  ".webm"
+  ".webm",
+  // Archives / compiled binaries: reconstruct's bundle files these under
+  // "asset" (opaque blob shipped with the repo, not code/data) — the engine
+  // matches instead of letting them fall through to "other".
+  ".zip",
+  ".gz",
+  ".tar",
+  ".rar",
+  ".7z",
+  ".wasm",
+  ".so",
+  ".dylib",
+  ".dll",
+  ".exe",
+  ".bin",
+  ".class",
+  ".jar",
+  ".pyc",
+  ".node"
 ]);
 var I18N_DIRS = ["locales", "locale", "i18n", "lang", "langs", "translations", "messages"];
 var I18N_EXTS = /* @__PURE__ */ new Set([".json", ".yaml", ".yml", ".po", ".properties"]);

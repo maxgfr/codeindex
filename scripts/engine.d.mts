@@ -132,6 +132,7 @@ interface WalkedFile {
 interface WalkResult {
     files: WalkedFile[];
     capped: boolean;
+    excluded: number;
 }
 declare const DEFAULT_MAX_FILES = 20000;
 declare function walk(root: string, opts?: WalkOptions): WalkResult;
@@ -145,6 +146,7 @@ interface RepoScan {
     docText: Map<string, string>;
     mtimes: Map<string, number>;
     capped: boolean;
+    excluded: number;
 }
 interface ScanOptions {
     include?: string[];
@@ -369,18 +371,20 @@ declare function readMemory(repo: string, name: string): string | undefined;
 declare function deleteMemory(repo: string, name: string): boolean;
 declare function listMemories(repo: string): string[];
 
-type WorkspaceKind = "npm" | "pnpm" | "lerna" | "nx" | "cargo" | "go" | "maven";
+type WorkspaceKind = "npm" | "pnpm" | "lerna" | "nx" | "cargo" | "go" | "maven" | "uv" | "composer" | "gradle";
 interface WorkspacePackage {
     name: string;
     dir: string;
     kind: WorkspaceKind;
     manifest: string;
+    description?: string;
     dependsOn?: string[];
 }
 interface WorkspaceInfo {
     packages: WorkspacePackage[];
     cycle?: string[];
     topoOrder: string[];
+    warnings: string[];
     packageOf(rel: string): WorkspacePackage | undefined;
 }
 declare function detectWorkspaces(root: string): WorkspaceInfo;
