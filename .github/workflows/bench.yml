@@ -22,7 +22,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run bench harness (no --write)
-        run: node scripts/bench/bench.mjs --repo socialgouv/code-du-travail-numerique --runs 2 | tee bench-output.md
+        run: |
+          set -o pipefail
+          node scripts/bench/bench.mjs --repo socialgouv/code-du-travail-numerique --runs 2 | tee bench-output.md
       - uses: actions/upload-artifact@v4
         with:
           name: bench-output

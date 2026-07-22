@@ -151,8 +151,11 @@ function scenarioCold(ctxs, comp, cfg) {
           const r = runMedian({ ...cfg, runs: Math.min(cfg.runs, cfg.slowRuns) },
             () => runCmd(comp["scip-typescript"].path, ["index", "--output", idx], { cwd: work }),
             { before: () => { idx = tmpPath("scip.scip"); }, after: () => rmrf(idx) });
+          // Text cell, so surface the effective run count ourselves (ms cells get
+          // this from render); scip is forced to slowRuns, which may be < nominal.
+          const runsAnn = r.runs !== cfg.runs ? ` (${r.runs}×)` : "";
           scipCell = r.last.ok
-            ? { v: `${Math.round(r.ms)} (+${Math.round(inst.ms)} install)`, k: "text" }
+            ? { v: `${Math.round(r.ms)}${runsAnn} (+${Math.round(inst.ms)} install)`, k: "text" }
             : na("scip index failed");
         }
         rmrf(work);
@@ -199,8 +202,12 @@ function scenarioWarm(ctxs, comp, cfg) {
       if (rel) {
         const target = join(work, rel);
         const original = readFileSync(target);
+        // Unique payload per iteration so the content hash changes every run and
+        // the real incremental re-parse path is timed — not the hash short-circuit
+        // an identical append would hit after warmup.
+        let ti = 0;
         const touch = runMedian(cfg, () => runCmd(process.execPath, [CLI_PATH, "index", "--repo", work, "--out", out]),
-          { before: () => writeFileSync(target, Buffer.concat([original, Buffer.from("\n// codeindex-bench-touch\n")])), after: () => writeFileSync(target, original) });
+          { before: () => writeFileSync(target, Buffer.concat([original, Buffer.from(`\n// codeindex-bench-touch ${ti++}\n`)])), after: () => writeFileSync(target, original) });
         writeFileSync(target, original);
         touchCell = touch.last.ok ? msCell(touch) : na("rerun failed");
       }
@@ -214,8 +221,9 @@ function scenarioWarm(ctxs, comp, cfg) {
         else {
           const target = join(oxWork, rel);
           const original = readFileSync(target);
+          let oi = 0; // unique payload per iteration (see the codeindex touch above)
           const r = runMedian(cfg, () => runCmd(comp["01x"].path, ["reindex", rel], { cwd: oxWork }),
-            { before: () => writeFileSync(target, Buffer.concat([original, Buffer.from("\n// codeindex-bench-touch\n")])), after: () => writeFileSync(target, original) });
+            { before: () => writeFileSync(target, Buffer.concat([original, Buffer.from(`\n// codeindex-bench-touch ${oi++}\n`)])), after: () => writeFileSync(target, original) });
           oxCell = r.last.ok ? msCell(r) : na(`reindex exit ${r.last.code}`);
           rmrf(oxWork);
         }
@@ -283,8 +291,8 @@ function scenarioQueries(ctxs, comp, cfg) {
   }
   return {
     id: "queries", title: "Queries (find-symbol / references / callers)",
-    note: "in-proc = warm scan already loaded, API call timed alone; spawn = full `codeindex` CLI process. The spawn/in-proc gap is Node startup, not algorithm cost. ctags lookup scans its tags file for the symbol.",
-    headers: ["Repo", "Symbol", "find-symbol in-proc (ms)", "find-symbol spawn (ms)", "references in-proc (ms)", "callers in-proc (ms)", "01x find-symbol (ms)", "ctags lookup (ms)"],
+    note: "`find-symbol in-proc` / `references in-proc`: a single API call on an already-loaded warm scan (call timed alone). `caller-index in-proc`: builds the whole-scan caller index (not just callers-of-symbol). `full-index spawn`: a full `codeindex symbols` CLI process — Node startup PLUS a cold buildIndexArtifacts and serialization of the entire symbol table, i.e. NOT a single-symbol lookup. `01x find-symbol`: one query against its primed SQLite DB. `ctags lookup`: scans the tags file for the symbol.",
+    headers: ["Repo", "Symbol", "find-symbol in-proc (ms)", "full-index spawn (ms)", "references in-proc (ms)", "caller-index in-proc (ms)", "01x find-symbol (ms)", "ctags lookup (ms)"],
     rows,
   };
 }
@@ -295,7 +303,9 @@ function scenarioTokens(ctxs, _comp, _cfg) {
     log(`tokens: ${ctx.repo.slug}`);
     const scan = ctx.scan();
     const sym = ctx.symbol();
-    const hits = engine.grepRepo(ctx.dir(), sym);
+    // Uncapped: grepRepo defaults to DEFAULT_MAX_HITS=200; the 200-cap would both
+    // truncate the measured bytes and feed a bogus line count into 01x's formula.
+    const hits = engine.grepRepo(ctx.dir(), sym, { maxHits: Number.MAX_SAFE_INTEGER });
     const grepText = hits.map((h) => `${h.file}:${h.line}:${h.text}`).join("\n");
     const grepBytes = byteLen(grepText);
     const indexBytes = byteLen(JSON.stringify(engine.findSymbol(scan, sym)));
@@ -378,7 +388,9 @@ function scenarioSize(ctxs, comp, _cfg) {
 // Not per-repo: measured install footprint of each tool.
 function scenarioInstall(_ctxs, comp, _cfg) {
   const rows = [];
-  // ours — npm pack --dry-run, zero runtime deps.
+  // ours — npm pack --dry-run, zero runtime deps. We report `unpackedSize` (the
+  // installed-on-disk footprint), NOT the compressed tarball `size` — it is the
+  // apples-to-apples comparison against the competitor binaries' on-disk sizes.
   let ourCell = na("npm pack failed");
   const pack = runCmd("npm", ["pack", "--dry-run", "--json"], { cwd: REPO_ROOT });
   if (pack.ok) {

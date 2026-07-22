@@ -60,13 +60,13 @@ export const REPOS = [
     symbol: "WalkBuilder",
   },
   {
-    // Pinned 2026-07-22 from repos/vercel/next.js/commits/canary. Big repo:
-    // marked `slow` so scenarios that spawn a >60s run downgrade to fewer runs.
+    // Pinned 2026-07-22 from repos/vercel/next.js/commits/canary. Big repo: a run
+    // that crosses 60s downgrades to fewer runs automatically (the orchestrator's
+    // warmup-threshold rule) — no per-repo flag needed.
     slug: "vercel/next.js",
     sha: "203177bb7505837801281c7d1eb008519a242010",
     lang: "typescript",
     symbol: "NextResponse",
-    slow: true,
     // Reference figures published by 01x-in for comparison (not asserted here):
     ref01x: { coldMs: 121037, files: 11064 },
   },
