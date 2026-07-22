@@ -1,6 +1,6 @@
 {
   "name": "@maxgfr/codeindex",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Self-contained, deterministic repo-indexing engine: walk + language detection + symbol/import extraction (tree-sitter AST with regex fallback) + import resolution + typed cross-file link-graph + analytics. Ships as a single zero-dependency engine.mjs that consumer tools vendor.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
