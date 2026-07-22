@@ -8638,191 +8638,6 @@ var init_mcp = __esm({
   }
 });
 
-// src/engine-cli.ts
-var engine_cli_exports = {};
-__export(engine_cli_exports, {
-  runCli: () => runCli
-});
-import { mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
-import { join as join6, resolve } from "path";
-function parseFlags(args2) {
-  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false };
-  for (let i2 = 0; i2 < args2.length; i2++) {
-    const a = args2[i2];
-    const next = () => {
-      const v = args2[++i2];
-      if (v === void 0) throw new Error(`missing value for ${a}`);
-      return v;
-    };
-    if (a === "--repo") flags2.repo = resolve(next());
-    else if (a === "--out") flags2.out = resolve(next());
-    else if (a === "--include") flags2.include.push(next());
-    else if (a === "--exclude") flags2.exclude.push(next());
-    else if (a === "--scope") flags2.scope = next();
-    else if (a === "--no-gitignore") flags2.gitignore = false;
-    else if (a === "--max-files") flags2.maxFiles = Number(next());
-    else if (a === "--max-bytes") flags2.maxBytes = Number(next());
-    else if (a === "--no-ast") flags2.noAst = true;
-    else if (a === "--since") flags2.since = next();
-    else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
-    else throw new Error(`unknown flag: ${a}`);
-  }
-  return flags2;
-}
-function emit(content, out2) {
-  if (out2) writeFileSync(out2, content);
-  else process.stdout.write(content);
-}
-function scanOptions(flags2) {
-  return {
-    include: flags2.include.length ? flags2.include : void 0,
-    exclude: flags2.exclude.length ? flags2.exclude : void 0,
-    scope: flags2.scope,
-    gitignore: flags2.gitignore,
-    maxFiles: flags2.maxFiles,
-    maxBytes: flags2.maxBytes
-  };
-}
-async function runCli(argv) {
-  const [cmd, ...rest] = argv;
-  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
-    process.stdout.write(HELP);
-    return;
-  }
-  if (cmd === "version" || cmd === "--version") {
-    process.stdout.write(ENGINE_VERSION + "\n");
-    return;
-  }
-  if (cmd === "mcp") {
-    const { runMcpServer: runMcpServer2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
-    await runMcpServer2();
-    return;
-  }
-  const flags2 = parseFlags(rest);
-  if (!flags2.noAst) await ensureGrammars(allGrammarKeys());
-  if (cmd === "index") {
-    if (!flags2.out) throw new Error("index needs --out <dir>");
-    const outDir = flags2.out;
-    mkdirSync(outDir, { recursive: true });
-    const cachePath = join6(outDir, "cache.json");
-    let cache;
-    try {
-      const parsed = JSON.parse(readFileSync3(cachePath, "utf8"));
-      if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
-        cache = new Map(Object.entries(parsed.files));
-      }
-    } catch {
-    }
-    const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
-    writeFileSync(join6(outDir, "graph.json"), renderGraphJson(graph));
-    writeFileSync(join6(outDir, "symbols.json"), renderSymbolsJson(symbols));
-    const files = {};
-    for (const f of scan2.files) {
-      const entry = { hash: f.hash, record: f, size: f.size };
-      const mtime = scan2.mtimes.get(f.rel);
-      if (mtime !== void 0) entry.mtimeMs = mtime;
-      files[f.rel] = entry;
-    }
-    writeFileSync(
-      cachePath,
-      JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n"
-    );
-    process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${scan2.capped ? " (capped)" : ""}
-`);
-  } else if (cmd === "scan") {
-    const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
-    const summary = {
-      engineVersion: ENGINE_VERSION,
-      commit: scan2.commit,
-      fileCount: scan2.files.length,
-      languages: scan2.languages,
-      capped: scan2.capped
-    };
-    emit(JSON.stringify(summary, null, 2) + "\n", flags2.out);
-  } else if (cmd === "graph") {
-    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
-    emit(renderGraphJson(graph), flags2.out);
-  } else if (cmd === "symbols") {
-    const { symbols } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
-    emit(renderSymbolsJson(symbols), flags2.out);
-  } else if (cmd === "callers") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
-    const index = buildCallerIndex(scan2);
-    const obj = {};
-    for (const [name2, entry] of index) obj[name2] = entry;
-    emit(JSON.stringify(obj, null, 2) + "\n", flags2.out);
-  } else if (cmd === "workspaces") {
-    const info2 = detectWorkspaces(flags2.repo);
-    emit(
-      JSON.stringify(
-        { packages: info2.packages, cycle: info2.cycle ?? null, topoOrder: info2.topoOrder },
-        null,
-        2
-      ) + "\n",
-      flags2.out
-    );
-  } else if (cmd === "churn") {
-    const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
-    const sorted = {};
-    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
-    emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags2.out);
-  } else if (cmd === "grep") {
-    if (!flags2.positional) throw new Error("grep needs a pattern: engine.mjs grep <pattern> --repo <dir>");
-    emit(JSON.stringify(grepRepo(flags2.repo, flags2.positional), null, 2) + "\n", flags2.out);
-  } else {
-    process.stderr.write(`unknown command: ${cmd}
-
-${HELP}`);
-    process.exitCode = 2;
-  }
-}
-var HELP;
-var init_engine_cli = __esm({
-  "src/engine-cli.ts"() {
-    "use strict";
-    init_types();
-    init_types();
-    init_loader();
-    init_pipeline();
-    init_graph_json();
-    init_symbols_json();
-    init_scan();
-    init_callers();
-    init_workspaces();
-    init_git();
-    init_grep();
-    HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
-
-Usage: engine.mjs <command> [flags]
-
-Commands:
-  index       Build graph.json + symbols.json (+ incremental cache.json) into
-              --out <dir> in ONE pass \u2014 the fast path for repeated runs
-  scan        Scan summary: file count, language histogram, capped flag
-  graph       Full link-graph (graph.json bytes) to stdout or --out
-  symbols     Symbol index (symbols.json bytes) to stdout or --out
-  callers     Per-symbol caller index (JSON)
-  workspaces  Monorepo packages + dependency graph (JSON)
-  churn       Per-file git commit counts (JSON; --since <ref> to bound)
-  grep        Search: engine.mjs grep <pattern> --repo <dir> (JSON hits)
-  mcp         Run as an MCP server over stdio (tools: scan_summary, graph,
-              symbols, callers, workspaces, churn, grep)
-  version     Print the engine version
-
-Flags:
-  --repo <dir>        Repo root (default: cwd)
-  --out <file>        Write output to a file instead of stdout
-  --include <glob>    Only include matching paths (repeatable)
-  --exclude <glob>    Exclude matching paths (repeatable)
-  --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
-  --no-gitignore      Do not honor .gitignore files (default: honored)
-  --max-files <n>     Cap walked files (default 20000)
-  --max-bytes <n>     Skip files above this size (default 1 MiB)
-  --no-ast            Skip tree-sitter grammars even when present (regex tier)
-`;
-  }
-});
-
 // src/engine.ts
 init_types();
 init_walk();
@@ -8960,20 +8775,180 @@ init_mcp();
 init_hash();
 init_sort();
 init_util();
-import { realpathSync as realpathSync2 } from "fs";
-import { fileURLToPath as fileURLToPath2 } from "url";
-var cliEntry = process.argv[1];
-var isMain = false;
-if (cliEntry) {
-  try {
-    isMain = realpathSync2(cliEntry) === realpathSync2(fileURLToPath2(import.meta.url));
-  } catch {
-    isMain = false;
+
+// src/engine-cli.ts
+init_types();
+init_types();
+init_loader();
+init_pipeline();
+init_graph_json();
+init_symbols_json();
+init_scan();
+init_callers();
+init_workspaces();
+init_git();
+init_grep();
+import { mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
+import { join as join6, resolve } from "path";
+var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
+
+Usage: engine.mjs <command> [flags]
+
+Commands:
+  index       Build graph.json + symbols.json (+ incremental cache.json) into
+              --out <dir> in ONE pass \u2014 the fast path for repeated runs
+  scan        Scan summary: file count, language histogram, capped flag
+  graph       Full link-graph (graph.json bytes) to stdout or --out
+  symbols     Symbol index (symbols.json bytes) to stdout or --out
+  callers     Per-symbol caller index (JSON)
+  workspaces  Monorepo packages + dependency graph (JSON)
+  churn       Per-file git commit counts (JSON; --since <ref> to bound)
+  grep        Search: engine.mjs grep <pattern> --repo <dir> (JSON hits)
+  mcp         Run as an MCP server over stdio (tools: scan_summary, graph,
+              symbols, callers, workspaces, churn, grep)
+  version     Print the engine version
+
+Flags:
+  --repo <dir>        Repo root (default: cwd)
+  --out <file>        Write output to a file instead of stdout
+  --include <glob>    Only include matching paths (repeatable)
+  --exclude <glob>    Exclude matching paths (repeatable)
+  --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
+  --no-gitignore      Do not honor .gitignore files (default: honored)
+  --max-files <n>     Cap walked files (default 20000)
+  --max-bytes <n>     Skip files above this size (default 1 MiB)
+  --no-ast            Skip tree-sitter grammars even when present (regex tier)
+`;
+function parseFlags(args2) {
+  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false };
+  for (let i2 = 0; i2 < args2.length; i2++) {
+    const a = args2[i2];
+    const next = () => {
+      const v = args2[++i2];
+      if (v === void 0) throw new Error(`missing value for ${a}`);
+      return v;
+    };
+    if (a === "--repo") flags2.repo = resolve(next());
+    else if (a === "--out") flags2.out = resolve(next());
+    else if (a === "--include") flags2.include.push(next());
+    else if (a === "--exclude") flags2.exclude.push(next());
+    else if (a === "--scope") flags2.scope = next();
+    else if (a === "--no-gitignore") flags2.gitignore = false;
+    else if (a === "--max-files") flags2.maxFiles = Number(next());
+    else if (a === "--max-bytes") flags2.maxBytes = Number(next());
+    else if (a === "--no-ast") flags2.noAst = true;
+    else if (a === "--since") flags2.since = next();
+    else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
+    else throw new Error(`unknown flag: ${a}`);
   }
+  return flags2;
 }
-if (isMain) {
-  const { runCli: runCli2 } = await Promise.resolve().then(() => (init_engine_cli(), engine_cli_exports));
-  await runCli2(process.argv.slice(2));
+function emit(content, out2) {
+  if (out2) writeFileSync(out2, content);
+  else process.stdout.write(content);
+}
+function scanOptions(flags2) {
+  return {
+    include: flags2.include.length ? flags2.include : void 0,
+    exclude: flags2.exclude.length ? flags2.exclude : void 0,
+    scope: flags2.scope,
+    gitignore: flags2.gitignore,
+    maxFiles: flags2.maxFiles,
+    maxBytes: flags2.maxBytes
+  };
+}
+async function runCli(argv) {
+  const [cmd, ...rest] = argv;
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+    process.stdout.write(HELP);
+    return;
+  }
+  if (cmd === "version" || cmd === "--version") {
+    process.stdout.write(ENGINE_VERSION + "\n");
+    return;
+  }
+  if (cmd === "mcp") {
+    const { runMcpServer: runMcpServer2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
+    await runMcpServer2();
+    return;
+  }
+  const flags2 = parseFlags(rest);
+  if (!flags2.noAst) await ensureGrammars(allGrammarKeys());
+  if (cmd === "index") {
+    if (!flags2.out) throw new Error("index needs --out <dir>");
+    const outDir = flags2.out;
+    mkdirSync(outDir, { recursive: true });
+    const cachePath = join6(outDir, "cache.json");
+    let cache;
+    try {
+      const parsed = JSON.parse(readFileSync3(cachePath, "utf8"));
+      if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
+        cache = new Map(Object.entries(parsed.files));
+      }
+    } catch {
+    }
+    const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
+    writeFileSync(join6(outDir, "graph.json"), renderGraphJson(graph));
+    writeFileSync(join6(outDir, "symbols.json"), renderSymbolsJson(symbols));
+    const files = {};
+    for (const f of scan2.files) {
+      const entry = { hash: f.hash, record: f, size: f.size };
+      const mtime = scan2.mtimes.get(f.rel);
+      if (mtime !== void 0) entry.mtimeMs = mtime;
+      files[f.rel] = entry;
+    }
+    writeFileSync(
+      cachePath,
+      JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n"
+    );
+    process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${scan2.capped ? " (capped)" : ""}
+`);
+  } else if (cmd === "scan") {
+    const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const summary = {
+      engineVersion: ENGINE_VERSION,
+      commit: scan2.commit,
+      fileCount: scan2.files.length,
+      languages: scan2.languages,
+      capped: scan2.capped
+    };
+    emit(JSON.stringify(summary, null, 2) + "\n", flags2.out);
+  } else if (cmd === "graph") {
+    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    emit(renderGraphJson(graph), flags2.out);
+  } else if (cmd === "symbols") {
+    const { symbols } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    emit(renderSymbolsJson(symbols), flags2.out);
+  } else if (cmd === "callers") {
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const index = buildCallerIndex(scan2);
+    const obj = {};
+    for (const [name2, entry] of index) obj[name2] = entry;
+    emit(JSON.stringify(obj, null, 2) + "\n", flags2.out);
+  } else if (cmd === "workspaces") {
+    const info2 = detectWorkspaces(flags2.repo);
+    emit(
+      JSON.stringify(
+        { packages: info2.packages, cycle: info2.cycle ?? null, topoOrder: info2.topoOrder },
+        null,
+        2
+      ) + "\n",
+      flags2.out
+    );
+  } else if (cmd === "churn") {
+    const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
+    const sorted = {};
+    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
+    emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags2.out);
+  } else if (cmd === "grep") {
+    if (!flags2.positional) throw new Error("grep needs a pattern: engine.mjs grep <pattern> --repo <dir>");
+    emit(JSON.stringify(grepRepo(flags2.repo, flags2.positional), null, 2) + "\n", flags2.out);
+  } else {
+    process.stderr.write(`unknown command: ${cmd}
+
+${HELP}`);
+    process.exitCode = 2;
+  }
 }
 export {
   DEFAULT_MAX_FILES,
@@ -9042,6 +9017,7 @@ export {
   resolveDocLink,
   resolveImport,
   rrf,
+  runCli,
   runMcpServer,
   scanRepo,
   sh,

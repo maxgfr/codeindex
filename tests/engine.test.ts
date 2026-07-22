@@ -8,6 +8,7 @@ import * as engine from "../src/engine.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const BUNDLE = fileURLToPath(new URL("../scripts/engine.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 
 // The public contract: every export a consumer may rely on. Removing or
 // renaming one is a breaking change — this list is the tripwire.
@@ -98,6 +99,8 @@ const CONTRACT = [
   "keywords",
   "rankedKeywords",
   "rrf",
+  "runCli",
+  "runMcpServer",
 ] as const;
 
 describe("public API contract", () => {
@@ -135,7 +138,7 @@ describe("pipeline", () => {
 
 describe("bundle CLI", () => {
   const run = (args: string[], cwd?: string): string =>
-    execFileSync(process.execPath, [BUNDLE, ...args], { encoding: "utf8", cwd });
+    execFileSync(process.execPath, [CLI, ...args], { encoding: "utf8", cwd });
 
   it("graph emits valid JSON, byte-identical across two runs", () => {
     const a = run(["graph", "--repo", REPO]);
@@ -159,7 +162,7 @@ describe("index command (single pass + incremental cache)", () => {
   it("writes graph.json + symbols.json + cache.json; warm rebuild is byte-identical", () => {
     const out = join(mkdtempSync(join(tmpdir(), "ci-index-")), "out");
     const run = () =>
-      execFileSync(process.execPath, [BUNDLE, "index", "--repo", REPO, "--out", out], { encoding: "utf8" });
+      execFileSync(process.execPath, [CLI, "index", "--repo", REPO, "--out", out], { encoding: "utf8" });
     run();
     const cold = engine.readText(join(out, "graph.json"));
     const coldSymbols = engine.readText(join(out, "symbols.json"));
@@ -176,7 +179,8 @@ describe("no-wasm mode (vendored consumer layout)", () => {
     const dir = mkdtempSync(join(tmpdir(), "ci-nowasm-"));
     const lone = join(dir, "engine.mjs");
     copyFileSync(BUNDLE, lone);
-    const out = execFileSync(process.execPath, [lone, "symbols", "--repo", REPO], {
+    copyFileSync(CLI, join(dir, "cli.mjs"));
+    const out = execFileSync(process.execPath, [join(dir, "cli.mjs"), "symbols", "--repo", REPO], {
       encoding: "utf8",
       // Neutralize the env override a dev shell might carry.
       env: { ...process.env, CODEINDEX_GRAMMAR_DIR: "", ULTRAINDEX_GRAMMAR_DIR: "" },
@@ -184,7 +188,7 @@ describe("no-wasm mode (vendored consumer layout)", () => {
     const parsed = JSON.parse(out) as { defs: Record<string, unknown> };
     expect(Object.keys(parsed.defs).length).toBeGreaterThan(0);
 
-    const graphOut = execFileSync(process.execPath, [lone, "graph", "--repo", REPO], {
+    const graphOut = execFileSync(process.execPath, [join(dir, "cli.mjs"), "graph", "--repo", REPO], {
       encoding: "utf8",
       env: { ...process.env, CODEINDEX_GRAMMAR_DIR: "", ULTRAINDEX_GRAMMAR_DIR: "" },
     });

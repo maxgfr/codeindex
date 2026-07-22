@@ -16,6 +16,7 @@ const E2E = !!process.env.CODEINDEX_E2E;
 
 const CACHE = fileURLToPath(new URL("./.e2e-cache", import.meta.url));
 const BUNDLE = fileURLToPath(new URL("../scripts/engine.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 const KNOWN_REASONS = new Set([
   "missing-module",
   "alias-unresolved",
@@ -168,8 +169,9 @@ describe.skipIf(!E2E)("engine-only no-wasm mode (vendored consumer layout)", () 
     (repo) => {
       const repoDir = clonePinned(repo);
       const dir = mkdtempSync(join(tmpdir(), "ci-e2e-nowasm-"));
-      const lone = join(dir, "engine.mjs");
-      copyFileSync(BUNDLE, lone);
+      copyFileSync(BUNDLE, join(dir, "engine.mjs"));
+      copyFileSync(CLI, join(dir, "cli.mjs"));
+      const lone = join(dir, "cli.mjs");
       const env = { ...process.env, CODEINDEX_GRAMMAR_DIR: "", ULTRAINDEX_GRAMMAR_DIR: "" };
       const out1 = join(dir, "out1");
       const out2 = join(dir, "out2");
@@ -189,7 +191,7 @@ describe.skipIf(!E2E)("committed bundle smoke", () => {
   it("the shipped engine.mjs indexes a real repo", { timeout: 900_000 }, () => {
     const repoDir = clonePinned(REPOS[1]!); // the smallest of the matrix
     const out = join(mkdtempSync(join(tmpdir(), "ci-e2e-")), "out");
-    execFileSync(process.execPath, [BUNDLE, "index", "--repo", repoDir, "--out", out], { stdio: "pipe" });
+    execFileSync(process.execPath, [CLI, "index", "--repo", repoDir, "--out", out], { stdio: "pipe" });
     const graph = JSON.parse(readFileSync(join(out, "graph.json"), "utf8")) as Graph;
     expect(graph.fileCount).toBeGreaterThan(0);
     expect(graph.modules.length).toBeGreaterThan(0);

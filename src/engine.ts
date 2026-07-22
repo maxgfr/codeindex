@@ -112,21 +112,9 @@ export {
 } from "./util.js";
 export type { ShResult } from "./util.js";
 
-// Slim CLI when executed directly (never when imported). Realpath both sides:
-// argv[1] may reach the bundle through a symlink (e.g. macOS /var/folders →
-// /private/var) while import.meta.url is already resolved.
-import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-const cliEntry = process.argv[1];
-let isMain = false;
-if (cliEntry) {
-  try {
-    isMain = realpathSync(cliEntry) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    isMain = false;
-  }
-}
-if (isMain) {
-  const { runCli } = await import("./engine-cli.js");
-  await runCli(process.argv.slice(2));
-}
+// CLI entry — exported, never self-triggered. This module MUST stay free of
+// top-level side effects: consumers re-bundle engine.mjs into their own
+// single-file CLIs, where a "am I the main module?" guard would misfire
+// (import.meta.url inside their bundle IS their bundle) and hijack their argv.
+// The standalone CLI/MCP entry is the static wrapper scripts/cli.mjs.
+export { runCli } from "./engine-cli.js";

@@ -45,10 +45,13 @@ the engine silently uses its regex tier. Only tools that want AST precision
 ## Use as a CLI
 
 ```sh
-node scripts/engine.mjs graph   --repo . > graph.json
-node scripts/engine.mjs symbols --repo . > symbols.json
-node scripts/engine.mjs scan    --repo .   # summary: files, languages, capped
+node scripts/cli.mjs index   --repo . --out .codeindex   # graph + symbols + cache
+node scripts/cli.mjs graph   --repo . > graph.json
+node scripts/cli.mjs mcp                                  # MCP server over stdio
 ```
+
+`engine.mjs` is a pure side-effect-free library (safe for consumers to inline
+into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.
 
 ## Versioning
 

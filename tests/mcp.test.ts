@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const BUNDLE = fileURLToPath(new URL("../scripts/engine.mjs", import.meta.url));
+const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 
 interface RpcMsg {
@@ -21,7 +21,7 @@ interface RpcMsg {
 // collect one JSON response per line, resolve when every id has answered.
 function mcpSession(requests: Record<string, unknown>[]): Promise<Map<number, RpcMsg>> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [BUNDLE, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
+    const child = spawn(process.execPath, [CLI, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
     const expected = new Set(requests.filter((r) => r.id !== undefined).map((r) => r.id as number));
     const got = new Map<number, RpcMsg>();
     let buf = "";
