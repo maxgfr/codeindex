@@ -182,6 +182,29 @@ describe("issue #2/#6: naming, nx, go.work, warnings", () => {
   });
 });
 
+describe("issue #6: categorize archive/executable extensions", () => {
+  it.each([
+    ".zip", ".gz", ".tar", ".rar", ".7z", ".wasm", ".so", ".dylib", ".dll", ".exe", ".bin",
+    ".class", ".jar", ".pyc", ".node",
+  ])("blob%s -> asset", (ext) => {
+    expect(categorize(`vendor-blobs/blob${ext}`, ext)).toBe("asset");
+  });
+
+  it("keeps .svg as asset (engine view; reconstruct overrides to `other` locally)", () => {
+    expect(categorize("logo.svg", ".svg")).toBe("asset");
+  });
+
+  it("categorizes .astro as code and labels the language", () => {
+    expect(categorize("src/pages/index.astro", ".astro")).toBe("code");
+    expect(extToLang(".astro")).toBe("astro");
+  });
+
+  it("counts .astro files under the astro language in a scan", () => {
+    const root = scratchRepo({ "src/index.astro": "---\nconst t = 1;\n---\n<h1>{t}</h1>\n" });
+    expect(scanRepo(root).languages).toMatchObject({ astro: 1 });
+  });
+});
+
 describe("issue #6: walk/scan excluded count", () => {
   it("counts files seen and rejected by size/lockfile/binary/minified/gitignore — never ignored dirs", () => {
     const root = scratchRepo({

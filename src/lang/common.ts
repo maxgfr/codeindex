@@ -60,6 +60,7 @@ const EXT_LANG: Record<string, string> = {
   ".md": "markdown", ".mdx": "markdown", ".rst": "restructuredtext", ".txt": "text",
   ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".ini": "ini",
   ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue", ".svelte": "svelte",
+  ".astro": "astro",
 };
 
 export function extToLang(ext: string): string {

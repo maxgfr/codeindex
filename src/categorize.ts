@@ -24,9 +24,19 @@ const CODE_EXTS = new Set([
 const STYLE_EXTS = new Set([".css", ".scss", ".sass", ".less", ".styl", ".pcss"]);
 const DOC_EXTS = new Set([".md", ".mdx", ".rst", ".adoc", ".txt"]);
 const DATA_EXTS = new Set([".json", ".yaml", ".yml", ".toml", ".csv", ".xml", ".env"]);
+// `.svg` is deliberately "asset" here: in this purpose-oriented view it plays
+// the same image role as .png/.ico. reconstruct's own bundle categorizes it
+// as "other" (SVG is text, and its asset set is exactly its binary-extension
+// set) and keeps that as a local override on top of the engine — a documented
+// divergence, not an accident.
 const ASSET_EXTS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".bmp", ".tiff", ".svg", ".pdf",
   ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4", ".mov", ".avi", ".webm",
+  // Archives / compiled binaries: reconstruct's bundle files these under
+  // "asset" (opaque blob shipped with the repo, not code/data) — the engine
+  // matches instead of letting them fall through to "other".
+  ".zip", ".gz", ".tar", ".rar", ".7z", ".wasm", ".so", ".dylib", ".dll", ".exe", ".bin",
+  ".class", ".jar", ".pyc", ".node",
 ]);
 
 const I18N_DIRS = ["locales", "locale", "i18n", "lang", "langs", "translations", "messages"];
