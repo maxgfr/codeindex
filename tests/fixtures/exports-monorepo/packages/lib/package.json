@@ -1,0 +1,16 @@
+{
+  "name": "@x/lib",
+  "main": "./dist/cjs/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./utils": {
+      "import": "./dist/esm/utils.js",
+      "default": "./dist/cjs/utils.js"
+    },
+    "./features/*": "./dist/esm/features/*.js"
+  }
+}

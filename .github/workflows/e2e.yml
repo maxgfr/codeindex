@@ -1,0 +1,20 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1" # weekly, Monday 05:17 UTC
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:e2e

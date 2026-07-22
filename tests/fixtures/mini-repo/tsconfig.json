@@ -1,0 +1,9 @@
+{
+  // JSONC with a comment + trailing comma, to exercise the tolerant parser.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+    },
+  },
+}

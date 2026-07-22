@@ -1,0 +1,486 @@
+{
+  "schemaVersion": 4,
+  "version": "5.1.0",
+  "fileCount": 14,
+  "languages": {
+    "go": 2,
+    "json": 1,
+    "markdown": 3,
+    "other": 1,
+    "python": 3,
+    "typescript": 4
+  },
+  "files": [
+    {
+      "id": "README.md",
+      "kind": "file",
+      "rel": "README.md",
+      "fileKind": "doc",
+      "lang": "markdown",
+      "module": "root",
+      "title": "Mini Repo",
+      "summary": "A tiny polyglot fixture used to exercise ultraindex. The HTTP layer is built",
+      "symbols": 0,
+      "lines": 11,
+      "degIn": 1,
+      "degOut": 3,
+      "pagerank": 1.1854
+    },
+    {
+      "id": "docs/api.md",
+      "kind": "file",
+      "rel": "docs/api.md",
+      "fileKind": "doc",
+      "lang": "markdown",
+      "module": "docs",
+      "title": "API Reference",
+      "summary": "The HttpClient is the main entry point. See the guide for usage.",
+      "symbols": 0,
+      "lines": 4,
+      "degIn": 2,
+      "degOut": 2,
+      "pagerank": 1.5213
+    },
+    {
+      "id": "docs/guide.md",
+      "kind": "file",
+      "rel": "docs/guide.md",
+      "fileKind": "doc",
+      "lang": "markdown",
+      "module": "docs",
+      "title": "User Guide",
+      "summary": "Start here, then read the API reference. Back to the",
+      "symbols": 0,
+      "lines": 7,
+      "degIn": 2,
+      "degOut": 2,
+      "pagerank": 1.5213
+    },
+    {
+      "id": "go.mod",
+      "kind": "file",
+      "rel": "go.mod",
+      "fileKind": "config",
+      "lang": "other",
+      "module": "root",
+      "title": "go.mod",
+      "symbols": 0,
+      "lines": 4,
+      "degIn": 0,
+      "degOut": 0,
+      "pagerank": 0.5389
+    },
+    {
+      "id": "gopkg/main.go",
+      "kind": "file",
+      "rel": "gopkg/main.go",
+      "fileKind": "code",
+      "lang": "go",
+      "module": "gopkg",
+      "title": "main.go",
+      "summary": "Command main wires the sub package together.",
+      "symbols": 1,
+      "lines": 13,
+      "degIn": 0,
+      "degOut": 2,
+      "pagerank": 0.5389
+    },
+    {
+      "id": "gopkg/sub/sub.go",
+      "kind": "file",
+      "rel": "gopkg/sub/sub.go",
+      "fileKind": "code",
+      "lang": "go",
+      "module": "gopkg-sub",
+      "title": "sub.go",
+      "summary": "Package sub provides a trivial exported function.",
+      "symbols": 1,
+      "lines": 8,
+      "degIn": 2,
+      "degOut": 0,
+      "pagerank": 0.9969
+    },
+    {
+      "id": "pkg/__init__.py",
+      "kind": "file",
+      "rel": "pkg/__init__.py",
+      "fileKind": "code",
+      "lang": "python",
+      "module": "pkg",
+      "title": "__init__.py",
+      "symbols": 0,
+      "lines": 0,
+      "degIn": 0,
+      "degOut": 0,
+      "pagerank": 0.5389
+    },
+    {
+      "id": "pkg/core.py",
+      "kind": "file",
+      "rel": "pkg/core.py",
+      "fileKind": "code",
+      "lang": "python",
+      "module": "pkg",
+      "title": "core.py",
+      "summary": "Core package logic for the mini repo.",
+      "symbols": 1,
+      "lines": 8,
+      "degIn": 0,
+      "degOut": 2,
+      "pagerank": 0.5389
+    },
+    {
+      "id": "pkg/util.py",
+      "kind": "file",
+      "rel": "pkg/util.py",
+      "fileKind": "code",
+      "lang": "python",
+      "module": "pkg",
+      "title": "util.py",
+      "summary": "Shared helpers for the package.",
+      "symbols": 1,
+      "lines": 6,
+      "degIn": 2,
+      "degOut": 0,
+      "pagerank": 0.9969
+    },
+    {
+      "id": "src/client.ts",
+      "kind": "file",
+      "rel": "src/client.ts",
+      "fileKind": "code",
+      "lang": "typescript",
+      "module": "src",
+      "title": "client.ts",
+      "summary": "HTTP client with retry.",
+      "symbols": 2,
+      "lines": 10,
+      "degIn": 3,
+      "degOut": 4,
+      "pagerank": 1.7503
+    },
+    {
+      "id": "src/helpers.ts",
+      "kind": "file",
+      "rel": "src/helpers.ts",
+      "fileKind": "code",
+      "lang": "typescript",
+      "module": "src",
+      "title": "helpers.ts",
+      "symbols": 1,
+      "lines": 2,
+      "degIn": 2,
+      "degOut": 0,
+      "pagerank": 1.2828
+    },
+    {
+      "id": "src/index.ts",
+      "kind": "file",
+      "rel": "src/index.ts",
+      "fileKind": "code",
+      "lang": "typescript",
+      "module": "src",
+      "title": "index.ts",
+      "symbols": 2,
+      "lines": 5,
+      "degIn": 0,
+      "degOut": 2,
+      "pagerank": 0.5389
+    },
+    {
+      "id": "src/util.ts",
+      "kind": "file",
+      "rel": "src/util.ts",
+      "fileKind": "code",
+      "lang": "typescript",
+      "module": "src",
+      "title": "util.ts",
+      "summary": "Retry/backoff helpers shared across the client.",
+      "symbols": 1,
+      "lines": 5,
+      "degIn": 3,
+      "degOut": 0,
+      "pagerank": 1.5118
+    },
+    {
+      "id": "tsconfig.json",
+      "kind": "file",
+      "rel": "tsconfig.json",
+      "fileKind": "config",
+      "lang": "json",
+      "module": "root",
+      "title": "tsconfig.json",
+      "symbols": 0,
+      "lines": 10,
+      "degIn": 0,
+      "degOut": 0,
+      "pagerank": 0.5389
+    }
+  ],
+  "modules": [
+    {
+      "id": "docs",
+      "kind": "module",
+      "slug": "docs",
+      "path": "docs",
+      "title": "docs",
+      "summary": "The HttpClient is the main entry point. See the guide for usage.",
+      "tier": 2,
+      "members": [
+        "docs/api.md",
+        "docs/guide.md"
+      ],
+      "symbols": 0,
+      "degIn": 1,
+      "degOut": 2,
+      "community": 0,
+      "pagerank": 1.214,
+      "betweenness": 0
+    },
+    {
+      "id": "gopkg",
+      "kind": "module",
+      "slug": "gopkg",
+      "path": "gopkg",
+      "title": "gopkg",
+      "summary": "Command main wires the sub package together.",
+      "tier": 1,
+      "members": [
+        "gopkg/main.go"
+      ],
+      "symbols": 1,
+      "degIn": 0,
+      "degOut": 1,
+      "community": 1,
+      "pagerank": 0.5883,
+      "betweenness": 0
+    },
+    {
+      "id": "gopkg-sub",
+      "kind": "module",
+      "slug": "gopkg-sub",
+      "path": "gopkg/sub",
+      "title": "gopkg/sub",
+      "summary": "Package sub provides a trivial exported function.",
+      "tier": 1,
+      "members": [
+        "gopkg/sub/sub.go"
+      ],
+      "symbols": 1,
+      "degIn": 1,
+      "degOut": 0,
+      "community": 1,
+      "pagerank": 1.0883,
+      "betweenness": 0
+    },
+    {
+      "id": "pkg",
+      "kind": "module",
+      "slug": "pkg",
+      "path": "pkg",
+      "title": "pkg",
+      "summary": "Core package logic for the mini repo.",
+      "tier": 1,
+      "members": [
+        "pkg/__init__.py",
+        "pkg/core.py",
+        "pkg/util.py"
+      ],
+      "symbols": 2,
+      "degIn": 0,
+      "degOut": 0,
+      "community": 2,
+      "pagerank": 0.5883,
+      "betweenness": 0
+    },
+    {
+      "id": "root",
+      "kind": "module",
+      "slug": "root",
+      "path": "(root)",
+      "title": "(root)",
+      "summary": "A tiny polyglot fixture used to exercise ultraindex. The HTTP layer is built",
+      "tier": 0,
+      "members": [
+        "README.md",
+        "go.mod",
+        "tsconfig.json"
+      ],
+      "symbols": 0,
+      "degIn": 1,
+      "degOut": 2,
+      "community": 0,
+      "pagerank": 1.1042,
+      "betweenness": 0
+    },
+    {
+      "id": "src",
+      "kind": "module",
+      "slug": "src",
+      "path": "src",
+      "title": "src",
+      "summary": "Retry/backoff helpers shared across the client.",
+      "tier": 1,
+      "members": [
+        "src/client.ts",
+        "src/helpers.ts",
+        "src/index.ts",
+        "src/util.ts"
+      ],
+      "symbols": 6,
+      "degIn": 2,
+      "degOut": 0,
+      "community": 0,
+      "pagerank": 1.417,
+      "betweenness": 0
+    }
+  ],
+  "fileEdges": [
+    {
+      "from": "README.md",
+      "to": "docs/api.md",
+      "kind": "doc-link",
+      "weight": 1
+    },
+    {
+      "from": "README.md",
+      "to": "docs/guide.md",
+      "kind": "doc-link",
+      "weight": 1
+    },
+    {
+      "from": "README.md",
+      "to": "src/client.ts",
+      "kind": "mention",
+      "weight": 1
+    },
+    {
+      "from": "docs/api.md",
+      "to": "docs/guide.md",
+      "kind": "doc-link",
+      "weight": 1
+    },
+    {
+      "from": "docs/api.md",
+      "to": "src/client.ts",
+      "kind": "mention",
+      "weight": 1
+    },
+    {
+      "from": "docs/guide.md",
+      "to": "./missing.md",
+      "kind": "doc-link",
+      "weight": 1,
+      "dangling": true,
+      "reason": "missing-target"
+    },
+    {
+      "from": "docs/guide.md",
+      "to": "README.md",
+      "kind": "doc-link",
+      "weight": 1
+    },
+    {
+      "from": "docs/guide.md",
+      "to": "docs/api.md",
+      "kind": "doc-link",
+      "weight": 1
+    },
+    {
+      "from": "gopkg/main.go",
+      "to": "gopkg/sub/sub.go",
+      "kind": "call",
+      "weight": 1,
+      "confidence": "extracted"
+    },
+    {
+      "from": "gopkg/main.go",
+      "to": "gopkg/sub/sub.go",
+      "kind": "import",
+      "weight": 1
+    },
+    {
+      "from": "pkg/core.py",
+      "to": "pkg/util.py",
+      "kind": "call",
+      "weight": 1,
+      "confidence": "extracted"
+    },
+    {
+      "from": "pkg/core.py",
+      "to": "pkg/util.py",
+      "kind": "import",
+      "weight": 2
+    },
+    {
+      "from": "src/client.ts",
+      "to": "src/helpers.ts",
+      "kind": "call",
+      "weight": 1,
+      "confidence": "extracted"
+    },
+    {
+      "from": "src/client.ts",
+      "to": "src/helpers.ts",
+      "kind": "import",
+      "weight": 1
+    },
+    {
+      "from": "src/client.ts",
+      "to": "src/util.ts",
+      "kind": "call",
+      "weight": 1,
+      "confidence": "extracted"
+    },
+    {
+      "from": "src/client.ts",
+      "to": "src/util.ts",
+      "kind": "import",
+      "weight": 1
+    },
+    {
+      "from": "src/index.ts",
+      "to": "src/client.ts",
+      "kind": "import",
+      "weight": 1
+    },
+    {
+      "from": "src/index.ts",
+      "to": "src/util.ts",
+      "kind": "import",
+      "weight": 1
+    }
+  ],
+  "moduleEdges": [
+    {
+      "from": "docs",
+      "to": "root",
+      "kind": "doc-link",
+      "weight": 1
+    },
+    {
+      "from": "docs",
+      "to": "src",
+      "kind": "mention",
+      "weight": 1
+    },
+    {
+      "from": "gopkg",
+      "to": "gopkg-sub",
+      "kind": "import",
+      "weight": 2
+    },
+    {
+      "from": "root",
+      "to": "docs",
+      "kind": "doc-link",
+      "weight": 2
+    },
+    {
+      "from": "root",
+      "to": "src",
+      "kind": "mention",
+      "weight": 1
+    }
+  ]
+}

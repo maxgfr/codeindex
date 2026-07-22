@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 4,
+  "defs": {
+    "DoThing": [
+      {
+        "file": "gopkg/sub/sub.go",
+        "line": 5,
+        "endLine": 7,
+        "kind": "function",
+        "exported": true,
+        "lang": "go"
+      }
+    ],
+    "HttpClient": [
+      {
+        "file": "src/client.ts",
+        "line": 5,
+        "endLine": 9,
+        "kind": "class",
+        "exported": true,
+        "lang": "typescript"
+      },
+      {
+        "file": "src/index.ts",
+        "line": 4,
+        "kind": "reexport",
+        "exported": true,
+        "lang": "typescript"
+      }
+    ],
+    "backoff": [
+      {
+        "file": "src/index.ts",
+        "line": 4,
+        "kind": "reexport",
+        "exported": true,
+        "lang": "typescript"
+      },
+      {
+        "file": "src/util.ts",
+        "line": 2,
+        "endLine": 4,
+        "kind": "function",
+        "exported": true,
+        "lang": "typescript"
+      }
+    ],
+    "helper": [
+      {
+        "file": "src/helpers.ts",
+        "line": 1,
+        "endLine": 1,
+        "kind": "const",
+        "exported": true,
+        "lang": "typescript"
+      }
+    ],
+    "helper_fn": [
+      {
+        "file": "pkg/util.py",
+        "line": 4,
+        "endLine": 5,
+        "kind": "function",
+        "exported": true,
+        "lang": "python"
+      }
+    ],
+    "main": [
+      {
+        "file": "gopkg/main.go",
+        "line": 10,
+        "endLine": 12,
+        "kind": "function",
+        "exported": false,
+        "lang": "go"
+      }
+    ],
+    "public_fn": [
+      {
+        "file": "pkg/core.py",
+        "line": 6,
+        "endLine": 7,
+        "kind": "function",
+        "exported": true,
+        "lang": "python"
+      }
+    ],
+    "request": [
+      {
+        "file": "src/client.ts",
+        "line": 6,
+        "endLine": 8,
+        "kind": "method",
+        "exported": true,
+        "lang": "typescript",
+        "parent": "HttpClient"
+      }
+    ]
+  },
+  "refs": {
+    "DoThing": [
+      "gopkg/main.go"
+    ],
+    "HttpClient": [
+      "README.md",
+      "docs/api.md",
+      "src/index.ts"
+    ],
+    "helper_fn": [
+      "pkg/core.py"
+    ]
+  }
+}

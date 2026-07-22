@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@org/data": ["libs/data/src/index.ts"],
+      "@org/data/*": ["libs/data/src/*"]
+    }
+  }
+}
