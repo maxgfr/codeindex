@@ -172,14 +172,21 @@ export async function runMcpServer(): Promise<void> {
   for await (const line of rl) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let req: RpcRequest;
+    let parsed: unknown;
     try {
-      req = JSON.parse(trimmed) as RpcRequest;
+      parsed = JSON.parse(trimmed);
     } catch {
       send({ id: null, error: { code: -32700, message: "parse error" } });
       continue;
     }
-    if (req.id === undefined || req.id === null) continue; // notification — no response
+    // JSON-RPC 2.0 batch: answer each member (a batching client would
+    // otherwise hang forever on a silently dropped array).
+    const requests = Array.isArray(parsed) ? (parsed as RpcRequest[]) : [parsed as RpcRequest];
+    for (const req of requests) handle(req);
+  }
+
+  function handle(req: RpcRequest): void {
+    if (req.id === undefined || req.id === null) return; // notification — no response
 
     try {
       if (req.method === "initialize") {

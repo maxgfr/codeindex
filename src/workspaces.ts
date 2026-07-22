@@ -103,10 +103,18 @@ function packageAt(root: string, dir: string, kind: WorkspaceKind): WorkspacePac
   }
   const pom = join(abs, "pom.xml");
   if (existsSync(pom)) {
-    const name = readText(pom).match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1] ?? dir.split("/").pop()!;
+    const name = ownArtifactId(readText(pom)) ?? dir.split("/").pop()!;
     return { name, dir, kind: "maven", manifest: `${dir}/pom.xml` };
   }
   return undefined;
+}
+
+// A child pom's FIRST <artifactId> usually belongs to its <parent> block —
+// strip that block (and <dependencies>, whose entries also carry artifactIds)
+// before reading the module's own coordinate.
+function ownArtifactId(pom: string): string | undefined {
+  const stripped = pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").replace(/<dependencies>[\s\S]*?<\/dependencies>/g, "");
+  return stripped.match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1];
 }
 
 function addPackage(root: string, dir: string, found: Map<string, WorkspacePackage>, kind: WorkspaceKind): void {
@@ -324,7 +332,9 @@ function mavenEdges(root: string, pkg: WorkspacePackage, byName: Set<string>): s
   const pom = readText(join(root, pkg.dir, "pom.xml"));
   if (!pom) return [];
   const edges = new Set<string>();
-  for (const m of pom.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
+  // Only <dependency> entries count as edges; the <parent> coordinate is a
+  // build-inheritance link, not a workspace dependency.
+  for (const m of pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
     const aid = m[1]!.match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1];
     if (aid && aid !== pkg.name && byName.has(aid)) edges.add(aid);
   }

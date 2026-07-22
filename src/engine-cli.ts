@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
@@ -53,6 +53,8 @@ interface CliFlags {
   maxBytes?: number;
   noAst: boolean;
   since?: string;
+  ignoreCase?: boolean;
+  maxHits?: number;
   positional?: string; // e.g. the grep pattern
 }
 
@@ -65,14 +67,22 @@ function parseFlags(args: string[]): CliFlags {
       if (v === undefined) throw new Error(`missing value for ${a}`);
       return v;
     };
+    const num = (): number => {
+      const raw = next();
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
+      return n;
+    };
     if (a === "--repo") flags.repo = resolve(next());
     else if (a === "--out") flags.out = resolve(next());
     else if (a === "--include") flags.include.push(next());
     else if (a === "--exclude") flags.exclude.push(next());
     else if (a === "--scope") flags.scope = next();
     else if (a === "--no-gitignore") flags.gitignore = false;
-    else if (a === "--max-files") flags.maxFiles = Number(next());
-    else if (a === "--max-bytes") flags.maxBytes = Number(next());
+    else if (a === "--max-files") flags.maxFiles = num();
+    else if (a === "--max-bytes") flags.maxBytes = num();
+    else if (a === "--ignore-case") flags.ignoreCase = true;
+    else if (a === "--max-hits") flags.maxHits = num();
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--since") flags.since = next();
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
@@ -114,6 +124,7 @@ export async function runCli(argv: string[]): Promise<void> {
   }
 
   const flags = parseFlags(rest);
+  if (!existsSync(flags.repo)) throw new Error(`--repo path does not exist: ${flags.repo}`);
   if (!flags.noAst) await ensureGrammars(allGrammarKeys());
 
   if (cmd === "index") {
@@ -189,8 +200,14 @@ export async function runCli(argv: string[]): Promise<void> {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
   } else if (cmd === "grep") {
-    if (!flags.positional) throw new Error("grep needs a pattern: engine.mjs grep <pattern> --repo <dir>");
-    emit(JSON.stringify(grepRepo(flags.repo, flags.positional), null, 2) + "\n", flags.out);
+    if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
+    const globs = [...flags.include, ...flags.exclude.map((g) => `!${g}`)];
+    const hits = grepRepo(flags.repo, flags.positional, {
+      globs: globs.length ? globs : undefined,
+      ignoreCase: flags.ignoreCase,
+      maxHits: flags.maxHits,
+    });
+    emit(JSON.stringify(hits, null, 2) + "\n", flags.out);
   } else {
     process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
     process.exitCode = 2;

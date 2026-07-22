@@ -30,12 +30,22 @@ function patternToRegExpSource(pattern: string): string {
       re += escapeRegExp(pattern[++i]!);
     } else if (c === "*") {
       if (pattern[i + 1] === "*") {
-        i++;
-        if (pattern[i + 1] === "/") {
-          i++;
+        // `**` is special only at segment boundaries (`**/`, `/**`, `/**/`,
+        // or the whole pattern); anywhere else — `a**b` — git treats each
+        // star as a regular single-segment `*`.
+        const atStart = i === 0 || pattern[i - 1] === "/";
+        let j = i;
+        while (pattern[j + 1] === "*") j++;
+        const next = pattern[j + 1];
+        if (atStart && next === "/") {
+          i = j + 1;
           re += "(?:[^/]+/)*"; // `**/` — zero or more whole segments
+        } else if (atStart && next === undefined) {
+          i = j;
+          re += ".*"; // trailing `/**` or bare `**` — anything, crossing `/`
         } else {
-          re += ".*"; // trailing `**` (or bare) — anything, crossing `/`
+          i = j;
+          re += "[^/]*"; // mid-segment run of stars — one segment, like `*`
         }
       } else {
         re += "[^/]*";

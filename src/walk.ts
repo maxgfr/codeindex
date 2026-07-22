@@ -81,11 +81,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     { dir: root, rel: "", rules: [] },
   ];
   const seenDirs = new Set<string>(); // resolved real dirs already walked
-  while (stack.length) {
-    if (out.length >= maxFiles) {
-      capped = true;
-      break;
-    }
+  walking: while (stack.length) {
     const frame = stack.pop()!;
     // Cycle guard: a directory symlink pointing at an ancestor would otherwise
     // make walk() loop, flooding the index with phantom duplicate files. Resolve
@@ -101,7 +97,9 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     if (!contained(real)) continue; // dir symlink escaping the repo
     let entries: string[];
     try {
-      entries = readdirSync(frame.dir);
+      // Sorted so the walk order — and therefore WHICH files survive a
+      // maxFiles cap — is identical across filesystems and machines.
+      entries = readdirSync(frame.dir).sort();
     } catch {
       continue;
     }
@@ -114,13 +112,21 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       const abs = join(frame.dir, name);
       const rel = frame.rel ? `${frame.rel}/${name}` : name;
       let st;
+      let isLink: boolean;
       try {
         st = statSync(abs);
+        isLink = lstatSync(abs).isSymbolicLink();
       } catch {
         continue;
       }
       if (st.isDirectory()) {
         if (IGNORE_DIRS.has(name)) continue;
+        // An in-repo DIRECTORY symlink is skipped entirely: its target is (or
+        // will be) walked under its canonical name, and letting both paths race
+        // through the cycle guard would keep whichever readdir served first —
+        // aliased, filesystem-order-dependent indexes. Out-of-repo links are
+        // covered by the containment guard above.
+        if (isLink) continue;
         if (useGitignore && rules.length && isIgnored(rules, rel, true)) continue;
         stack.push({ dir: abs, rel, rules });
         continue;
@@ -133,10 +139,19 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       if (name.endsWith(".min.js") || name.endsWith(".min.css")) continue;
       if (useGitignore && rules.length && isIgnored(rules, rel, false)) continue;
       // Symlink-escape guard for files (statSync above follows links).
-      try {
-        if (lstatSync(abs).isSymbolicLink() && !contained(realpathSync(abs))) continue;
-      } catch {
-        continue;
+      if (isLink) {
+        try {
+          if (!contained(realpathSync(abs))) continue;
+        } catch {
+          continue;
+        }
+      }
+      // The cap is enforced HERE, on kept files, so a flat directory cannot
+      // silently overshoot it and `capped` is set exactly when a file was
+      // actually dropped (never a silent truncation).
+      if (out.length >= maxFiles) {
+        capped = true;
+        break walking;
       }
       out.push({ rel: rel.split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
     }

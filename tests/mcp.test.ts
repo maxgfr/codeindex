@@ -51,6 +51,39 @@ function mcpSession(requests: Record<string, unknown>[]): Promise<Map<number, Rp
   });
 }
 
+// Same harness but the requests go out as ONE JSON-RPC batch array line.
+function mcpBatch(requests: Record<string, unknown>[]): Promise<Map<number, RpcMsg>> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [CLI, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
+    const expected = new Set(requests.filter((r) => r.id !== undefined).map((r) => r.id as number));
+    const got = new Map<number, RpcMsg>();
+    let buf = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("mcp batch timeout"));
+    }, 15_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line) as RpcMsg;
+        if (typeof msg.id === "number") got.set(msg.id, msg);
+        if (got.size === expected.size) {
+          clearTimeout(timer);
+          child.kill();
+          resolvePromise(got);
+        }
+      }
+    });
+    child.on("error", reject);
+    child.stdin.write(JSON.stringify(requests.map((r) => ({ jsonrpc: "2.0", ...r }))) + "\n");
+    child.stdin.end();
+  });
+}
+
 describe("MCP server", () => {
   it("handshakes, lists tools, and executes tool calls", async () => {
     const res = await mcpSession([
@@ -75,5 +108,14 @@ describe("MCP server", () => {
 
     expect(res.get(5)!.result!.isError).toBeUndefined();
     expect(res.get(6)!.result!.isError).toBe(true);
+  }, 20_000);
+
+  it("answers every member of a JSON-RPC batch", async () => {
+    const res = await mcpBatch([
+      { id: 1, method: "ping" },
+      { id: 2, method: "tools/list" },
+    ]);
+    expect(res.get(1)!.result).toEqual({});
+    expect(res.get(2)!.result!.tools!.length).toBeGreaterThan(0);
   }, 20_000);
 });

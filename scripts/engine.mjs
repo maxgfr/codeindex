@@ -223,12 +223,19 @@ function patternToRegExpSource(pattern) {
       re += escapeRegExp(pattern[++i2]);
     } else if (c2 === "*") {
       if (pattern[i2 + 1] === "*") {
-        i2++;
-        if (pattern[i2 + 1] === "/") {
-          i2++;
+        const atStart = i2 === 0 || pattern[i2 - 1] === "/";
+        let j = i2;
+        while (pattern[j + 1] === "*") j++;
+        const next = pattern[j + 1];
+        if (atStart && next === "/") {
+          i2 = j + 1;
           re += "(?:[^/]+/)*";
-        } else {
+        } else if (atStart && next === void 0) {
+          i2 = j;
           re += ".*";
+        } else {
+          i2 = j;
+          re += "[^/]*";
         }
       } else {
         re += "[^/]*";
@@ -326,11 +333,7 @@ function walk(root, opts = {}) {
     { dir: root, rel: "", rules: [] }
   ];
   const seenDirs = /* @__PURE__ */ new Set();
-  while (stack.length) {
-    if (out2.length >= maxFiles) {
-      capped = true;
-      break;
-    }
+  walking: while (stack.length) {
     const frame = stack.pop();
     let real;
     try {
@@ -343,7 +346,7 @@ function walk(root, opts = {}) {
     if (!contained(real)) continue;
     let entries;
     try {
-      entries = readdirSync(frame.dir);
+      entries = readdirSync(frame.dir).sort();
     } catch {
       continue;
     }
@@ -356,13 +359,16 @@ function walk(root, opts = {}) {
       const abs = join(frame.dir, name2);
       const rel = frame.rel ? `${frame.rel}/${name2}` : name2;
       let st;
+      let isLink;
       try {
         st = statSync(abs);
+        isLink = lstatSync(abs).isSymbolicLink();
       } catch {
         continue;
       }
       if (st.isDirectory()) {
         if (IGNORE_DIRS.has(name2)) continue;
+        if (isLink) continue;
         if (useGitignore && rules.length && isIgnored(rules, rel, true)) continue;
         stack.push({ dir: abs, rel, rules });
         continue;
@@ -374,10 +380,16 @@ function walk(root, opts = {}) {
       if (BINARY_EXT.has(ext)) continue;
       if (name2.endsWith(".min.js") || name2.endsWith(".min.css")) continue;
       if (useGitignore && rules.length && isIgnored(rules, rel, false)) continue;
-      try {
-        if (lstatSync(abs).isSymbolicLink() && !contained(realpathSync(abs))) continue;
-      } catch {
-        continue;
+      if (isLink) {
+        try {
+          if (!contained(realpathSync(abs))) continue;
+        } catch {
+          continue;
+        }
+      }
+      if (out2.length >= maxFiles) {
+        capped = true;
+        break walking;
       }
       out2.push({ rel: rel.split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
     }
@@ -7505,10 +7517,14 @@ function packageAt(root, dir, kind) {
   }
   const pom = join5(abs, "pom.xml");
   if (existsSync2(pom)) {
-    const name2 = readText(pom).match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1] ?? dir.split("/").pop();
+    const name2 = ownArtifactId(readText(pom)) ?? dir.split("/").pop();
     return { name: name2, dir, kind: "maven", manifest: `${dir}/pom.xml` };
   }
   return void 0;
+}
+function ownArtifactId(pom) {
+  const stripped = pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").replace(/<dependencies>[\s\S]*?<\/dependencies>/g, "");
+  return stripped.match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1];
 }
 function addPackage(root, dir, found, kind) {
   const clean = dir.replace(/^\.\//, "").replace(/\/+$/, "");
@@ -7698,7 +7714,7 @@ function mavenEdges(root, pkg, byName) {
   const pom = readText(join5(root, pkg.dir, "pom.xml"));
   if (!pom) return [];
   const edges = /* @__PURE__ */ new Set();
-  for (const m of pom.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
+  for (const m of pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
     const aid = m[1].match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1];
     if (aid && aid !== pkg.name && byName.has(aid)) edges.add(aid);
   }
@@ -8380,32 +8396,46 @@ function sortHits(hits) {
   return hits.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
 }
 function rgBackend(root, pattern, opts) {
-  const args2 = ["--no-heading", "--line-number", "--color=never", "--no-messages", "--hidden", "--max-filesize", "1M"];
+  const args2 = [
+    "--no-heading",
+    "--line-number",
+    "--null",
+    // path\0line:text — a `:12:` inside a filename can't corrupt parsing
+    "--color=never",
+    "--no-messages",
+    "--hidden",
+    "--no-require-git",
+    "--no-ignore-global",
+    "--no-ignore-exclude",
+    "--no-ignore-parent",
+    "--no-ignore-dot",
+    "--max-filesize",
+    "1M"
+  ];
   for (const d of IGNORE_DIRS) args2.push("--glob", `!**/${d}/**`);
   for (const l of LOCKFILES) args2.push("--iglob", `!**/${l}`);
-  args2.push("--glob", "!*.min.js", "--glob", "!*.min.css", "--glob", "!*.map");
+  for (const ext of BINARY_EXT) args2.push("--iglob", `!**/*${ext}`);
+  args2.push("--glob", "!*.min.js", "--glob", "!*.min.css");
   if (opts.ignoreCase) args2.push("--ignore-case");
-  for (const g of opts.globs ?? []) args2.push("--glob", g);
+  for (const g of opts.globs ?? []) args2.push("--glob", g.startsWith("/") ? g : `/${g}`);
   args2.push("--regexp", pattern, "./");
   const res = sh("rg", args2, { cwd: root });
   if (res.missing || !res.ok && res.status !== 1) return void 0;
   const hits = [];
   for (const line of res.stdout.split("\n")) {
     if (!line) continue;
-    const m = line.match(/^(.+?):(\d+):(.*)$/);
-    if (!m) continue;
-    hits.push({ file: m[1].replace(/^\.\//, ""), line: Number(m[2]), text: m[3] });
+    const nul = line.indexOf("\0");
+    if (nul === -1) continue;
+    const file = line.slice(0, nul).replace(/^\.\//, "");
+    const rest = line.slice(nul + 1);
+    const colon = rest.indexOf(":");
+    if (colon === -1) continue;
+    hits.push({ file, line: Number(rest.slice(0, colon)), text: rest.slice(colon + 1) });
   }
   return hits;
 }
-function jsBackend(root, pattern, opts) {
-  let re;
-  try {
-    re = new RegExp(pattern, opts.ignoreCase ? "i" : "");
-  } catch {
-    return [];
-  }
-  const filter = compileGlobs(opts.globs);
+function jsBackend(root, re, opts) {
+  const filter = compileGlobs(opts.globs?.map((g) => g.replace(/^\//, "")));
   const hits = [];
   for (const f of walk(root).files) {
     if (filter && !filter(f.rel)) continue;
@@ -8419,10 +8449,11 @@ function jsBackend(root, pattern, opts) {
   return hits;
 }
 function grepRepo(root, pattern, opts = {}) {
+  const re = new RegExp(pattern, opts.ignoreCase ? "i" : "");
   const max = opts.maxHits ?? DEFAULT_MAX_HITS;
   let hits;
   if (!opts.noRipgrep && have("rg")) hits = rgBackend(root, pattern, opts);
-  hits ??= jsBackend(root, pattern, opts);
+  hits ??= jsBackend(root, re, opts);
   return sortHits(hits).slice(0, max);
 }
 var DEFAULT_MAX_HITS;
@@ -8514,14 +8545,18 @@ async function runMcpServer() {
   for await (const line of rl) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let req;
+    let parsed;
     try {
-      req = JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
     } catch {
       send({ id: null, error: { code: -32700, message: "parse error" } });
       continue;
     }
-    if (req.id === void 0 || req.id === null) continue;
+    const requests = Array.isArray(parsed) ? parsed : [parsed];
+    for (const req of requests) handle2(req);
+  }
+  function handle2(req) {
+    if (req.id === void 0 || req.id === null) return;
     try {
       if (req.method === "initialize") {
         send({
@@ -8788,7 +8823,7 @@ init_callers();
 init_workspaces();
 init_git();
 init_grep();
-import { mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
+import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
 import { join as join6, resolve } from "path";
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
 
@@ -8828,14 +8863,22 @@ function parseFlags(args2) {
       if (v === void 0) throw new Error(`missing value for ${a}`);
       return v;
     };
+    const num = () => {
+      const raw = next();
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
+      return n;
+    };
     if (a === "--repo") flags2.repo = resolve(next());
     else if (a === "--out") flags2.out = resolve(next());
     else if (a === "--include") flags2.include.push(next());
     else if (a === "--exclude") flags2.exclude.push(next());
     else if (a === "--scope") flags2.scope = next();
     else if (a === "--no-gitignore") flags2.gitignore = false;
-    else if (a === "--max-files") flags2.maxFiles = Number(next());
-    else if (a === "--max-bytes") flags2.maxBytes = Number(next());
+    else if (a === "--max-files") flags2.maxFiles = num();
+    else if (a === "--max-bytes") flags2.maxBytes = num();
+    else if (a === "--ignore-case") flags2.ignoreCase = true;
+    else if (a === "--max-hits") flags2.maxHits = num();
     else if (a === "--no-ast") flags2.noAst = true;
     else if (a === "--since") flags2.since = next();
     else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
@@ -8873,6 +8916,7 @@ async function runCli(argv) {
     return;
   }
   const flags2 = parseFlags(rest);
+  if (!existsSync3(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
   if (!flags2.noAst) await ensureGrammars(allGrammarKeys());
   if (cmd === "index") {
     if (!flags2.out) throw new Error("index needs --out <dir>");
@@ -8941,8 +8985,14 @@ async function runCli(argv) {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags2.out);
   } else if (cmd === "grep") {
-    if (!flags2.positional) throw new Error("grep needs a pattern: engine.mjs grep <pattern> --repo <dir>");
-    emit(JSON.stringify(grepRepo(flags2.repo, flags2.positional), null, 2) + "\n", flags2.out);
+    if (!flags2.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
+    const globs = [...flags2.include, ...flags2.exclude.map((g) => `!${g}`)];
+    const hits = grepRepo(flags2.repo, flags2.positional, {
+      globs: globs.length ? globs : void 0,
+      ignoreCase: flags2.ignoreCase,
+      maxHits: flags2.maxHits
+    });
+    emit(JSON.stringify(hits, null, 2) + "\n", flags2.out);
   } else {
     process.stderr.write(`unknown command: ${cmd}
 
