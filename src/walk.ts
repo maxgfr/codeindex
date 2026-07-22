@@ -4,7 +4,8 @@ import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
 
 // Directories that never carry signal for a documentation/code question and
 // would bloat the index (dependencies, build output, VCS internals, caches).
-const IGNORE_DIRS = new Set([
+// Exported so grep.ts can align ripgrep's universe with the walker's.
+export const IGNORE_DIRS = new Set([
   ".git", "node_modules", ".pnpm", "bower_components", "vendor", "dist", "build", "out",
   "target", ".next", ".nuxt", ".svelte-kit", ".turbo", "coverage", "__pycache__", ".venv",
   "venv", ".tox", ".mypy_cache", ".pytest_cache", ".gradle", ".idea", ".vscode", ".cache",
@@ -14,14 +15,14 @@ const IGNORE_DIRS = new Set([
 // Lockfiles: huge, machine-generated, and pure noise for a code/docs question —
 // they'd otherwise rank as keyword-dense "code" hits (e.g. package-lock.json
 // matching a dependency name). Skipped entirely.
-const LOCKFILES = new Set([
+export const LOCKFILES = new Set([
   "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
   "composer.lock", "cargo.lock", "poetry.lock", "pipfile.lock", "gemfile.lock", "go.sum",
   "flake.lock", "packages.lock.json", "podfile.lock", "mix.lock",
 ]);
 
 // Binary / non-source extensions to skip when reading file contents.
-const BINARY_EXT = new Set([
+export const BINARY_EXT = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".icns", ".svg", ".pdf", ".zip",
   ".gz", ".tar", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".jar", ".war", ".class", ".so", ".dylib",
   ".dll", ".exe", ".bin", ".o", ".a", ".wasm", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3",

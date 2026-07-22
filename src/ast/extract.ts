@@ -188,6 +188,32 @@ const SPECS: Record<string, LangSpec> = {
     exported: always,
     calls: { function_call_expression: "function", member_call_expression: "member", object_creation_expression: "constructor" },
   },
+  c: {
+    lang: "c",
+    defs: {
+      function_definition: "function", struct_specifier: "struct",
+      enum_specifier: "enum", union_specifier: "union", type_definition: "type",
+    },
+    // C has no visibility keyword — headers are the interface, so everything
+    // counts as exported (same stance as the regex extractor).
+    containers: new Set(["translation_unit", "declaration_list", "linkage_specification", "preproc_ifdef", "preproc_if"]),
+    exported: always,
+    calls: { call_expression: "function" },
+  },
+  cpp: {
+    lang: "cpp",
+    defs: {
+      function_definition: "function", class_specifier: "class", struct_specifier: "struct",
+      enum_specifier: "enum", union_specifier: "union", type_definition: "type",
+      namespace_definition: "namespace",
+    },
+    containers: new Set([
+      "translation_unit", "declaration_list", "field_declaration_list",
+      "template_declaration", "linkage_specification", "preproc_ifdef", "preproc_if",
+    ]),
+    exported: always,
+    calls: { call_expression: "function", new_expression: "constructor" },
+  },
 };
 
 function firstLine(node: TSNode): string {
@@ -198,6 +224,16 @@ function firstLine(node: TSNode): string {
 function nameOf(node: TSNode): string | undefined {
   const named = node.childForFieldName("name");
   if (named?.text) return named.text;
+  // C/C++: the name hides inside a declarator chain (function_definition →
+  // [pointer_]declarator → function_declarator → identifier). Follow the
+  // `declarator` field down to the identifier leaf.
+  let decl = node.childForFieldName("declarator");
+  while (decl) {
+    if (decl.namedChildCount === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
+    const next = decl.childForFieldName("declarator");
+    if (!next || next === decl) break;
+    decl = next;
+  }
   // Fall back to the first identifier-like named child (covers grammars that do
   // not expose a `name` field on a given node).
   for (let i = 0; i < node.namedChildCount; i++) {

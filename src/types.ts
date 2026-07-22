@@ -18,8 +18,10 @@ export const SCHEMA_VERSION = 4;
 // EXTRACTOR_VERSION); bump this whenever symbol/import extraction changes so a
 // stale cache is discarded wholesale rather than mixing old and new records. v3
 // added FileRecord.calls (call-site callee names) and importedNames; v4 added
-// CommonJS assignment-style JS/TS definitions (`x.y = function () {}`).
-export const EXTRACTOR_VERSION = 4;
+// CommonJS assignment-style JS/TS definitions (`x.y = function () {}`); v5
+// populates `calls` on the regex tier too (files without an AST grammar), so
+// caller indexes work without the wasm sidecar.
+export const EXTRACTOR_VERSION = 5;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

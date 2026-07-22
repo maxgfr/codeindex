@@ -5,16 +5,27 @@ import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
 import { buildIndexArtifacts, type BuildIndexOptions } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
+import { scanRepo } from "./scan.js";
+import { buildCallerIndex } from "./callers.js";
+import { detectWorkspaces } from "./workspaces.js";
+import { gitChurn } from "./git.js";
+import { grepRepo } from "./grep.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
 Usage: engine.mjs <command> [flags]
 
 Commands:
-  scan      Scan summary: file count, language histogram, capped flag
-  graph     Full link-graph (graph.json bytes) to stdout or --out
-  symbols   Symbol index (symbols.json bytes) to stdout or --out
-  version   Print the engine version
+  scan        Scan summary: file count, language histogram, capped flag
+  graph       Full link-graph (graph.json bytes) to stdout or --out
+  symbols     Symbol index (symbols.json bytes) to stdout or --out
+  callers     Per-symbol caller index (JSON)
+  workspaces  Monorepo packages + dependency graph (JSON)
+  churn       Per-file git commit counts (JSON; --since <ref> to bound)
+  grep        Search: engine.mjs grep <pattern> --repo <dir> (JSON hits)
+  mcp         Run as an MCP server over stdio (tools: scan_summary, graph,
+              symbols, callers, workspaces, churn, grep)
+  version     Print the engine version
 
 Flags:
   --repo <dir>        Repo root (default: cwd)
@@ -38,6 +49,8 @@ interface CliFlags {
   maxFiles?: number;
   maxBytes?: number;
   noAst: boolean;
+  since?: string;
+  positional?: string; // e.g. the grep pattern
 }
 
 function parseFlags(args: string[]): CliFlags {
@@ -58,6 +71,8 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--max-files") flags.maxFiles = Number(next());
     else if (a === "--max-bytes") flags.maxBytes = Number(next());
     else if (a === "--no-ast") flags.noAst = true;
+    else if (a === "--since") flags.since = next();
+    else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
   return flags;
@@ -89,6 +104,11 @@ export async function runCli(argv: string[]): Promise<void> {
     process.stdout.write(ENGINE_VERSION + "\n");
     return;
   }
+  if (cmd === "mcp") {
+    const { runMcpServer } = await import("./mcp.js");
+    await runMcpServer();
+    return;
+  }
 
   const flags = parseFlags(rest);
   if (!flags.noAst) await ensureGrammars(allGrammarKeys());
@@ -109,6 +129,30 @@ export async function runCli(argv: string[]): Promise<void> {
   } else if (cmd === "symbols") {
     const { symbols } = buildIndexArtifacts(flags.repo, scanOptions(flags));
     emit(renderSymbolsJson(symbols), flags.out);
+  } else if (cmd === "callers") {
+    const scan = scanRepo(flags.repo, scanOptions(flags));
+    const index = buildCallerIndex(scan);
+    const obj: Record<string, unknown> = {};
+    for (const [name, entry] of index) obj[name] = entry;
+    emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
+  } else if (cmd === "workspaces") {
+    const info = detectWorkspaces(flags.repo);
+    emit(
+      JSON.stringify(
+        { packages: info.packages, cycle: info.cycle ?? null, topoOrder: info.topoOrder },
+        null,
+        2,
+      ) + "\n",
+      flags.out,
+    );
+  } else if (cmd === "churn") {
+    const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
+    const sorted: Record<string, number> = {};
+    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
+    emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
+  } else if (cmd === "grep") {
+    if (!flags.positional) throw new Error("grep needs a pattern: engine.mjs grep <pattern> --repo <dir>");
+    emit(JSON.stringify(grepRepo(flags.repo, flags.positional), null, 2) + "\n", flags.out);
   } else {
     process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
     process.exitCode = 2;

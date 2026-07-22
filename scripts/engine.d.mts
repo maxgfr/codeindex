@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "1.0.0";
 declare const SCHEMA_VERSION = 4;
-declare const EXTRACTOR_VERSION = 4;
+declare const EXTRACTOR_VERSION = 5;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "use" | "mention";
 type Tier = 0 | 1 | 2;
@@ -119,6 +119,7 @@ interface SymbolIndex {
 interface WalkOptions {
     maxFileBytes?: number;
     maxFiles?: number;
+    gitignore?: boolean;
 }
 interface WalkedFile {
     rel: string;
@@ -147,6 +148,8 @@ interface RepoScan {
 interface ScanOptions {
     include?: string[];
     exclude?: string[];
+    scope?: string;
+    gitignore?: boolean;
     maxBytes?: number;
     maxFiles?: number;
     out?: string;
@@ -162,10 +165,21 @@ declare function scanRepo(root: string, opts?: ScanOptions): RepoScan;
 
 declare function compileGlobs(globs: string[] | undefined): ((rel: string) => boolean) | null;
 
+interface IgnoreRule {
+    re: RegExp;
+    negated: boolean;
+    dirOnly: boolean;
+}
+declare function parseGitignore(content: string, baseRel: string): IgnoreRule[];
+declare function isIgnored(rules: readonly IgnoreRule[], rel: string, isDir: boolean): boolean;
+
 declare const MARKDOWN_EXT: Set<string>;
 declare function isDoc(rel: string, ext: string): boolean;
 declare function isCode(ext: string): boolean;
 declare function classify(rel: string, ext: string): FileKind;
+
+type FileCategory = "code" | "test" | "config" | "schema" | "i18n" | "doc" | "style" | "asset" | "data" | "other";
+declare function categorize(rel: string, ext: string): FileCategory;
 
 declare function extToLang(ext: string): string;
 
@@ -236,7 +250,7 @@ interface ExportEntry {
     star: boolean;
     targets: string[];
 }
-interface WorkspacePackage {
+interface WorkspacePackage$1 {
     name: string;
     dir: string;
     exportEntries: ExportEntry[];
@@ -265,7 +279,7 @@ interface ResolveContext {
     rustCrates: RustCrate[];
     javaRoots: string[];
     pyRoots: string[];
-    workspacePackages: WorkspacePackage[];
+    workspacePackages: WorkspacePackage$1[];
     cIncludeRoots: string[];
     rubyLibRoots: string[];
     phpPsr4: {
@@ -301,6 +315,35 @@ declare function buildGraph(scan: RepoScan, ctx: ResolveContext, modules: Module
 }): Graph;
 
 declare function resolveCallEdges(scan: RepoScan, importPairs: Set<string>): Edge[];
+
+interface CallerSite {
+    file: string;
+    line: number;
+}
+interface CallerEntry {
+    def: CodeSymbol;
+    callers: CallerSite[];
+}
+type CallerIndex = Map<string, CallerEntry>;
+declare function computeImportPairs(scan: RepoScan): Set<string>;
+declare function buildCallerIndex(scan: RepoScan, importPairs?: Set<string>): CallerIndex;
+declare function enclosingSymbol(scan: RepoScan, file: string, line: number): CodeSymbol | undefined;
+
+type WorkspaceKind = "npm" | "pnpm" | "lerna" | "nx" | "cargo" | "go" | "maven";
+interface WorkspacePackage {
+    name: string;
+    dir: string;
+    kind: WorkspaceKind;
+    manifest: string;
+    dependsOn?: string[];
+}
+interface WorkspaceInfo {
+    packages: WorkspacePackage[];
+    cycle?: string[];
+    topoOrder: string[];
+    packageOf(rel: string): WorkspacePackage | undefined;
+}
+declare function detectWorkspaces(root: string): WorkspaceInfo;
 
 declare function pagerankOf(ids: string[], edges: Edge[], damping?: number): Map<string, number>;
 declare function betweennessOf(ids: string[], edges: Edge[]): Map<string, number>;
@@ -371,6 +414,28 @@ declare function resolveBaseRef(dir: string, base?: string): {
 declare function diffFiles(dir: string, spec: DiffSpec): DiffFile[];
 declare function diffHunks(dir: string, spec: DiffSpec): Map<string, Hunk[]>;
 declare function untrackedFiles(dir: string): string[];
+declare function gitChurn(dir: string, opts?: {
+    since?: string;
+}): {
+    churn: Map<string, number>;
+    ok: boolean;
+};
+declare function changedSince(dir: string, ref: string): Set<string>;
+
+interface SearchHit {
+    file: string;
+    line: number;
+    text: string;
+}
+interface GrepOptions {
+    globs?: string[];
+    maxHits?: number;
+    ignoreCase?: boolean;
+    noRipgrep?: boolean;
+}
+declare function grepRepo(root: string, pattern: string, opts?: GrepOptions): SearchHit[];
+
+declare function runMcpServer(): Promise<void>;
 
 declare function sha1(s: string): string;
 declare function shortHash(s: string, n?: number): string;
@@ -401,4 +466,4 @@ declare function keywords(question: string): string[];
 declare function rankedKeywords(question: string): string[];
 declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): Map<string, number>;
 
-export { type BuildIndexOptions, type CodeInfo, type CodeSymbol, DEFAULT_MAX_FILES, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type FileKind, type FileNode, type FileRecord, type Graph, type Hunk, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type ModuleInfo, type ModuleNode, type RawRef, type RepoScan, type Resolution, type ResolveContext, SCHEMA_VERSION, type ScanOptions, type ShResult, type SurpriseEdge, type SymbolIndex, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, allGrammarKeys, applyCentrality, betweennessOf, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, classify, clip, clipInline, communityOf, compileGlobs, computeSurprises, computeSymbolRefs, computeTestMap, detectCommunities, diffFiles, diffHunks, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, foldText, grammarKeyForExt, grammarReady, have, headCommit, isCode, isDoc, isGitWorktree, isSurprising, isTestFile, isTestPath, keywords, languageOf, pagerankOf, rankedKeywords, readText, renderGraphJson, renderSymbolsJson, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, rrf, scanRepo, sh, sha1, shortHash, slugify, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk };
+export { type BuildIndexOptions, type CallerEntry, type CallerIndex, type CallerSite, type CodeInfo, type CodeSymbol, DEFAULT_MAX_FILES, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type FileCategory, type FileKind, type FileNode, type FileRecord, type Graph, type GrepOptions, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type ModuleInfo, type ModuleNode, type RawRef, type RepoScan, type Resolution, type ResolveContext, SCHEMA_VERSION, type ScanOptions, type SearchHit, type ShResult, type SurpriseEdge, type SymbolIndex, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changedSince, classify, clip, clipInline, communityOf, compileGlobs, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, pagerankOf, parseGitignore, rankedKeywords, readText, renderGraphJson, renderSymbolsJson, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, rrf, runMcpServer, scanRepo, sh, sha1, shortHash, slugify, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk };

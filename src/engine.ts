@@ -34,6 +34,8 @@ export { compileGlobs } from "./glob.js";
 export { parseGitignore, isIgnored } from "./ignore.js";
 export type { IgnoreRule } from "./ignore.js";
 export { classify, isCode, isDoc, MARKDOWN_EXT } from "./classify.js";
+export { categorize } from "./categorize.js";
+export type { FileCategory } from "./categorize.js";
 export { extractSymbols, languageOf, extToLang } from "./lang/registry.js";
 
 // Extraction tier (AST-preferred with regex fallback; imports always regex).
@@ -53,6 +55,10 @@ export { buildModules, isTestFile, tierForPath } from "./modules.js";
 export type { ModuleInfo } from "./modules.js";
 export { buildGraph, uniqueSymbolDefs } from "./graph.js";
 export { resolveCallEdges } from "./calls.js";
+export { buildCallerIndex, enclosingSymbol, computeImportPairs } from "./callers.js";
+export type { CallerIndex, CallerEntry, CallerSite } from "./callers.js";
+export { detectWorkspaces } from "./workspaces.js";
+export type { WorkspaceInfo, WorkspacePackage, WorkspaceKind } from "./workspaces.js";
 
 // Graph analytics.
 export { applyCentrality, pagerankOf, betweennessOf } from "./centrality.js";
@@ -70,8 +76,24 @@ export { buildIndexArtifacts } from "./pipeline.js";
 export type { BuildIndexOptions, IndexArtifacts } from "./pipeline.js";
 
 // Git utilities.
-export { headCommit, isGitWorktree, resolveBaseRef, diffFiles, diffHunks, untrackedFiles } from "./git.js";
+export {
+  headCommit,
+  isGitWorktree,
+  resolveBaseRef,
+  diffFiles,
+  diffHunks,
+  untrackedFiles,
+  gitChurn,
+  changedSince,
+} from "./git.js";
 export type { DiffFile, DiffSpec, Hunk } from "./git.js";
+
+// Repo text search (ripgrep when available, pure-JS fallback otherwise).
+export { grepRepo } from "./grep.js";
+export type { SearchHit, GrepOptions } from "./grep.js";
+
+// MCP server over stdio (also reachable as `engine.mjs mcp`).
+export { runMcpServer } from "./mcp.js";
 
 // General-purpose helpers shared by consumers (deterministic, dependency-free).
 export { sha1, shortHash } from "./hash.js";

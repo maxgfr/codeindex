@@ -177,3 +177,29 @@ export function untrackedFiles(dir: string): string[] {
   if (!res.ok) return [];
   return res.stdout.split("\0").filter((p) => p.length > 0);
 }
+
+// Per-file commit counts over the whole history (or since a ref) — the churn
+// half of hotspot analysis. `ok: false` means git was unavailable or the dir
+// isn't a repo: degrade loudly (callers can say "no churn data"), never
+// silently return an empty map that reads as "nothing ever changed".
+export function gitChurn(dir: string, opts: { since?: string } = {}): { churn: Map<string, number>; ok: boolean } {
+  const churn = new Map<string, number>();
+  const range = opts.since ? [`${opts.since}..HEAD`] : [];
+  const res = sh("git", [...gitArgs(dir), "log", ...range, "--pretty=format:", "--name-only", "-z"]);
+  if (!res.ok) return { churn, ok: false };
+  for (const tok of res.stdout.split("\0")) {
+    const f = tok.replace(/^\n+/, "").trim();
+    if (f) churn.set(f, (churn.get(f) ?? 0) + 1);
+  }
+  return { churn, ok: true };
+}
+
+// Files changed since a ref (worktree vs ref) plus untracked files — "what did
+// I touch". Returns an empty set outside a git repo.
+export function changedSince(dir: string, ref: string): Set<string> {
+  const out = new Set<string>();
+  const diff = sh("git", [...gitArgs(dir), "diff", "-z", "--name-only", ref, "--"]);
+  if (diff.ok) for (const p of diff.stdout.split("\0")) if (p) out.add(p);
+  for (const p of untrackedFiles(dir)) out.add(p);
+  return out;
+}

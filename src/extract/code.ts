@@ -295,6 +295,49 @@ function extractReexports(rel: string, content: string): CodeSymbol[] {
   return out;
 }
 
+// Control-flow and declaration keywords that syntactically precede `(` but are
+// never call targets — the union across supported languages. Deliberately does
+// NOT list real builtins (python's `print`, go's `make`…): a false call to a
+// name with no repo-wide def resolves to nothing downstream, while excluding a
+// real function name would silently drop true edges.
+const CALL_KEYWORDS = new Set([
+  "if", "else", "elif", "for", "while", "do", "switch", "case", "match", "when", "unless", "until",
+  "catch", "except", "return", "throw", "raise", "yield", "await", "typeof", "instanceof", "sizeof",
+  "delete", "void", "in", "of", "not", "and", "or", "assert", "defer", "select", "with", "loop",
+]);
+
+// Introducers whose FOLLOWING identifier is a definition, not a call:
+// `function foo(`, `def foo(`, `func foo(`, `fn foo(`, `class Foo(`, `sub foo(`.
+const DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bmacro|\bproc)\s*[*]?\s*$/;
+
+// Regex-tier call-site collection for files with no AST grammar — a
+// conservative `identifier(` scan so call data exists wasm-free (the AST tier
+// stays authoritative when available). Same contract as ast/extract's
+// collector: cap 512, deduped by name+line, sorted by name then line.
+function collectCallsRegex(content: string): { name: string; line: number }[] {
+  const out = new Map<string, { name: string; line: number }>();
+  const lines = content.split("\n");
+  const CALL_RE = /(?:\bnew\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
+  for (let i = 0; i < lines.length && out.size < 512; i++) {
+    const line = lines[i]!;
+    // Cheap comment guard: a line-leading comment marker means no calls here
+    // (block-comment interiors and strings stay best-effort, like the symbol
+    // regexes — noise resolves to nothing in the global call pass).
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;
+    CALL_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = CALL_RE.exec(line)) !== null && out.size < 512) {
+      const name = m[1]!;
+      if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
+      if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
+      const key = `${name} ${i + 1}`;
+      if (!out.has(key)) out.set(key, { name, line: i + 1 });
+    }
+  }
+  return [...out.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line));
+}
+
 export function extractCode(rel: string, ext: string, content: string): CodeInfo {
   // Symbols come from tree-sitter when a grammar is loaded for this extension
   // (AST-exact: real nesting, precise kinds, structural export), else the regex
@@ -319,7 +362,9 @@ export function extractCode(rel: string, ext: string, content: string): CodeInfo
           ? /^\s*(?:file-scoped\s+)?namespace\s+([\w.]+)/m.exec(content)?.[1]
           : undefined,
     idents: ast?.idents,
-    calls: ast?.calls,
+    // AST call sites when a grammar parsed the file; the conservative regex
+    // collector otherwise, so caller indexes exist without the wasm sidecar.
+    calls: ast ? ast.calls : collectCallsRegex(content),
     importedNames: ast?.importedNames,
   };
 }

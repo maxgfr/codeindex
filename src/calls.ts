@@ -11,9 +11,14 @@ const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
 // Collapse TypeScript/JavaScript to one family so a call in a `.ts` file can bind
 // to a def in a `.js` file (and vice versa) but never crosses into an unrelated
-// language. Every other language is its own family.
-function familyOf(lang: string): string {
-  return lang === "typescript" || lang === "javascript" ? "js" : lang;
+// language. Every other language is its own family. Exported for callers.ts,
+// which mirrors this binding logic at call-site granularity.
+export function familyOf(lang: string): string {
+  if (lang === "typescript" || lang === "javascript") return "js";
+  // C and C++ interoperate through headers (.h files classify as "c" while
+  // their consumers are often .cpp) — one family, like the JS/TS pair.
+  if (lang === "c" || lang === "cpp") return "c";
+  return lang;
 }
 
 // Leading path segments two repo-relative paths share (the filename never counts,
@@ -26,7 +31,7 @@ function sharedSegments(a: string, b: string): number {
   return n;
 }
 
-interface Cand {
+export interface Cand {
   file: string;
   lang: string;
 }
@@ -34,7 +39,7 @@ interface Cand {
 // Pick a single candidate for a call: the sole candidate, else the one sharing
 // the strictly-most leading path segments with the caller. A tie at the maximum
 // (or an empty list) is unresolvable — return undefined so the caller skips it.
-function pick(callerRel: string, cands: Cand[]): Cand | undefined {
+export function pickCandidate(callerRel: string, cands: Cand[]): Cand | undefined {
   if (cands.length === 1) return cands[0];
   if (cands.length === 0) return undefined;
   let best: Cand | undefined;
@@ -98,13 +103,13 @@ export function resolveCallEdges(scan: RepoScan, importPairs: Set<string>): Edge
         // file it came from, so it can't narrow `imported` further — pick among
         // the imported candidates by proximity.
         if (!imported.length) continue;
-        chosen = pick(f.rel, imported);
+        chosen = pickCandidate(f.rel, imported);
         confidence = "extracted";
       } else if (imported.length) {
-        chosen = pick(f.rel, imported);
+        chosen = pickCandidate(f.rel, imported);
         confidence = "extracted";
       } else {
-        chosen = pick(f.rel, cands);
+        chosen = pickCandidate(f.rel, cands);
         confidence = "inferred";
       }
       if (!chosen) continue;
