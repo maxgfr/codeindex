@@ -219,7 +219,9 @@ function patternToRegExpSource(pattern) {
   let re = "";
   for (let i2 = 0; i2 < pattern.length; i2++) {
     const c2 = pattern[i2];
-    if (c2 === "*") {
+    if (c2 === "\\" && i2 + 1 < pattern.length) {
+      re += escapeRegExp(pattern[++i2]);
+    } else if (c2 === "*") {
       if (pattern[i2 + 1] === "*") {
         i2++;
         if (pattern[i2 + 1] === "/") {
@@ -233,6 +235,28 @@ function patternToRegExpSource(pattern) {
       }
     } else if (c2 === "?") {
       re += "[^/]";
+    } else if (c2 === "[") {
+      let j = i2 + 1;
+      let body2 = "";
+      if (pattern[j] === "!") {
+        body2 += "^";
+        j++;
+      }
+      if (pattern[j] === "]") {
+        body2 += "\\]";
+        j++;
+      }
+      while (j < pattern.length && pattern[j] !== "]") {
+        const ch = pattern[j];
+        body2 += ch === "\\" || ch === "^" ? "\\" + ch : ch;
+        j++;
+      }
+      if (j < pattern.length && body2 !== "" && body2 !== "^") {
+        re += `[${body2}]`;
+        i2 = j;
+      } else {
+        re += "\\[";
+      }
     } else {
       re += escapeRegExp(c2);
     }
@@ -243,14 +267,13 @@ function parseGitignore(content, baseRel) {
   const rules = [];
   const prefix = baseRel ? escapeRegExp(baseRel) + "/" : "";
   for (const rawLine of content.split(/\r?\n/)) {
-    let line = rawLine.replace(/(?<!\\)\s+$/, "");
+    let line = rawLine.replace(/(?<!\\) +$/, "");
     if (!line || line.startsWith("#")) continue;
     let negated = false;
     if (line.startsWith("!")) {
       negated = true;
       line = line.slice(1);
     }
-    if (line.startsWith("\\#") || line.startsWith("\\!")) line = line.slice(1);
     let dirOnly = false;
     if (line.endsWith("/")) {
       dirOnly = true;

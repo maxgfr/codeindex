@@ -50,6 +50,35 @@ describe("parseGitignore semantics", () => {
     expect(test(r, "file12.md")).toBe(false);
   });
 
+  it("trims only unescaped trailing SPACES (git semantics)", () => {
+    // Trailing tab is significant; escaped trailing space is literal.
+    const r = parseGitignore("ghi\t\ndef\\ \nplain   \n", "");
+    expect(test(r, "ghi\t")).toBe(true);
+    expect(test(r, "ghi")).toBe(false);
+    expect(test(r, "def ")).toBe(true);
+    expect(test(r, "def")).toBe(false);
+    expect(test(r, "plain")).toBe(true);
+  });
+
+  it("consumes fnmatch escapes mid-pattern", () => {
+    const r = parseGitignore("a\\*b\n\\#lit\n\\!bang\n", "");
+    expect(test(r, "a*b")).toBe(true);
+    expect(test(r, "axb")).toBe(false); // escaped star is literal, not a wildcard
+    expect(test(r, "#lit")).toBe(true);
+    expect(test(r, "!bang")).toBe(true);
+  });
+
+  it("supports [...] character classes", () => {
+    const r = parseGitignore("*.py[co]\n[Tt]humbs.db\n", "");
+    expect(test(r, "m.pyc")).toBe(true);
+    expect(test(r, "m.pyo")).toBe(true);
+    expect(test(r, "m.py")).toBe(false);
+    expect(test(r, "Thumbs.db")).toBe(true);
+    expect(test(r, "thumbs.db")).toBe(true);
+    // A file literally named with brackets must NOT match the class pattern.
+    expect(test(r, "x.py[co]")).toBe(false);
+  });
+
   it("nested .gitignore rules are scoped to their base directory", () => {
     const r = parseGitignore("*.gen.ts\n", "packages/core");
     expect(test(r, "packages/core/x.gen.ts")).toBe(true);

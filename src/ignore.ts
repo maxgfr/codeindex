@@ -1,10 +1,14 @@
-// .gitignore support for the walker. Semantics follow git's core rules for the
-// common cases: per-directory files apply to their subtree, later rules win,
-// `!` negates, a trailing `/` restricts to directories, a `/` anywhere else
-// anchors the pattern to the .gitignore's own directory, and `*`/`**`/`?` glob
-// (never crossing `/` except `**`). Deliberate simplification shared with git
-// itself: once a directory is ignored the walk never descends into it, so a
-// negation cannot re-include a file inside an ignored directory.
+// .gitignore support for the walker. Semantics follow git's core rules: per-
+// directory files apply to their subtree, later rules win, `!` negates, a
+// trailing `/` restricts to directories, a `/` anywhere else anchors the
+// pattern to the .gitignore's own directory, `*`/`**`/`?` glob (never crossing
+// `/` except `**`), `[...]` character classes, and `\x` fnmatch escapes.
+// Verified by differential testing against `git check-ignore`. Two deliberate
+// deviations: (1) once a directory is ignored the walk never descends into it,
+// so a negation cannot re-include a file inside it — git behaves the same;
+// (2) matching is ALWAYS case-sensitive (gitignore(5) semantics) even where
+// git's platform default is core.ignorecase=true — a platform-dependent match
+// would break cross-machine byte-identical builds.
 import { escapeRegExp } from "./util.js";
 
 export interface IgnoreRule {
@@ -14,12 +18,17 @@ export interface IgnoreRule {
 }
 
 // Compile one gitignore pattern segment-wise. Differs from glob.ts: `**` here
-// follows gitignore's spec (`**/` leading, `/**` trailing, `/**/` mid-pattern).
+// follows gitignore's spec (`**/` leading, `/**` trailing, `/**/` mid-pattern),
+// `\x` escapes the next character (fnmatch), and `[...]` character classes are
+// supported (`*.py[cod]`, `[Tt]humbs.db`).
 function patternToRegExpSource(pattern: string): string {
   let re = "";
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]!;
-    if (c === "*") {
+    if (c === "\\" && i + 1 < pattern.length) {
+      // fnmatch escaping: the next character is literal (`\*`, `\?`, `\ `, `\\`).
+      re += escapeRegExp(pattern[++i]!);
+    } else if (c === "*") {
       if (pattern[i + 1] === "*") {
         i++;
         if (pattern[i + 1] === "/") {
@@ -33,6 +42,30 @@ function patternToRegExpSource(pattern: string): string {
       }
     } else if (c === "?") {
       re += "[^/]";
+    } else if (c === "[") {
+      // Character class: consume up to the closing `]` (a leading `]` is
+      // literal, `!` negates). Falls back to a literal `[` when unclosed.
+      let j = i + 1;
+      let body = "";
+      if (pattern[j] === "!") {
+        body += "^";
+        j++;
+      }
+      if (pattern[j] === "]") {
+        body += "\\]";
+        j++;
+      }
+      while (j < pattern.length && pattern[j] !== "]") {
+        const ch = pattern[j]!;
+        body += ch === "\\" || ch === "^" ? "\\" + ch : ch;
+        j++;
+      }
+      if (j < pattern.length && body !== "" && body !== "^") {
+        re += `[${body}]`;
+        i = j;
+      } else {
+        re += "\\[";
+      }
     } else {
       re += escapeRegExp(c);
     }
@@ -46,16 +79,16 @@ export function parseGitignore(content: string, baseRel: string): IgnoreRule[] {
   const rules: IgnoreRule[] = [];
   const prefix = baseRel ? escapeRegExp(baseRel) + "/" : "";
   for (const rawLine of content.split(/\r?\n/)) {
-    // Trailing spaces are ignored unless backslash-escaped (rare; we keep the
-    // simple form). Blank lines and comments carry no rule.
-    let line = rawLine.replace(/(?<!\\)\s+$/, "");
+    // Trailing SPACES are ignored unless backslash-escaped (git trims only
+    // 0x20 — a trailing tab is significant). Blank lines and comments carry no
+    // rule. Escapes (`\ `, `\*`, `\#`…) are consumed by the pattern compiler.
+    let line = rawLine.replace(/(?<!\\) +$/, "");
     if (!line || line.startsWith("#")) continue;
     let negated = false;
     if (line.startsWith("!")) {
       negated = true;
       line = line.slice(1);
     }
-    if (line.startsWith("\\#") || line.startsWith("\\!")) line = line.slice(1);
     let dirOnly = false;
     if (line.endsWith("/")) {
       dirOnly = true;
