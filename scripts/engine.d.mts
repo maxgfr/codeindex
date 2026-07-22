@@ -322,6 +322,10 @@ declare function resolveCallEdges(scan: RepoScan, importPairs: Set<string>): Edg
 interface CallerSite {
     file: string;
     line: number;
+    confidence?: "corroborated" | "unique-name";
+}
+interface CallerIndexOptions {
+    recall?: boolean;
 }
 interface CallerEntry {
     def: CodeSymbol;
@@ -329,7 +333,7 @@ interface CallerEntry {
 }
 type CallerIndex = Map<string, CallerEntry>;
 declare function computeImportPairs(scan: RepoScan): Set<string>;
-declare function buildCallerIndex(scan: RepoScan, importPairs?: Set<string>): CallerIndex;
+declare function buildCallerIndex(scan: RepoScan, importPairs?: Set<string>, opts?: CallerIndexOptions): CallerIndex;
 declare function enclosingSymbol(scan: RepoScan, file: string, line: number): CodeSymbol | undefined;
 
 declare function symbolsOverview(scan: RepoScan, rel: string): CodeSymbol[];
@@ -471,6 +475,45 @@ interface GrepOptions {
 }
 declare function grepRepo(root: string, pattern: string, opts?: GrepOptions): SearchHit[];
 
+interface SearchOptions {
+    limit?: number;
+}
+interface SearchResult {
+    file: string;
+    score: number;
+    matchedTerms: string[];
+    topSymbols: string[];
+}
+declare function subtokens(raw: string): string[];
+declare function searchIndex(scan: RepoScan, query: string, opts?: SearchOptions): SearchResult[];
+
+type RuleSeverity = "error" | "warn";
+interface ForbiddenEdgeRule {
+    name: string;
+    from: string | string[];
+    to: string | string[];
+    kind?: EdgeKind[];
+    severity?: RuleSeverity;
+    comment?: string;
+}
+interface BuiltinRule {
+    name: string;
+    builtin: "cycles" | "orphans";
+    severity?: RuleSeverity;
+    comment?: string;
+}
+type ArchRule = ForbiddenEdgeRule | BuiltinRule;
+interface RuleViolation {
+    rule: string;
+    from: string;
+    to: string;
+    kind: EdgeKind | "cycle" | "orphan";
+    severity: RuleSeverity;
+    comment?: string;
+}
+declare function parseRules(input: unknown): ArchRule[];
+declare function checkRules(graph: Graph, rules: ArchRule[]): RuleViolation[];
+
 interface ChangeCoupling {
     a: string;
     b: string;
@@ -536,4 +579,4 @@ declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): M
 
 declare function runCli(argv: string[]): Promise<void>;
 
-export { type BuildIndexOptions, type CallerEntry, type CallerIndex, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type ModuleInfo, type ModuleNode, type RawRef, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, SCHEMA_VERSION, type ScanOptions, type SearchHit, type ShResult, type SurpriseEdge, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, classify, clip, clipInline, communityOf, compileGlobs, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, insertAfterSymbol, insertBeforeSymbol, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, listMemories, pagerankOf, parseGitignore, rankHotspots, rankedKeywords, readMemory, readText, renderGraphJson, renderRepoMap, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, resolveUniqueSymbol, rrf, runCli, runMcpServer, scanRepo, sh, sha1, shortHash, slugify, symbolsOverview, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, writeMemory };
+export { type ArchRule, type BuildIndexOptions, type BuiltinRule, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type ModuleInfo, type ModuleNode, type RawRef, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type SearchHit, type SearchOptions, type SearchResult, type ShResult, type SurpriseEdge, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, insertAfterSymbol, insertBeforeSymbol, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, listMemories, pagerankOf, parseGitignore, parseRules, rankHotspots, rankedKeywords, readMemory, readText, renderGraphJson, renderRepoMap, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, resolveUniqueSymbol, rrf, runCli, runMcpServer, scanRepo, searchIndex, sh, sha1, shortHash, slugify, subtokens, symbolsOverview, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, writeMemory };

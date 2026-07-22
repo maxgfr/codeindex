@@ -7530,8 +7530,9 @@ function computeImportPairs(scan2) {
   }
   return pairs;
 }
-function buildCallerIndex(scan2, importPairs) {
+function buildCallerIndex(scan2, importPairs, opts = {}) {
   const pairs = importPairs ?? computeImportPairs(scan2);
+  const recall = opts.recall === true;
   const defs = /* @__PURE__ */ new Map();
   for (const f of scan2.files) {
     const seen = /* @__PURE__ */ new Set();
@@ -7565,16 +7566,24 @@ function buildCallerIndex(scan2, importPairs) {
     for (const c2 of f.calls) {
       const local = own.get(c2.name);
       if (local) {
-        if (local.line !== c2.line) record(local, { file: f.rel, line: c2.line });
+        if (local.line !== c2.line)
+          record(local, recall ? { file: f.rel, line: c2.line, confidence: "corroborated" } : { file: f.rel, line: c2.line });
         continue;
       }
       const cands = (defs.get(c2.name) ?? []).filter((d) => familyOf(d.lang) === family && d.file !== f.rel).map((d) => ({ file: d.file, lang: d.lang }));
       if (!cands.length) continue;
       const imported = cands.filter((d) => pairs.has(`${f.rel}|${d.file}`));
-      const chosen = family === "js" ? imported.length ? pickCandidate(f.rel, imported) : void 0 : imported.length ? pickCandidate(f.rel, imported) : pickCandidate(f.rel, cands);
+      const chosen = family === "js" ? imported.length ? pickCandidate(f.rel, imported) : (
+        // JS/TS gate: no corroborating import → no binding. Recall mode
+        // relaxes this to a unique-repo-wide name match (issue #7).
+        recall && cands.length === 1 ? cands[0] : void 0
+      ) : imported.length ? pickCandidate(f.rel, imported) : pickCandidate(f.rel, cands);
       if (!chosen) continue;
       const def = defs.get(c2.name).find((d) => d.file === chosen.file);
-      record(def, { file: f.rel, line: c2.line });
+      record(
+        def,
+        recall ? { file: f.rel, line: c2.line, confidence: imported.length ? "corroborated" : "unique-name" } : { file: f.rel, line: c2.line }
+      );
     }
   }
   const index = /* @__PURE__ */ new Map();
@@ -8830,6 +8839,293 @@ var init_grep = __esm({
   }
 });
 
+// src/bm25.ts
+function subtokens(raw) {
+  const folded = foldText(raw).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (t) => {
+    if (t.length < 2 || seen.has(t)) return;
+    seen.add(t);
+    out2.push(t);
+  };
+  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
+  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
+  return out2;
+}
+function addTerms(doc, text) {
+  for (const t of subtokens(text)) {
+    doc.tf.set(t, (doc.tf.get(t) ?? 0) + 1);
+    doc.len++;
+  }
+}
+function buildDocs(scan2) {
+  const docs = [];
+  for (const f of scan2.files) {
+    const doc = { file: f.rel, tf: /* @__PURE__ */ new Map(), len: 0, symbols: [] };
+    const seenSym = /* @__PURE__ */ new Set();
+    for (const s of f.symbols) {
+      addTerms(doc, s.name);
+      if (!seenSym.has(s.name)) {
+        seenSym.add(s.name);
+        doc.symbols.push(s.name);
+      }
+    }
+    for (const seg of f.rel.split("/")) addTerms(doc, seg);
+    for (const h of f.headings) addTerms(doc, h);
+    if (f.summary) addTerms(doc, f.summary);
+    docs.push(doc);
+  }
+  return docs;
+}
+function searchIndex(scan2, query, opts = {}) {
+  const terms = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const kw of keywords(query)) {
+    for (const t of subtokens(kw)) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      terms.push(t);
+    }
+  }
+  if (!terms.length) return [];
+  const docs = buildDocs(scan2);
+  const n = docs.length;
+  if (!n) return [];
+  let totalLen = 0;
+  for (const d of docs) totalLen += d.len;
+  const avgLen = totalLen / n || 1;
+  const df = /* @__PURE__ */ new Map();
+  for (const t of terms) {
+    let count = 0;
+    for (const d of docs) if (d.tf.has(t)) count++;
+    df.set(t, count);
+  }
+  const results = [];
+  for (const d of docs) {
+    let score = 0;
+    const matched = [];
+    for (const t of terms) {
+      const tf = d.tf.get(t);
+      if (!tf) continue;
+      matched.push(t);
+      const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
+      score += idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * d.len / avgLen));
+    }
+    if (!matched.length) continue;
+    const scored = d.symbols.map((name2) => {
+      const toks = new Set(subtokens(name2));
+      let hits = 0;
+      for (const t of matched) if (toks.has(t)) hits++;
+      return { name: name2, hits };
+    }).filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits || byStr(a.name, b.name));
+    results.push({
+      file: d.file,
+      score: Number(score.toFixed(4)),
+      matchedTerms: matched.sort(byStr),
+      topSymbols: scored.slice(0, TOP_SYMBOLS).map((s) => s.name)
+    });
+  }
+  results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
+  return results.slice(0, opts.limit ?? DEFAULT_LIMIT);
+}
+var K1, B, DEFAULT_LIMIT, TOP_SYMBOLS;
+var init_bm25 = __esm({
+  "src/bm25.ts"() {
+    "use strict";
+    init_util();
+    init_sort();
+    K1 = 1.2;
+    B = 0.75;
+    DEFAULT_LIMIT = 20;
+    TOP_SYMBOLS = 5;
+  }
+});
+
+// src/rules.ts
+function isEntrypointLike(rel) {
+  const base = rel.split("/").pop();
+  const stem = base.split(".")[0].toLowerCase();
+  return ENTRYPOINT_STEMS.has(stem);
+}
+function toList(v) {
+  return Array.isArray(v) ? v : [v];
+}
+function parseRules(input) {
+  const raw = Array.isArray(input) ? input : input?.rules;
+  if (!Array.isArray(raw)) throw new Error("rules config must be an array (or an object with a `rules` array)");
+  return raw.map((entry, i2) => {
+    const at = `rules[${i2}]`;
+    if (typeof entry !== "object" || entry === null) throw new Error(`${at}: must be an object`);
+    const r = entry;
+    if (typeof r.name !== "string" || !r.name) throw new Error(`${at}: \`name\` (non-empty string) is required`);
+    if (r.severity !== void 0 && !SEVERITIES.has(r.severity))
+      throw new Error(`${at} (${r.name}): \`severity\` must be "error" or "warn"`);
+    if (r.comment !== void 0 && typeof r.comment !== "string")
+      throw new Error(`${at} (${r.name}): \`comment\` must be a string`);
+    if (r.builtin !== void 0) {
+      if (!BUILTINS.has(r.builtin))
+        throw new Error(`${at} (${r.name}): \`builtin\` must be "cycles" or "orphans"`);
+      return { name: r.name, builtin: r.builtin, severity: r.severity, comment: r.comment };
+    }
+    const glob = (field) => {
+      const v = r[field];
+      const ok = typeof v === "string" ? v.length > 0 : Array.isArray(v) && v.length > 0 && v.every((g) => typeof g === "string" && g);
+      if (!ok) throw new Error(`${at} (${r.name}): \`${field}\` must be a glob or a non-empty array of globs`);
+      return v;
+    };
+    const from = glob("from");
+    const to = glob("to");
+    if (r.kind !== void 0) {
+      const ok = Array.isArray(r.kind) && r.kind.every((k) => EDGE_KINDS.has(k));
+      if (!ok) throw new Error(`${at} (${r.name}): \`kind\` must be an array of edge kinds (${[...EDGE_KINDS].join(", ")})`);
+    }
+    return { name: r.name, from, to, kind: r.kind, severity: r.severity, comment: r.comment };
+  });
+}
+function findImportCycles(graph) {
+  const adj = /* @__PURE__ */ new Map();
+  for (const e of graph.moduleEdges) {
+    if (e.kind !== "import") continue;
+    let list = adj.get(e.from);
+    if (!list) adj.set(e.from, list = []);
+    list.push(e.to);
+  }
+  for (const list of adj.values()) list.sort(byStr);
+  const nodes = [...adj.keys()].sort(byStr);
+  const indexOf = /* @__PURE__ */ new Map();
+  const low = /* @__PURE__ */ new Map();
+  const onStack = /* @__PURE__ */ new Set();
+  const stack = [];
+  const sccs = [];
+  let counter = 0;
+  for (const root of nodes) {
+    if (indexOf.has(root)) continue;
+    const work = [{ node: root, next: 0 }];
+    while (work.length) {
+      const frame = work[work.length - 1];
+      const v = frame.node;
+      if (frame.next === 0) {
+        indexOf.set(v, counter);
+        low.set(v, counter);
+        counter++;
+        stack.push(v);
+        onStack.add(v);
+      }
+      const targets = adj.get(v) ?? [];
+      if (frame.next < targets.length) {
+        const w = targets[frame.next];
+        frame.next++;
+        if (!indexOf.has(w)) work.push({ node: w, next: 0 });
+        else if (onStack.has(w)) low.set(v, Math.min(low.get(v), indexOf.get(w)));
+      } else {
+        if (low.get(v) === indexOf.get(v)) {
+          const scc = [];
+          for (; ; ) {
+            const w = stack.pop();
+            onStack.delete(w);
+            scc.push(w);
+            if (w === v) break;
+          }
+          if (scc.length > 1) sccs.push(scc);
+        }
+        work.pop();
+        const parent = work[work.length - 1];
+        if (parent) low.set(parent.node, Math.min(low.get(parent.node), low.get(v)));
+      }
+    }
+  }
+  const cycles = [];
+  for (const scc of sccs) {
+    const members = new Set(scc);
+    const start2 = [...scc].sort(byStr)[0];
+    const parent = /* @__PURE__ */ new Map([[start2, null]]);
+    const order = [start2];
+    for (let i2 = 0; i2 < order.length; i2++) {
+      const v = order[i2];
+      for (const w of adj.get(v) ?? []) {
+        if (!members.has(w) || parent.has(w)) continue;
+        parent.set(w, v);
+        order.push(w);
+      }
+    }
+    const closer = order.find((v) => (adj.get(v) ?? []).includes(start2) && v !== start2) ?? // Degenerate (shouldn't happen in an SCC): fall back to start itself.
+    start2;
+    const path = [];
+    for (let v = closer; v !== null; v = parent.get(v) ?? null) path.unshift(v);
+    path.push(start2);
+    cycles.push({ start: start2, path });
+  }
+  return cycles;
+}
+function checkRules(graph, rules) {
+  const out2 = [];
+  const emit2 = (rule, v) => {
+    out2.push({
+      rule: rule.name,
+      ...v,
+      severity: rule.severity ?? "error",
+      ...rule.comment !== void 0 ? { comment: rule.comment } : {}
+    });
+  };
+  const fileSet = new Set(graph.files.map((f) => f.rel));
+  for (const rule of rules) {
+    if ("builtin" in rule) {
+      if (rule.builtin === "cycles") {
+        for (const c2 of findImportCycles(graph)) {
+          emit2(rule, { from: c2.start, to: c2.path.join(" -> "), kind: "cycle" });
+        }
+      } else {
+        for (const f of graph.files) {
+          if (f.fileKind !== "code" || f.degIn !== 0 || f.degOut !== 0) continue;
+          if (isEntrypointLike(f.rel)) continue;
+          emit2(rule, { from: f.rel, to: f.rel, kind: "orphan" });
+        }
+      }
+      continue;
+    }
+    const fromMatch = compileGlobs(toList(rule.from));
+    const toMatch = compileGlobs(toList(rule.to));
+    if (!fromMatch || !toMatch) continue;
+    const kinds = rule.kind?.length ? new Set(rule.kind) : null;
+    for (const e of graph.fileEdges) {
+      if (e.dangling || !fileSet.has(e.to)) continue;
+      if (kinds && !kinds.has(e.kind)) continue;
+      if (!fromMatch(e.from) || !toMatch(e.to)) continue;
+      emit2(rule, { from: e.from, to: e.to, kind: e.kind });
+    }
+  }
+  out2.sort((a, b) => byStr(a.rule, b.rule) || byStr(a.from, b.from) || byStr(a.to, b.to) || byStr(a.kind, b.kind));
+  return out2;
+}
+var EDGE_KINDS, SEVERITIES, BUILTINS, ENTRYPOINT_STEMS;
+var init_rules = __esm({
+  "src/rules.ts"() {
+    "use strict";
+    init_glob();
+    init_sort();
+    EDGE_KINDS = /* @__PURE__ */ new Set(["contains", "doc-link", "import", "call", "use", "mention"]);
+    SEVERITIES = /* @__PURE__ */ new Set(["error", "warn"]);
+    BUILTINS = /* @__PURE__ */ new Set(["cycles", "orphans"]);
+    ENTRYPOINT_STEMS = /* @__PURE__ */ new Set([
+      "index",
+      "main",
+      "app",
+      "application",
+      "cli",
+      "server",
+      "entry",
+      "entrypoint",
+      "setup",
+      "conftest",
+      "__init__",
+      "__main__",
+      "mod",
+      "lib"
+    ]);
+  }
+});
+
 // src/coupling.ts
 function changeCoupling(dir, opts = {}) {
   const maxCommitFiles = opts.maxCommitFiles ?? 30;
@@ -9045,6 +9341,19 @@ function callTool(name2, args2) {
     });
     return JSON.stringify(hits, null, 2);
   }
+  if (name2 === "search") {
+    const query = str(args2.query);
+    if (!query) throw new Error("`query` is required");
+    const results = searchIndex(scanRepo(repo, scanOpts), query, {
+      limit: typeof args2.limit === "number" ? args2.limit : void 0
+    });
+    return JSON.stringify(results, null, 2);
+  }
+  if (name2 === "check_rules") {
+    const rules = parseRules(args2.rules);
+    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    return JSON.stringify(checkRules(graph, rules), null, 2);
+  }
   throw new Error(`unknown tool: ${name2}`);
 }
 async function runMcpServer() {
@@ -9121,6 +9430,8 @@ var init_mcp = __esm({
     init_query();
     init_edit();
     init_memory();
+    init_bm25();
+    init_rules();
     repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
     scopeProps = {
       scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -9307,6 +9618,33 @@ var init_mcp = __esm({
           },
           required: ["repo", "pattern"]
         }
+      },
+      {
+        name: "search",
+        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            ...repoProp,
+            ...scopeProps,
+            query: { type: "string", description: "Natural-language or identifier query" },
+            limit: { type: "number", description: "Max results (default 20)" }
+          },
+          required: ["repo", "query"]
+        }
+      },
+      {
+        name: "check_rules",
+        description: 'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"} (module-level import cycles; edge-less code files). Returns deterministic violations with severity error|warn \u2014 a CI gate.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            ...repoProp,
+            ...scopeProps,
+            rules: { type: "array", description: "Rules array (inline JSON \u2014 see description)" }
+          },
+          required: ["repo", "rules"]
+        }
       }
     ];
   }
@@ -9448,6 +9786,8 @@ init_graph_json();
 init_pipeline();
 init_git();
 init_grep();
+init_bm25();
+init_rules();
 init_coupling();
 init_repomap();
 init_mcp();
@@ -9469,6 +9809,8 @@ init_git();
 init_grep();
 init_coupling();
 init_repomap();
+init_bm25();
+init_rules();
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "fs";
 import { join as join9, resolve } from "path";
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
@@ -9485,6 +9827,11 @@ Commands:
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
+  search      Keyless BM25 lexical search over symbol names, path segments,
+              markdown headings and summaries: cli.mjs search "<query>" --repo <dir>
+  rules       Architecture rules (forbidden edges, cycles, orphans) validated
+              against the link-graph: --config <codeindex.rules.json>; exits 1
+              on any error-severity violation (a CI gate)
   repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
   hotspots    Churn \xD7 size ranking of the files where work concentrates (JSON)
   coupling    Change coupling: files that change together (JSON; --since <ref>)
@@ -9502,6 +9849,11 @@ Flags:
   --max-files <n>     Cap walked files (default 20000)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
+  --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, \u2026}])
+  --limit <n>         Max results for \`search\` (default 20)
+  --recall            \`callers\`: recall-oriented binding (issue #7) \u2014 relaxes
+                      the JS/TS import gate to unique repo-wide names and labels
+                      each site corroborated|unique-name
 `;
 function parseFlags(args2) {
   const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false };
@@ -9531,6 +9883,9 @@ function parseFlags(args2) {
     else if (a === "--budget-tokens") flags2.budgetTokens = num();
     else if (a === "--no-ast") flags2.noAst = true;
     else if (a === "--since") flags2.since = next();
+    else if (a === "--config") flags2.config = resolve(next());
+    else if (a === "--limit") flags2.limit = num();
+    else if (a === "--recall") flags2.recall = true;
     else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -9615,10 +9970,23 @@ async function runCli(argv) {
     emit(renderSymbolsJson(symbols), flags2.out);
   } else if (cmd === "callers") {
     const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
-    const index = buildCallerIndex(scan2);
+    const index = buildCallerIndex(scan2, void 0, { recall: flags2.recall });
     const obj = {};
     for (const [name2, entry] of index) obj[name2] = entry;
     emit(JSON.stringify(obj, null, 2) + "\n", flags2.out);
+  } else if (cmd === "search") {
+    if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit });
+    emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+  } else if (cmd === "rules") {
+    if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
+    const rules = parseRules(JSON.parse(readFileSync5(flags2.config, "utf8")));
+    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const violations = checkRules(graph, rules);
+    const errors = violations.filter((v) => v.severity === "error").length;
+    emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags2.out);
+    if (errors > 0) process.exitCode = 1;
   } else if (cmd === "workspaces") {
     const info2 = detectWorkspaces(flags2.repo);
     emit(
@@ -9680,6 +10048,7 @@ export {
   categorize,
   changeCoupling,
   changedSince,
+  checkRules,
   classify,
   clip,
   clipInline,
@@ -9725,6 +10094,7 @@ export {
   listMemories,
   pagerankOf,
   parseGitignore,
+  parseRules,
   rankHotspots,
   rankedKeywords,
   readMemory,
@@ -9742,10 +10112,12 @@ export {
   runCli,
   runMcpServer,
   scanRepo,
+  searchIndex,
   sh,
   sha1,
   shortHash,
   slugify,
+  subtokens,
   symbolsOverview,
   testsForModule,
   tierForPath,
