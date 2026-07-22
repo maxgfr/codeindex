@@ -17,12 +17,18 @@ importers:
       '@semantic-release/git':
         specifier: ^10.0.1
         version: 10.0.1(semantic-release@24.2.9(typescript@5.9.3))
+      '@tree-sitter-grammars/tree-sitter-lua':
+        specifier: 0.4.1
+        version: 0.4.1
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.43
       semantic-release:
         specifier: ^24.2.0
         version: 24.2.9(typescript@5.9.3)
+      tree-sitter-bash:
+        specifier: 0.25.1
+        version: 0.25.1
       tree-sitter-c:
         specifier: ^0.24.1
         version: 0.24.1
@@ -52,6 +58,9 @@ importers:
         version: 0.23.1
       tree-sitter-rust:
         specifier: ^0.24.0
+        version: 0.24.0
+      tree-sitter-scala:
+        specifier: 0.24.0
         version: 0.24.0
       tree-sitter-typescript:
         specifier: ^0.23.2
@@ -639,6 +648,14 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@tree-sitter-grammars/tree-sitter-lua@0.4.1':
+    resolution: {integrity: sha512-EwagFaU6ZveVk18/Y8qUhZkkiBKnQ7dSCHbm//TUroLVKy3i1rOYGy/cNHtSkAb1eDvS1HhCLybH2S541Cya/g==}
+    peerDependencies:
+      tree-sitter: ^0.22.4
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
 
   '@tybys/wasm-util@0.10.3':
     resolution: {integrity: sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==}
@@ -1888,6 +1905,14 @@ packages:
     resolution: {integrity: sha512-L0Orpi8qGpRG//Nd+H90vFB+3iHnue1zSSGmNOOCh1GLJ7rUKVwV2HvijphGQS2UmhUZewS9VgvxYIdgr+fG1A==}
     hasBin: true
 
+  tree-sitter-bash@0.25.1:
+    resolution: {integrity: sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
   tree-sitter-c-sharp@0.23.5:
     resolution: {integrity: sha512-xJGOeXPMmld0nES5+080N/06yY6LQi+KWGWV4LfZaZe6srJPtUtfhIbRSN7EZN6IaauzW28v6W4QHFwmeUW6HQ==}
     peerDependencies:
@@ -1980,6 +2005,14 @@ packages:
     resolution: {integrity: sha512-NWemUDf629Tfc90Y0Z55zuwPCAHkLxWnMf2RznYu4iBkkrQl2o/CHGB7Cr52TyN5F1DAx8FmUnDtCy9iUkXZEQ==}
     peerDependencies:
       tree-sitter: ^0.22.1
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
+  tree-sitter-scala@0.24.0:
+    resolution: {integrity: sha512-vkMuAUrBZ1zZz2XcGDQk18Kz73JkpgaeXzbNVobPke0G35sd9jH32aUxG6OLRKM7et0TbsfqkWf4DeJoGk4K1g==}
+    peerDependencies:
+      tree-sitter: ^0.21.1
     peerDependenciesMeta:
       tree-sitter:
         optional: true
@@ -2661,6 +2694,11 @@ snapshots:
   '@sindresorhus/merge-streams@4.0.0': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@tree-sitter-grammars/tree-sitter-lua@0.4.1':
+    dependencies:
+      node-addon-api: 8.9.0
+      node-gyp-build: 4.8.4
 
   '@tybys/wasm-util@0.10.3':
     dependencies:
@@ -3814,6 +3852,11 @@ snapshots:
 
   tree-kill@1.2.2: {}
 
+  tree-sitter-bash@0.25.1:
+    dependencies:
+      node-addon-api: 8.9.0
+      node-gyp-build: 4.8.4
+
   tree-sitter-c-sharp@0.23.5:
     dependencies:
       node-addon-api: 8.9.0
@@ -3871,6 +3914,11 @@ snapshots:
       node-gyp-build: 4.8.4
 
   tree-sitter-rust@0.24.0:
+    dependencies:
+      node-addon-api: 8.9.0
+      node-gyp-build: 4.8.4
+
+  tree-sitter-scala@0.24.0:
     dependencies:
       node-addon-api: 8.9.0
       node-gyp-build: 4.8.4

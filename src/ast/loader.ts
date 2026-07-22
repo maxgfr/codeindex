@@ -19,6 +19,9 @@ export const EXT_GRAMMAR: Record<string, string> = {
   ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
   ".cs": "c_sharp",
   ".php": "php",
+  ".scala": "scala", ".sc": "scala",
+  ".sh": "bash", ".bash": "bash",
+  ".lua": "lua",
 };
 
 export function grammarKeyForExt(ext: string): string | undefined {

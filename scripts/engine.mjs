@@ -5562,7 +5562,12 @@ var init_loader = __esm({
       ".hpp": "cpp",
       ".hh": "cpp",
       ".cs": "c_sharp",
-      ".php": "php"
+      ".php": "php",
+      ".scala": "scala",
+      ".sc": "scala",
+      ".sh": "bash",
+      ".bash": "bash",
+      ".lua": "lua"
     };
     runtimeReady = false;
     parser = null;
@@ -5640,14 +5645,18 @@ function findFirst(node, pred) {
 function readName(node) {
   if (!node) return void 0;
   if (node.namedChildCount === 0) return IDENT_LEAF.test(node.type) ? node.text : void 0;
-  const seg = node.childForFieldName("name") ?? node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.childForFieldName("field");
+  const seg = node.childForFieldName("name") ?? node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.childForFieldName("field") ?? // Callee wrappers that point at the real callee via a `function` field:
+  // scala's generic_function (`foo[Int](x)`) and a curried/chained
+  // call_expression callee (`curried(a)(b)`) — descend to the inner name
+  // instead of tripping over type_arguments/arguments as the last child.
+  node.childForFieldName("function");
   if (seg) return readName(seg);
   const last = node.namedChild(node.namedChildCount - 1);
   return last && last !== node ? readName(last) : void 0;
 }
 function readReceiver(node) {
   if (!node || node.namedChildCount === 0) return void 0;
-  const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver");
+  const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver") ?? node.childForFieldName("table");
   const name2 = obj ? readName(obj) : void 0;
   return name2 && /^[A-Za-z_]\w*$/.test(name2) ? name2 : void 0;
 }
@@ -5836,6 +5845,28 @@ function extractAst(rel, ext, content) {
           }
         }
       }
+      if (spec.assignments && node.type === "assignment_statement") {
+        const vars = node.children.find((c2) => c2.type === "variable_list");
+        const vals = node.children.find((c2) => c2.type === "expression_list");
+        const pairs = Math.min(vars?.namedChildCount ?? 0, vals?.namedChildCount ?? 0);
+        for (let i2 = 0; i2 < pairs; i2++) {
+          const target = vars.namedChild(i2);
+          const value = vals.namedChild(i2);
+          if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
+          symbols.push({
+            name: target.text,
+            kind: "function",
+            file: rel,
+            line: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
+            ...parent ? { parent } : {},
+            signature: firstLine(node),
+            exported: nowExported || spec.exported(firstLine(node), target.text),
+            lang: spec.lang
+          });
+        }
+        return;
+      }
       const kind = spec.defs[node.type];
       if (kind) {
         const name2 = nameOf(node);
@@ -5887,7 +5918,7 @@ function extractAst(rel, ext, content) {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, byPublicKeyword, byPub, byCapital, byPyConvention, always, neverExport, TS_SPEC, SPECS, IDENT_LEAF;
+var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, byPublicKeyword, byNotPrivate, byNotLocal, byPub, byCapital, byPyConvention, always, neverExport, TS_SPEC, SPECS, IDENT_LEAF;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
@@ -5906,6 +5937,8 @@ var init_extract = __esm({
     ]);
     ANON_DEFAULT_CLASS = /* @__PURE__ */ new Set(["class", "class_declaration", "abstract_class_declaration"]);
     byPublicKeyword = (line) => /\b(public|internal)\b/.test(line);
+    byNotPrivate = (line) => !/\b(private|protected)\b/.test(line);
+    byNotLocal = (line) => !/^local\b/.test(line);
     byPub = (line) => /\bpub\b/.test(line);
     byCapital = (_l, name2) => /^[A-Z]/.test(name2);
     byPyConvention = (_l, name2) => !name2.startsWith("_") || /^__\w+__$/.test(name2);
@@ -6076,9 +6109,55 @@ var init_extract = __esm({
         ]),
         exported: always,
         calls: { call_expression: "function", new_expression: "constructor" }
+      },
+      scala: {
+        lang: "scala",
+        defs: {
+          class_definition: "class",
+          object_definition: "object",
+          trait_definition: "trait",
+          enum_definition: "enum",
+          function_definition: "def",
+          function_declaration: "def",
+          val_definition: "val",
+          var_definition: "var",
+          type_definition: "type",
+          given_definition: "given"
+        },
+        // package_clause carries braced-package bodies (`package com.acme { … }`);
+        // template_body is every class/object/trait body.
+        containers: /* @__PURE__ */ new Set(["compilation_unit", "package_clause", "template_body"]),
+        exported: byNotPrivate,
+        // Qualified calls are call_expression → field_expression (value/field);
+        // `new Widget(...)` is an instance_expression with a bare type child.
+        calls: { call_expression: "function", instance_expression: "constructor" }
+      },
+      bash: {
+        lang: "shell",
+        defs: { function_definition: "function" },
+        // if/compound bodies carry guarded definitions (`if …; then f() { … }; fi`).
+        containers: /* @__PURE__ */ new Set(["program", "if_statement", "compound_statement"]),
+        // Shell has no visibility — every function is callable from outside.
+        exported: always,
+        // Every invocation is a `command` whose `name` field is a command_name
+        // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
+        calls: { command: "function" }
+      },
+      lua: {
+        lang: "lua",
+        defs: { function_declaration: "function" },
+        // variable_declaration wraps `local x = function()` assignment statements.
+        containers: /* @__PURE__ */ new Set(["chunk", "variable_declaration"]),
+        exported: byNotLocal,
+        // function_call's `name` is an identifier, a dot_index_expression
+        // (table/field) or a method_index_expression (table/method) — the receiver
+        // is the `table` field in both qualified forms.
+        calls: { function_call: "function" },
+        assignments: true
+        // `M.alias = function(z) … end` (assignment_statement shape)
       }
     };
-    IDENT_LEAF = /(^|_)(identifier|name|constant)$/;
+    IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
   }
 });
 

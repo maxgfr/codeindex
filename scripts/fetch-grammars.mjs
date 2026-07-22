@@ -32,6 +32,9 @@ const GRAMMARS = {
   c_sharp: "tree-sitter-c-sharp/tree-sitter-c_sharp.wasm",
   ruby: "tree-sitter-ruby/tree-sitter-ruby.wasm",
   php: "tree-sitter-php/tree-sitter-php.wasm",
+  scala: "tree-sitter-scala/tree-sitter-scala.wasm",
+  bash: "tree-sitter-bash/tree-sitter-bash.wasm",
+  lua: "@tree-sitter-grammars/tree-sitter-lua/tree-sitter-lua.wasm",
 };
 const RUNTIME = "web-tree-sitter/web-tree-sitter.wasm";
 

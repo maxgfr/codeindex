@@ -92,7 +92,7 @@ describe("AST extraction (tree-sitter)", () => {
 
   it("returns undefined for a language with no committed grammar (regex fallback)", () => {
     expect(extractAst("s.swift", ".swift", "func f() {}")).toBeUndefined();
-    expect(extractAst("s.lua", ".lua", "function f() end")).toBeUndefined();
+    expect(extractAst("s.kt", ".kt", "fun f() {}")).toBeUndefined();
   });
 
   it("falls back (undefined) rather than throwing on unparseable input", () => {
@@ -170,6 +170,171 @@ describe("AST call-site + imported-name collection", () => {
     expect(names).toContain("ok");
     // Swift has no committed grammar → extractAst is undefined, so no calls.
     expect(extractAst("s.swift", ".swift", "f()")).toBeUndefined();
+  });
+});
+
+describe("Scala AST extraction", () => {
+  const src = [
+    "package com.acme.app",
+    "",
+    "object Registry {",
+    "  val limit: Int = 10",
+    "  def register(name: String): Unit = {",
+    "    helper(name)",
+    "    store.save(name)",
+    "    val w = new Widget(name)",
+    "  }",
+    "  private def helper(n: String): Unit = println(n)",
+    "}",
+    "",
+    "case class Point(x: Int, y: Int)",
+    "",
+    "trait Shape {",
+    "  def area(): Double",
+    "}",
+    "",
+    "class Widget(name: String) {",
+    "  protected def hidden(): Int = 1",
+    "  def render(): String = name",
+    "}",
+  ].join("\n");
+
+  it("extracts objects/classes/traits/defs/vals with parent nesting and private/protected visibility", () => {
+    const syms = extractAst("R.scala", ".scala", src)!.symbols;
+    const registry = syms.find((s) => s.name === "Registry")!;
+    expect(registry.kind).toBe("object");
+    expect(registry.exported).toBe(true);
+    const register = syms.find((s) => s.name === "register")!;
+    expect(register.kind).toBe("def");
+    expect(register.parent).toBe("Registry");
+    expect(register.exported).toBe(true);
+    expect(syms.find((s) => s.name === "helper")!.exported).toBe(false); // private def
+    const limit = syms.find((s) => s.name === "limit")!;
+    expect(limit.kind).toBe("val");
+    expect(limit.parent).toBe("Registry");
+    expect(syms.find((s) => s.name === "Point")!.kind).toBe("class"); // case class
+    expect(syms.find((s) => s.name === "Shape")!.kind).toBe("trait");
+    expect(syms.find((s) => s.name === "area")!.parent).toBe("Shape"); // abstract def
+    expect(syms.find((s) => s.name === "hidden")!.exported).toBe(false); // protected def
+    expect(syms.find((s) => s.name === "render")!.exported).toBe(true);
+  });
+
+  it("collects calls incl. a qualified call with receiver and a constructor", () => {
+    const res = extractAst("R.scala", ".scala", src)!;
+    const names = res.calls.map((c) => c.name);
+    expect(names).toContain("helper"); // bare call
+    const save = res.calls.find((c) => c.name === "save")!;
+    expect(save.receiver).toBe("store"); // field_expression value → receiver
+    expect(names).toContain("Widget"); // instance_expression → constructed type
+  });
+
+  it("upgrades .scala/.sc from the regex tier: extractAst is now defined", () => {
+    // Before this grammar shipped, extractAst returned undefined for scala.
+    expect(extractAst("a.scala", ".scala", "object A { def f(): Int = 1 }")).toBeDefined();
+    expect(extractAst("a.sc", ".sc", "def f(): Int = 1")).toBeDefined();
+  });
+});
+
+describe("Bash AST extraction", () => {
+  const src = [
+    "#!/usr/bin/env bash",
+    "",
+    "function setup {",
+    "  echo start",
+    "}",
+    "",
+    "teardown() {",
+    "  echo stop",
+    "}",
+    "",
+    "if true; then",
+    "  guarded() {",
+    "    echo hi",
+    "  }",
+    "fi",
+    "",
+    "setup",
+    'git commit -m "x"',
+  ].join("\n");
+
+  it("extracts both function syntaxes (always exported), incl. an if-guarded definition", () => {
+    const syms = extractAst("run.sh", ".sh", src)!.symbols;
+    for (const name of ["setup", "teardown", "guarded"]) {
+      const s = syms.find((x) => x.name === name)!;
+      expect(s.kind).toBe("function");
+      expect(s.exported).toBe(true); // shell has no visibility — always exported
+    }
+  });
+
+  it("collects command invocations as calls (word leaf under command_name), no receivers", () => {
+    const res = extractAst("run.sh", ".sh", src)!;
+    const setup = res.calls.find((c) => c.name === "setup")!;
+    expect(setup.line).toBe(17);
+    expect(setup.receiver).toBeUndefined(); // shell calls are never qualified
+    expect(res.calls.map((c) => c.name)).toContain("git");
+  });
+
+  it("upgrades .sh/.bash from the regex tier: extractAst is now defined", () => {
+    expect(extractAst("a.sh", ".sh", "f() {\n  echo hi\n}\n")).toBeDefined();
+    expect(extractAst("a.bash", ".bash", "f() {\n  echo hi\n}\n")).toBeDefined();
+  });
+});
+
+describe("Lua AST extraction", () => {
+  const src = [
+    "local M = {}",
+    "",
+    "local function hidden(x)",
+    "  return x + 1",
+    "end",
+    "",
+    "function M.add(a, b)",
+    "  return hidden(a) + b",
+    "end",
+    "",
+    "function M:method(v)",
+    "  self.value = v",
+    "end",
+    "",
+    "M.alias = function(z)",
+    "  return z",
+    "end",
+    "",
+    "function top(n)",
+    "  print(n)",
+    '  string.format("%d", n)',
+    "  obj:send(n)",
+    "end",
+    "",
+    "return M",
+  ].join("\n");
+
+  it("extracts declaration- and assignment-style functions; `local function` is not exported", () => {
+    const syms = extractAst("m.lua", ".lua", src)!.symbols;
+    expect(syms.find((s) => s.name === "hidden")!.exported).toBe(false); // local function → file-local
+    expect(syms.find((s) => s.name === "M.add")!.exported).toBe(true); // dotted name kept whole
+    expect(syms.find((s) => s.name === "M:method")!.exported).toBe(true); // colon method form
+    const alias = syms.find((s) => s.name === "M.alias")!; // assignment-style def
+    expect(alias.kind).toBe("function");
+    expect(alias.line).toBe(15);
+    expect(alias.endLine).toBe(17);
+    expect(alias.exported).toBe(true);
+    expect(syms.find((s) => s.name === "top")!.exported).toBe(true);
+    // `self.value = v` (inside a body) and `local M = {}` are not symbols.
+    expect(syms.some((s) => s.name === "self.value")).toBe(false);
+    expect(syms.some((s) => s.name === "M")).toBe(false);
+  });
+
+  it("collects calls incl. dot- and colon-qualified receivers", () => {
+    const res = extractAst("m.lua", ".lua", src)!;
+    expect(res.calls.map((c) => c.name)).toContain("hidden");
+    expect(res.calls.find((c) => c.name === "format")!.receiver).toBe("string"); // dot_index table
+    expect(res.calls.find((c) => c.name === "send")!.receiver).toBe("obj"); // method_index table
+  });
+
+  it("upgrades .lua from the regex tier: extractAst is now defined", () => {
+    // This exact shape was the old "no committed grammar" fallback assertion.
+    expect(extractAst("s.lua", ".lua", "function f() end")).toBeDefined();
   });
 });
 

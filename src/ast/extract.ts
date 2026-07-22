@@ -84,10 +84,20 @@ interface LangSpec {
   // `res.sendStatus = function sendStatus() {}`, `Foo.prototype.bar = () => {}`,
   // `exports.helper = function () {}` — the CommonJS definition style that
   // declaration-node walks miss entirely (express, connect, older Node code).
+  // Two grammar shapes are handled: JS/TS expression_statement>assignment_
+  // expression and lua assignment_statement (variable_list = expression_list).
   assignments?: boolean;
 }
 
 const byPublicKeyword = (line: string): boolean => /\b(public|internal)\b/.test(line);
+// Scala is public by default; `private`/`protected` modifiers sit on the
+// declaration's first line (same stance as the regex tier).
+const byNotPrivate = (line: string): boolean => !/\b(private|protected)\b/.test(line);
+// Lua: `local function f` is file-local by construction. Assignment-style
+// `local f = function()` stays exported — regex-tier parity (its rule marks
+// those exported), and the `local` keyword lives on the wrapping
+// variable_declaration, outside the assignment node this line is read from.
+const byNotLocal = (line: string): boolean => !/^local\b/.test(line);
 const byPub = (line: string): boolean => /\bpub\b/.test(line);
 const byCapital = (_l: string, name: string): boolean => /^[A-Z]/.test(name);
 const byPyConvention = (_l: string, name: string): boolean => !name.startsWith("_") || /^__\w+__$/.test(name);
@@ -224,6 +234,44 @@ const SPECS: Record<string, LangSpec> = {
     exported: always,
     calls: { call_expression: "function", new_expression: "constructor" },
   },
+  scala: {
+    lang: "scala",
+    defs: {
+      class_definition: "class", object_definition: "object", trait_definition: "trait",
+      enum_definition: "enum", function_definition: "def", function_declaration: "def",
+      val_definition: "val", var_definition: "var", type_definition: "type", given_definition: "given",
+    },
+    // package_clause carries braced-package bodies (`package com.acme { … }`);
+    // template_body is every class/object/trait body.
+    containers: new Set(["compilation_unit", "package_clause", "template_body"]),
+    exported: byNotPrivate,
+    // Qualified calls are call_expression → field_expression (value/field);
+    // `new Widget(...)` is an instance_expression with a bare type child.
+    calls: { call_expression: "function", instance_expression: "constructor" },
+  },
+  bash: {
+    lang: "shell",
+    defs: { function_definition: "function" },
+    // if/compound bodies carry guarded definitions (`if …; then f() { … }; fi`).
+    containers: new Set(["program", "if_statement", "compound_statement"]),
+    // Shell has no visibility — every function is callable from outside.
+    exported: always,
+    // Every invocation is a `command` whose `name` field is a command_name
+    // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
+    calls: { command: "function" },
+  },
+  lua: {
+    lang: "lua",
+    defs: { function_declaration: "function" },
+    // variable_declaration wraps `local x = function()` assignment statements.
+    containers: new Set(["chunk", "variable_declaration"]),
+    exported: byNotLocal,
+    // function_call's `name` is an identifier, a dot_index_expression
+    // (table/field) or a method_index_expression (table/method) — the receiver
+    // is the `table` field in both qualified forms.
+    calls: { function_call: "function" },
+    assignments: true, // `M.alias = function(z) … end` (assignment_statement shape)
+  },
 };
 
 function firstLine(node: TSNode): string {
@@ -293,9 +341,11 @@ function findFirst(node: TSNode, pred: (n: TSNode) => boolean): TSNode | undefin
 }
 
 // True for a leaf node that IS an identifier-ish name (identifier,
-// property_identifier, type_identifier, field_identifier, constant, or php's
-// `name`). The rightmost such leaf of a callee is the called name.
-const IDENT_LEAF = /(^|_)(identifier|name|constant)$/;
+// property_identifier, type_identifier, field_identifier, constant, php's
+// `name`, or bash's `word` — the leaf inside a command_name). The rightmost
+// such leaf of a callee is the called name. End-anchored, so python/ruby
+// keyword_* node types (keyword_argument, keyword_pattern, …) never match.
+const IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
 
 // Read the callee's simple name from a (possibly qualified) callee node: a bare
 // identifier returns itself; a member/attribute/selector/scoped access returns its
@@ -308,7 +358,12 @@ function readName(node: TSNode | null): string | undefined {
     node.childForFieldName("name") ??
     node.childForFieldName("property") ??
     node.childForFieldName("attribute") ??
-    node.childForFieldName("field");
+    node.childForFieldName("field") ??
+    // Callee wrappers that point at the real callee via a `function` field:
+    // scala's generic_function (`foo[Int](x)`) and a curried/chained
+    // call_expression callee (`curried(a)(b)`) — descend to the inner name
+    // instead of tripping over type_arguments/arguments as the last child.
+    node.childForFieldName("function");
   if (seg) return readName(seg);
   const last = node.namedChild(node.namedChildCount - 1);
   return last && last !== node ? readName(last) : undefined;
@@ -320,8 +375,9 @@ function readName(node: TSNode | null): string | undefined {
 // member_expression, python attribute, java method_invocation, php member call),
 // go selector_expression's `operand`, rust field_expression's `value` and
 // scoped_identifier's `path`, c# member_access_expression's `expression`, c/c++
-// field_expression's `argument`, ruby call's `receiver`. Undefined for a bare
-// callee or a computed/complex receiver (`fetch().then(...)`, `arr[0].map(...)`).
+// field_expression's `argument`, ruby call's `receiver`, lua dot/method_index_
+// expression's `table` (scala's field_expression reuses `value`). Undefined for a
+// bare callee or a computed/complex receiver (`fetch().then(...)`, `arr[0].map(...)`).
 function readReceiver(node: TSNode | null): string | undefined {
   if (!node || node.namedChildCount === 0) return undefined;
   const obj =
@@ -331,7 +387,8 @@ function readReceiver(node: TSNode | null): string | undefined {
     node.childForFieldName("path") ??
     node.childForFieldName("expression") ??
     node.childForFieldName("argument") ??
-    node.childForFieldName("receiver");
+    node.childForFieldName("receiver") ??
+    node.childForFieldName("table");
   const name = obj ? readName(obj) : undefined;
   return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
 }
@@ -567,6 +624,34 @@ export function extractAst(rel: string, ext: string, content: string): AstResult
             }
           }
         }
+      }
+      // Lua-flavored assignment definitions: `M.alias = function(z) … end` /
+      // `local alias = function(y) … end` — an assignment_statement pairs a
+      // `variable_list` of targets with an `expression_list` of values (fields
+      // name/value, index-aligned). Only function-valued targets become
+      // symbols, named after the full target text (dotted/colon names stay
+      // whole — regex-tier parity).
+      if (spec.assignments && node.type === "assignment_statement") {
+        const vars = node.children.find((c) => c.type === "variable_list");
+        const vals = node.children.find((c) => c.type === "expression_list");
+        const pairs = Math.min(vars?.namedChildCount ?? 0, vals?.namedChildCount ?? 0);
+        for (let i = 0; i < pairs; i++) {
+          const target = vars!.namedChild(i)!;
+          const value = vals!.namedChild(i)!;
+          if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
+          symbols.push({
+            name: target.text,
+            kind: "function",
+            file: rel,
+            line: node.startPosition.row + 1,
+            endLine: node.endPosition.row + 1,
+            ...(parent ? { parent } : {}),
+            signature: firstLine(node),
+            exported: nowExported || spec.exported(firstLine(node), target.text),
+            lang: spec.lang,
+          });
+        }
+        return;
       }
       const kind = spec.defs[node.type];
       if (kind) {
