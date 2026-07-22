@@ -6557,7 +6557,6 @@ function tolerantJsonParse(text) {
   }
 }
 function resolveExtends(fileSet, fromDir, ext) {
-  if (!/^\.\.?\//.test(ext)) return void 0;
   const base = norm(posix.join(fromDir, ext));
   const cands = ext.endsWith(".json") ? [base] : [base + ".json", posix.join(base, "tsconfig.json")];
   for (const c2 of cands) if (fileSet.has(c2)) return c2;
@@ -7086,7 +7085,7 @@ function resolveImport(fromRel, ext, spec, ctx) {
   if (dot !== -1 && ASSET_EXT.has(spec.slice(dot).toLowerCase().replace(/[?#].*$/, ""))) {
     return { kind: "external" };
   }
-  if (JS_TS2.has(ext)) return resolveJs(fromRel, spec, ctx);
+  if (JS_TS2.has(ext) || SFC_HTML.has(ext)) return resolveJs(fromRel, spec, ctx);
   if (PY2.has(ext)) return resolvePython(fromRel, spec, ctx);
   if (ext === ".go") return resolveGo(fromRel, spec, ctx);
   if (ext === ".rs") return resolveRust(fromRel, spec, ctx);
@@ -7097,7 +7096,7 @@ function resolveImport(fromRel, ext, spec, ctx) {
   if (ext === ".cs") return resolveCsharp(spec, ctx);
   return { kind: "external" };
 }
-var ASSET_EXT, JS_EXT_PROBES, JS_INDEX, JS_TS2, PY2, C_CPP2, BUILD_DIRS, CONDITION_PRIORITY, MAX_EXPORT_TARGETS;
+var ASSET_EXT, JS_EXT_PROBES, JS_INDEX, JS_TS2, SFC_HTML, PY2, C_CPP2, BUILD_DIRS, CONDITION_PRIORITY, MAX_EXPORT_TARGETS;
 var init_resolve = __esm({
   "src/resolve.ts"() {
     "use strict";
@@ -7129,9 +7128,26 @@ var init_resolve = __esm({
       ".ogg",
       ".map"
     ]);
-    JS_EXT_PROBES = ["", ".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+    JS_EXT_PROBES = [
+      "",
+      ".ts",
+      ".tsx",
+      ".d.ts",
+      ".mts",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+      ".vue",
+      ".svelte",
+      ".astro",
+      ".html",
+      ".htm"
+    ];
     JS_INDEX = ["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs"];
     JS_TS2 = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+    SFC_HTML = /* @__PURE__ */ new Set([".vue", ".svelte", ".astro", ".html", ".htm"]);
     PY2 = /* @__PURE__ */ new Set([".py", ".pyi"]);
     C_CPP2 = /* @__PURE__ */ new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);
     BUILD_DIRS = /* @__PURE__ */ new Set(["dist", "build", "lib", "out", "output", "esm", "cjs", "umd"]);

@@ -81,9 +81,22 @@ const ASSET_EXT = new Set([
   ".wav", ".flac", ".ogg", ".map",
 ]);
 
-const JS_EXT_PROBES = ["", ".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+// Extensionless-import probe order. `.ts` before `.tsx` is deliberate (it
+// mirrors tsc's own resolution order, and pinned output bytes depend on it) —
+// when both `x.ts` and `x.tsx` exist, the plain `.ts` module wins; do NOT
+// reorder. The SFC/HTML candidates (.vue/.svelte/.astro/.html/.htm) sit AFTER
+// every JS-family extension so they only match when no JS/TS source does —
+// appending keeps every pre-existing resolution byte-identical.
+const JS_EXT_PROBES = [
+  "", ".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs",
+  ".vue", ".svelte", ".astro", ".html", ".htm",
+];
 const JS_INDEX = ["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs"];
 const JS_TS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+// SFC/HTML importers: a .vue/.svelte/.astro/.html/.htm file's <script> block
+// carries ordinary ES imports, so those files resolve through the JS-family
+// path exactly like a .tsx file — not through the external/dangling fallback.
+const SFC_HTML = new Set([".vue", ".svelte", ".astro", ".html", ".htm"]);
 const PY = new Set([".py", ".pyi"]);
 const C_CPP = new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);
 
@@ -187,9 +200,12 @@ function tolerantJsonParse(text: string): unknown {
 }
 
 // Resolve a tsconfig `extends` target to an in-repo config path, or undefined for
-// a bare package specifier (a node_modules base we don't index) or a missing file.
+// a package specifier (a node_modules base we don't index) or a missing file.
+// A bare non-relative target ("base.json", written without the "./" prefix —
+// tsc accepts it) is probed relative to the config's own directory too; only
+// when no such file exists is it treated as a package base (external), so a
+// true package extends like "@tsconfig/node18" stays external.
 function resolveExtends(fileSet: Set<string>, fromDir: string, ext: string): string | undefined {
-  if (!/^\.\.?\//.test(ext)) return undefined; // bare specifier → external tooling base
   const base = norm(posix.join(fromDir, ext));
   const cands = ext.endsWith(".json") ? [base] : [base + ".json", posix.join(base, "tsconfig.json")];
   for (const c of cands) if (fileSet.has(c)) return c;
@@ -921,7 +937,7 @@ export function resolveImport(
   if (dot !== -1 && ASSET_EXT.has(spec.slice(dot).toLowerCase().replace(/[?#].*$/, ""))) {
     return { kind: "external" };
   }
-  if (JS_TS.has(ext)) return resolveJs(fromRel, spec, ctx);
+  if (JS_TS.has(ext) || SFC_HTML.has(ext)) return resolveJs(fromRel, spec, ctx);
   if (PY.has(ext)) return resolvePython(fromRel, spec, ctx);
   if (ext === ".go") return resolveGo(fromRel, spec, ctx);
   if (ext === ".rs") return resolveRust(fromRel, spec, ctx);
