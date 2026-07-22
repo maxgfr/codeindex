@@ -28,6 +28,10 @@ export interface RepoScan {
 export interface ScanOptions {
   include?: string[];
   exclude?: string[];
+  // Sugar for include: ["<scope>/**"] — restrict the scan to one directory.
+  scope?: string;
+  // Honor .gitignore files (default true — see WalkOptions.gitignore).
+  gitignore?: boolean;
   maxBytes?: number;
   maxFiles?: number;
   out?: string; // absolute output dir to exclude from the scan (self-index guard)
@@ -50,9 +54,14 @@ function countLines(s: string): number {
 // Walk the repo once and turn every in-scope file into a FileRecord. Pure file
 // I/O + deterministic extraction — never reads the repo into the model.
 export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
-  const include = compileGlobs(opts.include);
+  const scoped = opts.scope ? [...(opts.include ?? []), `${opts.scope.replace(/\/+$/, "")}/**`] : opts.include;
+  const include = compileGlobs(scoped);
   const exclude = compileGlobs(opts.exclude);
-  const { files: walked, capped } = walk(root, { maxFileBytes: opts.maxBytes, maxFiles: opts.maxFiles });
+  const { files: walked, capped } = walk(root, {
+    maxFileBytes: opts.maxBytes,
+    maxFiles: opts.maxFiles,
+    gitignore: opts.gitignore,
+  });
   // Never index our own output (e.g. a committed `docs/ultraindex/`), or builds
   // would describe the encyclopedia instead of the code.
   const outPrefix = opts.out ? opts.out.replace(/\/+$/, "") + "/" : null;

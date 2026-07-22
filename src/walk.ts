@@ -1,5 +1,6 @@
-import { readdirSync, statSync, readFileSync, realpathSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative, sep, extname } from "node:path";
+import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
 
 // Directories that never carry signal for a documentation/code question and
 // would bloat the index (dependencies, build output, VCS internals, caches).
@@ -30,6 +31,10 @@ const BINARY_EXT = new Set([
 export interface WalkOptions {
   maxFileBytes?: number; // skip files larger than this (default 1 MiB)
   maxFiles?: number; // hard cap on indexed files (default 20000)
+  // Honor .gitignore files (root and nested, with negation/anchoring/dir-only
+  // semantics — see ignore.ts). Default TRUE: an ignored file is noise for
+  // every consumer; pass false to index generated/ignored trees deliberately.
+  gitignore?: boolean;
 }
 
 export interface WalkedFile {
@@ -54,36 +59,59 @@ export const DEFAULT_MAX_FILES = 20_000;
 export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
+  const useGitignore = opts.gitignore !== false;
   const out: WalkedFile[] = [];
   let capped = false;
 
-  const stack: string[] = [root];
+  // Containment root for the symlink-escape guard: a symlinked file or
+  // directory whose real path leaves the repo must not be indexed (it would
+  // read foreign content and emit citations no one can open).
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return { files: out, capped };
+  }
+  const contained = (real: string): boolean => real === rootReal || real.startsWith(rootReal + sep);
+
+  // Each frame carries the ignore-rule chain inherited from its ancestors;
+  // rules from deeper .gitignore files are appended after (later rules win).
+  const stack: { dir: string; rel: string; rules: readonly IgnoreRule[] }[] = [
+    { dir: root, rel: "", rules: [] },
+  ];
   const seenDirs = new Set<string>(); // resolved real dirs already walked
   while (stack.length) {
     if (out.length >= maxFiles) {
       capped = true;
       break;
     }
-    const dir = stack.pop()!;
+    const frame = stack.pop()!;
     // Cycle guard: a directory symlink pointing at an ancestor would otherwise
     // make walk() loop, flooding the index with phantom duplicate files. Resolve
     // the real path and skip any directory we've already descended into.
     let real: string;
     try {
-      real = realpathSync(dir);
+      real = realpathSync(frame.dir);
     } catch {
       continue;
     }
     if (seenDirs.has(real)) continue;
     seenDirs.add(real);
+    if (!contained(real)) continue; // dir symlink escaping the repo
     let entries: string[];
     try {
-      entries = readdirSync(dir);
+      entries = readdirSync(frame.dir);
     } catch {
       continue;
     }
+    let rules = frame.rules;
+    if (useGitignore && entries.includes(".gitignore")) {
+      const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel);
+      if (parsed.length) rules = [...rules, ...parsed];
+    }
     for (const name of entries) {
-      const abs = join(dir, name);
+      const abs = join(frame.dir, name);
+      const rel = frame.rel ? `${frame.rel}/${name}` : name;
       let st;
       try {
         st = statSync(abs);
@@ -92,7 +120,8 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       }
       if (st.isDirectory()) {
         if (IGNORE_DIRS.has(name)) continue;
-        stack.push(abs);
+        if (useGitignore && rules.length && isIgnored(rules, rel, true)) continue;
+        stack.push({ dir: abs, rel, rules });
         continue;
       }
       if (!st.isFile()) continue;
@@ -101,7 +130,14 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       const ext = extname(name).toLowerCase();
       if (BINARY_EXT.has(ext)) continue;
       if (name.endsWith(".min.js") || name.endsWith(".min.css")) continue;
-      out.push({ rel: relative(root, abs).split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
+      if (useGitignore && rules.length && isIgnored(rules, rel, false)) continue;
+      // Symlink-escape guard for files (statSync above follows links).
+      try {
+        if (lstatSync(abs).isSymbolicLink() && !contained(realpathSync(abs))) continue;
+      } catch {
+        continue;
+      }
+      out.push({ rel: rel.split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
     }
   }
   return { files: out, capped };

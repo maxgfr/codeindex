@@ -21,6 +21,8 @@ Flags:
   --out <file>        Write output to a file instead of stdout
   --include <glob>    Only include matching paths (repeatable)
   --exclude <glob>    Exclude matching paths (repeatable)
+  --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
+  --no-gitignore      Do not honor .gitignore files (default: honored)
   --max-files <n>     Cap walked files (default 20000)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
@@ -31,13 +33,15 @@ interface CliFlags {
   out?: string;
   include: string[];
   exclude: string[];
+  scope?: string;
+  gitignore: boolean;
   maxFiles?: number;
   maxBytes?: number;
   noAst: boolean;
 }
 
 function parseFlags(args: string[]): CliFlags {
-  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], noAst: false };
+  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const next = (): string => {
@@ -49,6 +53,8 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--out") flags.out = resolve(next());
     else if (a === "--include") flags.include.push(next());
     else if (a === "--exclude") flags.exclude.push(next());
+    else if (a === "--scope") flags.scope = next();
+    else if (a === "--no-gitignore") flags.gitignore = false;
     else if (a === "--max-files") flags.maxFiles = Number(next());
     else if (a === "--max-bytes") flags.maxBytes = Number(next());
     else if (a === "--no-ast") flags.noAst = true;
@@ -66,6 +72,8 @@ function scanOptions(flags: CliFlags): BuildIndexOptions {
   return {
     include: flags.include.length ? flags.include : undefined,
     exclude: flags.exclude.length ? flags.exclude : undefined,
+    scope: flags.scope,
+    gitignore: flags.gitignore,
     maxFiles: flags.maxFiles,
     maxBytes: flags.maxBytes,
   };

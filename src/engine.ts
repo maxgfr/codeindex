@@ -31,6 +31,8 @@ export type { WalkOptions, WalkedFile, WalkResult } from "./walk.js";
 export { scanRepo } from "./scan.js";
 export type { RepoScan, ScanOptions } from "./scan.js";
 export { compileGlobs } from "./glob.js";
+export { parseGitignore, isIgnored } from "./ignore.js";
+export type { IgnoreRule } from "./ignore.js";
 export { classify, isCode, isDoc, MARKDOWN_EXT } from "./classify.js";
 export { extractSymbols, languageOf, extToLang } from "./lang/registry.js";
 
