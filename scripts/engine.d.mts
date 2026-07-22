@@ -601,7 +601,7 @@ declare function sh(cmd: string, args: string[], opts?: {
     cwd?: string;
     input?: string;
     timeoutMs?: number;
-    env?: NodeJS.ProcessEnv;
+    env?: Record<string, string | undefined>;
 }): ShResult;
 declare function have(cmd: string): boolean;
 declare function slugify(input: string): string;

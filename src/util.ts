@@ -18,7 +18,7 @@ export interface ShResult {
 export function sh(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; input?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+  opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined> } = {},
 ): ShResult {
   const res = spawnSync(cmd, args, {
     cwd: opts.cwd,

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,19 +39,6 @@ beforeAll(() => {
   execFileSync("tar", ["-xzf", tarball, "-C", pkgDir, "--strip-components=1"]);
 
   writeFileSync(join(tmp, "package.json"), JSON.stringify({ type: "module" }));
-
-  // scripts/engine.d.mts has one pre-existing ambient reference (`sh()`'s
-  // `opts.env?: NodeJS.ProcessEnv`) that needs @types/node on the *consumer's*
-  // side to resolve — same as any Node-oriented package's shipped .d.ts.
-  // Without skipLibCheck (the tsconfig below intentionally doesn't set it —
-  // it's the brief's minimal config, verbatim), tsc fully checks every
-  // declaration in the file even when unrelated to the symbols actually
-  // imported, so this must be present for the type-check step below to run
-  // at all. Every realistic TS consumer of a Node CLI/engine package already
-  // has @types/node; we provide it here via a symlink to the repo's own
-  // devDependency instead of a network install, keeping the test hermetic.
-  mkdirSync(join(tmp, "node_modules", "@types"), { recursive: true });
-  symlinkSync(join(REPO_ROOT, "node_modules", "@types", "node"), join(tmp, "node_modules", "@types", "node"), "dir");
 }, 60_000);
 
 afterAll(() => {
