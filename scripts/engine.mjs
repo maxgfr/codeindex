@@ -8620,8 +8620,8 @@ var engine_cli_exports = {};
 __export(engine_cli_exports, {
   runCli: () => runCli
 });
-import { writeFileSync } from "fs";
-import { resolve } from "path";
+import { mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
+import { join as join6, resolve } from "path";
 function parseFlags(args2) {
   const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false };
   for (let i2 = 0; i2 < args2.length; i2++) {
@@ -8677,7 +8677,36 @@ async function runCli(argv) {
   }
   const flags2 = parseFlags(rest);
   if (!flags2.noAst) await ensureGrammars(allGrammarKeys());
-  if (cmd === "scan") {
+  if (cmd === "index") {
+    if (!flags2.out) throw new Error("index needs --out <dir>");
+    const outDir = flags2.out;
+    mkdirSync(outDir, { recursive: true });
+    const cachePath = join6(outDir, "cache.json");
+    let cache;
+    try {
+      const parsed = JSON.parse(readFileSync3(cachePath, "utf8"));
+      if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
+        cache = new Map(Object.entries(parsed.files));
+      }
+    } catch {
+    }
+    const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
+    writeFileSync(join6(outDir, "graph.json"), renderGraphJson(graph));
+    writeFileSync(join6(outDir, "symbols.json"), renderSymbolsJson(symbols));
+    const files = {};
+    for (const f of scan2.files) {
+      const entry = { hash: f.hash, record: f, size: f.size };
+      const mtime = scan2.mtimes.get(f.rel);
+      if (mtime !== void 0) entry.mtimeMs = mtime;
+      files[f.rel] = entry;
+    }
+    writeFileSync(
+      cachePath,
+      JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n"
+    );
+    process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${scan2.capped ? " (capped)" : ""}
+`);
+  } else if (cmd === "scan") {
     const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
     const summary = {
       engineVersion: ENGINE_VERSION,
@@ -8729,6 +8758,7 @@ var init_engine_cli = __esm({
   "src/engine-cli.ts"() {
     "use strict";
     init_types();
+    init_types();
     init_loader();
     init_pipeline();
     init_graph_json();
@@ -8743,6 +8773,8 @@ var init_engine_cli = __esm({
 Usage: engine.mjs <command> [flags]
 
 Commands:
+  index       Build graph.json + symbols.json (+ incremental cache.json) into
+              --out <dir> in ONE pass \u2014 the fast path for repeated runs
   scan        Scan summary: file count, language histogram, capped flag
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out

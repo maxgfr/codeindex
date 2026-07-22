@@ -155,6 +155,22 @@ describe("bundle CLI", () => {
   });
 });
 
+describe("index command (single pass + incremental cache)", () => {
+  it("writes graph.json + symbols.json + cache.json; warm rebuild is byte-identical", () => {
+    const out = join(mkdtempSync(join(tmpdir(), "ci-index-")), "out");
+    const run = () =>
+      execFileSync(process.execPath, [BUNDLE, "index", "--repo", REPO, "--out", out], { encoding: "utf8" });
+    run();
+    const cold = engine.readText(join(out, "graph.json"));
+    const coldSymbols = engine.readText(join(out, "symbols.json"));
+    expect(cold.length).toBeGreaterThan(0);
+    expect(engine.readText(join(out, "cache.json"))).toContain('"extractorVersion"');
+    run(); // warm — must reuse the cache and reproduce the exact bytes
+    expect(engine.readText(join(out, "graph.json"))).toBe(cold);
+    expect(engine.readText(join(out, "symbols.json"))).toBe(coldSymbols);
+  });
+});
+
 describe("no-wasm mode (vendored consumer layout)", () => {
   it("the bundle alone — no grammars sidecar — still indexes via the regex tier", () => {
     const dir = mkdtempSync(join(tmpdir(), "ci-nowasm-"));

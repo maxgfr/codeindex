@@ -1,5 +1,6 @@
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
 import { buildIndexArtifacts, type BuildIndexOptions } from "./pipeline.js";
@@ -16,6 +17,8 @@ const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexin
 Usage: engine.mjs <command> [flags]
 
 Commands:
+  index       Build graph.json + symbols.json (+ incremental cache.json) into
+              --out <dir> in ONE pass — the fast path for repeated runs
   scan        Scan summary: file count, language histogram, capped flag
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
@@ -113,7 +116,42 @@ export async function runCli(argv: string[]): Promise<void> {
   const flags = parseFlags(rest);
   if (!flags.noAst) await ensureGrammars(allGrammarKeys());
 
-  if (cmd === "scan") {
+  if (cmd === "index") {
+    if (!flags.out) throw new Error("index needs --out <dir>");
+    const outDir = flags.out;
+    mkdirSync(outDir, { recursive: true });
+    // Incremental cache: reuse per-file records when (schema, extractor) match —
+    // same invalidation discipline as ultraindex's cache.json.
+    const cachePath = join(outDir, "cache.json");
+    let cache: Map<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }> | undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as {
+        schemaVersion: number;
+        extractorVersion: number;
+        files: Record<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }>;
+      };
+      if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
+        cache = new Map(Object.entries(parsed.files));
+      }
+    } catch {
+      // no cache yet (or unreadable) — cold build
+    }
+    const { scan, graph, symbols } = buildIndexArtifacts(flags.repo, { ...scanOptions(flags), cache, out: outDir });
+    writeFileSync(join(outDir, "graph.json"), renderGraphJson(graph));
+    writeFileSync(join(outDir, "symbols.json"), renderSymbolsJson(symbols));
+    const files: Record<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }> = {};
+    for (const f of scan.files) {
+      const entry: { hash: string; record: FileRecord; size?: number; mtimeMs?: number } = { hash: f.hash, record: f, size: f.size };
+      const mtime = scan.mtimes.get(f.rel);
+      if (mtime !== undefined) entry.mtimeMs = mtime;
+      files[f.rel] = entry;
+    }
+    writeFileSync(
+      cachePath,
+      JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n",
+    );
+    process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""}\n`);
+  } else if (cmd === "scan") {
     const { scan } = buildIndexArtifacts(flags.repo, scanOptions(flags));
     const summary = {
       engineVersion: ENGINE_VERSION,
