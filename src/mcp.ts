@@ -17,6 +17,7 @@ import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
+import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -78,6 +79,41 @@ const TOOLS = [
       type: "object",
       properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
       required: ["repo"],
+    },
+  },
+  {
+    name: "symbols_overview",
+    description:
+      "All symbols declared in ONE file (name, kind, line span, exported, parent), in declaration order — the fastest way to understand a file without reading it.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, file: { type: "string", description: "Repo-relative file path" } },
+      required: ["repo", "file"],
+    },
+  },
+  {
+    name: "find_symbol",
+    description:
+      "Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Options: substring matching, includeBody to return the declaration's source. Exact-name matches rank first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        namePath: { type: "string", description: "Symbol name or Parent/child path" },
+        substring: { type: "boolean" },
+        includeBody: { type: "boolean" },
+      },
+      required: ["repo", "namePath"],
+    },
+  },
+  {
+    name: "find_references",
+    description:
+      "Who references a symbol? Three labeled tiers: defs (declarations), callSites (line-precise, import-corroborated call bindings), referencingFiles (file-level identifier/doc mentions — may include homonyms). Confidence decreases across tiers; the labels let you decide what to trust.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, name: { type: "string", description: "Symbol name" } },
+      required: ["repo", "name"],
     },
   },
   {
@@ -179,6 +215,25 @@ function callTool(name: string, args: Record<string, unknown>): string {
     const sorted: Record<string, number> = {};
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     return JSON.stringify({ ok, churn: sorted }, null, 2);
+  }
+  if (name === "symbols_overview") {
+    const file = str(args.file);
+    if (!file) throw new Error("`file` is required");
+    return JSON.stringify(symbolsOverview(scanRepo(repo, scanOpts), file), null, 2);
+  }
+  if (name === "find_symbol") {
+    const namePath = str(args.namePath);
+    if (!namePath) throw new Error("`namePath` is required");
+    const matches = findSymbol(scanRepo(repo, scanOpts), namePath, {
+      substring: args.substring === true,
+      includeBody: args.includeBody === true,
+    });
+    return JSON.stringify(matches, null, 2);
+  }
+  if (name === "find_references") {
+    const symName = str(args.name);
+    if (!symName) throw new Error("`name` is required");
+    return JSON.stringify(findReferences(scanRepo(repo, scanOpts), symName), null, 2);
   }
   if (name === "repo_map") {
     const { scan, graph } = buildIndexArtifacts(repo, scanOpts);

@@ -329,6 +329,23 @@ declare function computeImportPairs(scan: RepoScan): Set<string>;
 declare function buildCallerIndex(scan: RepoScan, importPairs?: Set<string>): CallerIndex;
 declare function enclosingSymbol(scan: RepoScan, file: string, line: number): CodeSymbol | undefined;
 
+declare function symbolsOverview(scan: RepoScan, rel: string): CodeSymbol[];
+interface SymbolMatch extends CodeSymbol {
+    body?: string;
+}
+interface FindSymbolOptions {
+    substring?: boolean;
+    includeBody?: boolean;
+    maxResults?: number;
+}
+declare function findSymbol(scan: RepoScan, namePath: string, opts?: FindSymbolOptions): SymbolMatch[];
+interface SymbolReferences {
+    defs: CodeSymbol[];
+    callSites: CallerSite[];
+    referencingFiles: string[];
+}
+declare function findReferences(scan: RepoScan, name: string): SymbolReferences;
+
 type WorkspaceKind = "npm" | "pnpm" | "lerna" | "nx" | "cargo" | "go" | "maven";
 interface WorkspacePackage {
     name: string;
@@ -500,4 +517,4 @@ declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): M
 
 declare function runCli(argv: string[]): Promise<void>;
 
-export { type BuildIndexOptions, type CallerEntry, type CallerIndex, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type FileCategory, type FileKind, type FileNode, type FileRecord, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type ModuleInfo, type ModuleNode, type RawRef, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, SCHEMA_VERSION, type ScanOptions, type SearchHit, type ShResult, type SurpriseEdge, type SymbolIndex, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, classify, clip, clipInline, communityOf, compileGlobs, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, pagerankOf, parseGitignore, rankHotspots, rankedKeywords, readText, renderGraphJson, renderRepoMap, renderSymbolsJson, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, rrf, runCli, runMcpServer, scanRepo, sh, sha1, shortHash, slugify, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk };
+export { type BuildIndexOptions, type CallerEntry, type CallerIndex, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type ModuleInfo, type ModuleNode, type RawRef, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, SCHEMA_VERSION, type ScanOptions, type SearchHit, type ShResult, type SurpriseEdge, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, classify, clip, clipInline, communityOf, compileGlobs, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, pagerankOf, parseGitignore, rankHotspots, rankedKeywords, readText, renderGraphJson, renderRepoMap, renderSymbolsJson, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, rrf, runCli, runMcpServer, scanRepo, sh, sha1, shortHash, slugify, symbolsOverview, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk };

@@ -11,6 +11,7 @@ import { detectWorkspaces } from "../src/workspaces.js";
 import { gitChurn, changedSince } from "../src/git.js";
 import { changeCoupling, rankHotspots } from "../src/coupling.js";
 import { renderRepoMap } from "../src/repomap.js";
+import { symbolsOverview, findSymbol, findReferences } from "../src/query.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { grepRepo } from "../src/grep.js";
 import { extractCode } from "../src/extract/code.js";
@@ -307,5 +308,45 @@ describe("repo map", () => {
     expect(map).toMatch(/\d+: /); // line-numbered signatures
     const tiny = renderRepoMap(scan, graph, { budgetTokens: 60 });
     expect(tiny.length).toBeLessThan(map.length);
+  });
+});
+
+describe("symbol query API", () => {
+  function makeRepo(): string {
+    const root = mkdtempSync(join(tmpdir(), "ci-query-"));
+    writeFileSync(
+      join(root, "widget.ts"),
+      "export class Widget {\n  size(): number {\n    return 1;\n  }\n}\n\nexport function makeWidget(): Widget {\n  return new Widget();\n}\n",
+    );
+    writeFileSync(join(root, "app.ts"), 'import { makeWidget } from "./widget";\nexport const w = makeWidget();\n');
+    writeFileSync(join(root, "README.md"), "Use `makeWidget` to build widgets.\n");
+    return root;
+  }
+
+  it("symbolsOverview lists a file's declarations in order", () => {
+    const scan = scanRepo(makeRepo());
+    const names = symbolsOverview(scan, "widget.ts").map((s) => `${s.kind}:${s.name}`);
+    expect(names).toEqual(["class:Widget", "method:size", "function:makeWidget"]);
+  });
+
+  it("findSymbol supports name paths, substring and bodies", () => {
+    const scan = scanRepo(makeRepo());
+    const method = findSymbol(scan, "Widget/size");
+    expect(method).toHaveLength(1);
+    expect(method[0]!.parent).toBe("Widget");
+    const body = findSymbol(scan, "makeWidget", { includeBody: true })[0]!;
+    expect(body.body).toContain("return new Widget()");
+    const fuzzy = findSymbol(scan, "widg", { substring: true });
+    expect(fuzzy.map((m) => m.name)).toContain("Widget");
+    expect(fuzzy.map((m) => m.name)).toContain("makeWidget");
+  });
+
+  it("findReferences merges precise call sites with file-level references", () => {
+    const scan = scanRepo(makeRepo());
+    const refs = findReferences(scan, "makeWidget");
+    expect(refs.defs[0]!.file).toBe("widget.ts");
+    expect(refs.callSites).toEqual([{ file: "app.ts", line: 2 }]);
+    expect(refs.referencingFiles).toContain("app.ts");
+    expect(refs.referencingFiles).toContain("README.md"); // doc mention tier
   });
 });

@@ -87,6 +87,9 @@ const CONTRACT = [
   "changeCoupling",
   "rankHotspots",
   "renderRepoMap",
+  "symbolsOverview",
+  "findSymbol",
+  "findReferences",
   // helpers
   "sha1",
   "shortHash",

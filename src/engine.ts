@@ -56,6 +56,8 @@ export type { ModuleInfo } from "./modules.js";
 export { buildGraph, uniqueSymbolDefs } from "./graph.js";
 export { resolveCallEdges } from "./calls.js";
 export { buildCallerIndex, enclosingSymbol, computeImportPairs } from "./callers.js";
+export { symbolsOverview, findSymbol, findReferences } from "./query.js";
+export type { SymbolMatch, FindSymbolOptions, SymbolReferences } from "./query.js";
 export type { CallerIndex, CallerEntry, CallerSite } from "./callers.js";
 export { detectWorkspaces } from "./workspaces.js";
 export type { WorkspaceInfo, WorkspacePackage, WorkspaceKind } from "./workspaces.js";
