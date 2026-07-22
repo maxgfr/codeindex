@@ -49,6 +49,10 @@ export interface WalkedFile {
 export interface WalkResult {
   files: WalkedFile[];
   capped: boolean; // true when the maxFiles cap was hit and the walk stopped early
+  // Files that were SEEN and rejected by the size/lockfile/binary/minified/
+  // gitignore rules. Ignored DIRECTORIES (node_modules, gitignored trees…)
+  // are not counted — their contents were never even listed.
+  excluded: number;
 }
 
 export const DEFAULT_MAX_FILES = 20_000;
@@ -63,6 +67,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const useGitignore = opts.gitignore !== false;
   const out: WalkedFile[] = [];
   let capped = false;
+  let excluded = 0;
 
   // Containment root for the symlink-escape guard: a symlinked file or
   // directory whose real path leaves the repo must not be indexed (it would
@@ -71,7 +76,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   try {
     rootReal = realpathSync(root);
   } catch {
-    return { files: out, capped };
+    return { files: out, capped, excluded };
   }
   const contained = (real: string): boolean => real === rootReal || real.startsWith(rootReal + sep);
 
@@ -132,12 +137,29 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         continue;
       }
       if (!st.isFile()) continue;
-      if (st.size > maxFileBytes) continue;
-      if (LOCKFILES.has(name.toLowerCase())) continue;
+      // Each rejection below is a file the walk SAW and dropped — counted in
+      // `excluded` so consumers can report how much was filtered, not capped.
+      if (st.size > maxFileBytes) {
+        excluded++;
+        continue;
+      }
+      if (LOCKFILES.has(name.toLowerCase())) {
+        excluded++;
+        continue;
+      }
       const ext = extname(name).toLowerCase();
-      if (BINARY_EXT.has(ext)) continue;
-      if (name.endsWith(".min.js") || name.endsWith(".min.css")) continue;
-      if (useGitignore && rules.length && isIgnored(rules, rel, false)) continue;
+      if (BINARY_EXT.has(ext)) {
+        excluded++;
+        continue;
+      }
+      if (name.endsWith(".min.js") || name.endsWith(".min.css")) {
+        excluded++;
+        continue;
+      }
+      if (useGitignore && rules.length && isIgnored(rules, rel, false)) {
+        excluded++;
+        continue;
+      }
       // Symlink-escape guard for files (statSync above follows links).
       if (isLink) {
         try {
@@ -156,7 +178,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       out.push({ rel: rel.split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
     }
   }
-  return { files: out, capped };
+  return { files: out, capped, excluded };
 }
 
 // Read a file as text, returning "" on any error (unreadable, vanished). Honours

@@ -32,7 +32,7 @@ function file(
 }
 
 function scanOf(files: FileRecord[]): RepoScan {
-  return { root: "/repo", files, languages: {}, docText: new Map(), mtimes: new Map(), capped: false };
+  return { root: "/repo", files, languages: {}, docText: new Map(), mtimes: new Map(), capped: false, excluded: 0 };
 }
 
 describe("resolveCallEdges", () => {

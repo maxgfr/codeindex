@@ -23,6 +23,10 @@ export interface RepoScan {
   // (size,mtime) fastpath key into cache.json for the next build.
   mtimes: Map<string, number>;
   capped: boolean; // the walk hit --max-files and the index is partial
+  // Files the walk saw and rejected (size/lockfile/binary/minified/gitignore
+  // rules — see WalkResult.excluded). Surfaced so a consumer can report how
+  // much of the tree was filtered out of the index.
+  excluded: number;
 }
 
 export interface ScanOptions {
@@ -57,7 +61,7 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
   const scoped = opts.scope ? [...(opts.include ?? []), `${opts.scope.replace(/\/+$/, "")}/**`] : opts.include;
   const include = compileGlobs(scoped);
   const exclude = compileGlobs(opts.exclude);
-  const { files: walked, capped } = walk(root, {
+  const { files: walked, capped, excluded } = walk(root, {
     maxFileBytes: opts.maxBytes,
     maxFiles: opts.maxFiles,
     gitignore: opts.gitignore,
@@ -164,5 +168,5 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
   }
 
   files.sort(byKey((f) => f.rel));
-  return { root, commit: headCommit(root), files, languages, docText, mtimes, capped };
+  return { root, commit: headCommit(root), files, languages, docText, mtimes, capped, excluded };
 }

@@ -181,3 +181,32 @@ describe("issue #2/#6: naming, nx, go.work, warnings", () => {
     expect(info.packages.find((p) => p.name === "good")!.description).toBe("A fine package");
   });
 });
+
+describe("issue #6: walk/scan excluded count", () => {
+  it("counts files seen and rejected by size/lockfile/binary/minified/gitignore — never ignored dirs", () => {
+    const root = scratchRepo({
+      ".gitignore": "secret.txt\n",
+      "ok.ts": "export const ok = 1;\n",
+      "big.ts": "x".repeat(500),
+      "yarn.lock": "lockfile-noise\n",
+      "logo.png": "not-really-a-png\n",
+      "app.min.js": "minified\n",
+      "secret.txt": "gitignored\n",
+      // Ignored DIRS: their files must not count — they were never seen.
+      "node_modules/dep/index.js": "module.exports = 1;\n",
+      "dist/out.js": "bundled\n",
+    });
+    const r = walk(root, { maxFileBytes: 200 });
+    expect(r.files.map((f) => f.rel)).toEqual([".gitignore", "ok.ts"]);
+    expect(r.excluded).toBe(5); // big.ts, yarn.lock, logo.png, app.min.js, secret.txt
+    expect(r.capped).toBe(false);
+
+    // RepoScan surfaces the walk's count (additive — not part of graph.json).
+    expect(scanRepo(root, { maxBytes: 200 }).excluded).toBe(5);
+  });
+
+  it("stays zero on a clean tree", () => {
+    const root = scratchRepo({ "a.ts": "export {};\n" });
+    expect(walk(root).excluded).toBe(0);
+  });
+});
