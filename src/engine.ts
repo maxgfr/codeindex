@@ -75,6 +75,8 @@ export { computeSurprises, isSurprising } from "./surprise.js";
 // Symbol index + machine renderers (render-to-string; consumers own persistence).
 export { buildSymbolIndex, computeSymbolRefs, renderSymbolsJson } from "./render/symbols-json.js";
 export { renderGraphJson } from "./render/graph-json.js";
+export { renderScip } from "./render/scip.js";
+export type { RenderScipOptions } from "./render/scip.js";
 
 // One-call pipeline.
 export { buildIndexArtifacts } from "./pipeline.js";

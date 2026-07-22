@@ -24,7 +24,9 @@ ultraeval, reconstruct, construct, ultra11y).
   `mention` edges at file and module level, plus Louvain communities, PageRank/
   betweenness centrality, a tests→code map, and surprise-edge detection.
 - **Render** byte-stable `graph.json` / `symbols.json` (two builds of an
-  unchanged repo are byte-identical).
+  unchanged repo are byte-identical), plus a **SCIP** code-intelligence index
+  (`index.scip`) via a hand-rolled zero-dependency protobuf encoder — validated
+  by the official `scip` CLI (`stats`/`lint`).
 
 ## Use as a library (the vendoring model)
 
@@ -68,6 +70,7 @@ brew install maxgfr/tap/codeindex        # or: npm i -g @maxgfr/codeindex
 
 codeindex index   --repo . --out .codeindex   # graph + symbols + incremental cache
 codeindex graph   --repo . > graph.json
+codeindex scip    --repo . --out index.scip   # SCIP index (--out - for stdout)
 codeindex callers --repo .                    # per-symbol caller index
 codeindex grep    'pattern' --repo .
 ```

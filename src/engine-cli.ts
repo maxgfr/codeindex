@@ -6,6 +6,7 @@ import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
 import { buildIndexArtifacts, type BuildIndexOptions } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
+import { renderScip } from "./render/scip.js";
 import { scanRepo } from "./scan.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -29,6 +30,8 @@ Commands:
   scan        Scan summary: file count, language histogram, capped flag
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
+  scip        SCIP code-intelligence index (protobuf bytes) into --out
+              (default index.scip; --out - writes to stdout)
   callers     Per-symbol caller index (JSON)
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
@@ -47,7 +50,10 @@ Commands:
 
 Flags:
   --repo <dir>        Repo root (default: cwd)
-  --out <file>        Write output to a file instead of stdout
+  --out <file>        Write output to a file instead of stdout (\`scip\`: --out -
+                      writes the binary index to stdout)
+  --project-root <uri> \`scip\`: override Metadata.project_root (default
+                      file://<repo>); pin it for a byte-reproducible index
   --include <glob>    Only include matching paths (repeatable)
   --exclude <glob>    Exclude matching paths (repeatable)
   --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
@@ -79,6 +85,7 @@ interface CliFlags {
   config?: string; // rules config path
   limit?: number; // search result cap
   recall?: boolean; // callers: recall-oriented binding
+  projectRoot?: string; // scip: override Metadata.project_root
   positional?: string; // e.g. the grep pattern or search query
 }
 
@@ -98,7 +105,10 @@ function parseFlags(args: string[]): CliFlags {
       return n;
     };
     if (a === "--repo") flags.repo = resolve(next());
-    else if (a === "--out") flags.out = resolve(next());
+    else if (a === "--out") {
+      const v = next();
+      flags.out = v === "-" ? "-" : resolve(v); // "-" = stdout (scip binary)
+    } else if (a === "--project-root") flags.projectRoot = next();
     else if (a === "--include") flags.include.push(next());
     else if (a === "--exclude") flags.exclude.push(next());
     else if (a === "--scope") flags.scope = next();
@@ -206,6 +216,15 @@ export async function runCli(argv: string[]): Promise<void> {
   } else if (cmd === "symbols") {
     const { symbols } = buildIndexArtifacts(flags.repo, scanOptions(flags));
     emit(renderSymbolsJson(symbols), flags.out);
+  } else if (cmd === "scip") {
+    const scan = scanRepo(flags.repo, scanOptions(flags));
+    const bytes = renderScip(scan, { projectRoot: flags.projectRoot });
+    const out = flags.out ?? resolve("index.scip");
+    if (out === "-") process.stdout.write(Buffer.from(bytes));
+    else {
+      writeFileSync(out, bytes);
+      process.stderr.write(`codeindex: SCIP index → ${out} (${bytes.length} bytes)\n`);
+    }
   } else if (cmd === "callers") {
     const scan = scanRepo(flags.repo, scanOptions(flags));
     const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
