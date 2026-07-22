@@ -1,21 +1,37 @@
 // Multi-ecosystem workspace/monorepo detection (merged from ultradoc's manifest
 // probing and reconstruct's superset): npm/yarn workspaces, pnpm, lerna, nx,
-// cargo workspaces, go.work, maven modules. Returns the package list with a
-// workspace-level dependency graph (name edges + path edges), one cycle when
-// present, a topological order, and a longest-prefix packageOf() matcher.
-// Deterministic: packages sorted by dir, edges sorted, no wall-clock.
-import { existsSync, readdirSync } from "node:fs";
+// cargo workspaces, go.work, maven modules, uv workspaces (pyproject), Composer
+// path repositories, and Gradle settings includes. Returns the package list
+// with a workspace-level dependency graph (name edges + path edges), one cycle
+// when present, a topological order, malformed-manifest warnings, and a
+// longest-prefix packageOf() matcher. Deterministic: packages sorted by dir,
+// edges and warnings sorted, no wall-clock.
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readText } from "./walk.js";
 import { byStr } from "./sort.js";
+import { escapeRegExp } from "./util.js";
 
-export type WorkspaceKind = "npm" | "pnpm" | "lerna" | "nx" | "cargo" | "go" | "maven";
+export type WorkspaceKind =
+  | "npm"
+  | "pnpm"
+  | "lerna"
+  | "nx"
+  | "cargo"
+  | "go"
+  | "maven"
+  | "uv"
+  | "composer"
+  | "gradle";
 
 export interface WorkspacePackage {
   name: string;
   dir: string; // repo-relative posix path
   kind: WorkspaceKind;
   manifest: string; // repo-relative manifest path that named this package
+  // Free-text description when the naming manifest carries one (package.json,
+  // composer.json, pyproject [project]/[tool.poetry], Cargo [package]).
+  description?: string;
   dependsOn?: string[]; // sibling package names, sorted
 }
 
@@ -23,31 +39,42 @@ export interface WorkspaceInfo {
   packages: WorkspacePackage[];
   cycle?: string[]; // one dependency cycle (first found, deterministic order)
   topoOrder: string[]; // dependency-first package names (cycles appended last)
+  // Malformed manifests met during detection (e.g. an unparseable
+  // package.json). The member dir is still registered — named by its full dir
+  // path — and the reason lands here instead of being silently dropped.
+  // Deduplicated and sorted for determinism.
+  warnings: string[];
   packageOf(rel: string): WorkspacePackage | undefined;
 }
 
 const WS_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", "coverage"]);
 const MAX_RECURSE_DEPTH = 4;
 
-function readJson(path: string): Record<string, unknown> | undefined {
+function readJson(path: string, label?: string, warnings?: string[]): Record<string, unknown> | undefined {
   const raw = readText(path);
   if (!raw) return undefined;
   try {
     const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
+    if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
+    if (label && warnings) warnings.push(`malformed ${label}: not a JSON object`);
+    return undefined;
+  } catch (e) {
+    if (label && warnings) {
+      const reason = String(e instanceof Error ? e.message : e).split("\n")[0];
+      warnings.push(`malformed ${label}: ${reason}`);
+    }
     return undefined;
   }
 }
 
 function tomlSectionBody(toml: string, section: string): string | null {
-  const re = new RegExp(`^\\[${section}\\]\\s*$([\\s\\S]*?)(?=^\\[|$(?![\\s\\S]))`, "m");
+  const re = new RegExp(`^\\[${escapeRegExp(section)}\\]\\s*$([\\s\\S]*?)(?=^\\[|$(?![\\s\\S]))`, "m");
   const m = toml.match(re);
   return m ? m[1]! : null;
 }
 
 function tomlStringArray(body: string, key: string): string[] {
-  const m = body.match(new RegExp(`${key}\\s*=\\s*\\[([^\\]]*)\\]`));
+  const m = body.match(new RegExp(`${escapeRegExp(key)}\\s*=\\s*\\[([^\\]]*)\\]`));
   if (!m) return [];
   return m[1]!
     .split(/\r?\n/)
@@ -56,6 +83,10 @@ function tomlStringArray(body: string, key: string): string[] {
     .split(",")
     .map((s) => s.trim().replace(/^["']|["']$/g, ""))
     .filter(Boolean);
+}
+
+function tomlString(body: string | null, key: string): string | undefined {
+  return body?.match(new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*["']([^"']+)["']`, "m"))?.[1];
 }
 
 // Glob for workspace patterns/negations (npm semantics: `*` one level, `**`
@@ -81,30 +112,141 @@ function wsGlobToRegExp(pat: string): RegExp {
   return new RegExp(`^${re}($|/)`);
 }
 
-// Identify a directory as a package: read whichever manifest names it.
-function packageAt(root: string, dir: string, kind: WorkspaceKind): WorkspacePackage | undefined {
-  const abs = join(root, dir);
-  const pkgJson = join(abs, "package.json");
-  if (existsSync(pkgJson)) {
-    const pkg = readJson(pkgJson);
-    const name = typeof pkg?.name === "string" && pkg.name ? pkg.name : dir.split("/").pop()!;
-    return { name, dir, kind, manifest: `${dir}/package.json` };
+// --- per-manifest package probes ------------------------------------------
+// Each probe identifies `dir` through one manifest kind; packageAt() runs them
+// in a kind-aware order. When a manifest exists but names nothing (or cannot
+// be parsed), the FULL dir path is the name — basenames collide across trees
+// (`packages/a/utils` vs `packages/b/utils`).
+
+function probeNodePkg(root: string, dir: string, kind: WorkspaceKind, warnings: string[]): WorkspacePackage | undefined {
+  const path = join(root, dir, "package.json");
+  if (!existsSync(path)) return undefined;
+  const manifest = `${dir}/package.json`;
+  const pkg = readJson(path, manifest, warnings);
+  const out: WorkspacePackage = {
+    name: typeof pkg?.name === "string" && pkg.name ? pkg.name : dir,
+    dir,
+    kind,
+    manifest,
+  };
+  if (typeof pkg?.description === "string" && pkg.description) out.description = pkg.description;
+  return out;
+}
+
+function probeCargo(root: string, dir: string): WorkspacePackage | undefined {
+  const path = join(root, dir, "Cargo.toml");
+  if (!existsSync(path)) return undefined;
+  const body = tomlSectionBody(readText(path), "package");
+  const out: WorkspacePackage = {
+    name: tomlString(body, "name") ?? dir,
+    dir,
+    kind: "cargo",
+    manifest: `${dir}/Cargo.toml`,
+  };
+  const description = tomlString(body, "description");
+  if (description) out.description = description;
+  return out;
+}
+
+function probeGoMod(root: string, dir: string): WorkspacePackage | undefined {
+  const path = join(root, dir, "go.mod");
+  if (!existsSync(path)) return undefined;
+  const name = readText(path).match(/^module\s+(\S+)/m)?.[1] ?? dir;
+  return { name, dir, kind: "go", manifest: `${dir}/go.mod` };
+}
+
+function probeMaven(root: string, dir: string): WorkspacePackage | undefined {
+  const path = join(root, dir, "pom.xml");
+  if (!existsSync(path)) return undefined;
+  return { name: ownArtifactId(readText(path)) ?? dir, dir, kind: "maven", manifest: `${dir}/pom.xml` };
+}
+
+function probePyproject(root: string, dir: string): WorkspacePackage | undefined {
+  const path = join(root, dir, "pyproject.toml");
+  if (!existsSync(path)) return undefined;
+  const toml = readText(path);
+  const project = tomlSectionBody(toml, "project");
+  const poetry = tomlSectionBody(toml, "tool.poetry");
+  const out: WorkspacePackage = {
+    name: tomlString(project, "name") ?? tomlString(poetry, "name") ?? dir,
+    dir,
+    kind: "uv",
+    manifest: `${dir}/pyproject.toml`,
+  };
+  const description = tomlString(project, "description") ?? tomlString(poetry, "description");
+  if (description) out.description = description;
+  return out;
+}
+
+function probeComposer(root: string, dir: string, warnings: string[]): WorkspacePackage | undefined {
+  const path = join(root, dir, "composer.json");
+  if (!existsSync(path)) return undefined;
+  const manifest = `${dir}/composer.json`;
+  const pkg = readJson(path, manifest, warnings);
+  const out: WorkspacePackage = {
+    name: typeof pkg?.name === "string" && pkg.name ? pkg.name : dir,
+    dir,
+    kind: "composer",
+    manifest,
+  };
+  if (typeof pkg?.description === "string" && pkg.description) out.description = pkg.description;
+  return out;
+}
+
+// Nx projects may carry NO package.json — `project.json` alone names them.
+function probeNxProject(root: string, dir: string, warnings: string[]): WorkspacePackage | undefined {
+  const path = join(root, dir, "project.json");
+  if (!existsSync(path)) return undefined;
+  const manifest = `${dir}/project.json`;
+  const proj = readJson(path, manifest, warnings);
+  return {
+    name: typeof proj?.name === "string" && proj.name ? proj.name : dir,
+    dir,
+    kind: "nx",
+    manifest,
+  };
+}
+
+function probeGradle(root: string, dir: string): WorkspacePackage | undefined {
+  for (const f of ["build.gradle", "build.gradle.kts"]) {
+    if (existsSync(join(root, dir, f))) {
+      // Gradle build files carry no project name — settings.gradle assigns
+      // paths, so the full dir path IS the identity.
+      return { name: dir, dir, kind: "gradle", manifest: `${dir}/${f}` };
+    }
   }
-  const cargo = join(abs, "Cargo.toml");
-  if (existsSync(cargo)) {
-    const body = tomlSectionBody(readText(cargo), "package");
-    const name = body?.match(/name\s*=\s*["']([^"']+)["']/)?.[1] ?? dir.split("/").pop()!;
-    return { name, dir, kind: "cargo", manifest: `${dir}/Cargo.toml` };
-  }
-  const gomod = join(abs, "go.mod");
-  if (existsSync(gomod)) {
-    const name = readText(gomod).match(/^module\s+(\S+)/m)?.[1] ?? dir.split("/").pop()!;
-    return { name, dir, kind: "go", manifest: `${dir}/go.mod` };
-  }
-  const pom = join(abs, "pom.xml");
-  if (existsSync(pom)) {
-    const name = ownArtifactId(readText(pom)) ?? dir.split("/").pop()!;
-    return { name, dir, kind: "maven", manifest: `${dir}/pom.xml` };
+  return undefined;
+}
+
+// Identify a directory as a package: probe manifests in a kind-aware order.
+// The discovering ecosystem's manifest wins the name — a go.work member with a
+// coexisting package.json is a Go module and takes its name from go.mod; a uv
+// member is a Python package first; Composer path repos read composer.json
+// first. The generic tail still identifies packages of other ecosystems, and
+// project.json (nx) is probed last everywhere so project.json-only members
+// are never invisible.
+function packageAt(root: string, dir: string, kind: WorkspaceKind, warnings: string[]): WorkspacePackage | undefined {
+  const node = () => probeNodePkg(root, dir, kind, warnings);
+  const cargo = () => probeCargo(root, dir);
+  const gomod = () => probeGoMod(root, dir);
+  const maven = () => probeMaven(root, dir);
+  const py = () => probePyproject(root, dir);
+  const composer = () => probeComposer(root, dir, warnings);
+  const nx = () => probeNxProject(root, dir, warnings);
+  const gradle = () => probeGradle(root, dir);
+  const probes =
+    kind === "go"
+      ? [gomod, node, cargo, maven, py, composer, nx]
+      : kind === "uv"
+        ? [py, node, cargo, gomod, maven, composer, nx]
+        : kind === "composer"
+          ? [composer, node, py, cargo, gomod, maven, nx]
+          : kind === "gradle"
+            ? [node, maven, cargo, gomod, py, composer, nx, gradle]
+            : [node, cargo, gomod, maven, py, composer, nx];
+  for (const probe of probes) {
+    const pkg = probe();
+    if (pkg) return pkg;
   }
   return undefined;
 }
@@ -117,53 +259,103 @@ function ownArtifactId(pom: string): string | undefined {
   return stripped.match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1];
 }
 
-function addPackage(root: string, dir: string, found: Map<string, WorkspacePackage>, kind: WorkspaceKind): void {
+function addPackage(
+  root: string,
+  dir: string,
+  found: Map<string, WorkspacePackage>,
+  kind: WorkspaceKind,
+  warnings: string[],
+): void {
   const clean = dir.replace(/^\.\//, "").replace(/\/+$/, "");
-  if (!clean || found.has(clean)) return;
-  const pkg = packageAt(root, clean, kind);
+  if (!clean || clean === "." || found.has(clean)) return;
+  if (clean.split("/").includes("..")) return; // never leave the repo root
+  const pkg = packageAt(root, clean, kind, warnings);
   if (pkg) found.set(clean, pkg);
 }
 
-function collectRecursive(
-  root: string,
-  base: string,
-  found: Map<string, WorkspacePackage>,
-  kind: WorkspaceKind,
-  depth: number,
-): void {
-  if (depth > MAX_RECURSE_DEPTH) return;
-  let entries;
+// --- glob expansion --------------------------------------------------------
+
+function isDirAt(root: string, rel: string): boolean {
   try {
-    entries = readdirSync(join(root, base), { withFileTypes: true });
+    return statSync(join(root, rel)).isDirectory();
   } catch {
-    return;
-  }
-  for (const ent of entries) {
-    if (!ent.isDirectory() || WS_SKIP_DIRS.has(ent.name)) continue;
-    const sub = base ? `${base}/${ent.name}` : ent.name;
-    addPackage(root, sub, found, kind);
-    collectRecursive(root, sub, found, kind, depth + 1);
+    return false;
   }
 }
 
-function expandPattern(root: string, raw: string, found: Map<string, WorkspacePackage>, kind: WorkspaceKind): void {
-  const pat = raw.replace(/\/+$/, "");
-  if (pat.endsWith("/**")) {
-    collectRecursive(root, pat.slice(0, -3), found, kind, 0);
-  } else if (pat.endsWith("/*")) {
-    const base = pat.slice(0, -2);
-    let entries;
-    try {
-      entries = readdirSync(join(root, base), { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const ent of entries) {
-      if (ent.isDirectory()) addPackage(root, `${base}/${ent.name}`, found, kind);
-    }
-  } else {
-    addPackage(root, pat, found, kind);
+function subdirsOf(root: string, base: string): string[] {
+  let entries;
+  try {
+    entries = readdirSync(base ? join(root, base) : root, { withFileTypes: true });
+  } catch {
+    return [];
   }
+  return entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith(".") && !WS_SKIP_DIRS.has(e.name))
+    .map((e) => (base ? `${base}/${e.name}` : e.name))
+    .sort(byStr);
+}
+
+function descendantsOf(root: string, base: string, depth: number, out: string[]): void {
+  if (depth > MAX_RECURSE_DEPTH) return;
+  for (const sub of subdirsOf(root, base)) {
+    out.push(sub);
+    descendantsOf(root, sub, depth + 1, out);
+  }
+}
+
+// Segment-based expansion of one workspace glob into existing directories:
+// `*` spans one level, a partial segment (`libs-*`) filters that level, `**`
+// matches this level plus every descendant (bounded) — so nested patterns
+// like `packages/*/plugins/*` expand at arbitrary depth. Wildcards never
+// enter dot-dirs or WS_SKIP_DIRS (npm's own expansion skips node_modules
+// likewise); literal segments always resolve.
+function expandGlobDirs(root: string, pat: string): string[] {
+  const segs = pat.split("/").filter((s) => s && s !== ".");
+  if (segs.includes("..")) return [];
+  let dirs: string[] = [""];
+  for (const seg of segs) {
+    const next = new Set<string>();
+    if (seg === "**") {
+      for (const d of dirs) {
+        if (d) next.add(d);
+        const desc: string[] = [];
+        descendantsOf(root, d, 0, desc);
+        for (const s of desc) next.add(s);
+      }
+    } else if (seg.includes("*")) {
+      const re = new RegExp(`^${seg.split("*").map(escapeRegExp).join("[^/]*")}$`);
+      for (const d of dirs) {
+        for (const sub of subdirsOf(root, d)) {
+          if (re.test(sub.split("/").pop()!)) next.add(sub);
+        }
+      }
+    } else {
+      for (const d of dirs) {
+        const cand = d ? `${d}/${seg}` : seg;
+        if (isDirAt(root, cand)) next.add(cand);
+      }
+    }
+    dirs = [...next];
+    if (!dirs.length) return [];
+  }
+  return dirs.filter(Boolean);
+}
+
+function expandPattern(
+  root: string,
+  raw: string,
+  found: Map<string, WorkspacePackage>,
+  kind: WorkspaceKind,
+  warnings: string[],
+): void {
+  const pat = raw.replace(/^\.\//, "").replace(/\/+$/, "");
+  if (!pat) return;
+  if (!pat.includes("*")) {
+    addPackage(root, pat, found, kind, warnings);
+    return;
+  }
+  for (const dir of expandGlobDirs(root, pat)) addPackage(root, dir, found, kind, warnings);
 }
 
 interface WsPattern {
@@ -171,7 +363,7 @@ interface WsPattern {
   kind: WorkspaceKind;
 }
 
-function npmFamilyPatterns(root: string): { positives: WsPattern[]; negations: string[] } {
+function npmFamilyPatterns(root: string, warnings: string[]): { positives: WsPattern[]; negations: string[] } {
   const positives: WsPattern[] = [];
   const negations: string[] = [];
   const push = (raw: string, kind: WorkspaceKind): void => {
@@ -180,7 +372,7 @@ function npmFamilyPatterns(root: string): { positives: WsPattern[]; negations: s
     if (t.startsWith("!")) negations.push(t.slice(1));
     else positives.push({ pattern: t, kind });
   };
-  const pkg = readJson(join(root, "package.json"));
+  const pkg = readJson(join(root, "package.json"), "package.json", warnings);
   const ws = pkg?.workspaces;
   if (Array.isArray(ws)) {
     for (const x of ws) if (typeof x === "string") push(x, "npm");
@@ -201,14 +393,14 @@ function npmFamilyPatterns(root: string): { positives: WsPattern[]; negations: s
   return { positives, negations };
 }
 
-function fallbackNpmPatterns(root: string): WsPattern[] {
-  const lerna = readJson(join(root, "lerna.json"));
+function fallbackNpmPatterns(root: string, warnings: string[]): WsPattern[] {
+  const lerna = readJson(join(root, "lerna.json"), "lerna.json", warnings);
   if (lerna && Array.isArray(lerna.packages)) {
     return (lerna.packages as unknown[])
       .filter((x): x is string => typeof x === "string")
       .map((pattern) => ({ pattern, kind: "lerna" as const }));
   }
-  const nx = readJson(join(root, "nx.json"));
+  const nx = readJson(join(root, "nx.json"), "nx.json", warnings);
   if (nx) {
     const layout = (nx.workspaceLayout ?? {}) as { appsDir?: unknown; libsDir?: unknown };
     const appsDir = typeof layout.appsDir === "string" ? layout.appsDir : "apps";
@@ -218,7 +410,7 @@ function fallbackNpmPatterns(root: string): WsPattern[] {
   return [];
 }
 
-function detectCargoMembers(root: string, found: Map<string, WorkspacePackage>): void {
+function detectCargoMembers(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
   const toml = readText(join(root, "Cargo.toml"));
   if (!toml) return;
   const body = tomlSectionBody(toml, "workspace");
@@ -227,14 +419,14 @@ function detectCargoMembers(root: string, found: Map<string, WorkspacePackage>):
   if (!members.length) return;
   const excludes = tomlStringArray(body, "exclude").map(wsGlobToRegExp);
   const candidates = new Map<string, WorkspacePackage>();
-  for (const pat of members) expandPattern(root, pat, candidates, "cargo");
+  for (const pat of members) expandPattern(root, pat, candidates, "cargo", warnings);
   for (const [dir, pkg] of candidates) {
     if (excludes.some((re) => re.test(dir))) continue;
     if (!found.has(dir)) found.set(dir, pkg);
   }
 }
 
-function detectGoWork(root: string, found: Map<string, WorkspacePackage>): void {
+function detectGoWork(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
   const gowork = readText(join(root, "go.work"));
   if (!gowork) return;
   const dirs: string[] = [];
@@ -247,24 +439,70 @@ function detectGoWork(root: string, found: Map<string, WorkspacePackage>): void 
   for (const m of gowork.matchAll(/^use\s+([^\s(]+)/gm)) dirs.push(m[1]!);
   for (const dir of dirs) {
     if (dir === "." || dir === "./") continue;
-    addPackage(root, dir, found, "go");
+    addPackage(root, dir, found, "go", warnings);
   }
 }
 
-function detectMavenModules(root: string, found: Map<string, WorkspacePackage>): void {
+function detectMavenModules(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
   const pom = readText(join(root, "pom.xml"));
   if (!pom) return;
   const modules = pom.match(/<modules>([\s\S]*?)<\/modules>/)?.[1];
   if (!modules) return;
   for (const m of modules.matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)) {
-    addPackage(root, m[1]!, found, "maven");
+    addPackage(root, m[1]!, found, "maven", warnings);
+  }
+}
+
+// uv workspaces: [tool.uv.workspace] members/exclude in the root pyproject.
+function detectUvMembers(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
+  const toml = readText(join(root, "pyproject.toml"));
+  if (!toml) return;
+  const body = tomlSectionBody(toml, "tool.uv.workspace");
+  if (!body) return;
+  const members = tomlStringArray(body, "members");
+  if (!members.length) return;
+  const excludes = tomlStringArray(body, "exclude").map(wsGlobToRegExp);
+  const candidates = new Map<string, WorkspacePackage>();
+  for (const pat of members) expandPattern(root, pat, candidates, "uv", warnings);
+  for (const [dir, pkg] of candidates) {
+    if (excludes.some((re) => re.test(dir))) continue;
+    if (!found.has(dir)) found.set(dir, pkg);
+  }
+}
+
+// Composer path repositories: { "repositories": [{ "type": "path", "url": … }] }
+// — the url may be a glob (packages/*), same expansion as npm patterns.
+function detectComposerPathRepos(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
+  const composer = readJson(join(root, "composer.json"), "composer.json", warnings);
+  const repos = composer?.repositories;
+  if (!Array.isArray(repos)) return;
+  for (const r of repos) {
+    if (!r || typeof r !== "object") continue;
+    const { type, url } = r as { type?: unknown; url?: unknown };
+    if (type === "path" && typeof url === "string" && url) expandPattern(root, url, found, "composer", warnings);
+  }
+}
+
+// Gradle multi-project builds: settings.gradle(.kts) `include ':a', ':b:c'` or
+// `include("x")` — a `:`-separated project path maps to a directory path.
+function detectGradleIncludes(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
+  for (const f of ["settings.gradle", "settings.gradle.kts"]) {
+    const text = readText(join(root, f));
+    if (!text) continue;
+    for (const line of text.split(/\r?\n/)) {
+      if (!/^\s*include[\s(]/.test(line)) continue;
+      for (const m of line.matchAll(/["']([^"']+)["']/g)) {
+        const dir = m[1]!.replace(/^:/, "").replace(/:/g, "/");
+        if (dir) addPackage(root, dir, found, "gradle", warnings);
+      }
+    }
   }
 }
 
 // --- workspace dependency edges -------------------------------------------
 
-function npmEdges(root: string, pkg: WorkspacePackage, byName: Set<string>): string[] {
-  const manifest = readJson(join(root, pkg.dir, "package.json"));
+function npmEdges(root: string, pkg: WorkspacePackage, byName: Set<string>, warnings: string[]): string[] {
+  const manifest = readJson(join(root, pkg.dir, "package.json"), `${pkg.dir}/package.json`, warnings);
   if (!manifest) return [];
   const edges = new Set<string>();
   for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
@@ -341,6 +579,84 @@ function mavenEdges(root: string, pkg: WorkspacePackage, byName: Set<string>): s
   return [...edges];
 }
 
+function uvEdges(root: string, pkg: WorkspacePackage, byName: Set<string>): string[] {
+  const toml = readText(join(root, pkg.dir, "pyproject.toml"));
+  if (!toml) return [];
+  const edges = new Set<string>();
+  // [project] dependencies = ["sibling", "requests>=2"] — bare name prefix.
+  const project = tomlSectionBody(toml, "project");
+  if (project) {
+    for (const dep of tomlStringArray(project, "dependencies")) {
+      const name = dep.match(/^[A-Za-z0-9_.-]+/)?.[0];
+      if (name && name !== pkg.name && byName.has(name)) edges.add(name);
+    }
+  }
+  // [tool.uv.sources] sibling = { workspace = true }
+  const sources = tomlSectionBody(toml, "tool.uv.sources");
+  if (sources) {
+    for (const line of sources.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*\{[^}]*workspace\s*=\s*true/);
+      if (m && m[1] !== pkg.name && byName.has(m[1]!)) edges.add(m[1]!);
+    }
+  }
+  return [...edges];
+}
+
+function composerEdges(root: string, pkg: WorkspacePackage, byName: Set<string>, warnings: string[]): string[] {
+  const manifest = readJson(join(root, pkg.dir, "composer.json"), `${pkg.dir}/composer.json`, warnings);
+  if (!manifest) return [];
+  const edges = new Set<string>();
+  for (const field of ["require", "require-dev"]) {
+    const deps = manifest[field];
+    if (!deps || typeof deps !== "object") continue;
+    for (const dep of Object.keys(deps)) {
+      if (dep !== pkg.name && byName.has(dep)) edges.add(dep);
+    }
+  }
+  return [...edges];
+}
+
+function gradleEdges(root: string, pkg: WorkspacePackage, byName: Set<string>, byDir: Map<string, string>): string[] {
+  for (const f of ["build.gradle", "build.gradle.kts"]) {
+    const text = readText(join(root, pkg.dir, f));
+    if (!text) continue;
+    const edges = new Set<string>();
+    // implementation project(':libs:core') — a project path is a dir path.
+    for (const m of text.matchAll(/project\s*\(\s*["']:?([^"']+)["']\s*\)/g)) {
+      const path = m[1]!.replace(/:/g, "/");
+      const target = byDir.get(path) ?? (byName.has(path) ? path : undefined);
+      if (target && target !== pkg.name) edges.add(target);
+    }
+    return [...edges];
+  }
+  return [];
+}
+
+function edgesFor(
+  root: string,
+  pkg: WorkspacePackage,
+  byName: Set<string>,
+  byDir: Map<string, string>,
+  warnings: string[],
+): string[] {
+  switch (pkg.kind) {
+    case "cargo":
+      return cargoEdges(root, pkg, byName, byDir);
+    case "go":
+      return goPkgEdges(root, pkg, byName, byDir);
+    case "maven":
+      return mavenEdges(root, pkg, byName);
+    case "uv":
+      return uvEdges(root, pkg, byName);
+    case "composer":
+      return composerEdges(root, pkg, byName, warnings);
+    case "gradle":
+      return gradleEdges(root, pkg, byName, byDir);
+    default:
+      return npmEdges(root, pkg, byName, warnings);
+  }
+}
+
 function findCycle(packages: WorkspacePackage[]): string[] | undefined {
   const deps = new Map(packages.map((p) => [p.name, [...(p.dependsOn ?? [])].sort(byStr)]));
   const state = new Map<string, "visiting" | "done">();
@@ -391,36 +707,33 @@ function topoOrder(packages: WorkspacePackage[]): string[] {
 }
 
 export function detectWorkspaces(root: string): WorkspaceInfo {
+  const warnings: string[] = [];
   const found = new Map<string, WorkspacePackage>();
 
-  const { positives, negations } = npmFamilyPatterns(root);
-  const npmPatterns = positives.length ? positives : fallbackNpmPatterns(root);
+  const { positives, negations } = npmFamilyPatterns(root, warnings);
+  const npmPatterns = positives.length ? positives : fallbackNpmPatterns(root, warnings);
   if (npmPatterns.length) {
     const candidates = new Map<string, WorkspacePackage>();
-    for (const { pattern, kind } of npmPatterns) expandPattern(root, pattern, candidates, kind);
+    for (const { pattern, kind } of npmPatterns) expandPattern(root, pattern, candidates, kind, warnings);
     const negRes = negations.map(wsGlobToRegExp);
     for (const [dir, pkg] of candidates) {
       if (negRes.some((re) => re.test(dir))) continue;
       found.set(dir, pkg);
     }
   }
-  detectCargoMembers(root, found);
-  detectGoWork(root, found);
-  detectMavenModules(root, found);
+  detectCargoMembers(root, found, warnings);
+  detectGoWork(root, found, warnings);
+  detectMavenModules(root, found, warnings);
+  detectUvMembers(root, found, warnings);
+  detectComposerPathRepos(root, found, warnings);
+  detectGradleIncludes(root, found, warnings);
 
   const packages = [...found.values()].sort((a, b) => byStr(a.dir, b.dir));
 
   const byName = new Set(packages.map((p) => p.name));
   const byDir = new Map(packages.map((p) => [p.dir, p.name]));
   for (const pkg of packages) {
-    const edges =
-      pkg.kind === "cargo"
-        ? cargoEdges(root, pkg, byName, byDir)
-        : pkg.kind === "go"
-          ? goPkgEdges(root, pkg, byName, byDir)
-          : pkg.kind === "maven"
-            ? mavenEdges(root, pkg, byName)
-            : npmEdges(root, pkg, byName);
+    const edges = edgesFor(root, pkg, byName, byDir, warnings);
     if (edges.length) pkg.dependsOn = edges.sort(byStr);
   }
 
@@ -429,6 +742,7 @@ export function detectWorkspaces(root: string): WorkspaceInfo {
     packages,
     cycle: findCycle(packages),
     topoOrder: topoOrder(packages),
+    warnings: [...new Set(warnings)].sort(byStr),
     packageOf: (rel: string) => byDepth.find((p) => rel === p.dir || rel.startsWith(p.dir + "/")),
   };
 }
