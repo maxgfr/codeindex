@@ -731,7 +731,57 @@ function scan(rel, content, lang, rules) {
 function extToLang(ext) {
   return EXT_LANG[ext] ?? "other";
 }
-var EXT_LANG;
+function extractReexports(rel, content, localSymbols) {
+  if (!REEXPORT_EXTS.has(rel.slice(rel.lastIndexOf(".")))) return [];
+  const lang = /\.(ts|tsx|mts|cts)$/.test(rel) ? "typescript" : "javascript";
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const lineAt = (idx) => content.slice(0, idx).split(/\r?\n/).length;
+  const localKindOf = /* @__PURE__ */ new Map();
+  for (const s of localSymbols) if (!localKindOf.has(s.name)) localKindOf.set(s.name, s.kind);
+  const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
+  let m;
+  while ((m = named.exec(content)) && out2.length < 60) {
+    const from = m[2];
+    for (const part of m[1].split(",")) {
+      const p = part.trim().replace(/^type\s+/, "");
+      const as = /^(\S+)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(p);
+      const orig = as ? as[1] : p;
+      const name2 = as ? as[2] : p;
+      if (!/^[A-Za-z_$][\w$]*$/.test(name2) || name2 === "default" || seen.has(name2)) continue;
+      seen.add(name2);
+      const mirroredKind = !from ? localKindOf.get(orig) : void 0;
+      out2.push({
+        name: name2,
+        kind: mirroredKind ?? "reexport",
+        file: rel,
+        line: lineAt(m.index),
+        signature: from ? `export { ${name2} } from "${from}"` : `export { ${name2} }`,
+        exported: true,
+        lang
+      });
+    }
+  }
+  const star = /export\s*\*\s*(?:as\s+([A-Za-z_$][\w$]*)\s+)?from\s*['"]([^'"]+)['"]/g;
+  while ((m = star.exec(content)) && out2.length < 60) {
+    const ns = m[1];
+    const from = m[2];
+    const key = "*" + (ns ?? from);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out2.push({
+      name: ns ?? `* (${from})`,
+      kind: ns ? "reexport" : "reexport-all",
+      file: rel,
+      line: lineAt(m.index),
+      signature: `export * ${ns ? `as ${ns} ` : ""}from "${from}"`,
+      exported: true,
+      lang
+    });
+  }
+  return out2;
+}
+var EXT_LANG, REEXPORT_EXTS;
 var init_common = __esm({
   "src/lang/common.ts"() {
     "use strict";
@@ -799,6 +849,7 @@ var init_common = __esm({
       ".svelte": "svelte",
       ".astro": "astro"
     };
+    REEXPORT_EXTS = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
   }
 });
 
@@ -1231,12 +1282,18 @@ var init_scala = __esm({
 // src/lang/registry.ts
 function extractSymbols(rel, ext, content) {
   const extractor = BY_EXT.get(ext);
-  if (!extractor) return [];
-  try {
-    return extractor.extract(rel, content);
-  } catch {
-    return [];
+  let symbols;
+  if (!extractor) symbols = [];
+  else {
+    try {
+      symbols = extractor.extract(rel, content);
+    } catch {
+      symbols = [];
+    }
   }
+  const known = new Set(symbols.map((s) => s.name));
+  const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
+  return reexports.length ? [...symbols, ...reexports] : symbols;
 }
 function languageOf(ext) {
   return BY_EXT.get(ext)?.lang ?? extToLang(ext);
@@ -6340,56 +6397,6 @@ function extractImports(ext, content) {
   }
   return [...specs].map((spec) => ({ kind: "import", spec }));
 }
-function extractReexports(rel, content, localSymbols) {
-  if (!JS_TS.has(rel.slice(rel.lastIndexOf(".")))) return [];
-  const lang = /\.(ts|tsx|mts|cts)$/.test(rel) ? "typescript" : "javascript";
-  const out2 = [];
-  const seen = /* @__PURE__ */ new Set();
-  const lineAt = (idx) => content.slice(0, idx).split(/\r?\n/).length;
-  const localKindOf = /* @__PURE__ */ new Map();
-  for (const s of localSymbols) if (!localKindOf.has(s.name)) localKindOf.set(s.name, s.kind);
-  const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
-  let m;
-  while ((m = named.exec(content)) && out2.length < 60) {
-    const from = m[2];
-    for (const part of m[1].split(",")) {
-      const p = part.trim().replace(/^type\s+/, "");
-      const as = /^(\S+)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(p);
-      const orig = as ? as[1] : p;
-      const name2 = as ? as[2] : p;
-      if (!/^[A-Za-z_$][\w$]*$/.test(name2) || name2 === "default" || seen.has(name2)) continue;
-      seen.add(name2);
-      const mirroredKind = !from ? localKindOf.get(orig) : void 0;
-      out2.push({
-        name: name2,
-        kind: mirroredKind ?? "reexport",
-        file: rel,
-        line: lineAt(m.index),
-        signature: from ? `export { ${name2} } from "${from}"` : `export { ${name2} }`,
-        exported: true,
-        lang
-      });
-    }
-  }
-  const star = /export\s*\*\s*(?:as\s+([A-Za-z_$][\w$]*)\s+)?from\s*['"]([^'"]+)['"]/g;
-  while ((m = star.exec(content)) && out2.length < 60) {
-    const ns = m[1];
-    const from = m[2];
-    const key = "*" + (ns ?? from);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out2.push({
-      name: ns ?? `* (${from})`,
-      kind: ns ? "reexport" : "reexport-all",
-      file: rel,
-      line: lineAt(m.index),
-      signature: `export * ${ns ? `as ${ns} ` : ""}from "${from}"`,
-      exported: true,
-      lang
-    });
-  }
-  return out2;
-}
 function collectCallsRegex(content, symbols = []) {
   const out2 = /* @__PURE__ */ new Map();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
@@ -6454,6 +6461,7 @@ var init_code = __esm({
     "use strict";
     init_registry();
     init_extract();
+    init_common();
     JS_TS = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
     PY = /* @__PURE__ */ new Set([".py", ".pyi"]);
     C_CPP = /* @__PURE__ */ new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);

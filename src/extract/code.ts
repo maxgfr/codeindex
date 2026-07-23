@@ -1,6 +1,7 @@
 import type { CodeSymbol, RawRef } from "../types.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
+import { extractReexports } from "../lang/common.js";
 
 export interface CodeInfo {
   symbols: CodeSymbol[];
@@ -251,62 +252,6 @@ function extractImports(ext: string, content: string): RawRef[] {
   }
 
   return [...specs].map((spec) => ({ kind: "import" as const, spec }));
-}
-
-// Barrel re-exports (`export { A, B as C } from './x'`, `export * from './y'`).
-// The line-based lang extractor can't capture multi-name lists, but these ARE
-// the public facade of a module — so list them as exported symbols here.
-//
-// An ALIAS with no `from` clause (`export { b as c }`) renames an in-file
-// declaration — `localSymbols` (already extracted by the AST or regex tier)
-// lets us resolve `b` and mirror ITS kind onto `c` (e.g. "function"), so the
-// alias reads as the real symbol it is rather than the generic "reexport".
-// A true cross-module re-export (`export { b as c } from "./mod"`) has no
-// local `b` to resolve — and an alias the local pass genuinely can't see
-// (destructured/ambient/etc.) falls back the same way — both keep "reexport".
-function extractReexports(rel: string, content: string, localSymbols: CodeSymbol[]): CodeSymbol[] {
-  if (!JS_TS.has(rel.slice(rel.lastIndexOf(".")))) return [];
-  const lang = /\.(ts|tsx|mts|cts)$/.test(rel) ? "typescript" : "javascript";
-  const out: CodeSymbol[] = [];
-  const seen = new Set<string>();
-  const lineAt = (idx: number): number => content.slice(0, idx).split(/\r?\n/).length;
-  const localKindOf = new Map<string, string>();
-  for (const s of localSymbols) if (!localKindOf.has(s.name)) localKindOf.set(s.name, s.kind);
-
-  const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
-  let m: RegExpExecArray | null;
-  while ((m = named.exec(content)) && out.length < 60) {
-    const from = m[2];
-    for (const part of m[1]!.split(",")) {
-      const p = part.trim().replace(/^type\s+/, "");
-      const as = /^(\S+)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(p);
-      const orig = as ? as[1]! : p;
-      const name = as ? as[2]! : p;
-      if (!/^[A-Za-z_$][\w$]*$/.test(name) || name === "default" || seen.has(name)) continue;
-      seen.add(name);
-      const mirroredKind = !from ? localKindOf.get(orig) : undefined;
-      out.push({
-        name, kind: mirroredKind ?? "reexport", file: rel, line: lineAt(m.index),
-        signature: from ? `export { ${name} } from "${from}"` : `export { ${name} }`,
-        exported: true, lang,
-      });
-    }
-  }
-
-  const star = /export\s*\*\s*(?:as\s+([A-Za-z_$][\w$]*)\s+)?from\s*['"]([^'"]+)['"]/g;
-  while ((m = star.exec(content)) && out.length < 60) {
-    const ns = m[1];
-    const from = m[2]!;
-    const key = "*" + (ns ?? from);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      name: ns ?? `* (${from})`, kind: ns ? "reexport" : "reexport-all", file: rel,
-      line: lineAt(m.index), signature: `export * ${ns ? `as ${ns} ` : ""}from "${from}"`,
-      exported: true, lang,
-    });
-  }
-  return out;
 }
 
 // Control-flow and declaration keywords that syntactically precede `(` but are

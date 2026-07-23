@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../types.js";
-import { extToLang } from "./common.js";
+import { extToLang, extractReexports } from "./common.js";
 import { jsTs } from "./js-ts.js";
 import { python } from "./python.js";
 import { go } from "./go.js";
@@ -35,14 +35,29 @@ for (const e of EXTRACTORS) for (const ext of e.exts) BY_EXT.set(ext, e);
 
 // Extract declared symbols from one file. Returns [] for languages without a
 // dedicated extractor (their content is still fully searchable via ripgrep).
+//
+// Also mirrors extractCode's barrel re-export/alias pass (extractReexports):
+// a direct extractSymbols consumer (ultradoc, or any tool that doesn't go
+// through extractCode) hits the same `export { a, b as c }` barrels a repo
+// scan does, and should see the same alias-mirrors-b's-own-kind symbols —
+// not the bare "reexport" kind extractReexports falls back to when there's
+// no local declaration to mirror. extractCode already runs extractReexports
+// itself and filters by name, so this can't double-add: whichever entry point
+// adds "c" first wins, the other's re-run is a no-op duplicate filtered out.
 export function extractSymbols(rel: string, ext: string, content: string): CodeSymbol[] {
   const extractor = BY_EXT.get(ext);
-  if (!extractor) return [];
-  try {
-    return extractor.extract(rel, content);
-  } catch {
-    return [];
+  let symbols: CodeSymbol[];
+  if (!extractor) symbols = [];
+  else {
+    try {
+      symbols = extractor.extract(rel, content);
+    } catch {
+      symbols = [];
+    }
   }
+  const known = new Set(symbols.map((s) => s.name));
+  const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
+  return reexports.length ? [...symbols, ...reexports] : symbols;
 }
 
 // Human-readable language label for an extension (used for the language

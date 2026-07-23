@@ -158,3 +158,29 @@ load_plugin() {
     expect(names).toEqual(expect.arrayContaining(["Main", "Service"]));
   });
 });
+
+// Gap found during the ultradoc migration: the v2.11.0 export-alias fix
+// (`export { b as c }` mirroring b's own kind onto c) lives in extractCode's
+// extractReexports pass, but ultradoc — and any other consumer that calls the
+// standalone extractSymbols directly rather than extractCode — never saw it.
+// extractSymbols now runs the same extractReexports helper itself (reused,
+// not reimplemented), so both entry points agree.
+describe("extractSymbols export-alias parity with extractCode (ultradoc gap)", () => {
+  it("`export { a, b as c }`: the alias c mirrors local function b's own kind, not the generic reexport kind", () => {
+    const src = "const a = 1;\nfunction b() {}\nexport { a, b as c };\n";
+    const syms = extractSymbols("barrel.ts", ".ts", src);
+    const alias = syms.find((s) => s.name === "c");
+    expect(alias).toBeDefined();
+    expect(alias?.kind).toBe("function");
+    expect(alias?.exported).toBe(true);
+  });
+
+  it("a true cross-module re-export alias (`export { b as c } from './other'`) keeps the generic reexport kind", () => {
+    const src = 'export { b as c } from "./other";\n';
+    const syms = extractSymbols("barrel.ts", ".ts", src);
+    const alias = syms.find((s) => s.name === "c");
+    expect(alias).toBeDefined();
+    expect(alias?.kind).toBe("reexport");
+    expect(alias?.exported).toBe(true);
+  });
+});
