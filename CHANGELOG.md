@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.9.0](https://github.com/maxgfr/codeindex/compare/v2.8.1...v2.9.0) (2026-07-23)
+
+
+### Features
+
+* **search:** trigram fuzzy fallback for unmatched query terms ([0f1f6f3](https://github.com/maxgfr/codeindex/commit/0f1f6f37506ed4ee20c082d832ee11cdb43b80ab))
+
 ## [2.8.1](https://github.com/maxgfr/codeindex/compare/v2.8.0...v2.8.1) (2026-07-23)
 
 
