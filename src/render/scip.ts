@@ -38,6 +38,7 @@ const utf8 = new TextEncoder();
 // Unsigned LEB128. Every value we encode (field tags, enum values, ranges,
 // sub-message byte lengths) is a small non-negative integer well under 2^31.
 function pushVarint(out: Bytes, n: number): void {
+  if (n < 0) throw new Error(`pushVarint: negative input ${n} is not a valid unsigned varint`);
   while (n > 0x7f) {
     out.push((n & 0x7f) | 0x80);
     n = Math.floor(n / 128);
@@ -87,6 +88,7 @@ const F_DOC_RELPATH = 1;
 const F_DOC_OCCURRENCES = 2;
 const F_DOC_SYMBOLS = 3;
 const F_DOC_LANGUAGE = 4;
+const F_DOC_POSITION_ENCODING = 6; // Document.position_encoding = 6 (Document.text = 5 is unused — we never embed source text)
 const F_OCC_RANGE = 1;
 const F_OCC_SYMBOL = 2;
 const F_OCC_ROLES = 3;
@@ -97,6 +99,13 @@ const F_SI_ENCLOSING = 8;
 
 const TEXT_ENCODING_UTF8 = 1; // TextEncoding.UTF8
 const ROLE_DEFINITION = 0x1; // SymbolRole.Definition (a reference omits the field → 0)
+
+// PositionEncoding.UTF16CodeUnitOffsetFromLineStart = 2. `locate`/`findWord`
+// below compute range offsets with JS string `indexOf`/`.length`, i.e. UTF-16
+// code units — this is the encoding that matches that computation (NOT
+// Metadata.text_document_encoding, which is the on-disk file encoding and is
+// unrelated to how `character` offsets in ranges are interpreted).
+const POSITION_ENCODING_UTF16 = 2; // PositionEncoding.UTF16CodeUnitOffsetFromLineStart
 
 // SymbolInformation.Kind — only the codeindex kinds we can map; anything else
 // leaves the field unset (UnspecifiedKind = 0).
@@ -337,6 +346,7 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
       pushLenDelim(doc, F_DOC_SYMBOLS, sb);
     }
     pushString(doc, F_DOC_LANGUAGE, f.lang);
+    pushVarintField(doc, F_DOC_POSITION_ENCODING, POSITION_ENCODING_UTF16);
     documents.push(doc);
   }
 

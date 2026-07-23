@@ -10293,6 +10293,7 @@ init_sort();
 import { join as join9 } from "path";
 var utf8 = new TextEncoder();
 function pushVarint(out2, n) {
+  if (n < 0) throw new Error(`pushVarint: negative input ${n} is not a valid unsigned varint`);
   while (n > 127) {
     out2.push(n & 127 | 128);
     n = Math.floor(n / 128);
@@ -10330,6 +10331,7 @@ var F_DOC_RELPATH = 1;
 var F_DOC_OCCURRENCES = 2;
 var F_DOC_SYMBOLS = 3;
 var F_DOC_LANGUAGE = 4;
+var F_DOC_POSITION_ENCODING = 6;
 var F_OCC_RANGE = 1;
 var F_OCC_SYMBOL = 2;
 var F_OCC_ROLES = 3;
@@ -10339,6 +10341,7 @@ var F_SI_DISPLAY_NAME = 6;
 var F_SI_ENCLOSING = 8;
 var TEXT_ENCODING_UTF8 = 1;
 var ROLE_DEFINITION = 1;
+var POSITION_ENCODING_UTF16 = 2;
 var KIND = {
   function: 17,
   // Function
@@ -10506,6 +10509,7 @@ function renderScip(scan2, opts = {}) {
       pushLenDelim(doc, F_DOC_SYMBOLS, sb);
     }
     pushString(doc, F_DOC_LANGUAGE, f.lang);
+    pushVarintField(doc, F_DOC_POSITION_ENCODING, POSITION_ENCODING_UTF16);
     documents.push(doc);
   }
   const toolInfo = [];

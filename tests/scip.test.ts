@@ -147,6 +147,47 @@ describe("renderScip", () => {
     expect(totalRefs).toBeGreaterThan(0);
   });
 
+  it("declares UTF-16 position_encoding on every Document and locates ranges in UTF-16 code units", () => {
+    // `café` (a 2-byte-in-UTF-8, 1-code-unit-in-UTF-16 character) sits BEFORE
+    // `target` on the same declaration line, so a UTF-8 byte offset for
+    // `target` would differ from its UTF-16 offset — this is what proves
+    // `locate`/`findWord` (JS `indexOf`, i.e. UTF-16 code units) actually needs
+    // `Document.position_encoding` declared.
+    const root = mkdtempSync(join(tmpdir(), "scip-utf16-"));
+    const line = 'export const café = "x", target = 1;\n';
+    writeFileSync(join(root, "unicode.ts"), line);
+
+    const scan = scanRepo(root);
+    const buf = renderScip(scan, { projectRoot: PROJECT_ROOT });
+    const index = decode(buf);
+    const documents = allOf(index, 2);
+    expect(documents.length).toBeGreaterThan(0);
+
+    // (a) every Document carries position_encoding = UTF16CodeUnitOffsetFromLineStart (2)
+    for (const docField of documents) {
+      const doc = decode(docField.bytes!);
+      expect(first(doc, 6)?.varint).toBe(2);
+    }
+
+    // (b) `target`'s decoded startChar is the UTF-16 (JS `.indexOf`) offset,
+    // and it differs from what a UTF-8-byte-offset consumer would compute.
+    let targetRange: number[] | undefined;
+    for (const occField of allOf(decode(documents[0]!.bytes!), 2)) {
+      const occ = decode(occField.bytes!);
+      if (str(first(occ, 2)).includes("target")) {
+        targetRange = packedInts(first(occ, 1));
+        break;
+      }
+    }
+    expect(targetRange).toBeDefined();
+
+    const utf16StartChar = line.indexOf("target");
+    const utf8StartChar = Buffer.byteLength(line.slice(0, utf16StartChar), "utf8");
+    expect(utf16StartChar).not.toBe(utf8StartChar); // fixture actually exercises the divergence
+    expect(targetRange![1]).toBe(utf16StartChar);
+    expect(targetRange![1]).not.toBe(utf8StartChar);
+  });
+
   it("matches the committed golden index byte-for-byte", () => {
     const buf = Buffer.from(render());
     // Regenerate the golden after an intentional encoder/mapping change with:
