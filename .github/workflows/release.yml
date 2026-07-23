@@ -33,7 +33,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # npm trusted publishing (OIDC) needs npm >= 11.5.1, shipped with node 24.
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
