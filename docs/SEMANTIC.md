@@ -69,6 +69,17 @@ tarball** (`package.json` `files` is unchanged; the pack-smoke test asserts no
 JSON so a tiny fixture is committable; a real `pull`ed model uses the same shape
 at scale.
 
+### The official asset
+
+`codeindex embed pull` (no env) fetches the published **`embed-model-v1`** GitHub
+release: a conversion of [`minishlab/potion-base-8M`](https://huggingface.co/minishlab/potion-base-8M)
+(revision `bf8b0566…`, **MIT**) — 256-dim, a 27 559-token WordPiece vocab, int8
+rows at one global scale. The download is **sha256-verified** against
+`EMBED_ASSET_SHA256` (`src/embed/model.ts`) before it is written; a mismatch
+fails the pull and writes nothing. The asset is **never** committed to git or
+shipped in the npm tarball — it lives only in the release. Reproduce it
+byte-for-byte with the pinned toolchain in [`scripts/embed-asset/`](../scripts/embed-asset/).
+
 ## CLI
 
 ```sh
@@ -76,8 +87,10 @@ at scale.
 # reachability (JSON). Precedence: endpoint > static model.
 codeindex embed status --repo <dir>
 
-# Fetch the model asset (needs CODEINDEX_EMBED_URL — the official asset is
-# unpublished, so this fails cleanly with instructions when unset).
+# Fetch the official static-embedding asset (published as the `embed-model-v1`
+# GitHub release) into CODEINDEX_EMBED_DIR (or <repo>/.codeindex/models/). The
+# built-in default download is sha256-verified before it is written; set
+# CODEINDEX_EMBED_URL to fetch a custom/mirrored model.json instead (un-verified).
 codeindex embed pull --repo <dir>
 
 # Build embeddings.bin from the repo into --out <dir> (static tier only).

@@ -520,7 +520,11 @@ interface StaticEmbedModel {
 declare function resolveEmbedModelDir(repo?: string): string | undefined;
 declare function hasEmbedModel(repo?: string): boolean;
 declare function loadEmbedModel(dir?: string): StaticEmbedModel | undefined;
-declare function resolveEmbedPullUrl(): string | undefined;
+interface EmbedPullTarget {
+    url: string;
+    sha256?: string;
+}
+declare function resolveEmbedPullUrl(): EmbedPullTarget;
 
 declare function basicTokenize(text: string): string[];
 declare function wordpiece(word: string, model: StaticEmbedModel): number[];

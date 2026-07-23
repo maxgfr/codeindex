@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,11 +21,23 @@ import { join } from "node:path";
 // graph.json / symbols.json consumers.
 export const EMBED_VERSION = 1;
 
-// The default model-name a `pull` writes and a `status` reports. The real asset
-// URL is intentionally NOT hard-coded yet (see resolveEmbedPullUrl): the asset
-// is unpublished, so `pull` fails cleanly asking for CODEINDEX_EMBED_URL rather
-// than fetching a phantom.
+// The default sub-directory a `pull` writes into and a `status` reports.
 export const DEFAULT_EMBED_DIRNAME = "models";
+
+// The official static-embedding asset, published as the dedicated GitHub release
+// `embed-model-v1` (tag deliberately outside the `v<semver>` semantic-release
+// namespace, so publishing it triggers no CI). `pull` uses this when
+// CODEINDEX_EMBED_URL is unset. Reproduce the asset byte-for-byte with the pinned
+// toolchain in scripts/embed-asset/.
+export const DEFAULT_EMBED_URL =
+  "https://github.com/maxgfr/codeindex/releases/download/embed-model-v1/model.json";
+
+// sha256 of the published model.json. `pull` verifies the downloaded bytes
+// against this ONLY when it fetched the built-in default (a custom
+// CODEINDEX_EMBED_URL is the user's own mirror and keeps the un-verified
+// behavior). Regenerate alongside DEFAULT_EMBED_URL when re-cutting the asset:
+// `shasum -a 256 model.json`.
+export const EMBED_ASSET_SHA256 = "163ad053eab4e9a80d421ed4164f32292c83290f02fbbe6fe4b9b1cd6ea18d34";
 
 // A loaded static-embedding model. `vocab` maps a wordpiece token to its row
 // index; `weights` is the flat row-major (vocabSize × dim) matrix as IEEE-754
@@ -107,11 +120,37 @@ export function loadEmbedModel(dir?: string): StaticEmbedModel | undefined {
   return { modelId, dim, unk, unkId, vocabSize, vocab: vmap, weights: flat };
 }
 
-// Resolve the URL `embed pull` fetches from. The official asset is not published
-// yet, so there is no built-in default: the user must point CODEINDEX_EMBED_URL
-// at a model.json (or a directory serving one). Returns undefined when unset —
-// the caller turns that into a clean, actionable failure, never a crash.
-export function resolveEmbedPullUrl(): string | undefined {
-  const url = process.env.CODEINDEX_EMBED_URL;
-  return url && url.trim() ? url.trim() : undefined;
+// What `embed pull` fetches, and whether to verify it. CODEINDEX_EMBED_URL wins
+// outright (the user's explicit override / private mirror) and carries NO
+// sha256, so a custom asset keeps the current un-verified behavior. With no env,
+// we fall back to the built-in official asset AND its pinned sha256, so `pull`
+// can prove integrity of the default download.
+export interface EmbedPullTarget {
+  url: string;
+  sha256?: string; // present only for the built-in default → verify
+}
+
+export function resolveEmbedPullUrl(): EmbedPullTarget {
+  const env = process.env.CODEINDEX_EMBED_URL;
+  if (env && env.trim()) return { url: env.trim() };
+  return { url: DEFAULT_EMBED_URL, sha256: EMBED_ASSET_SHA256 };
+}
+
+// Fetch a model.json body over HTTP, following redirects (GitHub release assets
+// 302 to a CDN — native fetch follows by default). When `expectedSha256` is
+// given, the downloaded bytes are hashed and MUST match or this throws with a
+// clear message and returns nothing — so a corrupt/tampered default asset never
+// gets written. A non-2xx response also throws. Verification and I/O are split
+// from the CLI so both the success and the sha-mismatch paths are unit-testable.
+export async function fetchEmbedModel(url: string, expectedSha256?: string): Promise<string> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+  const body = await res.text();
+  if (expectedSha256) {
+    const got = createHash("sha256").update(body).digest("hex");
+    if (got !== expectedSha256) {
+      throw new Error(`sha256 mismatch: expected ${expectedSha256}, got ${got}`);
+    }
+  }
+  return body;
 }

@@ -9401,6 +9401,7 @@ var init_bm25 = __esm({
 });
 
 // src/embed/model.ts
+import { createHash as createHash2 } from "crypto";
 import { existsSync as existsSync3, readFileSync as readFileSync5 } from "fs";
 import { join as join10 } from "path";
 function resolveEmbedModelDir(repo) {
@@ -9446,15 +9447,30 @@ function loadEmbedModel(dir) {
   return { modelId, dim, unk, unkId, vocabSize, vocab: vmap, weights: flat };
 }
 function resolveEmbedPullUrl() {
-  const url = process.env.CODEINDEX_EMBED_URL;
-  return url && url.trim() ? url.trim() : void 0;
+  const env = process.env.CODEINDEX_EMBED_URL;
+  if (env && env.trim()) return { url: env.trim() };
+  return { url: DEFAULT_EMBED_URL, sha256: EMBED_ASSET_SHA256 };
 }
-var EMBED_VERSION, DEFAULT_EMBED_DIRNAME;
+async function fetchEmbedModel(url, expectedSha256) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+  const body2 = await res.text();
+  if (expectedSha256) {
+    const got = createHash2("sha256").update(body2).digest("hex");
+    if (got !== expectedSha256) {
+      throw new Error(`sha256 mismatch: expected ${expectedSha256}, got ${got}`);
+    }
+  }
+  return body2;
+}
+var EMBED_VERSION, DEFAULT_EMBED_DIRNAME, DEFAULT_EMBED_URL, EMBED_ASSET_SHA256;
 var init_model = __esm({
   "src/embed/model.ts"() {
     "use strict";
     EMBED_VERSION = 1;
     DEFAULT_EMBED_DIRNAME = "models";
+    DEFAULT_EMBED_URL = "https://github.com/maxgfr/codeindex/releases/download/embed-model-v1/model.json";
+    EMBED_ASSET_SHA256 = "163ad053eab4e9a80d421ed4164f32292c83290f02fbbe6fe4b9b1cd6ea18d34";
   }
 });
 
@@ -11175,8 +11191,9 @@ Commands:
                 embed status   Effective mode (none/static/endpoint), model +
                                EMBED_VERSION, and endpoint reachability (JSON)
                 embed build    Write embeddings.bin into --out <dir> (static tier)
-                embed pull     Fetch the model asset into CODEINDEX_EMBED_DIR (or
-                               <repo>/.codeindex/models/) \u2014 needs CODEINDEX_EMBED_URL
+                embed pull     Fetch the official model asset into CODEINDEX_EMBED_DIR
+                               (or <repo>/.codeindex/models/); sha256-verified. Override
+                               the source with CODEINDEX_EMBED_URL
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
   rules       Architecture rules (forbidden edges, cycles, orphans) validated
@@ -11456,26 +11473,20 @@ async function runCli(argv) {
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
-      const url = resolveEmbedPullUrl();
-      if (!url) {
-        process.stderr.write(
-          "codeindex: no model URL configured. The official static-embedding asset is not published yet.\nSet CODEINDEX_EMBED_URL to a model.json URL (optionally CODEINDEX_EMBED_DIR as the destination), then re-run `codeindex embed pull`.\n"
-        );
-        process.exitCode = 1;
-        return;
-      }
+      const { url, sha256 } = resolveEmbedPullUrl();
       const destDir = process.env.CODEINDEX_EMBED_DIR ?? join12(flags2.repo, ".codeindex", "models");
       mkdirSync2(destDir, { recursive: true });
       process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join12(destDir, "model.json")}
 `);
-      const res = await fetch(url);
-      if (!res.ok) {
-        process.stderr.write(`codeindex: pull failed \u2014 HTTP ${res.status} from ${url}
+      let body2;
+      try {
+        body2 = await fetchEmbedModel(url, sha256);
+      } catch (e) {
+        process.stderr.write(`codeindex: pull failed \u2014 ${e instanceof Error ? e.message : String(e)} (nothing written)
 `);
         process.exitCode = 1;
         return;
       }
-      const body2 = await res.text();
       try {
         JSON.parse(body2);
       } catch {

@@ -19,7 +19,7 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, resolveEmbedPullUrl } from "./embed/model.js";
+import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import {
@@ -55,8 +55,9 @@ Commands:
                 embed status   Effective mode (none/static/endpoint), model +
                                EMBED_VERSION, and endpoint reachability (JSON)
                 embed build    Write embeddings.bin into --out <dir> (static tier)
-                embed pull     Fetch the model asset into CODEINDEX_EMBED_DIR (or
-                               <repo>/.codeindex/models/) — needs CODEINDEX_EMBED_URL
+                embed pull     Fetch the official model asset into CODEINDEX_EMBED_DIR
+                               (or <repo>/.codeindex/models/); sha256-verified. Override
+                               the source with CODEINDEX_EMBED_URL
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
   rules       Architecture rules (forbidden edges, cycles, orphans) validated
@@ -387,26 +388,21 @@ export async function runCli(argv: string[]): Promise<void> {
       writeFileSync(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
     } else if (sub === "pull") {
-      const url = resolveEmbedPullUrl();
-      if (!url) {
-        // Clean, actionable failure — the official asset is not published yet.
-        process.stderr.write(
-          "codeindex: no model URL configured. The official static-embedding asset is not published yet.\n" +
-            "Set CODEINDEX_EMBED_URL to a model.json URL (optionally CODEINDEX_EMBED_DIR as the destination), then re-run `codeindex embed pull`.\n",
-        );
-        process.exitCode = 1;
-        return;
-      }
+      // Default: the official published asset + its pinned sha256. A user-set
+      // CODEINDEX_EMBED_URL overrides both (mirror/custom model, no verification).
+      const { url, sha256 } = resolveEmbedPullUrl();
       const destDir = process.env.CODEINDEX_EMBED_DIR ?? join(flags.repo, ".codeindex", "models");
       mkdirSync(destDir, { recursive: true });
       process.stderr.write(`codeindex: fetching model from ${url} → ${join(destDir, "model.json")}\n`);
-      const res = await fetch(url);
-      if (!res.ok) {
-        process.stderr.write(`codeindex: pull failed — HTTP ${res.status} from ${url}\n`);
+      let body: string;
+      try {
+        // Follows redirects (GitHub → CDN) and verifies sha256 for the default asset.
+        body = await fetchEmbedModel(url, sha256);
+      } catch (e) {
+        process.stderr.write(`codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`);
         process.exitCode = 1;
         return;
       }
-      const body = await res.text();
       try {
         JSON.parse(body);
       } catch {

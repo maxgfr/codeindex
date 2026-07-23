@@ -1,10 +1,22 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
-import { EMBED_VERSION, loadEmbedModel, resolveEmbedModelDir, type StaticEmbedModel } from "../src/embed/model.js";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_EMBED_URL,
+  EMBED_ASSET_SHA256,
+  EMBED_VERSION,
+  fetchEmbedModel,
+  loadEmbedModel,
+  resolveEmbedModelDir,
+  resolveEmbedPullUrl,
+  type StaticEmbedModel,
+} from "../src/embed/model.js";
 import { basicTokenize, encode, intDot, roundHalfToEven, tokenize, wordpiece } from "../src/embed/encode.js";
 import { buildEmbeddingIndex, deserializeEmbeddings, serializeEmbeddings } from "../src/embed/index.js";
 import { searchSemantic } from "../src/embed/search.js";
@@ -288,5 +300,125 @@ describe("CLI embed + search --semantic", () => {
     const parsed = JSON.parse(stdout) as { file: string; semanticSymbol?: string }[];
     expect(parsed.length).toBeGreaterThan(0);
     expect(parsed.every((r) => r.semanticSymbol === undefined)).toBe(true);
+  });
+});
+
+// Serve `body` (with `status`) on a throwaway loopback port for one pull.
+async function serveOnce(body: string, status = 200): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(body);
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    url: `http://127.0.0.1:${port}/model.json`,
+    close: () =>
+      new Promise<void>((r) => {
+        server.closeAllConnections?.();
+        server.close(() => r());
+      }),
+  };
+}
+
+describe("embed pull — default URL + sha256 verification", () => {
+  const prevUrl = process.env.CODEINDEX_EMBED_URL;
+  const prevDir = process.env.CODEINDEX_EMBED_DIR;
+  afterEach(() => {
+    if (prevUrl === undefined) delete process.env.CODEINDEX_EMBED_URL;
+    else process.env.CODEINDEX_EMBED_URL = prevUrl;
+    if (prevDir === undefined) delete process.env.CODEINDEX_EMBED_DIR;
+    else process.env.CODEINDEX_EMBED_DIR = prevDir;
+  });
+
+  it("resolveEmbedPullUrl falls back to the built-in default WITH the pinned sha256 when env is unset", () => {
+    delete process.env.CODEINDEX_EMBED_URL;
+    const r = resolveEmbedPullUrl();
+    expect(r.url).toBe(DEFAULT_EMBED_URL);
+    expect(r.sha256).toBe(EMBED_ASSET_SHA256);
+    expect(DEFAULT_EMBED_URL).toMatch(/^https:\/\/github\.com\/.*\/releases\/download\/embed-model-v1\/model\.json$/);
+    expect(EMBED_ASSET_SHA256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("CODEINDEX_EMBED_URL wins and carries NO sha256 (custom mirror keeps the un-verified behavior)", () => {
+    process.env.CODEINDEX_EMBED_URL = "  https://example.test/m.json  ";
+    const r = resolveEmbedPullUrl();
+    expect(r.url).toBe("https://example.test/m.json"); // trimmed
+    expect(r.sha256).toBeUndefined();
+  });
+
+  it("fetchEmbedModel returns the body when the sha256 matches (default-URL path)", async () => {
+    const body = JSON.stringify({ modelId: "x", dim: 1, vocab: ["a"], weights: [[1]] });
+    const sha = createHash("sha256").update(body).digest("hex");
+    const srv = await serveOnce(body);
+    try {
+      await expect(fetchEmbedModel(srv.url, sha)).resolves.toBe(body);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("fetchEmbedModel THROWS on a sha256 mismatch (corrupt/tampered default asset → nothing usable returned)", async () => {
+    const body = JSON.stringify({ modelId: "x", dim: 1, vocab: ["a"], weights: [[1]] });
+    const srv = await serveOnce(body);
+    try {
+      await expect(fetchEmbedModel(srv.url, "0".repeat(64))).rejects.toThrow(/sha256 mismatch/);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("fetchEmbedModel with NO expected sha256 (custom URL) skips verification entirely", async () => {
+    const body = "not even json but the fetch helper does not care";
+    const srv = await serveOnce(body);
+    try {
+      await expect(fetchEmbedModel(srv.url)).resolves.toBe(body);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("fetchEmbedModel throws on a non-2xx response", async () => {
+    const srv = await serveOnce("nope", 404);
+    try {
+      await expect(fetchEmbedModel(srv.url, undefined)).rejects.toThrow(/HTTP 404/);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("CLI `embed pull` fetches from CODEINDEX_EMBED_URL, writes model.json, and `embed status` reports it", async () => {
+    // The mock server runs in THIS process, so the child must be spawned
+    // ASYNCHRONOUSLY — execFileSync would block the event loop and the server
+    // could never answer the child's fetch.
+    const run = (args: string[], env: NodeJS.ProcessEnv): Promise<string> =>
+      new Promise((resolve, reject) => {
+        execFile(process.execPath, [CLI, ...args], { encoding: "utf8", env }, (err, stdout) => {
+          if (err) reject(err);
+          else resolve(stdout);
+        });
+      });
+    const fixture = readFileSync(join(MODEL_DIR, "model.json"), "utf8");
+    const srv = await serveOnce(fixture);
+    const dest = mkdtempSync(join(tmpdir(), "ci-embed-pull-"));
+    tmpDirs.push(dest);
+    try {
+      const env = { ...process.env, CODEINDEX_EMBED_URL: srv.url, CODEINDEX_EMBED_DIR: dest };
+      delete (env as Record<string, string | undefined>).CODEINDEX_EMBED_ENDPOINT;
+      await run(["embed", "pull", "--repo", REPO], env);
+      expect(existsSync(join(dest, "model.json"))).toBe(true);
+      const status = await run(["embed", "status", "--repo", REPO], env);
+      const parsed = JSON.parse(status) as { mode: string; model: { present: boolean; modelId?: string } };
+      expect(parsed.mode).toBe("static");
+      expect(parsed.model.present).toBe(true);
+      expect(parsed.model.modelId).toBe("codeindex-fixture-tiny-8d");
+    } finally {
+      await srv.close();
+    }
+  });
+
+  const tmpDirs: string[] = [];
+  afterAll(() => {
+    for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
   });
 });
