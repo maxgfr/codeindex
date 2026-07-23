@@ -75,6 +75,20 @@ codeindex callers --repo .                    # per-symbol caller index
 codeindex grep    'pattern' --repo .
 ```
 
+## Search
+
+`codeindex search "<query>" --repo .` ranks files with keyless BM25 over symbol
+names, path segments, markdown headings and summaries. A query term that
+matches nothing in the corpus (zero document frequency) gets a deterministic
+**trigram fuzzy fallback** — typo tolerance without embeddings: the term is
+compared to the corpus vocabulary by character-trigram Dice similarity
+(threshold 0.6, top-3 candidates, contribution scaled by the Dice score so a
+near-miss always ranks below an exact hit). Terms that already match anything
+are never touched, so an existing query stays byte-identical. Enabled by
+default; disable with `--no-fuzzy` (CLI) or `fuzzy: false` (library/MCP
+`SearchOptions.fuzzy`); results carry an additive `fuzzyTerms` field when the
+fallback contributed.
+
 ## Use as an MCP server
 
 `codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio —

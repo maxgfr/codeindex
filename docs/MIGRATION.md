@@ -55,6 +55,15 @@ does; nobody else should).
 `meta: { version, schemaVersion }` so a consumer stamps its own identity into
 artifacts it persists (ultraindex does this to keep its graph.json lineage).
 
+## v2.9.0 — `search` trigram fuzzy fallback
+
+New, purely additive: `SearchOptions.fuzzy?: boolean` (default `true`) and
+`SearchResult.fuzzyTerms?: string[]` (present only when the fallback
+contributed). A query term is only ever expanded when it has zero document
+frequency in the corpus, so any query where every term already matched keeps
+producing byte-identical output — **no re-pin required**, no action needed
+from existing consumers. Pass `fuzzy: false` (or CLI `--no-fuzzy`) to opt out.
+
 ## Per-skill mapping (what to replace with what)
 
 | Skill | Replace | With (engine export) |

@@ -487,12 +487,14 @@ declare function grepRepo(root: string, pattern: string, opts?: GrepOptions): Se
 
 interface SearchOptions {
     limit?: number;
+    fuzzy?: boolean;
 }
 interface SearchResult {
     file: string;
     score: number;
     matchedTerms: string[];
     topSymbols: string[];
+    fuzzyTerms?: string[];
 }
 declare function subtokens(raw: string): string[];
 declare function searchIndex(scan: RepoScan, query: string, opts?: SearchOptions): SearchResult[];

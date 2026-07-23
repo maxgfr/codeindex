@@ -266,7 +266,7 @@ const TOOLS = [
   {
     name: "search",
     description:
-      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols.',
+      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`.',
     inputSchema: {
       type: "object",
       properties: {
@@ -274,6 +274,11 @@ const TOOLS = [
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
         limit: { type: "number", description: "Max results (default 20)" },
+        fuzzy: {
+          type: "boolean",
+          description:
+            "Trigram fuzzy fallback for query terms with zero document frequency (default true)",
+        },
       },
       required: ["repo", "query"],
     },
@@ -437,6 +442,7 @@ function callTool(name: string, args: Record<string, unknown>): string {
     if (!query) throw new Error("`query` is required");
     const results = searchIndex(scanRepo(repo, scanOpts), query, {
       limit: typeof args.limit === "number" ? args.limit : undefined,
+      fuzzy: typeof args.fuzzy === "boolean" ? args.fuzzy : undefined,
     });
     return JSON.stringify(results, null, 2);
   }

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { searchIndex, subtokens } from "../src/bm25.js";
+import { charTrigrams, diceCoefficient, searchIndex, subtokens } from "../src/bm25.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
 
@@ -136,6 +136,69 @@ describe("searchIndex", () => {
     expect(a.length).toBeGreaterThan(0);
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
     expect(a[0]!.file).toBe("src/client.ts");
+  });
+});
+
+describe("charTrigrams / diceCoefficient", () => {
+  it("pads with two boundary sentinels on each side before slicing 3-grams", () => {
+    expect(charTrigrams("term")).toEqual(new Set(["^^t", "^te", "ter", "erm", "rm$", "m$$"]));
+  });
+
+  it("scores identical sets at 1 and disjoint sets at 0", () => {
+    expect(diceCoefficient(charTrigrams("auth"), charTrigrams("auth"))).toBe(1);
+    expect(diceCoefficient(charTrigrams("auth"), charTrigrams("zzzzz"))).toBe(0);
+  });
+});
+
+describe("searchIndex fuzzy trigram fallback (df==0 query terms)", () => {
+  it('RED→GREEN: a typo ("authh") expands to the vocab term "auth" (Dice >= 0.6) and finds the file', () => {
+    const scan = scanOf([
+      file("src/auth/service.ts", { symbols: ["AuthService", "verifyAuthToken"] }),
+      file("src/billing/invoice.ts", { symbols: ["InvoiceBuilder"] }),
+    ]);
+    const results = searchIndex(scan, "authh");
+    expect(results.length).toBe(1);
+    expect(results[0]!.file).toBe("src/auth/service.ts");
+    expect(results[0]!.matchedTerms).toEqual([]); // "authh" itself never appears verbatim
+    expect(results[0]!.topSymbols).toEqual(["AuthService", "verifyAuthToken"]);
+    expect(results[0]!.fuzzyTerms).toEqual(["authh"]);
+    expect(results[0]!.score).toBeGreaterThan(0);
+  });
+
+  it("does not fuzzy-match a term with low character-trigram similarity (stays unmatched)", () => {
+    const scan = scanOf([file("src/auth/service.ts", { symbols: ["AuthService"] })]);
+    expect(searchIndex(scan, "zzzzzzz")).toEqual([]);
+  });
+
+  it("`fuzzy: false` disables the fallback: the same typo now yields no result", () => {
+    const scan = scanOf([file("src/auth/service.ts", { symbols: ["AuthService"] })]);
+    expect(searchIndex(scan, "authh", { fuzzy: false })).toEqual([]);
+  });
+
+  it("is deterministic across two independent scans of the same repo (fuzzy path included)", () => {
+    const a = searchIndex(scanRepo(REPO), "clientt"); // typo of the real fixture term "client"
+    const b = searchIndex(scanRepo(REPO), "clientt");
+    expect(a.length).toBeGreaterThan(0);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    expect(a[0]!.file).toBe("src/client.ts");
+    expect(a[0]!.fuzzyTerms).toEqual(["clientt"]);
+  });
+
+  it("REGRESSION: a query whose every term already matches (df>0) stays byte-identical whether fuzzy is on or off", () => {
+    const scan = scanOf([
+      file("src/http/client.ts", { symbols: ["HttpClient", "retryRequest"] }),
+      file("src/http/server.ts", { symbols: ["HttpServer"] }),
+      file("src/queue/retry.ts", { symbols: ["retryLater"] }),
+    ]);
+    const withDefault = searchIndex(scan, "http client retry");
+    const withFuzzyExplicit = searchIndex(scan, "http client retry", { fuzzy: true });
+    const withFuzzyOff = searchIndex(scan, "http client retry", { fuzzy: false });
+    const json = JSON.stringify(withDefault);
+    expect(JSON.stringify(withFuzzyExplicit)).toBe(json);
+    expect(JSON.stringify(withFuzzyOff)).toBe(json);
+    expect(json).not.toContain("fuzzyTerms");
+    expect(withDefault[0]!.file).toBe("src/http/client.ts");
+    expect(withDefault[0]!.matchedTerms).toEqual(["client", "http", "retry"]);
   });
 });
 

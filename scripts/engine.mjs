@@ -9210,6 +9210,27 @@ function buildDocs(scan2) {
   }
   return docs;
 }
+function charTrigrams(term) {
+  const padded = `^^${term}$$`;
+  const grams = /* @__PURE__ */ new Set();
+  for (let i2 = 0; i2 + 3 <= padded.length; i2++) grams.add(padded.slice(i2, i2 + 3));
+  return grams;
+}
+function diceCoefficient(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const g of a) if (b.has(g)) inter++;
+  return 2 * inter / (a.size + b.size);
+}
+function buildTrigramIndex(docs) {
+  const index = /* @__PURE__ */ new Map();
+  for (const d of docs) {
+    for (const term of d.tf.keys()) {
+      if (!index.has(term)) index.set(term, charTrigrams(term));
+    }
+  }
+  return index;
+}
 function searchIndex(scan2, query, opts = {}) {
   const terms = [];
   const seen = /* @__PURE__ */ new Set();
@@ -9233,35 +9254,81 @@ function searchIndex(scan2, query, opts = {}) {
     for (const d of docs) if (d.tf.has(t)) count++;
     df.set(t, count);
   }
+  const fuzzyEnabled = opts.fuzzy ?? true;
+  const fuzzyCandidates = /* @__PURE__ */ new Map();
+  if (fuzzyEnabled) {
+    const unmatched = terms.filter((t) => df.get(t) === 0);
+    if (unmatched.length) {
+      const trigramIndex = buildTrigramIndex(docs);
+      for (const t of unmatched) {
+        const grams = charTrigrams(t);
+        const candidates = [];
+        for (const [vocabTerm, vocabGrams] of trigramIndex) {
+          const dice = diceCoefficient(grams, vocabGrams);
+          if (dice >= FUZZY_DICE_THRESHOLD) candidates.push({ term: vocabTerm, dice });
+        }
+        candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
+        fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
+      }
+    }
+  }
+  const vocabDf = /* @__PURE__ */ new Map();
+  const dfOfVocabTerm = (term) => {
+    const known = df.get(term) ?? vocabDf.get(term);
+    if (known !== void 0) return known;
+    let count = 0;
+    for (const d of docs) if (d.tf.has(term)) count++;
+    vocabDf.set(term, count);
+    return count;
+  };
   const results = [];
   for (const d of docs) {
     let score = 0;
     const matched = [];
+    const symbolTerms = /* @__PURE__ */ new Set();
+    const fuzzyHit = /* @__PURE__ */ new Set();
     for (const t of terms) {
       const tf = d.tf.get(t);
-      if (!tf) continue;
-      matched.push(t);
-      const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
-      score += idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * d.len / avgLen));
+      if (tf) {
+        matched.push(t);
+        symbolTerms.add(t);
+        const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
+        score += idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * d.len / avgLen));
+        continue;
+      }
+      const candidates = fuzzyCandidates.get(t);
+      if (!candidates) continue;
+      for (const cand of candidates) {
+        const ctf = d.tf.get(cand.term);
+        if (!ctf) continue;
+        const cdf = dfOfVocabTerm(cand.term);
+        const idf = Math.log(1 + (n - cdf + 0.5) / (cdf + 0.5));
+        const contribution = idf * (ctf * (K1 + 1)) / (ctf + K1 * (1 - B + B * d.len / avgLen));
+        score += contribution * cand.dice;
+        symbolTerms.add(cand.term);
+        fuzzyHit.add(t);
+      }
     }
-    if (!matched.length) continue;
+    if (!matched.length && !fuzzyHit.size) continue;
     const scored = d.symbols.map((name2) => {
       const toks = new Set(subtokens(name2));
       let hits = 0;
-      for (const t of matched) if (toks.has(t)) hits++;
+      for (const t of symbolTerms) if (toks.has(t)) hits++;
       return { name: name2, hits };
     }).filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits || byStr(a.name, b.name));
-    results.push({
+    const result = {
       file: d.file,
       score: Number(score.toFixed(4)),
       matchedTerms: matched.sort(byStr),
       topSymbols: scored.slice(0, TOP_SYMBOLS).map((s) => s.name)
-    });
+    };
+    if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
+    results.push(result);
   }
   results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
   return results.slice(0, opts.limit ?? DEFAULT_LIMIT);
 }
-var K1, B, DEFAULT_LIMIT, TOP_SYMBOLS;
+var K1, B, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP;
 var init_bm25 = __esm({
   "src/bm25.ts"() {
     "use strict";
@@ -9271,6 +9338,8 @@ var init_bm25 = __esm({
     B = 0.75;
     DEFAULT_LIMIT = 20;
     TOP_SYMBOLS = 5;
+    FUZZY_DICE_THRESHOLD = 0.6;
+    FUZZY_CAP = 3;
   }
 });
 
@@ -9803,7 +9872,8 @@ function callTool(name2, args2) {
     const query = str(args2.query);
     if (!query) throw new Error("`query` is required");
     const results = searchIndex(scanRepo(repo, scanOpts), query, {
-      limit: typeof args2.limit === "number" ? args2.limit : void 0
+      limit: typeof args2.limit === "number" ? args2.limit : void 0,
+      fuzzy: typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0
     });
     return JSON.stringify(results, null, 2);
   }
@@ -10105,14 +10175,18 @@ var init_mcp = __esm({
       },
       {
         name: "search",
-        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols.',
+        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`.',
         inputSchema: {
           type: "object",
           properties: {
             ...repoProp,
             ...scopeProps,
             query: { type: "string", description: "Natural-language or identifier query" },
-            limit: { type: "number", description: "Max results (default 20)" }
+            limit: { type: "number", description: "Max results (default 20)" },
+            fuzzy: {
+              type: "boolean",
+              description: "Trigram fuzzy fallback for query terms with zero document frequency (default true)"
+            }
           },
           required: ["repo", "query"]
         }
@@ -10606,12 +10680,14 @@ Flags:
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, \u2026}])
   --limit <n>         Max results for \`search\` (default 20)
+  --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
+                      with zero document frequency (default: enabled)
   --recall            \`callers\`: recall-oriented binding (issue #7) \u2014 relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
 `;
 function parseFlags(args2) {
-  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false };
+  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true };
   for (let i2 = 0; i2 < args2.length; i2++) {
     const a = args2[i2];
     const next = () => {
@@ -10643,6 +10719,7 @@ function parseFlags(args2) {
     else if (a === "--since") flags2.since = next();
     else if (a === "--config") flags2.config = resolve(next());
     else if (a === "--limit") flags2.limit = num();
+    else if (a === "--no-fuzzy") flags2.fuzzy = false;
     else if (a === "--recall") flags2.recall = true;
     else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
     else throw new Error(`unknown flag: ${a}`);
@@ -10745,7 +10822,7 @@ async function runCli(argv) {
   } else if (cmd === "search") {
     if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
-    const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit });
+    const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
     emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");

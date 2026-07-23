@@ -8,6 +8,14 @@
 // the query reuses util keywords, so query and haystack always tokenize alike.
 // Deterministic: files are scored in scan order (sorted by rel), scores are
 // fixed to 4 decimal places, and ties break by path.
+//
+// Trigram fuzzy fallback (v2.9.0): a query term that matches NOTHING in the
+// corpus (document frequency == 0 — checked STRICTLY, so any term that
+// already matches anywhere is never touched) is expanded against the corpus
+// vocabulary via character-trigram Dice similarity (threshold 0.6, top-3
+// candidates, deterministic tie-break). This keeps every currently-matching
+// query byte-identical: the expansion only ever engages on terms that would
+// otherwise contribute nothing.
 import type { RepoScan } from "./scan.js";
 import { foldText, keywords } from "./util.js";
 import { byStr } from "./sort.js";
@@ -16,10 +24,17 @@ const K1 = 1.2;
 const B = 0.75;
 const DEFAULT_LIMIT = 20;
 const TOP_SYMBOLS = 5;
+const FUZZY_DICE_THRESHOLD = 0.6;
+const FUZZY_CAP = 3;
 
 export interface SearchOptions {
   // Maximum results returned (default 20).
   limit?: number;
+  // Trigram fuzzy fallback for query terms with zero document frequency
+  // (default true). Safe as an always-on default: the df==0 gate means it
+  // only ever engages on terms that would otherwise match nothing, so a
+  // query where every term already hits is completely unaffected.
+  fuzzy?: boolean;
 }
 
 export interface SearchResult {
@@ -27,6 +42,10 @@ export interface SearchResult {
   score: number; // BM25 score, fixed to 4 decimal places
   matchedTerms: string[]; // query tokens present in this file's document, sorted
   topSymbols: string[]; // symbols whose name matches the most query tokens (cap 5)
+  // Query terms (df==0) resolved via trigram fuzzy fallback that contributed
+  // to this result, sorted. Present only when >=1 term used the fallback —
+  // purely additive, never present for an all-exact-match result.
+  fuzzyTerms?: string[];
 }
 
 // Split an identifier/phrase into lowercase, diacritic-folded subtokens:
@@ -87,6 +106,39 @@ function buildDocs(scan: RepoScan): Doc[] {
   return docs;
 }
 
+// Character trigrams of a token, padded with two boundary sentinels on each
+// side (pg_trgm-style: "^^t…m$$") so short prefix/suffix runs still produce
+// shared grams. Deduplicated into a Set — a repeated gram doesn't inflate
+// Dice similarity.
+export function charTrigrams(term: string): Set<string> {
+  const padded = `^^${term}$$`;
+  const grams = new Set<string>();
+  for (let i = 0; i + 3 <= padded.length; i++) grams.add(padded.slice(i, i + 3));
+  return grams;
+}
+
+// Dice coefficient between two trigram sets: 2|A∩B| / (|A|+|B|). 0 when
+// either side is empty (no divide-by-zero).
+export function diceCoefficient(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const g of a) if (b.has(g)) inter++;
+  return (2 * inter) / (a.size + b.size);
+}
+
+// Trigram index of the corpus vocabulary: every distinct doc token mapped to
+// its trigram set. Built LAZILY by searchIndex — only when >=1 query term has
+// df==0 — so a fully-matched query never pays this cost.
+function buildTrigramIndex(docs: Doc[]): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  for (const d of docs) {
+    for (const term of d.tf.keys()) {
+      if (!index.has(term)) index.set(term, charTrigrams(term));
+    }
+  }
+  return index;
+}
+
 // Rank the scanned files against a natural-language (or identifier) query.
 // Pure and deterministic: same scan + query → the same results, byte-for-byte.
 export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions = {}): SearchResult[] {
@@ -118,36 +170,93 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
     df.set(t, count);
   }
 
+  // Fuzzy fallback: STRICT df==0 gate — a term that matches anywhere, even
+  // once, is never expanded. The trigram index of the corpus vocabulary is
+  // built lazily, only when at least one term needs it, so a fully-matched
+  // query (the common case) pays zero extra cost and stays byte-identical.
+  const fuzzyEnabled = opts.fuzzy ?? true;
+  const fuzzyCandidates = new Map<string, { term: string; dice: number }[]>();
+  if (fuzzyEnabled) {
+    const unmatched = terms.filter((t) => df.get(t) === 0);
+    if (unmatched.length) {
+      const trigramIndex = buildTrigramIndex(docs);
+      for (const t of unmatched) {
+        const grams = charTrigrams(t);
+        const candidates: { term: string; dice: number }[] = [];
+        for (const [vocabTerm, vocabGrams] of trigramIndex) {
+          const dice = diceCoefficient(grams, vocabGrams);
+          if (dice >= FUZZY_DICE_THRESHOLD) candidates.push({ term: vocabTerm, dice });
+        }
+        // Deterministic: similarity desc, then vocab term asc.
+        candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
+        fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
+      }
+    }
+  }
+  // df cache for expanded vocab terms (distinct from query-term df above).
+  const vocabDf = new Map<string, number>();
+  const dfOfVocabTerm = (term: string): number => {
+    const known = df.get(term) ?? vocabDf.get(term);
+    if (known !== undefined) return known;
+    let count = 0;
+    for (const d of docs) if (d.tf.has(term)) count++;
+    vocabDf.set(term, count);
+    return count;
+  };
+
   const results: SearchResult[] = [];
   for (const d of docs) {
     let score = 0;
     const matched: string[] = [];
+    const symbolTerms = new Set<string>(); // matched ∪ fuzzy-expanded vocab terms, for topSymbols ranking
+    const fuzzyHit = new Set<string>(); // original query terms resolved via fuzzy fallback, for this doc
     for (const t of terms) {
       const tf = d.tf.get(t);
-      if (!tf) continue;
-      matched.push(t);
-      const idf = Math.log(1 + (n - df.get(t)! + 0.5) / (df.get(t)! + 0.5));
-      score += (idf * (tf * (K1 + 1))) / (tf + K1 * (1 - B + (B * d.len) / avgLen));
+      if (tf) {
+        matched.push(t);
+        symbolTerms.add(t);
+        const idf = Math.log(1 + (n - df.get(t)! + 0.5) / (df.get(t)! + 0.5));
+        score += (idf * (tf * (K1 + 1))) / (tf + K1 * (1 - B + (B * d.len) / avgLen));
+        continue;
+      }
+      // Only ever reached for a term with df==0 (or absent from THIS doc but
+      // matched elsewhere — fuzzyCandidates has no entry for those, so the
+      // lookup below is a no-op and behavior is identical to before v2.9.0).
+      const candidates = fuzzyCandidates.get(t);
+      if (!candidates) continue;
+      for (const cand of candidates) {
+        const ctf = d.tf.get(cand.term);
+        if (!ctf) continue;
+        const cdf = dfOfVocabTerm(cand.term);
+        const idf = Math.log(1 + (n - cdf + 0.5) / (cdf + 0.5));
+        const contribution = (idf * (ctf * (K1 + 1))) / (ctf + K1 * (1 - B + (B * d.len) / avgLen));
+        score += contribution * cand.dice; // near-miss always scores below an exact hit (dice < 1)
+        symbolTerms.add(cand.term);
+        fuzzyHit.add(t);
+      }
     }
-    if (!matched.length) continue;
+    if (!matched.length && !fuzzyHit.size) continue;
 
-    // Symbols ranked by how many query tokens their name carries, then by name.
+    // Symbols ranked by how many query tokens (exact or fuzzy-expanded) their
+    // name carries, then by name.
     const scored = d.symbols
       .map((name) => {
         const toks = new Set(subtokens(name));
         let hits = 0;
-        for (const t of matched) if (toks.has(t)) hits++;
+        for (const t of symbolTerms) if (toks.has(t)) hits++;
         return { name, hits };
       })
       .filter((s) => s.hits > 0)
       .sort((a, b) => b.hits - a.hits || byStr(a.name, b.name));
 
-    results.push({
+    const result: SearchResult = {
       file: d.file,
       score: Number(score.toFixed(4)),
       matchedTerms: matched.sort(byStr),
       topSymbols: scored.slice(0, TOP_SYMBOLS).map((s) => s.name),
-    });
+    };
+    if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
+    results.push(result);
   }
 
   // Rounded score first (so 4-dp ties resolve stably), then path.

@@ -63,6 +63,8 @@ Flags:
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20)
+  --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
+                      with zero document frequency (default: enabled)
   --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
@@ -84,13 +86,14 @@ interface CliFlags {
   budgetTokens?: number;
   config?: string; // rules config path
   limit?: number; // search result cap
+  fuzzy: boolean; // search: trigram fuzzy fallback for df==0 terms (default true)
   recall?: boolean; // callers: recall-oriented binding
   projectRoot?: string; // scip: override Metadata.project_root
   positional?: string; // e.g. the grep pattern or search query
 }
 
 function parseFlags(args: string[]): CliFlags {
-  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false };
+  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const next = (): string => {
@@ -122,6 +125,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--since") flags.since = next();
     else if (a === "--config") flags.config = resolve(next());
     else if (a === "--limit") flags.limit = num();
+    else if (a === "--no-fuzzy") flags.fuzzy = false;
     else if (a === "--recall") flags.recall = true;
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
@@ -234,7 +238,7 @@ export async function runCli(argv: string[]): Promise<void> {
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan = scanRepo(flags.repo, scanOptions(flags));
-    const results = searchIndex(scan, flags.positional, { limit: flags.limit });
+    const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy });
     emit(JSON.stringify(results, null, 2) + "\n", flags.out);
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
