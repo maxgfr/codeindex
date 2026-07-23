@@ -16,7 +16,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.11.0";
     SCHEMA_VERSION = 4;
-    EXTRACTOR_VERSION = 7;
+    EXTRACTOR_VERSION = 8;
   }
 });
 
@@ -6390,8 +6390,9 @@ function extractReexports(rel, content, localSymbols) {
   }
   return out2;
 }
-function collectCallsRegex(content) {
+function collectCallsRegex(content, symbols = []) {
   const out2 = /* @__PURE__ */ new Map();
+  const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
   const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i2 = 0; i2 < lines.length && out2.size < 512; i2++) {
@@ -6406,6 +6407,7 @@ function collectCallsRegex(content) {
       if (name2.length < 2 || CALL_KEYWORDS.has(name2)) continue;
       if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
       const key = `${name2} ${i2 + 1}`;
+      if (ownDefLines.has(key)) continue;
       if (!out2.has(key)) out2.set(key, receiver ? { name: name2, line: i2 + 1, receiver } : { name: name2, line: i2 + 1 });
     }
   }
@@ -6426,7 +6428,9 @@ function extractCode(rel, ext, content) {
     idents: ast?.idents,
     // AST call sites when a grammar parsed the file; the conservative regex
     // collector otherwise, so caller indexes exist without the wasm sidecar.
-    calls: ast ? ast.calls : collectCallsRegex(content),
+    // `symbols` (this file's own regex-extracted defs) lets the collector
+    // exclude a definition's own name+line from its call candidates.
+    calls: ast ? ast.calls : collectCallsRegex(content, symbols),
     importedNames: ast?.importedNames
   };
 }

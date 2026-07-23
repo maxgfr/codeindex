@@ -331,8 +331,22 @@ const DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bm
 // immediate `receiver.` prefix is captured too (`axios.get(` → receiver
 // "axios"; `a.b.c(` → receiver "b" — the group anchors to the segment right
 // before the called name); bare calls carry no receiver.
-function collectCallsRegex(content: string): { name: string; line: number; receiver?: string }[] {
+//
+// `symbols` is the file's OWN regex-extracted symbols (name + definition
+// line) — a call candidate whose (name, line) exactly matches one of them is
+// the symbol's own definition line, not a call, and is excluded. DEF_INTRODUCERS
+// already excludes definitions that read `function foo(`/`def foo(`/etc., but
+// C/C++ function definitions have no such introducer (`void load(void) {`) —
+// the bare name reads exactly like a call to itself on its own definition
+// line. Exported for direct testing (extraction-v8.test.ts): once a wasm
+// sidecar/grammar is loaded, extractCode never reaches this path for C/C++, so
+// tests exercise it directly rather than through extractCode.
+export function collectCallsRegex(
+  content: string,
+  symbols: Pick<CodeSymbol, "name" | "line">[] = [],
+): { name: string; line: number; receiver?: string }[] {
   const out = new Map<string, { name: string; line: number; receiver?: string }>();
+  const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
   const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i = 0; i < lines.length && out.size < 512; i++) {
@@ -350,6 +364,7 @@ function collectCallsRegex(content: string): { name: string; line: number; recei
       if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
       if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
       const key = `${name} ${i + 1}`;
+      if (ownDefLines.has(key)) continue;
       if (!out.has(key)) out.set(key, receiver ? { name, line: i + 1, receiver } : { name, line: i + 1 });
     }
   }
@@ -382,7 +397,9 @@ export function extractCode(rel: string, ext: string, content: string): CodeInfo
     idents: ast?.idents,
     // AST call sites when a grammar parsed the file; the conservative regex
     // collector otherwise, so caller indexes exist without the wasm sidecar.
-    calls: ast ? ast.calls : collectCallsRegex(content),
+    // `symbols` (this file's own regex-extracted defs) lets the collector
+    // exclude a definition's own name+line from its call candidates.
+    calls: ast ? ast.calls : collectCallsRegex(content, symbols),
     importedNames: ast?.importedNames,
   };
 }

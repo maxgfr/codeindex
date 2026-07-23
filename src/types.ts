@@ -27,8 +27,12 @@ export const SCHEMA_VERSION = 4;
 // named after the file stem, `export default Foo` marking the declaration);
 // v7 makes an export-alias symbol (`export { b as c }`) mirror the aliased
 // local declaration's own kind (e.g. "function") instead of the generic
-// "reexport" when it resolves in-file.
-export const EXTRACTOR_VERSION = 7;
+// "reexport" when it resolves in-file. v8 fixes the C/C++ regex tier
+// reporting a function DEFINITION as a call to itself (`void load(void) {`
+// yielding a spurious call `load@<defline>`, found during the ultrasec
+// consumer migration) by excluding call candidates whose name+line match one
+// of the file's own extracted symbols.
+export const EXTRACTOR_VERSION = 8;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
