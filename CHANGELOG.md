@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.11.1](https://github.com/maxgfr/codeindex/compare/v2.11.0...v2.11.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **extract:** emit export-alias symbols from extractSymbols too ([a730cc4](https://github.com/maxgfr/codeindex/commit/a730cc455de2e3b7eb86710635fd8e3b7d41a5b0))
+* **extract:** stop emitting C/C++ function definitions as call sites ([994cd7f](https://github.com/maxgfr/codeindex/commit/994cd7f1b460e48d517f43d5ab31ce7808f6da73))
+* **extract:** suppress only the definition's own token when excluding self-calls ([0cd8b8a](https://github.com/maxgfr/codeindex/commit/0cd8b8a75827995643e144d29af01119def5e84d))
+
 # [2.11.0](https://github.com/maxgfr/codeindex/compare/v2.10.0...v2.11.0) (2026-07-23)
 
 
