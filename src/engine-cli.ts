@@ -19,6 +19,9 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
+import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, resolveEmbedPullUrl } from "./embed/model.js";
+import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
+import { searchSemantic } from "./embed/search.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
@@ -37,7 +40,14 @@ Commands:
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
   search      Keyless BM25 lexical search over symbol names, path segments,
-              markdown headings and summaries: cli.mjs search "<query>" --repo <dir>
+              markdown headings and summaries: cli.mjs search "<query>" --repo <dir>.
+              --semantic fuses in the deterministic static-embedding tier (RRF)
+              when a model is present; degrades to lexical (exit 0) when absent
+  embed       Deterministic static-embedding tier (opt-in by model asset):
+                embed status   Report the resolved model + EMBED_VERSION (JSON)
+                embed build    Write embeddings.bin into --out <dir> from the repo
+                embed pull     Fetch the model asset into CODEINDEX_EMBED_DIR (or
+                               <repo>/.codeindex/models/) — needs CODEINDEX_EMBED_URL
   rules       Architecture rules (forbidden edges, cycles, orphans) validated
               against the link-graph: --config <codeindex.rules.json>; exits 1
               on any error-severity violation (a CI gate)
@@ -65,6 +75,8 @@ Flags:
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
+  --semantic          \`search\`: RRF-fuse the deterministic static-embedding tier
+                      with lexical (needs a model asset; lexical-only otherwise)
   --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
@@ -87,13 +99,14 @@ interface CliFlags {
   config?: string; // rules config path
   limit?: number; // search result cap
   fuzzy: boolean; // search: trigram fuzzy fallback for df==0 terms (default true)
+  semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
   recall?: boolean; // callers: recall-oriented binding
   projectRoot?: string; // scip: override Metadata.project_root
   positional?: string; // e.g. the grep pattern or search query
 }
 
 function parseFlags(args: string[]): CliFlags {
-  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true };
+  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true, semantic: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const next = (): string => {
@@ -126,6 +139,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--config") flags.config = resolve(next());
     else if (a === "--limit") flags.limit = num();
     else if (a === "--no-fuzzy") flags.fuzzy = false;
+    else if (a === "--semantic") flags.semantic = true;
     else if (a === "--recall") flags.recall = true;
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
@@ -203,7 +217,18 @@ export async function runCli(argv: string[]): Promise<void> {
       cachePath,
       JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n",
     );
-    process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""}\n`);
+    // Deterministic embeddings sidecar: written next to graph.json ONLY when a
+    // model asset is present (opt-in). Silently skipped otherwise — no model, no
+    // embeddings.bin, no impact on the graph/symbols consumers.
+    let embedNote = "";
+    const modelDir = resolveEmbedModelDir(flags.repo);
+    const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+    if (model) {
+      const index = buildEmbeddingIndex(scan, model);
+      writeFileSync(join(outDir, "embeddings.bin"), serializeEmbeddings(index));
+      embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
+    }
+    process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${embedNote}${scan.capped ? " (capped)" : ""}\n`);
   } else if (cmd === "scan") {
     const { scan } = buildIndexArtifacts(flags.repo, scanOptions(flags));
     const summary = {
@@ -238,8 +263,85 @@ export async function runCli(argv: string[]): Promise<void> {
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan = scanRepo(flags.repo, scanOptions(flags));
-    const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy });
-    emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+    if (flags.semantic) {
+      const modelDir = resolveEmbedModelDir(flags.repo);
+      const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+      if (!model) {
+        // Degradation: --semantic without a model → lexical results + a stderr
+        // note, exit 0. The results shape is a superset of the lexical one.
+        process.stderr.write(
+          "codeindex: semantic search unavailable (no embedding model present) — returning lexical results; run `codeindex embed pull` to enable it\n",
+        );
+        const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy });
+        emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+      } else {
+        const index = buildEmbeddingIndex(scan, model);
+        const results = searchSemantic(scan, flags.positional, index, { model, limit: flags.limit, fuzzy: flags.fuzzy });
+        emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+      }
+    } else {
+      const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy });
+      emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+    }
+  } else if (cmd === "embed") {
+    const sub = flags.positional;
+    const modelDir = resolveEmbedModelDir(flags.repo);
+    if (sub === "status") {
+      const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+      const status = {
+        embedVersion: EMBED_VERSION,
+        model: model
+          ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
+          : { present: false },
+        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null,
+      };
+      emit(JSON.stringify(status, null, 2) + "\n", flags.out);
+    } else if (sub === "build") {
+      if (!flags.out) throw new Error("embed build needs --out <dir>");
+      if (!modelDir) {
+        process.stderr.write("codeindex: no embedding model present — run `codeindex embed pull` first (nothing written)\n");
+        process.exitCode = 1;
+        return;
+      }
+      const model = loadEmbedModel(modelDir)!;
+      mkdirSync(flags.out, { recursive: true });
+      const scan = scanRepo(flags.repo, scanOptions(flags));
+      const index = buildEmbeddingIndex(scan, model);
+      writeFileSync(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
+      process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
+    } else if (sub === "pull") {
+      const url = resolveEmbedPullUrl();
+      if (!url) {
+        // Clean, actionable failure — the official asset is not published yet.
+        process.stderr.write(
+          "codeindex: no model URL configured. The official static-embedding asset is not published yet.\n" +
+            "Set CODEINDEX_EMBED_URL to a model.json URL (optionally CODEINDEX_EMBED_DIR as the destination), then re-run `codeindex embed pull`.\n",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join(flags.repo, ".codeindex", "models");
+      mkdirSync(destDir, { recursive: true });
+      process.stderr.write(`codeindex: fetching model from ${url} → ${join(destDir, "model.json")}\n`);
+      const res = await fetch(url);
+      if (!res.ok) {
+        process.stderr.write(`codeindex: pull failed — HTTP ${res.status} from ${url}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      const body = await res.text();
+      try {
+        JSON.parse(body);
+      } catch {
+        process.stderr.write("codeindex: pull failed — response is not a valid model.json (expected JSON)\n");
+        process.exitCode = 1;
+        return;
+      }
+      writeFileSync(join(destDir, "model.json"), body);
+      process.stderr.write(`codeindex: model written to ${join(destDir, "model.json")}\n`);
+    } else {
+      throw new Error("embed needs a subcommand: pull | build | status");
+    }
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));

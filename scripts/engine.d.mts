@@ -499,6 +499,61 @@ interface SearchResult {
 declare function subtokens(raw: string): string[];
 declare function searchIndex(scan: RepoScan, query: string, opts?: SearchOptions): SearchResult[];
 
+declare const EMBED_VERSION = 1;
+interface StaticEmbedModel {
+    modelId: string;
+    dim: number;
+    unk: string;
+    unkId: number;
+    vocabSize: number;
+    vocab: Map<string, number>;
+    weights: Float64Array;
+}
+declare function resolveEmbedModelDir(repo?: string): string | undefined;
+declare function hasEmbedModel(repo?: string): boolean;
+declare function loadEmbedModel(dir?: string): StaticEmbedModel | undefined;
+declare function resolveEmbedPullUrl(): string | undefined;
+
+declare function basicTokenize(text: string): string[];
+declare function wordpiece(word: string, model: StaticEmbedModel): number[];
+declare function tokenize(text: string, model: StaticEmbedModel): number[];
+declare function roundHalfToEven(x: number): number;
+declare function encode(model: StaticEmbedModel, text: string): Int8Array;
+declare function intDot(a: Int8Array, b: Int8Array): number;
+
+interface EmbeddingRecord {
+    file: string;
+    symbol?: string;
+    line?: number;
+    vec: Int8Array;
+}
+interface EmbeddingIndex {
+    embedVersion: number;
+    modelId: string;
+    dim: number;
+    records: EmbeddingRecord[];
+}
+declare function buildEmbeddingIndex(scan: RepoScan, model: StaticEmbedModel): EmbeddingIndex;
+declare function serializeEmbeddings(index: EmbeddingIndex): Uint8Array;
+declare function deserializeEmbeddings(bytes: Uint8Array): EmbeddingIndex;
+
+interface SemanticSearchOptions extends SearchOptions {
+    model?: StaticEmbedModel;
+    rrfK?: number;
+}
+interface SemanticSearchResult extends SearchResult {
+    semanticSymbol?: string;
+}
+declare function searchSemantic(scan: RepoScan, query: string, index: EmbeddingIndex | undefined, opts?: SemanticSearchOptions): SemanticSearchResult[];
+
+interface EmbedEndpointOptions {
+    url?: string;
+    timeoutMs?: number;
+    headers?: Record<string, string>;
+}
+declare function resolveEmbedEndpoint(opts?: EmbedEndpointOptions): string | undefined;
+declare function embedViaEndpoint(texts: string[], opts?: EmbedEndpointOptions): Promise<number[][]>;
+
 type RuleSeverity = "error" | "warn";
 interface ForbiddenEdgeRule {
     name: string;
@@ -623,4 +678,4 @@ declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): M
 
 declare function runCli(argv: string[]): Promise<void>;
 
-export { type ArchRule, type BuildIndexOptions, type BuiltinRule, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DeadSymbol, type DiffFile, type DiffSpec, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type MermaidOptions, type ModuleInfo, type ModuleNode, type RawRef, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type SearchHit, type SearchOptions, type SearchResult, type ShResult, type SurpriseEdge, type SymbolComplexity, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, betweennessOf, buildCallerIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, complexityOfSource, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, detectCommunities, detectWorkspaces, diffFiles, diffHunks, enclosingSymbol, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, findDeadCode, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, have, headCommit, insertAfterSymbol, insertBeforeSymbol, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, listMemories, pagerankOf, parseGitignore, parseRules, rankHotspots, rankedKeywords, readMemory, readText, renderGraphJson, renderMermaid, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveImport, resolveUniqueSymbol, riskHotspots, rrf, runCli, runMcpServer, scanRepo, searchIndex, sh, sha1, shortHash, slugify, subtokens, symbolComplexity, symbolsOverview, testsForModule, tierForPath, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, writeMemory };
+export { type ArchRule, type BuildIndexOptions, type BuiltinRule, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_MAX_FILES, type DeadSymbol, type DiffFile, type DiffSpec, EMBED_VERSION, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type EmbedEndpointOptions, type EmbeddingIndex, type EmbeddingRecord, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type Graph, type GrepOptions, type Hotspot, type Hunk, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type MermaidOptions, type ModuleInfo, type ModuleNode, type RawRef, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type SearchHit, type SearchOptions, type SearchResult, type SemanticSearchOptions, type SemanticSearchResult, type ShResult, type StaticEmbedModel, type SurpriseEdge, type SymbolComplexity, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, basicTokenize, betweennessOf, buildCallerIndex, buildEmbeddingIndex, buildGraph, buildIndexArtifacts, buildModules, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, complexityOfSource, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, deserializeEmbeddings, detectCommunities, detectWorkspaces, diffFiles, diffHunks, embedViaEndpoint, enclosingSymbol, encode, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractMarkdown, extractSymbols, findDeadCode, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarReady, grepRepo, hasEmbedModel, have, headCommit, insertAfterSymbol, insertBeforeSymbol, intDot, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keywords, languageOf, listMemories, loadEmbedModel, pagerankOf, parseGitignore, parseRules, rankHotspots, rankedKeywords, readMemory, readText, renderGraphJson, renderMermaid, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveEmbedEndpoint, resolveEmbedModelDir, resolveEmbedPullUrl, resolveImport, resolveUniqueSymbol, riskHotspots, roundHalfToEven, rrf, runCli, runMcpServer, scanRepo, searchIndex, searchSemantic, serializeEmbeddings, sh, sha1, shortHash, slugify, subtokens, symbolComplexity, symbolsOverview, testsForModule, tierForPath, tokenize, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, wordpiece, writeMemory };

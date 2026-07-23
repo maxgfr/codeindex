@@ -89,6 +89,31 @@ default; disable with `--no-fuzzy` (CLI) or `fuzzy: false` (library/MCP
 `SearchOptions.fuzzy`); results carry an additive `fuzzyTerms` field when the
 fallback contributed.
 
+### Semantic search (deterministic static-embedding tier)
+
+`codeindex search "<query>" --repo . --semantic` RRF-fuses lexical BM25 with a
+**keyless, byte-deterministic** embedding tier. It uses a *static* embedding
+model (a `token → vector` lookup table, no neural forward pass, no wasm): the
+pure-JS encoder tokenizes → mean-pools → L2-normalizes → int8-quantizes
+(round-half-to-even), and ranking is a **pure integer dot product** — so encode
+and the `embeddings.bin` artifact are byte-identical across builds and platforms.
+
+It is **opt-in by asset**: with no model on disk the engine silently stays
+lexical, and `--semantic` without a model returns lexical results on **exit 0**
+(a stderr note only). Models are **never** shipped in the package; a model is
+resolved from `CODEINDEX_EMBED_DIR` or `<repo>/.codeindex/models/`.
+
+```sh
+codeindex embed status --repo .              # is a model active? (JSON)
+codeindex embed build  --repo . --out .codeindex   # write embeddings.bin
+codeindex search "http client retry" --repo . --semantic
+```
+
+`codeindex index` also writes `embeddings.bin` next to `graph.json` when a model
+is present. Fusion reuses the engine's `rrf` helper (k=60); `SCHEMA_VERSION` is
+untouched (a dedicated `EMBED_VERSION` keys the sidecar). Full details:
+[docs/SEMANTIC.md](./docs/SEMANTIC.md).
+
 ## Use as an MCP server
 
 `codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio —

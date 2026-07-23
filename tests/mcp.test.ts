@@ -103,11 +103,13 @@ describe("MCP server", () => {
           arguments: { repo: REPO, rules: [{ name: "no-src-from-pkg", from: "pkg/**", to: "src/**" }] },
         },
       },
+      { id: 9, method: "tools/call", params: { name: "embed_status", arguments: { repo: REPO } } },
+      { id: 10, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "http client retry", semantic: true } } },
     ]);
 
     expect(res.get(1)!.result!.serverInfo!.name).toBe("codeindex");
     const toolNames = res.get(2)!.result!.tools!.map((t) => t.name);
-    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "complexity", "mermaid", "grep", "search", "check_rules"]);
+    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "complexity", "mermaid", "grep", "search", "embed_status", "check_rules"]);
 
     const summary = JSON.parse(res.get(3)!.result!.content![0]!.text) as { fileCount: number };
     expect(summary.fileCount).toBeGreaterThan(0);
@@ -124,6 +126,17 @@ describe("MCP server", () => {
 
     const violations = JSON.parse(res.get(8)!.result!.content![0]!.text) as unknown[];
     expect(Array.isArray(violations)).toBe(true);
+
+    // embed_status: no model asset in the fixture repo → present:false, but the
+    // tier reports its EMBED_VERSION regardless.
+    const status = JSON.parse(res.get(9)!.result!.content![0]!.text) as { model: { present: boolean }; embedVersion: number };
+    expect(status.model.present).toBe(false);
+    expect(typeof status.embedVersion).toBe("number");
+
+    // search with semantic:true and no model → silently degrades to lexical.
+    expect(res.get(10)!.result!.isError).toBeUndefined();
+    const sem = JSON.parse(res.get(10)!.result!.content![0]!.text) as { file: string }[];
+    expect(sem[0]!.file).toBe("src/client.ts");
   }, 20_000);
 
   it("answers every member of a JSON-RPC batch", async () => {

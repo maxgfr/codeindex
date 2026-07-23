@@ -64,6 +64,35 @@ frequency in the corpus, so any query where every term already matched keeps
 producing byte-identical output — **no re-pin required**, no action needed
 from existing consumers. Pass `fuzzy: false` (or CLI `--no-fuzzy`) to opt out.
 
+## v2.10.0 — deterministic static-embedding tier (opt-in)
+
+New, purely additive, and **opt-in by asset presence** — nothing changes for a
+consumer that does not place a model. `SCHEMA_VERSION` is **untouched**;
+embeddings live in a separate `embeddings.bin` sidecar keyed by a dedicated
+`EMBED_VERSION`, so `graph.json` / `symbols.json` consumers are unaffected and
+**no re-pin is required**.
+
+- Activation mirrors the grammar tier: a model asset resolved via
+  `CODEINDEX_EMBED_DIR` or `<repo>/.codeindex/models/` (`resolveEmbedModelDir`).
+  No model → the engine stays lexical, silently. Models are **never** shipped in
+  the npm tarball (`files` unchanged; pack-smoke asserts no model asset).
+- `codeindex index` writes `embeddings.bin` next to `graph.json` **only** when a
+  model is present. `codeindex embed {status,build,pull}` and
+  `codeindex search --semantic` are the CLI surface; MCP gains `embed_status`
+  and a `semantic` property on `search`.
+- Determinism is the point: the pure-JS encoder (fold+lowercase → wordpiece →
+  mean-pool → L2-norm → int8 round-half-to-even at a fixed 1/127 scale) and the
+  **integer** dot-product ranking make encode and `embeddings.bin` byte-identical
+  across builds and platforms — goldens are possible. Fusion with lexical uses
+  the existing `rrf` helper (k=60), never a linear score blend.
+- New exports: `EMBED_VERSION`, `resolveEmbedModelDir`, `hasEmbedModel`,
+  `loadEmbedModel`, `encode`, `buildEmbeddingIndex`, `serializeEmbeddings`,
+  `deserializeEmbeddings`, `searchSemantic`, plus the v2.11-preview
+  `embedViaEndpoint`. See `docs/SEMANTIC.md`.
+
+`--semantic` without a model degrades to lexical results on **exit 0** (a stderr
+note only) — so wiring it on is safe before an asset exists.
+
 ## Per-skill mapping (what to replace with what)
 
 | Skill | Replace | With (engine export) |

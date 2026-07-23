@@ -103,6 +103,27 @@ export type { SearchHit, GrepOptions } from "./grep.js";
 export { searchIndex, subtokens } from "./bm25.js";
 export type { SearchOptions, SearchResult } from "./bm25.js";
 
+// Deterministic static-embedding tier (v2.10.0): a keyless, byte-deterministic
+// semantic search, opt-in by model-asset presence (models NEVER ship in the
+// tarball). EMBED_VERSION is dedicated to the embeddings.bin sidecar and is
+// independent of SCHEMA_VERSION / EXTRACTOR_VERSION.
+export {
+  EMBED_VERSION,
+  resolveEmbedModelDir,
+  hasEmbedModel,
+  loadEmbedModel,
+  resolveEmbedPullUrl,
+} from "./embed/model.js";
+export type { StaticEmbedModel } from "./embed/model.js";
+export { encode, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
+export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings } from "./embed/index.js";
+export type { EmbeddingIndex, EmbeddingRecord } from "./embed/index.js";
+export { searchSemantic } from "./embed/search.js";
+export type { SemanticSearchOptions, SemanticSearchResult } from "./embed/search.js";
+// HTTP endpoint tier (v2.11 preview — NOT wired into the CLI/MCP here).
+export { embedViaEndpoint, resolveEmbedEndpoint } from "./embed/endpoint.js";
+export type { EmbedEndpointOptions } from "./embed/endpoint.js";
+
 // Architecture rules: forbidden edges + cycles/orphans builtins (issue #4).
 export { checkRules, parseRules } from "./rules.js";
 export type { ArchRule, ForbiddenEdgeRule, BuiltinRule, RuleSeverity, RuleViolation } from "./rules.js";

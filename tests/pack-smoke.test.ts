@@ -60,6 +60,15 @@ describe("npm pack contents", () => {
     }
     expect(packFiles.some((f) => f.startsWith("scripts/bench/"))).toBe(false);
   });
+
+  it("ships the embed tier CODE but NEVER a model asset (models stay out of the tarball)", () => {
+    // The deterministic static-embedding tier ships as source (src/embed/*.ts).
+    expect(packFiles.some((f) => /^src\/embed\/.*\.ts$/.test(f))).toBe(true);
+    // …but no model weights/vocab/embeddings ever enter the package.
+    const modelAsset = /(^|\/)(model\.json|embeddings\.bin|weights\.bin)$|\.(safetensors|onnx|gguf)$/;
+    const offenders = packFiles.filter((f) => modelAsset.test(f));
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("Node resolution of the `exports` field", () => {

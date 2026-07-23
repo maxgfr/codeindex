@@ -9343,6 +9343,277 @@ var init_bm25 = __esm({
   }
 });
 
+// src/embed/model.ts
+import { existsSync as existsSync3, readFileSync as readFileSync5 } from "fs";
+import { join as join10 } from "path";
+function resolveEmbedModelDir(repo) {
+  const env = process.env.CODEINDEX_EMBED_DIR;
+  const candidates = [];
+  if (env) candidates.push(env);
+  if (repo) candidates.push(join10(repo, ".codeindex", DEFAULT_EMBED_DIRNAME));
+  candidates.push(join10(process.cwd(), ".codeindex", DEFAULT_EMBED_DIRNAME));
+  for (const c2 of candidates) {
+    if (existsSync3(join10(c2, "model.json"))) return c2;
+  }
+  return void 0;
+}
+function hasEmbedModel(repo) {
+  return resolveEmbedModelDir(repo) !== void 0;
+}
+function loadEmbedModel(dir) {
+  if (!dir) return void 0;
+  const path = join10(dir, "model.json");
+  if (!existsSync3(path)) return void 0;
+  const raw = JSON.parse(readFileSync5(path, "utf8"));
+  const { modelId, dim, vocab, weights } = raw;
+  if (typeof modelId !== "string" || !modelId) throw new Error(`embed model: missing modelId in ${path}`);
+  if (!Number.isInteger(dim) || dim <= 0) throw new Error(`embed model: bad dim ${dim} in ${path}`);
+  if (!Array.isArray(vocab) || !Array.isArray(weights) || vocab.length !== weights.length) {
+    throw new Error(`embed model: vocab/weights length mismatch in ${path}`);
+  }
+  const vocabSize = vocab.length;
+  const flat = new Float64Array(vocabSize * dim);
+  const vmap = /* @__PURE__ */ new Map();
+  for (let i2 = 0; i2 < vocabSize; i2++) {
+    const tok = vocab[i2];
+    if (typeof tok !== "string") throw new Error(`embed model: non-string vocab entry at ${i2}`);
+    if (!vmap.has(tok)) vmap.set(tok, i2);
+    const row = weights[i2];
+    if (!Array.isArray(row) || row.length !== dim) {
+      throw new Error(`embed model: row ${i2} has length ${row?.length}, expected ${dim}`);
+    }
+    for (let d = 0; d < dim; d++) flat[i2 * dim + d] = Number(row[d]);
+  }
+  const unk = typeof raw.unk === "string" ? raw.unk : "[UNK]";
+  const unkId = vmap.has(unk) ? vmap.get(unk) : -1;
+  return { modelId, dim, unk, unkId, vocabSize, vocab: vmap, weights: flat };
+}
+function resolveEmbedPullUrl() {
+  const url = process.env.CODEINDEX_EMBED_URL;
+  return url && url.trim() ? url.trim() : void 0;
+}
+var EMBED_VERSION, DEFAULT_EMBED_DIRNAME;
+var init_model = __esm({
+  "src/embed/model.ts"() {
+    "use strict";
+    EMBED_VERSION = 1;
+    DEFAULT_EMBED_DIRNAME = "models";
+  }
+});
+
+// src/embed/encode.ts
+function basicTokenize(text) {
+  const spaced = foldText(text).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const out2 = [];
+  for (const part of spaced.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (part) out2.push(part);
+  }
+  return out2;
+}
+function wordpiece(word, model) {
+  if (!word) return [];
+  const ids = [];
+  let start2 = 0;
+  const n = word.length;
+  while (start2 < n) {
+    let end = n;
+    let match = -1;
+    while (end > start2) {
+      const piece = start2 === 0 ? word.slice(start2, end) : "##" + word.slice(start2, end);
+      const id = model.vocab.get(piece);
+      if (id !== void 0) {
+        match = id;
+        break;
+      }
+      end--;
+    }
+    if (match === -1) return model.unkId >= 0 ? [model.unkId] : [];
+    ids.push(match);
+    start2 = end;
+  }
+  return ids;
+}
+function tokenize(text, model) {
+  const ids = [];
+  for (const word of basicTokenize(text)) {
+    for (const id of wordpiece(word, model)) ids.push(id);
+  }
+  return ids;
+}
+function roundHalfToEven(x) {
+  const f = Math.floor(x);
+  const diff = x - f;
+  if (diff < 0.5) return f;
+  if (diff > 0.5) return f + 1;
+  return f % 2 === 0 ? f : f + 1;
+}
+function encode(model, text) {
+  const { dim, weights } = model;
+  const out2 = new Int8Array(dim);
+  const ids = tokenize(text, model);
+  if (ids.length === 0) return out2;
+  const pooled = new Float64Array(dim);
+  for (const id of ids) {
+    const base = id * dim;
+    for (let d = 0; d < dim; d++) pooled[d] += weights[base + d];
+  }
+  const inv = 1 / ids.length;
+  for (let d = 0; d < dim; d++) pooled[d] *= inv;
+  let sumsq = 0;
+  for (let d = 0; d < dim; d++) sumsq += pooled[d] * pooled[d];
+  const norm2 = Math.sqrt(sumsq);
+  if (norm2 === 0) return out2;
+  for (let d = 0; d < dim; d++) {
+    let q = roundHalfToEven(pooled[d] / norm2 * QUANT);
+    if (q > QUANT) q = QUANT;
+    else if (q < -QUANT) q = -QUANT;
+    out2[d] = q;
+  }
+  return out2;
+}
+function intDot(a, b) {
+  const n = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let i2 = 0; i2 < n; i2++) dot += a[i2] * b[i2];
+  return dot;
+}
+var QUANT;
+var init_encode = __esm({
+  "src/embed/encode.ts"() {
+    "use strict";
+    init_util();
+    QUANT = 127;
+  }
+});
+
+// src/embed/index.ts
+function symbolText(rel, name2, signature, summary) {
+  return [name2, signature ?? "", summary ?? "", rel.replace(/\//g, " ")].join("\n");
+}
+function fileText(rel, title, summary, headings) {
+  return [title ?? "", summary ?? "", ...headings, rel.replace(/\//g, " ")].join("\n");
+}
+function buildEmbeddingIndex(scan2, model) {
+  const records = [];
+  for (const f of scan2.files) {
+    const seen = /* @__PURE__ */ new Set();
+    let hadSymbol = false;
+    for (const s of f.symbols) {
+      if (seen.has(s.name)) continue;
+      seen.add(s.name);
+      hadSymbol = true;
+      records.push({
+        file: f.rel,
+        symbol: s.name,
+        line: s.line,
+        vec: encode(model, symbolText(f.rel, s.name, s.signature, f.summary))
+      });
+    }
+    if (!hadSymbol) {
+      const text = fileText(f.rel, f.title, f.summary, f.headings);
+      if (text.replace(/\s+/g, "")) {
+        records.push({ file: f.rel, vec: encode(model, text) });
+      }
+    }
+  }
+  return { embedVersion: EMBED_VERSION, modelId: model.modelId, dim: model.dim, records };
+}
+function serializeEmbeddings(index) {
+  const header = JSON.stringify({
+    embedVersion: index.embedVersion,
+    modelId: index.modelId,
+    dim: index.dim,
+    count: index.records.length,
+    records: index.records.map((r) => ({ file: r.file, symbol: r.symbol ?? "", line: r.line ?? 0 }))
+  });
+  const headerBuf = Buffer.from(header, "utf8");
+  const body2 = Buffer.alloc(index.records.length * index.dim);
+  let off = 0;
+  for (const r of index.records) {
+    for (let d = 0; d < index.dim; d++) body2.writeInt8(r.vec[d] ?? 0, off++);
+  }
+  const out2 = Buffer.alloc(8 + headerBuf.length + body2.length);
+  out2.write(MAGIC, 0, "ascii");
+  out2.writeUInt32LE(headerBuf.length, 4);
+  headerBuf.copy(out2, 8);
+  body2.copy(out2, 8 + headerBuf.length);
+  return out2;
+}
+function deserializeEmbeddings(bytes) {
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (buf.length < 8 || buf.toString("ascii", 0, 4) !== MAGIC) {
+    throw new Error("embeddings.bin: bad magic (not a codeindex embeddings artifact)");
+  }
+  const headerLen = buf.readUInt32LE(4);
+  const header = JSON.parse(buf.toString("utf8", 8, 8 + headerLen));
+  const bodyOff = 8 + headerLen;
+  const { dim } = header;
+  const records = header.records.map((m, i2) => {
+    const vec = new Int8Array(dim);
+    for (let d = 0; d < dim; d++) vec[d] = buf.readInt8(bodyOff + i2 * dim + d);
+    const rec = { file: m.file, vec };
+    if (m.symbol) rec.symbol = m.symbol;
+    if (m.line) rec.line = m.line;
+    return rec;
+  });
+  return { embedVersion: header.embedVersion, modelId: header.modelId, dim, records };
+}
+var MAGIC;
+var init_embed = __esm({
+  "src/embed/index.ts"() {
+    "use strict";
+    init_encode();
+    init_model();
+    MAGIC = "CIE1";
+  }
+});
+
+// src/embed/search.ts
+function searchSemantic(scan2, query, index, opts = {}) {
+  const limit = opts.limit ?? DEFAULT_LIMIT2;
+  const lexical = searchIndex(scan2, query, { limit: Math.max(limit, 50), fuzzy: opts.fuzzy });
+  if (!opts.model || !index || index.records.length === 0) {
+    return lexical.slice(0, limit);
+  }
+  const q = encode(opts.model, query);
+  const bestByFile = /* @__PURE__ */ new Map();
+  for (const r of index.records) {
+    const dot = intDot(q, r.vec);
+    const prev = bestByFile.get(r.file);
+    if (!prev || dot > prev.score) bestByFile.set(r.file, { score: dot, symbol: r.symbol });
+  }
+  const semList = [...bestByFile.entries()].filter(([, v]) => v.score > 0).sort((a, b) => b[1].score - a[1].score || byStr(a[0], b[0])).map(([file]) => file);
+  const lexList = lexical.map((r) => r.file);
+  const fused = rrf([lexList, semList], (f) => f, opts.rrfK ?? RRF_K);
+  const lexByFile = new Map(lexical.map((r) => [r.file, r]));
+  const results = [...fused.entries()].sort((a, b) => b[1] - a[1] || byStr(a[0], b[0])).map(([file, score]) => {
+    const lex = lexByFile.get(file);
+    const res = {
+      file,
+      score: Number(score.toFixed(4)),
+      matchedTerms: lex?.matchedTerms ?? [],
+      topSymbols: lex?.topSymbols ?? []
+    };
+    const sem = bestByFile.get(file);
+    if (sem?.symbol) res.semanticSymbol = sem.symbol;
+    if (lex?.fuzzyTerms) res.fuzzyTerms = lex.fuzzyTerms;
+    return res;
+  });
+  return results.slice(0, limit);
+}
+var DEFAULT_LIMIT2, RRF_K;
+var init_search = __esm({
+  "src/embed/search.ts"() {
+    "use strict";
+    init_util();
+    init_sort();
+    init_bm25();
+    init_encode();
+    DEFAULT_LIMIT2 = 20;
+    RRF_K = 60;
+  }
+});
+
 // src/rules.ts
 function isEntrypointLike(rel) {
   const base = rel.split("/").pop();
@@ -9647,7 +9918,7 @@ var init_deadcode = __esm({
 });
 
 // src/complexity.ts
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 function complexityOfSource(source) {
   return 1 + (source.match(BRANCH_RE) ?? []).length;
 }
@@ -9657,7 +9928,7 @@ function symbolComplexity(scan2, rel, top = 50) {
     if (f.kind !== "code") continue;
     if (rel && f.rel !== rel) continue;
     if (!f.symbols.length) continue;
-    const lines = readText(join10(scan2.root, f.rel)).split("\n");
+    const lines = readText(join11(scan2.root, f.rel)).split("\n");
     for (const s of f.symbols) {
       if (s.kind === "reexport" || s.kind === "reexport-all") continue;
       const end = s.endLine ?? s.line;
@@ -9672,7 +9943,7 @@ function symbolComplexity(scan2, rel, top = 50) {
 }
 function riskHotspots(scan2, churn, top = 20) {
   const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
-    const complexity = complexityOfSource(readText(join10(scan2.root, f.rel)));
+    const complexity = complexityOfSource(readText(join11(scan2.root, f.rel)));
     const commits = churn.get(f.rel) ?? 0;
     return { file: f.rel, complexity, commits, score: (commits + 1) * complexity };
   });
@@ -9871,11 +10142,31 @@ function callTool(name2, args2) {
   if (name2 === "search") {
     const query = str(args2.query);
     if (!query) throw new Error("`query` is required");
-    const results = searchIndex(scanRepo(repo, scanOpts), query, {
-      limit: typeof args2.limit === "number" ? args2.limit : void 0,
-      fuzzy: typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0
-    });
-    return JSON.stringify(results, null, 2);
+    const scan2 = scanRepo(repo, scanOpts);
+    const limit = typeof args2.limit === "number" ? args2.limit : void 0;
+    const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
+    if (args2.semantic === true) {
+      const modelDir = resolveEmbedModelDir(repo);
+      const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+      if (model) {
+        const index = buildEmbeddingIndex(scan2, model);
+        return JSON.stringify(searchSemantic(scan2, query, index, { model, limit, fuzzy }), null, 2);
+      }
+    }
+    return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy }), null, 2);
+  }
+  if (name2 === "embed_status") {
+    const modelDir = resolveEmbedModelDir(repo);
+    const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+    return JSON.stringify(
+      {
+        embedVersion: EMBED_VERSION,
+        model: model ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize } : { present: false },
+        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null
+      },
+      null,
+      2
+    );
   }
   if (name2 === "check_rules") {
     const rules = parseRules(args2.rules);
@@ -9963,6 +10254,9 @@ var init_mcp = __esm({
     init_memory();
     init_bm25();
     init_rules();
+    init_model();
+    init_embed();
+    init_search();
     repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
     scopeProps = {
       scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -10175,7 +10469,7 @@ var init_mcp = __esm({
       },
       {
         name: "search",
-        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`.',
+        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse the deterministic static-embedding tier when a model asset is present (degrades to lexical otherwise \u2014 see embed_status).',
         inputSchema: {
           type: "object",
           properties: {
@@ -10186,10 +10480,19 @@ var init_mcp = __esm({
             fuzzy: {
               type: "boolean",
               description: "Trigram fuzzy fallback for query terms with zero document frequency (default true)"
+            },
+            semantic: {
+              type: "boolean",
+              description: "RRF-fuse the deterministic static-embedding tier with lexical when a model asset is present (default false; silently lexical-only when no model)"
             }
           },
           required: ["repo", "query"]
         }
+      },
+      {
+        name: "embed_status",
+        description: "Report the deterministic static-embedding tier: whether a model asset is resolved (opt-in, never shipped in the package), its modelId/dim, EMBED_VERSION, and any configured HTTP endpoint. Use to check whether `search` with semantic:true will actually fuse embeddings or degrade to lexical.",
+        inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] }
       },
       {
         name: "check_rules",
@@ -10605,6 +10908,41 @@ init_pipeline();
 init_git();
 init_grep();
 init_bm25();
+init_model();
+init_encode();
+init_embed();
+init_search();
+
+// src/embed/endpoint.ts
+function resolveEmbedEndpoint(opts = {}) {
+  const url = opts.url ?? process.env.CODEINDEX_EMBED_ENDPOINT;
+  return url && url.trim() ? url.trim() : void 0;
+}
+async function embedViaEndpoint(texts, opts = {}) {
+  const url = resolveEmbedEndpoint(opts);
+  if (!url) throw new Error("no embedding endpoint configured (set CODEINDEX_EMBED_ENDPOINT or pass opts.url)");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 3e4);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...opts.headers ?? {} },
+      body: JSON.stringify({ texts }),
+      signal: controller.signal
+    });
+    if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
+    const data = await res.json();
+    const vectors = data.vectors;
+    if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number"))) {
+      throw new Error(`embedding endpoint ${url} returned a malformed { vectors } payload`);
+    }
+    return vectors;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// src/engine.ts
 init_rules();
 init_coupling();
 init_repomap();
@@ -10623,8 +10961,8 @@ init_loader();
 init_pipeline();
 init_graph_json();
 init_symbols_json();
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync5, writeFileSync as writeFileSync3 } from "fs";
-import { join as join11, resolve } from "path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "fs";
+import { join as join12, resolve } from "path";
 init_scan();
 init_callers();
 init_workspaces();
@@ -10637,6 +10975,9 @@ init_complexity();
 init_viz();
 init_bm25();
 init_rules();
+init_model();
+init_embed();
+init_search();
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
 
 Usage: engine.mjs <command> [flags]
@@ -10654,7 +10995,14 @@ Commands:
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
   search      Keyless BM25 lexical search over symbol names, path segments,
-              markdown headings and summaries: cli.mjs search "<query>" --repo <dir>
+              markdown headings and summaries: cli.mjs search "<query>" --repo <dir>.
+              --semantic fuses in the deterministic static-embedding tier (RRF)
+              when a model is present; degrades to lexical (exit 0) when absent
+  embed       Deterministic static-embedding tier (opt-in by model asset):
+                embed status   Report the resolved model + EMBED_VERSION (JSON)
+                embed build    Write embeddings.bin into --out <dir> from the repo
+                embed pull     Fetch the model asset into CODEINDEX_EMBED_DIR (or
+                               <repo>/.codeindex/models/) \u2014 needs CODEINDEX_EMBED_URL
   rules       Architecture rules (forbidden edges, cycles, orphans) validated
               against the link-graph: --config <codeindex.rules.json>; exits 1
               on any error-severity violation (a CI gate)
@@ -10682,12 +11030,14 @@ Flags:
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
+  --semantic          \`search\`: RRF-fuse the deterministic static-embedding tier
+                      with lexical (needs a model asset; lexical-only otherwise)
   --recall            \`callers\`: recall-oriented binding (issue #7) \u2014 relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
 `;
 function parseFlags(args2) {
-  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true };
+  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true, semantic: false };
   for (let i2 = 0; i2 < args2.length; i2++) {
     const a = args2[i2];
     const next = () => {
@@ -10720,6 +11070,7 @@ function parseFlags(args2) {
     else if (a === "--config") flags2.config = resolve(next());
     else if (a === "--limit") flags2.limit = num();
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
+    else if (a === "--semantic") flags2.semantic = true;
     else if (a === "--recall") flags2.recall = true;
     else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
     else throw new Error(`unknown flag: ${a}`);
@@ -10756,24 +11107,24 @@ async function runCli(argv) {
     return;
   }
   const flags2 = parseFlags(rest);
-  if (!existsSync3(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
+  if (!existsSync4(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
   if (!flags2.noAst) await ensureGrammars(allGrammarKeys());
   if (cmd === "index") {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync2(outDir, { recursive: true });
-    const cachePath = join11(outDir, "cache.json");
+    const cachePath = join12(outDir, "cache.json");
     let cache;
     try {
-      const parsed = JSON.parse(readFileSync5(cachePath, "utf8"));
+      const parsed = JSON.parse(readFileSync6(cachePath, "utf8"));
       if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
         cache = new Map(Object.entries(parsed.files));
       }
     } catch {
     }
     const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
-    writeFileSync3(join11(outDir, "graph.json"), renderGraphJson(graph));
-    writeFileSync3(join11(outDir, "symbols.json"), renderSymbolsJson(symbols));
+    writeFileSync3(join12(outDir, "graph.json"), renderGraphJson(graph));
+    writeFileSync3(join12(outDir, "symbols.json"), renderSymbolsJson(symbols));
     const files = {};
     for (const f of scan2.files) {
       const entry = { hash: f.hash, record: f, size: f.size };
@@ -10785,7 +11136,15 @@ async function runCli(argv) {
       cachePath,
       JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n"
     );
-    process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${scan2.capped ? " (capped)" : ""}
+    let embedNote = "";
+    const modelDir = resolveEmbedModelDir(flags2.repo);
+    const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+    if (model) {
+      const index = buildEmbeddingIndex(scan2, model);
+      writeFileSync3(join12(outDir, "embeddings.bin"), serializeEmbeddings(index));
+      embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
+    }
+    process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${embedNote}${scan2.capped ? " (capped)" : ""}
 `);
   } else if (cmd === "scan") {
     const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
@@ -10822,11 +11181,86 @@ async function runCli(argv) {
   } else if (cmd === "search") {
     if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
-    const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
-    emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+    if (flags2.semantic) {
+      const modelDir = resolveEmbedModelDir(flags2.repo);
+      const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+      if (!model) {
+        process.stderr.write(
+          "codeindex: semantic search unavailable (no embedding model present) \u2014 returning lexical results; run `codeindex embed pull` to enable it\n"
+        );
+        const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
+        emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+      } else {
+        const index = buildEmbeddingIndex(scan2, model);
+        const results = searchSemantic(scan2, flags2.positional, index, { model, limit: flags2.limit, fuzzy: flags2.fuzzy });
+        emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+      }
+    } else {
+      const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
+      emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+    }
+  } else if (cmd === "embed") {
+    const sub = flags2.positional;
+    const modelDir = resolveEmbedModelDir(flags2.repo);
+    if (sub === "status") {
+      const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+      const status = {
+        embedVersion: EMBED_VERSION,
+        model: model ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize } : { present: false },
+        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null
+      };
+      emit(JSON.stringify(status, null, 2) + "\n", flags2.out);
+    } else if (sub === "build") {
+      if (!flags2.out) throw new Error("embed build needs --out <dir>");
+      if (!modelDir) {
+        process.stderr.write("codeindex: no embedding model present \u2014 run `codeindex embed pull` first (nothing written)\n");
+        process.exitCode = 1;
+        return;
+      }
+      const model = loadEmbedModel(modelDir);
+      mkdirSync2(flags2.out, { recursive: true });
+      const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+      const index = buildEmbeddingIndex(scan2, model);
+      writeFileSync3(join12(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
+`);
+    } else if (sub === "pull") {
+      const url = resolveEmbedPullUrl();
+      if (!url) {
+        process.stderr.write(
+          "codeindex: no model URL configured. The official static-embedding asset is not published yet.\nSet CODEINDEX_EMBED_URL to a model.json URL (optionally CODEINDEX_EMBED_DIR as the destination), then re-run `codeindex embed pull`.\n"
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join12(flags2.repo, ".codeindex", "models");
+      mkdirSync2(destDir, { recursive: true });
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join12(destDir, "model.json")}
+`);
+      const res = await fetch(url);
+      if (!res.ok) {
+        process.stderr.write(`codeindex: pull failed \u2014 HTTP ${res.status} from ${url}
+`);
+        process.exitCode = 1;
+        return;
+      }
+      const body2 = await res.text();
+      try {
+        JSON.parse(body2);
+      } catch {
+        process.stderr.write("codeindex: pull failed \u2014 response is not a valid model.json (expected JSON)\n");
+        process.exitCode = 1;
+        return;
+      }
+      writeFileSync3(join12(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join12(destDir, "model.json")}
+`);
+    } else {
+      throw new Error("embed needs a subcommand: pull | build | status");
+    }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRules(JSON.parse(readFileSync5(flags2.config, "utf8")));
+    const rules = parseRules(JSON.parse(readFileSync6(flags2.config, "utf8")));
     const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
@@ -10887,14 +11321,17 @@ ${HELP}`);
 }
 export {
   DEFAULT_MAX_FILES,
+  EMBED_VERSION,
   ENGINE_VERSION,
   EXTRACTOR_VERSION,
   MARKDOWN_EXT,
   SCHEMA_VERSION,
   allGrammarKeys,
   applyCentrality,
+  basicTokenize,
   betweennessOf,
   buildCallerIndex,
+  buildEmbeddingIndex,
   buildGraph,
   buildIndexArtifacts,
   buildModules,
@@ -10917,11 +11354,14 @@ export {
   computeSymbolRefs,
   computeTestMap,
   deleteMemory,
+  deserializeEmbeddings,
   detectCommunities,
   detectWorkspaces,
   diffFiles,
   diffHunks,
+  embedViaEndpoint,
   enclosingSymbol,
+  encode,
   ensureGrammars,
   escapeRegExp,
   extToLang,
@@ -10937,10 +11377,12 @@ export {
   grammarKeyForExt,
   grammarReady,
   grepRepo,
+  hasEmbedModel,
   have,
   headCommit,
   insertAfterSymbol,
   insertBeforeSymbol,
+  intDot,
   isCode,
   isDoc,
   isGitWorktree,
@@ -10951,6 +11393,7 @@ export {
   keywords,
   languageOf,
   listMemories,
+  loadEmbedModel,
   pagerankOf,
   parseGitignore,
   parseRules,
@@ -10967,14 +11410,20 @@ export {
   resolveBaseRef,
   resolveCallEdges,
   resolveDocLink,
+  resolveEmbedEndpoint,
+  resolveEmbedModelDir,
+  resolveEmbedPullUrl,
   resolveImport,
   resolveUniqueSymbol,
   riskHotspots,
+  roundHalfToEven,
   rrf,
   runCli,
   runMcpServer,
   scanRepo,
   searchIndex,
+  searchSemantic,
+  serializeEmbeddings,
   sh,
   sha1,
   shortHash,
@@ -10984,10 +11433,12 @@ export {
   symbolsOverview,
   testsForModule,
   tierForPath,
+  tokenize,
   uniqueSymbolDefs,
   untestedModules,
   untrackedFiles,
   walk,
+  wordpiece,
   writeMemory
 };
 // "Copyright" and "@license" are already caught by DIRECTIVE_RE.

@@ -25,6 +25,9 @@ import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
+import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel } from "./embed/model.js";
+import { buildEmbeddingIndex } from "./embed/index.js";
+import { searchSemantic } from "./embed/search.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -266,7 +269,7 @@ const TOOLS = [
   {
     name: "search",
     description:
-      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`.',
+      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse the deterministic static-embedding tier when a model asset is present (degrades to lexical otherwise — see embed_status).',
     inputSchema: {
       type: "object",
       properties: {
@@ -279,9 +282,20 @@ const TOOLS = [
           description:
             "Trigram fuzzy fallback for query terms with zero document frequency (default true)",
         },
+        semantic: {
+          type: "boolean",
+          description:
+            "RRF-fuse the deterministic static-embedding tier with lexical when a model asset is present (default false; silently lexical-only when no model)",
+        },
       },
       required: ["repo", "query"],
     },
+  },
+  {
+    name: "embed_status",
+    description:
+      "Report the deterministic static-embedding tier: whether a model asset is resolved (opt-in, never shipped in the package), its modelId/dim, EMBED_VERSION, and any configured HTTP endpoint. Use to check whether `search` with semantic:true will actually fuse embeddings or degrade to lexical.",
+    inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
   },
   {
     name: "check_rules",
@@ -440,11 +454,34 @@ function callTool(name: string, args: Record<string, unknown>): string {
   if (name === "search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
-    const results = searchIndex(scanRepo(repo, scanOpts), query, {
-      limit: typeof args.limit === "number" ? args.limit : undefined,
-      fuzzy: typeof args.fuzzy === "boolean" ? args.fuzzy : undefined,
-    });
-    return JSON.stringify(results, null, 2);
+    const scan = scanRepo(repo, scanOpts);
+    const limit = typeof args.limit === "number" ? args.limit : undefined;
+    const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
+    if (args.semantic === true) {
+      const modelDir = resolveEmbedModelDir(repo);
+      const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+      if (model) {
+        const index = buildEmbeddingIndex(scan, model);
+        return JSON.stringify(searchSemantic(scan, query, index, { model, limit, fuzzy }), null, 2);
+      }
+      // Degrade to lexical (opt-in tier not activated) — no throw.
+    }
+    return JSON.stringify(searchIndex(scan, query, { limit, fuzzy }), null, 2);
+  }
+  if (name === "embed_status") {
+    const modelDir = resolveEmbedModelDir(repo);
+    const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+    return JSON.stringify(
+      {
+        embedVersion: EMBED_VERSION,
+        model: model
+          ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
+          : { present: false },
+        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null,
+      },
+      null,
+      2,
+    );
   }
   if (name === "check_rules") {
     const rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
