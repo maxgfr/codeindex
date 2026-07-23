@@ -16,7 +16,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.11.1";
     SCHEMA_VERSION = 4;
-    EXTRACTOR_VERSION = 8;
+    EXTRACTOR_VERSION = 9;
   }
 });
 
@@ -737,8 +737,8 @@ function extractReexports(rel, content, localSymbols) {
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
   const lineAt = (idx) => content.slice(0, idx).split(/\r?\n/).length;
-  const localKindOf = /* @__PURE__ */ new Map();
-  for (const s of localSymbols) if (!localKindOf.has(s.name)) localKindOf.set(s.name, s.kind);
+  const localDeclOf = /* @__PURE__ */ new Map();
+  for (const s of localSymbols) if (!localDeclOf.has(s.name)) localDeclOf.set(s.name, s);
   const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
   let m;
   while ((m = named.exec(content)) && out2.length < 60) {
@@ -750,12 +750,13 @@ function extractReexports(rel, content, localSymbols) {
       const name2 = as ? as[2] : p;
       if (!/^[A-Za-z_$][\w$]*$/.test(name2) || name2 === "default" || seen.has(name2)) continue;
       seen.add(name2);
-      const mirroredKind = !from ? localKindOf.get(orig) : void 0;
+      const decl = !from ? localDeclOf.get(orig) : void 0;
       out2.push({
         name: name2,
-        kind: mirroredKind ?? "reexport",
+        kind: decl?.kind ?? "reexport",
         file: rel,
-        line: lineAt(m.index),
+        line: decl ? decl.line : lineAt(m.index),
+        ...decl?.endLine !== void 0 ? { endLine: decl.endLine } : {},
         signature: from ? `export { ${name2} } from "${from}"` : `export { ${name2} }`,
         exported: true,
         lang

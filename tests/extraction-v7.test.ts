@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { extractCode } from "../src/extract/code.js";
+import { extractReexports } from "../src/lang/common.js";
+import type { CodeSymbol } from "../src/types.js";
 
 // EXTRACTOR_VERSION 7: export-alias symbols mirror the aliased local symbol's
 // kind when the original is resolvable in-file (`export { b as c }` — `c` now
@@ -18,8 +20,10 @@ describe("export-alias symbols mirror the local kind (extractor v7)", () => {
     expect(alias).toBeDefined();
     expect(alias?.kind).toBe("function");
     expect(alias?.exported).toBe(true);
-    // At the export statement's line, not the original declaration's line.
-    expect(alias?.line).toBe(3);
+    // The original declaration's line (2: `function b() {}`), not the export
+    // statement's line (3) — citation consumers (ultradoc) need file:line to
+    // point at the actual declaration.
+    expect(alias?.line).toBe(2);
   });
 
   it("mirrors a class alias", () => {
@@ -46,6 +50,8 @@ describe("export-alias symbols mirror the local kind (extractor v7)", () => {
     expect(alias).toBeDefined();
     expect(alias?.kind).toBe("reexport");
     expect(alias?.exported).toBe(true);
+    // No local declaration to cite — keeps the export statement's own line.
+    expect(alias?.line).toBe(1);
   });
 
   it("an alias whose original isn't a resolvable local declaration keeps the reexport kind", () => {
@@ -56,5 +62,41 @@ describe("export-alias symbols mirror the local kind (extractor v7)", () => {
     const alias = info.symbols.find((s) => s.name === "y");
     expect(alias).toBeDefined();
     expect(alias?.kind).toBe("reexport");
+    // Nothing to resolve `x` against — keeps the export statement's own line.
+    expect(alias?.line).toBe(1);
+  });
+});
+
+// Issue #9: a resolved alias didn't just mirror the original's KIND, it also
+// needs to cite the original declaration's LINE (and endLine, when the AST
+// tier populated one) — citation consumers (ultradoc cites file:line as
+// evidence) were pointed at the export statement instead of the actual
+// declaration, a precision regression. Unresolved aliases and `from`-clause
+// re-exports have no declaration to point at, so they're unaffected (covered
+// above).
+describe("export-alias symbols cite the original declaration's line, not the export statement's (issue #9)", () => {
+  it("carries the resolved declaration's endLine (AST tier) onto the alias", () => {
+    // Constructing localSymbols by hand (rather than through a real
+    // extractor) simulates the AST tier's endLine, the same way
+    // extraction-v8.test.ts hand-builds `symbols` for collectCallsRegex.
+    const src = "function b() {\n  return 1;\n}\nexport { b as c };\n";
+    const localSymbols: CodeSymbol[] = [
+      { name: "b", kind: "function", file: "barrel.ts", line: 1, endLine: 3, exported: false, lang: "typescript" },
+    ];
+    const [alias] = extractReexports("barrel.ts", src, localSymbols);
+    expect(alias?.name).toBe("c");
+    expect(alias?.kind).toBe("function");
+    expect(alias?.line).toBe(1);
+    expect(alias?.endLine).toBe(3);
+  });
+
+  it("omits endLine when the resolved declaration doesn't have one (regex tier)", () => {
+    const src = "function b() {}\nexport { b as c };\n";
+    const localSymbols: CodeSymbol[] = [
+      { name: "b", kind: "function", file: "barrel.ts", line: 1, exported: false, lang: "typescript" },
+    ];
+    const [alias] = extractReexports("barrel.ts", src, localSymbols);
+    expect(alias?.line).toBe(1);
+    expect(alias?.endLine).toBeUndefined();
   });
 });

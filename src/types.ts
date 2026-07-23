@@ -30,9 +30,15 @@ export const SCHEMA_VERSION = 4;
 // "reexport" when it resolves in-file. v8 fixes the C/C++ regex tier
 // reporting a function DEFINITION as a call to itself (`void load(void) {`
 // yielding a spurious call `load@<defline>`, found during the ultrasec
-// consumer migration) by excluding call candidates whose name+line match one
-// of the file's own extracted symbols.
-export const EXTRACTOR_VERSION = 8;
+// consumer migration) by excluding, from call candidates, only the
+// definition's own token on its definition line — not every occurrence of
+// that name+line pair, which would also drop genuine same-line calls (dense
+// one-liners packing several definitions, one-line recursion); v9 makes a
+// resolved export-alias symbol also cite the original declaration's own line
+// (and endLine, when the AST tier populated one) instead of the export
+// statement's line — a citation-precision fix (issue #9) for consumers
+// (ultradoc) that use file:line as evidence.
+export const EXTRACTOR_VERSION = 9;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

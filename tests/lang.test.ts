@@ -173,6 +173,9 @@ describe("extractSymbols export-alias parity with extractCode (ultradoc gap)", (
     expect(alias).toBeDefined();
     expect(alias?.kind).toBe("function");
     expect(alias?.exported).toBe(true);
+    // Line 2 (`function b() {}`), not line 3 (the export statement) — the
+    // extractSymbols path must resolve the same declaration line extractCode does.
+    expect(alias?.line).toBe(2);
   });
 
   it("a true cross-module re-export alias (`export { b as c } from './other'`) keeps the generic reexport kind", () => {

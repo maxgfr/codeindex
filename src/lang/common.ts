@@ -75,11 +75,14 @@ const REEXPORT_EXTS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".m
 //
 // An ALIAS with no `from` clause (`export { b as c }`) renames an in-file
 // declaration — `localSymbols` (already extracted by the AST or regex tier)
-// lets us resolve `b` and mirror ITS kind onto `c` (e.g. "function"), so the
-// alias reads as the real symbol it is rather than the generic "reexport".
+// lets us resolve `b` and mirror ITS kind, declaration line, and endLine (AST
+// tier only) onto `c` (e.g. "function" at b's own line), so the alias reads
+// as the real symbol it is — citeable at its actual declaration — rather than
+// the generic "reexport" pinned to the export statement's line.
 // A true cross-module re-export (`export { b as c } from "./mod"`) has no
 // local `b` to resolve — and an alias the local pass genuinely can't see
-// (destructured/ambient/etc.) falls back the same way — both keep "reexport".
+// (destructured/ambient/etc.) falls back the same way — both keep "reexport"
+// and cite the export statement's own line, the only line they have.
 //
 // Shared by extractCode (extract/code.ts) AND the standalone extractSymbols
 // (lang/registry.ts) — ultradoc and other direct extractSymbols consumers hit
@@ -92,8 +95,11 @@ export function extractReexports(rel: string, content: string, localSymbols: Cod
   const out: CodeSymbol[] = [];
   const seen = new Set<string>();
   const lineAt = (idx: number): number => content.slice(0, idx).split(/\r?\n/).length;
-  const localKindOf = new Map<string, string>();
-  for (const s of localSymbols) if (!localKindOf.has(s.name)) localKindOf.set(s.name, s.kind);
+  // Keyed on the whole CodeSymbol (not just kind) so the alias branch below
+  // can also cite the resolved declaration's own line/endLine, not just mirror
+  // its kind.
+  const localDeclOf = new Map<string, CodeSymbol>();
+  for (const s of localSymbols) if (!localDeclOf.has(s.name)) localDeclOf.set(s.name, s);
 
   const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
   let m: RegExpExecArray | null;
@@ -106,9 +112,14 @@ export function extractReexports(rel: string, content: string, localSymbols: Cod
       const name = as ? as[2]! : p;
       if (!/^[A-Za-z_$][\w$]*$/.test(name) || name === "default" || seen.has(name)) continue;
       seen.add(name);
-      const mirroredKind = !from ? localKindOf.get(orig) : undefined;
+      // A resolved decl means this is a same-file alias: cite ITS line (and
+      // endLine, when the AST tier populated one) rather than the export
+      // statement's — an unresolved alias or a `from`-clause re-export has no
+      // local declaration to point at, so it keeps lineAt(m.index) below.
+      const decl = !from ? localDeclOf.get(orig) : undefined;
       out.push({
-        name, kind: mirroredKind ?? "reexport", file: rel, line: lineAt(m.index),
+        name, kind: decl?.kind ?? "reexport", file: rel, line: decl ? decl.line : lineAt(m.index),
+        ...(decl?.endLine !== undefined ? { endLine: decl.endLine } : {}),
         signature: from ? `export { ${name} } from "${from}"` : `export { ${name} }`,
         exported: true, lang,
       });
