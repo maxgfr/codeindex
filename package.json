@@ -59,7 +59,7 @@
     "@semantic-release/git": "^10.0.1",
     "@tree-sitter-grammars/tree-sitter-lua": "0.4.1",
     "@types/node": "^20.14.0",
-    "semantic-release": "^24.2.0",
+    "semantic-release": "^25.0.8",
     "tree-sitter-bash": "0.25.1",
     "tree-sitter-c": "^0.24.1",
     "tree-sitter-c-sharp": "^0.23.5",
