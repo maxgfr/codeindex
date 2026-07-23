@@ -75,6 +75,32 @@ codeindex callers --repo .                    # per-symbol caller index
 codeindex grep    'pattern' --repo .
 ```
 
+## Docker
+
+`ghcr.io/maxgfr/codeindex` ships the same zero-dependency bundle (`engine.mjs`
++ `cli.mjs` + the AST grammars) with nothing else inside — just `node` and the
+files above, no `npm install`. Multi-arch (`linux/amd64`, `linux/arm64`),
+built and pushed on release. Mount the repo to index at `/work`:
+
+```sh
+docker run --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex scan --repo /work
+docker run --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex index --repo /work --out /work/.codeindex
+```
+
+Pin by digest in CI or anywhere reproducibility matters, rather than a
+mutable tag:
+
+```sh
+docker run --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex@sha256:... scan --repo /work
+```
+
+Runs as an MCP server over stdio the same way as the npm CLI (see
+**Use as an MCP server** below) — add `-i` so `docker run` keeps stdin open:
+
+```sh
+docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp
+```
+
 ## Search
 
 `codeindex search "<query>" --repo .` ranks files with keyless BM25 over symbol

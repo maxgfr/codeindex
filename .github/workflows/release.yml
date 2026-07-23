@@ -10,6 +10,16 @@ name: Release
 #   - tags `v<version>` and creates the GitHub release with auto notes.
 # Consumers pin these tags: their sync-engine scripts fetch
 # scripts/engine.mjs + scripts/engine.d.mts at a tag and verify ENGINE_VERSION.
+#
+# Image publish note: the `chore(release): <v> [skip ci]` commit and the
+# `v<version>` tag above are both pushed by semantic-release using
+# GITHUB_TOKEN — GitHub's anti-recursion protection means neither triggers
+# `on: push` / `on: push: tags:` / `on: release:` workflows. So the
+# ghcr.io/maxgfr/codeindex image can't be built from a separate
+# tag/release-triggered workflow; instead this same job builds and pushes it
+# right after `semantic-release` runs, gated on the `.release-version`
+# sentinel file that `.releaserc.json`'s `@semantic-release/exec` publishCmd
+# writes only when a release actually happened.
 on:
   push:
     branches: [main]
@@ -19,6 +29,7 @@ permissions:
   issues: write
   pull-requests: write
   id-token: write
+  packages: write
 
 jobs:
   release:
@@ -50,3 +61,67 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm exec semantic-release
+
+      # `.release-version` only exists when semantic-release actually cut a
+      # release this run (written by the exec plugin's publishCmd) — most
+      # pushes to main are not releases (docs/chore/no-op commits), so this
+      # is what tells us whether to publish an image at all.
+      - name: Check whether a release was published
+        id: release
+        run: |
+          if [ -f .release-version ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "version=$(cat .release-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        if: steps.release.outputs.released == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.release.outputs.released == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: steps.release.outputs.released == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build from the tag semantic-release just pushed (the release commit),
+      # not from the run's HEAD: HEAD here is the pre-release commit that
+      # `semantic-release` amended-past when it pushed `chore(release): ...`
+      # (that push doesn't update this checkout), so the tag is the only ref
+      # in this workspace that actually points at the released bundle.
+      - name: Check out release tag v${{ steps.release.outputs.version }}
+        if: steps.release.outputs.released == 'true'
+        run: |
+          git fetch origin tag "v${{ steps.release.outputs.version }}"
+          git checkout "v${{ steps.release.outputs.version }}"
+
+      # Multi-arch, pushed straight to the registry. This runs after the
+      # npm publish + GitHub release above, so a failure here (e.g. transient
+      # QEMU/buildx flakiness on the arm64 leg) never rolls back or blocks
+      # the already-completed release — it only fails this workflow run,
+      # which is exactly the visibility we want. Left blocking (no
+      # continue-on-error) on purpose: a silently-skipped image publish is
+      # worse than a red run we have to re-trigger.
+      - name: Build and push distribution image
+        if: steps.release.outputs.released == 'true'
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="$VERSION" \
+            --push \
+            -t ghcr.io/maxgfr/codeindex:"$VERSION" \
+            -t ghcr.io/maxgfr/codeindex:latest \
+            .
+
+      - name: Return to release commit
+        if: always() && steps.release.outputs.released == 'true'
+        run: git checkout ${{ github.sha }}

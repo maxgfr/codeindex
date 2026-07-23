@@ -13,7 +13,8 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node scripts/sync-version.mjs ${nextRelease.version} && pnpm run build"
+        "prepareCmd": "node scripts/sync-version.mjs ${nextRelease.version} && pnpm run build",
+        "publishCmd": "echo \"${nextRelease.version}\" > .release-version"
       }
     ],
     "@semantic-release/npm",

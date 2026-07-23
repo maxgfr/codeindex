@@ -1,0 +1,14 @@
+# Deny-by-default: only the files the Dockerfile actually COPYs are sent to
+# the build context (keeps it small and avoids leaking src/, tests/, git
+# history, node_modules, etc. into the builder).
+**
+
+!package.json
+!README.md
+!LICENSE
+!docs/MIGRATION.md
+!scripts/engine.mjs
+!scripts/engine.d.mts
+!scripts/cli.mjs
+!scripts/grammars
+!scripts/grammars/**
