@@ -23,7 +23,8 @@
     "scripts/cli.mjs",
     "scripts/grammars",
     "src",
-    "docs/MIGRATION.md"
+    "docs/MIGRATION.md",
+    "docs/SEMANTIC.md"
   ],
   "engines": {
     "node": ">=18"
