@@ -270,7 +270,7 @@ const TOOLS = [
   {
     name: "search",
     description:
-      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse the deterministic static-embedding tier when a model asset is present (degrades to lexical otherwise — see embed_status).',
+      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse an embedding tier (HTTP endpoint, else a local static model) with lexical — the response then wraps the ranked list as `{ results, tier, degradedReason? }`, `tier` being "endpoint"/"static" when fusion happened or "lexical" (with `degradedReason`) when it did not (see embed_status). Without `semantic`, the response is the bare ranked array, unchanged.',
     inputSchema: {
       type: "object",
       properties: {
@@ -286,7 +286,7 @@ const TOOLS = [
         semantic: {
           type: "boolean",
           description:
-            "RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. Degrades silently to lexical-only when neither is available/reachable — see embed_status.",
+            'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently — see embed_status.',
         },
       },
       required: ["repo", "query"],
@@ -319,6 +319,9 @@ function str(v: unknown): string | undefined {
 }
 function strArray(v: unknown): string[] | undefined {
   return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? (v as string[]) : undefined;
+}
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -459,25 +462,44 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     const limit = typeof args.limit === "number" ? args.limit : undefined;
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     if (args.semantic === true) {
+      // semantic:true changes the response SHAPE (wraps the ranked list with a
+      // `tier`/`degradedReason?`) so a caller can tell "fusion happened" apart
+      // from "degraded to lexical" — see the `search` tool description. This
+      // branch is the ONLY place that shape appears; plain lexical search below
+      // stays the bare array, byte-compat for existing consumers.
       const endpoint = resolveEmbedEndpoint();
       if (endpoint) {
         // Rich tier — endpoint takes PRECEDENCE over a local static model. An
-        // unreachable/malformed endpoint degrades to lexical (no throw).
+        // unreachable/malformed endpoint degrades to lexical, now with a reason.
         try {
           const index = await buildEndpointIndex(scan);
           const queryVec = await encodeQueryViaEndpoint(query);
-          return JSON.stringify(searchSemantic(scan, query, index, { queryVec, limit, fuzzy }), null, 2);
-        } catch {
-          return JSON.stringify(searchIndex(scan, query, { limit, fuzzy }), null, 2);
+          const results = searchSemantic(scan, query, index, { queryVec, limit, fuzzy });
+          return JSON.stringify({ results, tier: "endpoint" }, null, 2);
+        } catch (e) {
+          const results = searchIndex(scan, query, { limit, fuzzy });
+          return JSON.stringify(
+            { results, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
+            null,
+            2,
+          );
         }
       }
       const modelDir = resolveEmbedModelDir(repo);
       const model = modelDir ? loadEmbedModel(modelDir) : undefined;
       if (model) {
         const index = buildEmbeddingIndex(scan, model);
-        return JSON.stringify(searchSemantic(scan, query, index, { model, limit, fuzzy }), null, 2);
+        const results = searchSemantic(scan, query, index, { model, limit, fuzzy });
+        return JSON.stringify({ results, tier: "static" }, null, 2);
       }
-      // Degrade to lexical (opt-in tier not activated) — no throw.
+      // Opt-in tier not activated (no endpoint, no model asset) — degrade to
+      // lexical with a reason instead of failing silently.
+      const results = searchIndex(scan, query, { limit, fuzzy });
+      return JSON.stringify(
+        { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured — see embed_status" },
+        null,
+        2,
+      );
     }
     return JSON.stringify(searchIndex(scan, query, { limit, fuzzy }), null, 2);
   }

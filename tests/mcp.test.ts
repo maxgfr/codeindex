@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
+const MODEL_DIR = fileURLToPath(new URL("./fixtures/embed-model", import.meta.url));
 
 interface RpcMsg {
   id?: number;
@@ -19,9 +20,17 @@ interface RpcMsg {
 
 // Drive the bundle as an MCP stdio server: send the handshake + requests,
 // collect one JSON response per line, resolve when every id has answered.
-function mcpSession(requests: Record<string, unknown>[]): Promise<Map<number, RpcMsg>> {
+// `env` overrides/extends the child's environment (e.g. CODEINDEX_EMBED_DIR
+// to exercise the static embedding tier) on top of the parent's process.env.
+function mcpSession(
+  requests: Record<string, unknown>[],
+  env?: Record<string, string | undefined>,
+): Promise<Map<number, RpcMsg>> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [CLI, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
+    const child = spawn(process.execPath, [CLI, "mcp"], {
+      stdio: ["pipe", "pipe", "inherit"],
+      env: env ? { ...process.env, ...env } : process.env,
+    });
     const expected = new Set(requests.filter((r) => r.id !== undefined).map((r) => r.id as number));
     const got = new Map<number, RpcMsg>();
     let buf = "";
@@ -120,7 +129,12 @@ describe("MCP server", () => {
     expect(res.get(5)!.result!.isError).toBeUndefined();
     expect(res.get(6)!.result!.isError).toBe(true);
 
-    const search = JSON.parse(res.get(7)!.result!.content![0]!.text) as { file: string }[];
+    // semantic not requested → response is the bare ranked array, byte-compat
+    // (no wrapping object, no `tier` field).
+    const searchText = res.get(7)!.result!.content![0]!.text;
+    expect(searchText).not.toContain('"tier"');
+    const search = JSON.parse(searchText) as { file: string }[];
+    expect(Array.isArray(search)).toBe(true);
     expect(search.length).toBeGreaterThan(0);
     expect(search[0]!.file).toBe("src/client.ts");
 
@@ -133,10 +147,42 @@ describe("MCP server", () => {
     expect(status.model.present).toBe(false);
     expect(typeof status.embedVersion).toBe("number");
 
-    // search with semantic:true and no model → silently degrades to lexical.
+    // search with semantic:true and no endpoint/model configured → degrades to
+    // lexical, but now REPORTS it via tier/degradedReason instead of silently.
     expect(res.get(10)!.result!.isError).toBeUndefined();
-    const sem = JSON.parse(res.get(10)!.result!.content![0]!.text) as { file: string }[];
-    expect(sem[0]!.file).toBe("src/client.ts");
+    const sem = JSON.parse(res.get(10)!.result!.content![0]!.text) as {
+      results: { file: string }[];
+      tier: string;
+      degradedReason?: string;
+    };
+    expect(sem.tier).toBe("lexical");
+    expect(sem.degradedReason).toMatch(/endpoint|model/i);
+    expect(sem.results[0]!.file).toBe("src/client.ts");
+  }, 20_000);
+
+  it("search semantic:true with a static model fixture reports tier: static", async () => {
+    const res = await mcpSession(
+      [
+        { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+        { method: "notifications/initialized" },
+        {
+          id: 2,
+          method: "tools/call",
+          params: { name: "search", arguments: { repo: REPO, query: "http client retry", semantic: true } },
+        },
+      ],
+      { CODEINDEX_EMBED_DIR: MODEL_DIR, CODEINDEX_EMBED_ENDPOINT: undefined },
+    );
+
+    expect(res.get(2)!.result!.isError).toBeUndefined();
+    const sem = JSON.parse(res.get(2)!.result!.content![0]!.text) as {
+      results: { file: string; semanticSymbol?: string }[];
+      tier: string;
+      degradedReason?: string;
+    };
+    expect(sem.tier).toBe("static");
+    expect(sem.degradedReason).toBeUndefined();
+    expect(sem.results.length).toBeGreaterThan(0);
   }, 20_000);
 
   it("answers every member of a JSON-RPC batch", async () => {
