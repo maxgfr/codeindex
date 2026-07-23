@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.8.1](https://github.com/maxgfr/codeindex/compare/v2.8.0...v2.8.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **scip:** pin the golden's tool version so release bumps cannot invalidate it ([3a61bfb](https://github.com/maxgfr/codeindex/commit/3a61bfb510c9d86e83c9ae29c824b120e581dd13))
+
 # [2.8.0](https://github.com/maxgfr/codeindex/compare/v2.7.0...v2.8.0) (2026-07-23)
 
 
