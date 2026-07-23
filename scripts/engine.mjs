@@ -7732,8 +7732,11 @@ function buildCallerIndex(scan2, importPairs, opts = {}) {
 function enclosingSymbol(scan2, file, line) {
   const f = scan2.files.find((x) => x.rel === file);
   if (!f?.symbols.length) return void 0;
+  return enclosingAmong(f.symbols, line);
+}
+function enclosingAmong(symbols, line) {
   let best;
-  for (const s of f.symbols) {
+  for (const s of symbols) {
     if (REFERENCE_KINDS3.has(s.kind)) continue;
     if (s.line > line) continue;
     if (s.endLine !== void 0 && line > s.endLine) continue;
@@ -7742,6 +7745,29 @@ function enclosingSymbol(scan2, file, line) {
     }
   }
   return best;
+}
+function buildRawCallerIndex(scan2) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) {
+    if (!f.calls?.length) continue;
+    const symbols = f.symbols.filter((s) => !REFERENCE_KINDS3.has(s.kind));
+    for (const c2 of f.calls) {
+      const site = { file: f.rel, line: c2.line };
+      if (c2.receiver !== void 0) site.receiver = c2.receiver;
+      const enc = enclosingAmong(symbols, c2.line);
+      if (enc) site.enclosingSymbol = enc;
+      let arr = byName.get(c2.name);
+      if (!arr) byName.set(c2.name, arr = []);
+      arr.push(site);
+    }
+  }
+  const index = /* @__PURE__ */ new Map();
+  for (const name2 of [...byName.keys()].sort(byStr)) {
+    const sites = byName.get(name2);
+    sites.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
+    index.set(name2, sites);
+  }
+  return index;
 }
 var REFERENCE_KINDS3;
 var init_callers = __esm({
@@ -11509,6 +11535,7 @@ export {
   buildGraph,
   buildIndexArtifacts,
   buildModules,
+  buildRawCallerIndex,
   buildResolveContext,
   buildSymbolIndex,
   byKey,

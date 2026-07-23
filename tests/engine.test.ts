@@ -52,6 +52,7 @@ const CONTRACT = [
   "uniqueSymbolDefs",
   "resolveCallEdges",
   "buildCallerIndex",
+  "buildRawCallerIndex",
   "enclosingSymbol",
   "computeImportPairs",
   "detectWorkspaces",

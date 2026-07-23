@@ -55,7 +55,7 @@ export { buildModules, isTestFile, tierForPath } from "./modules.js";
 export type { ModuleInfo } from "./modules.js";
 export { buildGraph, uniqueSymbolDefs } from "./graph.js";
 export { resolveCallEdges } from "./calls.js";
-export { buildCallerIndex, enclosingSymbol, computeImportPairs } from "./callers.js";
+export { buildCallerIndex, buildRawCallerIndex, enclosingSymbol, computeImportPairs } from "./callers.js";
 export { symbolsOverview, findSymbol, findReferences } from "./query.js";
 export { resolveUniqueSymbol, replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 export type { EditResult } from "./edit.js";
@@ -142,6 +142,10 @@ export type { ArchRule, ForbiddenEdgeRule, BuiltinRule, RuleSeverity, RuleViolat
 
 // Caller-index recall mode (issue #7) — options for buildCallerIndex above.
 export type { CallerIndexOptions } from "./callers.js";
+
+// Raw-recall caller index (issue #8) — ungated, def-resolution-free companion
+// to buildCallerIndex above; see its JSDoc in callers.ts for the contract.
+export type { RawCallerIndex, RawCallerSite } from "./callers.js";
 
 // Behavioral analytics (git-history mining) + the token-budgeted repo map.
 export { changeCoupling, rankHotspots } from "./coupling.js";

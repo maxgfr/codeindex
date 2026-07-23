@@ -119,7 +119,8 @@ note only) — so wiring it on is safe before an asset exists.
 | **ultrasec** | walker + gitignore + scope + symlink guard | `scanRepo` (`scope`, `gitignore` — its own semantics, ported here) |
 | | per-language defs/imports/calls extraction | `extractCode` (`symbols`/`refs`/`calls`) |
 | | `resolveImport` | `resolveImport` |
-| | `buildGraph` (import+call edges, symbolDefs, callersBySymbol, enclosingSymbol) | `buildGraph` + `resolveCallEdges` + `buildCallerIndex` + `enclosingSymbol` |
+| | `buildGraph` (import+call edges, symbolDefs) | `buildGraph` + `resolveCallEdges` |
+| | `callersBySymbol`, `enclosingSymbol` (raw-recall taint-BFS input) | `buildRawCallerIndex` (issue #8) — every name-matched call site keyed by the raw callee name, no def resolution or gating, `enclosingSymbol` computed per site. `buildCallerIndex` is **NOT** a substitute here: it is def-resolved and gated (language-family filter, JS/TS import gate, same-file self-declaration skip) and will silently drop sites a recall consumer needs. Both are bounded by `FileRecord.calls`'s per-file 512-call cap (dedup by name+line) — a file with more raw call sites than that loses sites upstream of either function. |
 | | keeps | taint source→sink enumeration, external scanners, EPSS/KEV/CVSS, SARIF |
 
 ## Golden-diff adjudication (every migration)
