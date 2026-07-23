@@ -16,6 +16,14 @@ const GOLDEN = fileURLToPath(new URL("./fixtures/scip/mini-repo.scip", import.me
 const PROJECT_ROOT = "file:///repo";
 const render = (): Uint8Array => renderScip(scanRepo(REPO), { projectRoot: PROJECT_ROOT });
 
+// The byte-golden fixture and the determinism check below pin tool_info.version
+// to a fixed string so a release's ENGINE_VERSION bump can never invalidate
+// them — see RenderScipOptions.toolVersion. The CLI-parity test deliberately
+// does NOT pin: it asserts the CLI and the API embed the same (live) version.
+const GOLDEN_TOOL_VERSION = "0.0.0-golden";
+const renderGolden = (): Uint8Array =>
+  renderScip(scanRepo(REPO), { projectRoot: PROJECT_ROOT, toolVersion: GOLDEN_TOOL_VERSION });
+
 // ---------------------------------------------------------------------------
 // A tiny protobuf reader (varint + length-delimited only) used to verify the
 // encoded index without pulling in a dependency.
@@ -78,8 +86,8 @@ const packedInts = (f: Field | undefined): number[] => {
 
 describe("renderScip", () => {
   it("is deterministic: two scans + two renders are byte-identical", () => {
-    const a = Buffer.from(render());
-    const b = Buffer.from(render());
+    const a = Buffer.from(renderGolden());
+    const b = Buffer.from(renderGolden());
     expect(Buffer.compare(a, b)).toBe(0);
     expect(a.length).toBeGreaterThan(0);
   });
@@ -189,9 +197,11 @@ describe("renderScip", () => {
   });
 
   it("matches the committed golden index byte-for-byte", () => {
-    const buf = Buffer.from(render());
+    const buf = Buffer.from(renderGolden());
     // Regenerate the golden after an intentional encoder/mapping change with:
     //   CODEINDEX_UPDATE_SCIP_GOLDEN=1 pnpm vitest run tests/scip.test.ts
+    // (renderGolden() pins toolVersion to GOLDEN_TOOL_VERSION, so a release's
+    // ENGINE_VERSION bump alone never requires — or should trigger — regen.)
     if (process.env.CODEINDEX_UPDATE_SCIP_GOLDEN) {
       writeFileSync(GOLDEN, buf);
       return;

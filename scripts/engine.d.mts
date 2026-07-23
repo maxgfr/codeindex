@@ -417,6 +417,7 @@ declare function renderGraphJson(graph: Graph): string;
 
 interface RenderScipOptions {
     projectRoot?: string;
+    toolVersion?: string;
 }
 declare function renderScip(scan: RepoScan, opts?: RenderScipOptions): Uint8Array;
 

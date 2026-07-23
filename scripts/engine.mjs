@@ -10434,6 +10434,7 @@ function findWord(line, name2) {
 }
 function renderScip(scan2, opts = {}) {
   const projectRoot = opts.projectRoot ?? "file://" + scan2.root.replace(/\\/g, "/");
+  const toolVersion = opts.toolVersion ?? ENGINE_VERSION;
   const docs = scan2.files.filter((f) => f.kind === "code" && f.symbols.length > 0);
   const docDefs = /* @__PURE__ */ new Map();
   const defByName = /* @__PURE__ */ new Map();
@@ -10514,7 +10515,7 @@ function renderScip(scan2, opts = {}) {
   }
   const toolInfo = [];
   pushString(toolInfo, F_TOOL_NAME, "codeindex");
-  pushString(toolInfo, F_TOOL_VERSION, ENGINE_VERSION);
+  pushString(toolInfo, F_TOOL_VERSION, toolVersion);
   const metadata2 = [];
   pushLenDelim(metadata2, F_META_TOOL_INFO, toolInfo);
   pushString(metadata2, F_META_PROJECT_ROOT, projectRoot);

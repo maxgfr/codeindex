@@ -24,6 +24,10 @@ export interface RenderScipOptions {
   // Overridable so a build is byte-reproducible regardless of the machine's
   // checkout path; defaults to `file://` + the posix repo root.
   projectRoot?: string;
+  // Metadata.tool_info.version. Overridable so a byte-golden fixture can pin a
+  // fixed string and stay stable across ENGINE_VERSION release bumps; defaults
+  // to the live ENGINE_VERSION (the CLI never overrides this — no flag for it).
+  toolVersion?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +250,7 @@ interface DefEntry {
 // ---------------------------------------------------------------------------
 export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8Array {
   const projectRoot = opts.projectRoot ?? "file://" + scan.root.replace(/\\/g, "/");
+  const toolVersion = opts.toolVersion ?? ENGINE_VERSION;
 
   // One Document per `code` file that declares ≥1 symbol, in scan order (already
   // sorted by rel).
@@ -353,7 +358,7 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
   // Metadata { tool_info, project_root, text_document_encoding }.
   const toolInfo: Bytes = [];
   pushString(toolInfo, F_TOOL_NAME, "codeindex");
-  pushString(toolInfo, F_TOOL_VERSION, ENGINE_VERSION);
+  pushString(toolInfo, F_TOOL_VERSION, toolVersion);
 
   const metadata: Bytes = [];
   pushLenDelim(metadata, F_META_TOOL_INFO, toolInfo);
