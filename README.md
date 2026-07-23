@@ -59,9 +59,9 @@ import { scanRepo, ENGINE_VERSION } from "@maxgfr/codeindex";
 const scan = scanRepo("/path/to/repo");
 ```
 
-The CLI ships in the same package (`npm i -g @maxgfr/codeindex`, see below).
-Skills should still prefer vendoring: it keeps their own bundle single-file and
-pinned to an exact commit without an npm dependency.
+The CLI ships in the same package — see **Use as a CLI** below for the global
+install command. Skills should still prefer vendoring: it keeps their own
+bundle single-file and pinned to an exact commit without an npm dependency.
 
 ## Use as a CLI
 
@@ -98,6 +98,19 @@ into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.
 
 `buildGraph`/`buildIndexArtifacts` accept `meta: { version, schemaVersion }` so
 a consumer can stamp its own identity into artifacts it persists.
+
+## Benchmarks
+
+Measured against 01x-in/codeindex, universal-ctags and scip-typescript with a
+reproducible harness (`scripts/bench/`); full methodology, fairness notes and
+all scenarios in [BENCHMARKS.md](./BENCHMARKS.md).
+
+| Metric | codeindex | Context |
+| --- | --- | --- |
+| `socialgouv/code-du-travail-numerique` — cold index | 1,746 ms | vs ctags 371 ms, 01x init 13,409 ms |
+| `socialgouv/code-du-travail-numerique` — warm rerun | 339 ms | |
+| `vercel/next.js` — cold index | 9,398 ms | vs ctags 3,431 ms |
+| `socialgouv/code-du-travail-numerique` — token ratio (measured) | 32.9× | structured index vs raw grep, single-symbol lookup |
 
 ## Development
 

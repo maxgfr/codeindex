@@ -1,0 +1,1433 @@
+{
+  "generatedAt": "2026-07-23T09:03:13.384Z",
+  "environment": {
+    "node": "v24.10.0",
+    "cpu": "Apple M5",
+    "ram": "16.0 GB",
+    "date": "2026-07-23T09:03:13.384Z"
+  },
+  "nominalRuns": 5,
+  "sections": [
+    {
+      "id": "cold",
+      "title": "Cold index",
+      "note": "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs.",
+      "headers": [
+        "Repo",
+        "Files",
+        "codeindex (ms)",
+        "ctags -R (ms)",
+        "scip-typescript (ms)",
+        "01x init (ms)"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "223",
+            "value": 223,
+            "kind": "int"
+          },
+          {
+            "display": "500",
+            "value": 500.06787499999973,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "45",
+            "value": 44.932124999999814,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "1506",
+            "value": 1506.0056669999994,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "129",
+            "value": 129,
+            "kind": "int"
+          },
+          {
+            "display": "277",
+            "value": 277.2011250000014,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "20",
+            "value": 20.479167000001326,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "1661",
+            "value": 1661.3131250000006,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "230",
+            "value": 230,
+            "kind": "int"
+          },
+          {
+            "display": "101",
+            "value": 100.64829200000167,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "21",
+            "value": 20.709209000000556,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (npm install failed)",
+            "na": "npm install failed"
+          },
+          {
+            "display": "994",
+            "value": 993.7054169999974,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "227",
+            "value": 227,
+            "kind": "int"
+          },
+          {
+            "display": "307",
+            "value": 306.80633300000045,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "26",
+            "value": 26.08679200000188,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "1265",
+            "value": 1265.3727080000026,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "2823",
+            "value": 2823,
+            "kind": "int"
+          },
+          {
+            "display": "1746",
+            "value": 1745.7529589999976,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "371",
+            "value": 370.6429999999964,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "13409",
+            "value": 13409.103833000001,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "132",
+            "value": 132,
+            "kind": "int"
+          },
+          {
+            "display": "103",
+            "value": 102.81020799998078,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "24",
+            "value": 23.66250000000582,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "449",
+            "value": 448.6750409999804,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "20000",
+            "value": 20000,
+            "kind": "int"
+          },
+          {
+            "display": "9398",
+            "value": 9397.78575000001,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "3431",
+            "value": 3430.5689589999965,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (npm install failed)",
+            "na": "npm install failed"
+          },
+          {
+            "display": "86062 (3×)",
+            "value": 86062.197583,
+            "kind": "ms",
+            "runs": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "warm",
+      "title": "Warm / incremental",
+      "note": "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). 01x re-indexes the single touched file.",
+      "headers": [
+        "Repo",
+        "codeindex warm rerun (ms)",
+        "codeindex +1 file (ms)",
+        "01x reindex file (ms)"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "85",
+            "value": 84.8174580000341,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "100",
+            "value": 99.57120799995027,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 11.840208999929018,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "72",
+            "value": 71.96170799992979,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "79",
+            "value": 79.00895799999125,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "29",
+            "value": 29.09854199993424,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "77",
+            "value": 76.65287499991246,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "82",
+            "value": 81.74166699999478,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "14",
+            "value": 13.790917000034824,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "95",
+            "value": 94.83487499994226,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "120",
+            "value": 120.27654199989047,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12.23208300000988,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "339",
+            "value": 339.11254200001713,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "344",
+            "value": 344.07499999995343,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (reindex exit 1)",
+            "na": "reindex exit 1"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "66",
+            "value": 66.46991700003855,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "73",
+            "value": 73.05125000001863,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11",
+            "value": 11.012832999927923,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "1775",
+            "value": 1774.7403749999357,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1828",
+            "value": 1827.6198330000043,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11",
+            "value": 11.223957999958657,
+            "kind": "ms",
+            "runs": 5
+          }
+        ]
+      ]
+    },
+    {
+      "id": "queries",
+      "title": "Queries (find-symbol / references / callers)",
+      "note": "`find-symbol in-proc` / `references in-proc`: a single API call on an already-loaded warm scan (call timed alone). `caller-index in-proc`: builds the whole-scan caller index (not just callers-of-symbol). `full-index spawn`: a full `codeindex symbols` CLI process — Node startup PLUS a cold buildIndexArtifacts and serialization of the entire symbol table, i.e. NOT a single-symbol lookup. `01x find-symbol`: one query against its primed SQLite DB. `ctags lookup`: scans the tags file for the symbol.",
+      "headers": [
+        "Repo",
+        "Symbol",
+        "find-symbol in-proc (ms)",
+        "full-index spawn (ms)",
+        "references in-proc (ms)",
+        "caller-index in-proc (ms)",
+        "01x find-symbol (ms)",
+        "ctags lookup (ms)"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.0816249999916181,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "466",
+            "value": 466.46804199996404,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 8.315874999971129,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.18445800000336,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.466790999984369,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.2710829999996349,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.05604200006928295,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "275",
+            "value": 275.0899999999674,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "3",
+            "value": 2.7519169999286532,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 2.128917000023648,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.073165999958292,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.37262500007636845,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.004916999954730272,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "116",
+            "value": 115.86512499989476,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.9022500000428408,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.04079200001433492,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "7",
+            "value": 7.079458000021987,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.3734999999869615,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.02266699995379895,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "321",
+            "value": 320.9722499999916,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "15",
+            "value": 15.017083000042476,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.5757500000763685,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "6",
+            "value": 6.265124999918044,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.15508300007786602,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.09729100007098168,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1860",
+            "value": 1860.327707999968,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "49",
+            "value": 48.66375000006519,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "4",
+            "value": 3.6094159999629483,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.40708400006406,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "7",
+            "value": 6.594459000043571,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.003333000000566244,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "108",
+            "value": 107.57041599997319,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.9912089999997988,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.03775000001769513,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 4.967875000089407,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.04383300000336021,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "1",
+            "value": 0.9722090000286698,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "9600",
+            "value": 9600.275417000055,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "579",
+            "value": 579.3360419999808,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "323",
+            "value": 323.13791699998546,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.037040999974124,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "121",
+            "value": 120.59866599994712,
+            "kind": "ms",
+            "runs": 5
+          }
+        ]
+      ]
+    },
+    {
+      "id": "tokens",
+      "title": "Token economy (single-symbol lookup)",
+      "note": "Two methods side by side: 01x's published formula (grep_lines×30 vs len×5+200) and an honest bytes/4 measurement of a raw grep vs our structured JSON. Ratio > 1 means the index returns less context to the model.",
+      "headers": [
+        "Repo",
+        "Symbol",
+        "grep lines",
+        "01x formula ratio",
+        "grep tokens (measured)",
+        "index tokens (measured)",
+        "measured ratio"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "103",
+            "value": 103,
+            "kind": "int"
+          },
+          {
+            "display": "12.1",
+            "value": 12.117647058823529,
+            "kind": "ratio"
+          },
+          {
+            "display": "2280",
+            "value": 2280,
+            "kind": "int"
+          },
+          {
+            "display": "39",
+            "value": 39,
+            "kind": "int"
+          },
+          {
+            "display": "58.8",
+            "value": 58.825806451612905,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "816",
+            "value": 816,
+            "kind": "int"
+          },
+          {
+            "display": "113.9",
+            "value": 113.86046511627907,
+            "kind": "ratio"
+          },
+          {
+            "display": "13400",
+            "value": 13400,
+            "kind": "int"
+          },
+          {
+            "display": "36",
+            "value": 36,
+            "kind": "int"
+          },
+          {
+            "display": "377.5",
+            "value": 377.46478873239437,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "11",
+            "value": 11,
+            "kind": "int"
+          },
+          {
+            "display": "1.3",
+            "value": 1.2941176470588236,
+            "kind": "ratio"
+          },
+          {
+            "display": "242",
+            "value": 242,
+            "kind": "int"
+          },
+          {
+            "display": "182",
+            "value": 182,
+            "kind": "int"
+          },
+          {
+            "display": "1.3",
+            "value": 1.3328748280605227,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "1149",
+            "value": 1149,
+            "kind": "int"
+          },
+          {
+            "display": "153.2",
+            "value": 153.2,
+            "kind": "ratio"
+          },
+          {
+            "display": "23865",
+            "value": 23865,
+            "kind": "int"
+          },
+          {
+            "display": "70",
+            "value": 70,
+            "kind": "int"
+          },
+          {
+            "display": "342.1",
+            "value": 342.14336917562724,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "48",
+            "value": 48,
+            "kind": "int"
+          },
+          {
+            "display": "5.3",
+            "value": 5.333333333333333,
+            "kind": "ratio"
+          },
+          {
+            "display": "2047",
+            "value": 2047,
+            "kind": "int"
+          },
+          {
+            "display": "62",
+            "value": 62,
+            "kind": "int"
+          },
+          {
+            "display": "32.9",
+            "value": 32.87550200803213,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "115",
+            "value": 115,
+            "kind": "int"
+          },
+          {
+            "display": "15.3",
+            "value": 15.333333333333334,
+            "kind": "ratio"
+          },
+          {
+            "display": "2423",
+            "value": 2423,
+            "kind": "int"
+          },
+          {
+            "display": "196",
+            "value": 196,
+            "kind": "int"
+          },
+          {
+            "display": "12.3",
+            "value": 12.347770700636943,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "1389",
+            "value": 1389,
+            "kind": "int"
+          },
+          {
+            "display": "160.3",
+            "value": 160.26923076923077,
+            "kind": "ratio"
+          },
+          {
+            "display": "39811",
+            "value": 39811,
+            "kind": "int"
+          },
+          {
+            "display": "102",
+            "value": 102,
+            "kind": "int"
+          },
+          {
+            "display": "390.3",
+            "value": 390.3014705882353,
+            "kind": "ratio"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "determinism",
+      "title": "Determinism (byte-identical rebuild)",
+      "note": "Two cold builds byte-compared (graph.json + symbols.json). 01x keeps a SQLite DB (embedded ids/timestamps) that is not byte-comparable, so determinism is not claimed for it here.",
+      "headers": [
+        "Repo",
+        "codeindex (byte-identical)",
+        "01x"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "size",
+      "title": "Index size on disk",
+      "note": "Our artifacts (graph.json + symbols.json + cache.json) vs 01x's `.codeindex/` SQLite DB vs the ctags `tags` file.",
+      "headers": [
+        "Repo",
+        "codeindex artifacts",
+        "01x .codeindex",
+        "ctags tags"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "2.0 MB",
+            "value": 2104890,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.0 MB",
+            "value": 1089536,
+            "kind": "bytes"
+          },
+          {
+            "display": "524.4 KB",
+            "value": 536948,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "1.2 MB",
+            "value": 1210398,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.1 MB",
+            "value": 1134592,
+            "kind": "bytes"
+          },
+          {
+            "display": "267.2 KB",
+            "value": 273617,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "332.3 KB",
+            "value": 340319,
+            "kind": "bytes"
+          },
+          {
+            "display": "104.0 KB",
+            "value": 106496,
+            "kind": "bytes"
+          },
+          {
+            "display": "238.2 KB",
+            "value": 243957,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "1.2 MB",
+            "value": 1246731,
+            "kind": "bytes"
+          },
+          {
+            "display": "908.0 KB",
+            "value": 929792,
+            "kind": "bytes"
+          },
+          {
+            "display": "282.3 KB",
+            "value": 289058,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "12.6 MB",
+            "value": 13240864,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.3 MB",
+            "value": 1359872,
+            "kind": "bytes"
+          },
+          {
+            "display": "4.4 MB",
+            "value": 4633149,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "277.1 KB",
+            "value": 283737,
+            "kind": "bytes"
+          },
+          {
+            "display": "84.0 KB",
+            "value": 86016,
+            "kind": "bytes"
+          },
+          {
+            "display": "87.9 KB",
+            "value": 90016,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "69.8 MB",
+            "value": 73195786,
+            "kind": "bytes"
+          },
+          {
+            "display": "17.2 MB",
+            "value": 17985536,
+            "kind": "bytes"
+          },
+          {
+            "display": "80.8 MB",
+            "value": 84698993,
+            "kind": "bytes"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "install",
+      "title": "Install footprint",
+      "note": "Measured, not declared. Our tarball is the unpacked size from `npm pack --dry-run`.",
+      "headers": [
+        "Tool",
+        "Install footprint",
+        "Notes"
+      ],
+      "rows": [
+        [
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "23.1 MB",
+            "value": 24254336,
+            "kind": "bytes"
+          },
+          {
+            "display": "zero runtime dependencies; single engine.mjs",
+            "value": "zero runtime dependencies; single engine.mjs",
+            "kind": "text"
+          }
+        ],
+        [
+          {
+            "display": "01x",
+            "value": "01x",
+            "kind": "text"
+          },
+          {
+            "display": "8.1 MB",
+            "value": 8470946,
+            "kind": "bytes"
+          },
+          {
+            "display": "binary only; + ast-grep 49.1 MB required",
+            "value": "binary only; + ast-grep 49.1 MB required",
+            "kind": "text"
+          }
+        ],
+        [
+          {
+            "display": "scip-typescript",
+            "value": "scip-typescript",
+            "kind": "text"
+          },
+          {
+            "display": "binary + target-repo node_modules",
+            "value": "binary + target-repo node_modules",
+            "kind": "text"
+          },
+          {
+            "display": "requires a full npm install of each indexed repo (see cold column)",
+            "value": "requires a full npm install of each indexed repo (see cold column)",
+            "kind": "text"
+          }
+        ]
+      ]
+    }
+  ]
+}
