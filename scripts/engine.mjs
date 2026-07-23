@@ -10156,7 +10156,9 @@ var init_viz = __esm({
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
-  runMcpServer: () => runMcpServer
+  memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
+  runMcpServer: () => runMcpServer,
+  scanFingerprint: () => scanFingerprint
 });
 import { createInterface } from "readline";
 function str(v) {
@@ -10164,6 +10166,19 @@ function str(v) {
 }
 function strArray(v) {
   return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? v : void 0;
+}
+function errMessage(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function scanFingerprint(scan2) {
+  return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
+}
+async function memoizedEmbeddingIndex(key, build) {
+  const cacheKey = `${key.mode}:${key.identity}:${scanFingerprint(key.scan)}`;
+  if (embeddingIndexCache && embeddingIndexCache.key === cacheKey) return embeddingIndexCache.index;
+  const index = await build();
+  embeddingIndexCache = { key: cacheKey, index };
+  return index;
 }
 async function callTool(name2, args2) {
   const repo = str(args2.repo);
@@ -10305,19 +10320,35 @@ async function callTool(name2, args2) {
       const endpoint = resolveEmbedEndpoint();
       if (endpoint) {
         try {
-          const index = await buildEndpointIndex(scan2);
+          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan: scan2 }, () => buildEndpointIndex(scan2));
           const queryVec = await encodeQueryViaEndpoint(query);
-          return JSON.stringify(searchSemantic(scan2, query, index, { queryVec, limit, fuzzy }), null, 2);
-        } catch {
-          return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy }), null, 2);
+          const results2 = searchSemantic(scan2, query, index, { queryVec, limit, fuzzy });
+          return JSON.stringify({ results: results2, tier: "endpoint" }, null, 2);
+        } catch (e) {
+          const results2 = searchIndex(scan2, query, { limit, fuzzy });
+          return JSON.stringify(
+            { results: results2, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
+            null,
+            2
+          );
         }
       }
       const modelDir = resolveEmbedModelDir(repo);
       const model = modelDir ? loadEmbedModel(modelDir) : void 0;
       if (model) {
-        const index = buildEmbeddingIndex(scan2, model);
-        return JSON.stringify(searchSemantic(scan2, query, index, { model, limit, fuzzy }), null, 2);
+        const index = await memoizedEmbeddingIndex(
+          { mode: "static", identity: `${modelDir}#${model.modelId}`, scan: scan2 },
+          () => buildEmbeddingIndex(scan2, model)
+        );
+        const results2 = searchSemantic(scan2, query, index, { model, limit, fuzzy });
+        return JSON.stringify({ results: results2, tier: "static" }, null, 2);
       }
+      const results = searchIndex(scan2, query, { limit, fuzzy });
+      return JSON.stringify(
+        { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured \u2014 see embed_status" },
+        null,
+        2
+      );
     }
     return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy }), null, 2);
   }
@@ -10398,7 +10429,7 @@ async function runMcpServer() {
     }
   }
 }
-var repoProp, scopeProps, TOOLS;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -10425,6 +10456,7 @@ var init_mcp = __esm({
     init_embed();
     init_search();
     init_endpoint();
+    init_hash();
     repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
     scopeProps = {
       scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -10637,7 +10669,7 @@ var init_mcp = __esm({
       },
       {
         name: "search",
-        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse the deterministic static-embedding tier when a model asset is present (degrades to lexical otherwise \u2014 see embed_status).',
+        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse an embedding tier (HTTP endpoint, else a local static model) with lexical \u2014 the response then wraps the ranked list as `{ results, tier, degradedReason? }`, `tier` being "endpoint"/"static" when fusion happened or "lexical" (with `degradedReason`) when it did not (see embed_status). Without `semantic`, the response is the bare ranked array, unchanged.',
         inputSchema: {
           type: "object",
           properties: {
@@ -10651,7 +10683,7 @@ var init_mcp = __esm({
             },
             semantic: {
               type: "boolean",
-              description: "RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. Degrades silently to lexical-only when neither is available/reachable \u2014 see embed_status."
+              description: 'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently \u2014 see embed_status.'
             }
           },
           required: ["repo", "query"]

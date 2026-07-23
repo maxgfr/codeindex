@@ -10,7 +10,7 @@ import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
 import { buildIndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { scanRepo } from "./scan.js";
+import { scanRepo, type RepoScan } from "./scan.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
@@ -26,9 +26,10 @@ import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel } from "./embed/model.js";
-import { buildEmbeddingIndex } from "./embed/index.js";
+import { buildEmbeddingIndex, type EmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
+import { sha1 } from "./hash.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -324,6 +325,47 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+// --- embedding index memoization --------------------------------------------
+// The MCP server process is long-lived, but every `search` call used to redo
+// the FULL corpus embedding build — N `buildEndpointIndex` HTTP round-trips,
+// or a full `buildEmbeddingIndex` re-encode pass — even when nothing in the
+// repo changed between requests. Memoize the last build behind a fingerprint
+// of the scan contents plus the tier's identity, so an unchanged repo reuses
+// the cached index and any file add/edit/remove (or a switch of endpoint/model)
+// still rebuilds. RepoScan carries no fingerprint of its own (checked
+// scan.ts/types.ts) — every FileRecord already carries a content hash, so
+// hashing the (rel, hash) pairs is the staleness oracle scan.ts itself uses.
+export function scanFingerprint(scan: RepoScan): string {
+  return sha1(scan.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
+}
+
+export interface EmbeddingIndexCacheKey {
+  mode: "endpoint" | "static";
+  // Distinguishes cache entries across configs sharing the same scan: the
+  // endpoint URL, or the model dir + modelId for the static tier.
+  identity: string;
+  scan: RepoScan;
+}
+
+// A SINGLE entry — never an unbounded map — holding the most recent build.
+let embeddingIndexCache: { key: string; index: EmbeddingIndex } | undefined;
+
+// Reuse the cached index when (mode, identity, scanFingerprint) matches the
+// last build; otherwise call `build` and cache its result. A failed build is
+// NEVER cached (matches today's per-call error behavior: the next request
+// retries from scratch, and a still-valid previous entry — under a different
+// key — is left untouched).
+export async function memoizedEmbeddingIndex(
+  key: EmbeddingIndexCacheKey,
+  build: () => Promise<EmbeddingIndex> | EmbeddingIndex,
+): Promise<EmbeddingIndex> {
+  const cacheKey = `${key.mode}:${key.identity}:${scanFingerprint(key.scan)}`;
+  if (embeddingIndexCache && embeddingIndexCache.key === cacheKey) return embeddingIndexCache.index;
+  const index = await build();
+  embeddingIndexCache = { key: cacheKey, index };
+  return index;
+}
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const repo = str(args.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
@@ -471,8 +513,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       if (endpoint) {
         // Rich tier — endpoint takes PRECEDENCE over a local static model. An
         // unreachable/malformed endpoint degrades to lexical, now with a reason.
+        // The corpus index is memoized per (endpoint, scan state) — the query
+        // itself is always re-encoded fresh (it differs per call).
         try {
-          const index = await buildEndpointIndex(scan);
+          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, () => buildEndpointIndex(scan));
           const queryVec = await encodeQueryViaEndpoint(query);
           const results = searchSemantic(scan, query, index, { queryVec, limit, fuzzy });
           return JSON.stringify({ results, tier: "endpoint" }, null, 2);
@@ -488,7 +532,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const modelDir = resolveEmbedModelDir(repo);
       const model = modelDir ? loadEmbedModel(modelDir) : undefined;
       if (model) {
-        const index = buildEmbeddingIndex(scan, model);
+        const index = await memoizedEmbeddingIndex(
+          { mode: "static", identity: `${modelDir}#${model.modelId}`, scan },
+          () => buildEmbeddingIndex(scan, model),
+        );
         const results = searchSemantic(scan, query, index, { model, limit, fuzzy });
         return JSON.stringify({ results, tier: "static" }, null, 2);
       }
