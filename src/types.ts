@@ -24,8 +24,11 @@ export const SCHEMA_VERSION = 4;
 // (the immediate receiver of a qualified call, both tiers) and JS/TS export
 // parity with ultradoc (CJS `exports.foo =` / `module.exports = {…}` named
 // exports, `export { a, b as c }` local marking, anonymous `export default`
-// named after the file stem, `export default Foo` marking the declaration).
-export const EXTRACTOR_VERSION = 6;
+// named after the file stem, `export default Foo` marking the declaration);
+// v7 makes an export-alias symbol (`export { b as c }`) mirror the aliased
+// local declaration's own kind (e.g. "function") instead of the generic
+// "reexport" when it resolves in-file.
+export const EXTRACTOR_VERSION = 7;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

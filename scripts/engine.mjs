@@ -16,7 +16,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.10.0";
     SCHEMA_VERSION = 4;
-    EXTRACTOR_VERSION = 6;
+    EXTRACTOR_VERSION = 7;
   }
 });
 
@@ -6340,12 +6340,14 @@ function extractImports(ext, content) {
   }
   return [...specs].map((spec) => ({ kind: "import", spec }));
 }
-function extractReexports(rel, content) {
+function extractReexports(rel, content, localSymbols) {
   if (!JS_TS.has(rel.slice(rel.lastIndexOf(".")))) return [];
   const lang = /\.(ts|tsx|mts|cts)$/.test(rel) ? "typescript" : "javascript";
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
   const lineAt = (idx) => content.slice(0, idx).split(/\r?\n/).length;
+  const localKindOf = /* @__PURE__ */ new Map();
+  for (const s of localSymbols) if (!localKindOf.has(s.name)) localKindOf.set(s.name, s.kind);
   const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
   let m;
   while ((m = named.exec(content)) && out2.length < 60) {
@@ -6353,12 +6355,14 @@ function extractReexports(rel, content) {
     for (const part of m[1].split(",")) {
       const p = part.trim().replace(/^type\s+/, "");
       const as = /^(\S+)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(p);
+      const orig = as ? as[1] : p;
       const name2 = as ? as[2] : p;
       if (!/^[A-Za-z_$][\w$]*$/.test(name2) || name2 === "default" || seen.has(name2)) continue;
       seen.add(name2);
+      const mirroredKind = !from ? localKindOf.get(orig) : void 0;
       out2.push({
         name: name2,
-        kind: "reexport",
+        kind: mirroredKind ?? "reexport",
         file: rel,
         line: lineAt(m.index),
         signature: from ? `export { ${name2} } from "${from}"` : `export { ${name2} }`,
@@ -6411,7 +6415,7 @@ function extractCode(rel, ext, content) {
   const ast = extractAst(rel, ext, content);
   const symbols = (ast ? ast.symbols : extractSymbols(rel, ext, content)).slice(0, 400);
   const known = new Set(symbols.map((s) => s.name));
-  const reexports = extractReexports(rel, content).filter((s) => !known.has(s.name));
+  const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
   return {
     symbols: [...symbols, ...reexports],
     summary: topDocComment(content),

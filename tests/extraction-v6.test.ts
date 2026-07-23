@@ -75,15 +75,17 @@ describe("JS/TS export parity (AST tier)", () => {
     expect(exportedByKey(r.symbols)["class:Foo"]).toBe(true);
   });
 
-  it("export { a, b as c } marks locals and the alias surfaces as a reexport symbol", () => {
+  it("export { a, b as c } marks locals and the alias surfaces as a symbol mirroring b's kind", () => {
     const src = "const a = 1;\nfunction b() {}\nexport { a, b as c };\n";
     const r = extractAst("barrel.ts", ".ts", src)!;
     const by = exportedByKey(r.symbols);
     expect(by["const:a"]).toBe(true);
     expect(by["function:b"]).toBe(true);
     // The alias symbol is appended by extractCode's reexport pass (both tiers).
+    // Since `b` resolves to an in-file function, `c` mirrors kind "function"
+    // (extractor v7) rather than the generic "reexport" — see extraction-v7.test.ts.
     const info = extractCode("barrel.ts", ".ts", src);
-    expect(info.symbols.some((s) => s.name === "c" && s.kind === "reexport" && s.exported)).toBe(true);
+    expect(info.symbols.some((s) => s.name === "c" && s.kind === "function" && s.exported)).toBe(true);
   });
 
   it("anonymous export default function/class is named after the file stem", () => {
