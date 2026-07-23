@@ -1,3 +1,9 @@
 node_modules/
 tests/.e2e-cache/
 *.tgz
+
+# Static-embedding model assets live ONLY in the GitHub release, never in git or
+# the npm tarball: the generated conversion output and any pulled model.
+scripts/embed-asset/model.json
+scripts/embed-asset/.venv/
+.codeindex/

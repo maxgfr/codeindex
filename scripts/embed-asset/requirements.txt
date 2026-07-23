@@ -1,0 +1,6 @@
+# Pinned maintainer toolchain to reproduce the codeindex static-embedding asset.
+# Developed on Python 3.14.6. Not an npm dependency — the published package ships
+# no model asset (see ../../tests/pack-smoke.test.ts).
+model2vec==0.8.2
+numpy==2.5.1
+huggingface_hub==1.24.0
