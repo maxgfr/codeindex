@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.8.0](https://github.com/maxgfr/codeindex/compare/v2.7.0...v2.8.0) (2026-07-23)
+
+
+### Bug Fixes
+
+* **scip:** declare per-document UTF-16 position encoding ([779c54b](https://github.com/maxgfr/codeindex/commit/779c54bf20e92ad6125c7629cfbe767a6f5c9757))
+
+
+### Features
+
+* **scip:** SCIP index export with a hand-rolled zero-dep protobuf encoder ([87d93b8](https://github.com/maxgfr/codeindex/commit/87d93b81cb55e807cbba9bfc558733bf4dd9e9a1))
+
 # [2.7.0](https://github.com/maxgfr/codeindex/compare/v2.6.0...v2.7.0) (2026-07-22)
 
 
