@@ -66,3 +66,48 @@ describe("C/C++ regex-tier calls exclude the file's own definition line (extract
     expect(calls).toContainEqual({ name: "helper", line: 7 });
   });
 });
+
+// Reviewer-found CRITICAL, fixed here: the first version of this exclusion
+// dropped every occurrence of a self-def name+line pair, not just the
+// definition's own token — a false negative (missed sink) is worse for a
+// security consumer than the false positive it fixed. `symbols` is populated
+// by hand below (rather than via a real extractor) because `scan()` — shared
+// by every regex-tier language, including JS/TS and C/C++ — emits at most one
+// symbol per physical line, so no real extractor could produce the adversarial
+// "three definitions packed on one line" fixture the regression needs; the
+// point is to harden collectCallsRegex itself against that input shape.
+describe("regex-tier calls keep genuine same-name-same-line occurrences (post-review fix)", () => {
+  it("(d) minified one-liner: bb's calls to aa() and cc() survive even though aa/cc are also defined on line 1", () => {
+    const src = "function aa(){return 1}function bb(){return aa()+cc()}function cc(){return 2}";
+    const symbols = [
+      { name: "aa", line: 1 },
+      { name: "bb", line: 1 },
+      { name: "cc", line: 1 },
+    ];
+    const calls = collectCallsRegex(src, symbols);
+    expect(calls).toContainEqual({ name: "aa", line: 1 }); // the call inside bb's body
+    expect(calls).toContainEqual({ name: "cc", line: 1 }); // the call inside bb's body
+    // bb itself is never called — only ever a definition.
+    expect(calls.some((call) => call.name === "bb")).toBe(false);
+  });
+
+  it("(e) one-line recursion: the genuine self-call survives", () => {
+    const src = "function foo(){foo();}";
+    const symbols = [{ name: "foo", line: 1 }];
+    const calls = collectCallsRegex(src, symbols);
+    expect(calls).toContainEqual({ name: "foo", line: 1 });
+  });
+
+  it("C fallback (no introducer keyword): one-line recursion still collects the real self-call", () => {
+    // Mirrors (e) but for a language with no DEF_INTRODUCERS keyword, forcing
+    // the first-occurrence fallback path rather than the introducer path.
+    // `symbols` is supplied by hand: c.ts's own definition rule requires the
+    // line to END right after the opening brace (no same-line body), so it
+    // would never itself recognize "foo" as a symbol on this exact one-liner
+    // — the point here is collectCallsRegex's fallback branch in isolation.
+    const src = "void foo(void){foo();}";
+    const symbols = [{ name: "foo", line: 1 }];
+    const calls = collectCallsRegex(src, symbols);
+    expect(calls).toContainEqual({ name: "foo", line: 1 });
+  });
+});

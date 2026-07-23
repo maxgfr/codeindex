@@ -6400,14 +6400,28 @@ function collectCallsRegex(content, symbols = []) {
     const trimmed = line.trimStart();
     if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;
     CALL_RE.lastIndex = 0;
+    let probe;
+    const introducerCaught = /* @__PURE__ */ new Set();
+    while ((probe = CALL_RE.exec(line)) !== null) {
+      const name2 = probe[2];
+      const key = `${name2} ${i2 + 1}`;
+      if (ownDefLines.has(key) && DEF_INTRODUCERS.test(line.slice(0, probe.index))) introducerCaught.add(key);
+    }
+    CALL_RE.lastIndex = 0;
     let m;
+    const fallbackExcluded = /* @__PURE__ */ new Set();
     while ((m = CALL_RE.exec(line)) !== null && out2.size < 512) {
       const receiver = m[1];
       const name2 = m[2];
       if (name2.length < 2 || CALL_KEYWORDS.has(name2)) continue;
       if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
       const key = `${name2} ${i2 + 1}`;
-      if (ownDefLines.has(key)) continue;
+      if (ownDefLines.has(key) && !introducerCaught.has(key)) {
+        if (!fallbackExcluded.has(key)) {
+          fallbackExcluded.add(key);
+          continue;
+        }
+      }
       if (!out2.has(key)) out2.set(key, receiver ? { name: name2, line: i2 + 1, receiver } : { name: name2, line: i2 + 1 });
     }
   }

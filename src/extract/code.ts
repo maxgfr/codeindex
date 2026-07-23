@@ -333,14 +333,27 @@ const DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bm
 // before the called name); bare calls carry no receiver.
 //
 // `symbols` is the file's OWN regex-extracted symbols (name + definition
-// line) — a call candidate whose (name, line) exactly matches one of them is
-// the symbol's own definition line, not a call, and is excluded. DEF_INTRODUCERS
-// already excludes definitions that read `function foo(`/`def foo(`/etc., but
+// line). DEF_INTRODUCERS already excludes definitions that read `function
+// foo(`/`def foo(`/etc. (per OCCURRENCE, wherever on the line it sits), but
 // C/C++ function definitions have no such introducer (`void load(void) {`) —
 // the bare name reads exactly like a call to itself on its own definition
-// line. Exported for direct testing (extraction-v8.test.ts): once a wasm
-// sidecar/grammar is loaded, extractCode never reaches this path for C/C++, so
-// tests exercise it directly rather than through extractCode.
+// line. For those, a call candidate whose (name, line) exactly matches one of
+// `symbols` is excluded too — but ONLY its first (leftmost) occurrence on that
+// line, never every same-named occurrence: dense/minified one-liners can pack
+// a genuine call to the same name on the same physical line as its own
+// definition (`function aa(){}function bb(){return aa()+cc()}function cc(){}`
+// — bb's calls to aa() and cc() must survive), and even a bodyless
+// single-line recursive definition (`function foo(){foo();}`) has a real self
+// -call to keep. Two-tier: if ANY occurrence of a def'd name on this line is
+// already caught by DEF_INTRODUCERS (JS/Python/…), that occurrence alone is
+// excluded (existing per-occurrence check below) and no further exclusion is
+// applied — every OTHER occurrence is a genuine call. Only when NO occurrence
+// carries an introducer (C/C++) does this fall back to excluding just the
+// first occurrence: C/C++'s own definition regex requires column 0, so on a
+// line where it matches at all, the first occurrence IS that definition.
+// Exported for direct testing (extraction-v8.test.ts): once a wasm sidecar/
+// grammar is loaded, extractCode never reaches this path for C/C++, so tests
+// exercise it directly rather than through extractCode.
 export function collectCallsRegex(
   content: string,
   symbols: Pick<CodeSymbol, "name" | "line">[] = [],
@@ -356,15 +369,36 @@ export function collectCallsRegex(
     // regexes — noise resolves to nothing in the global call pass).
     const trimmed = line.trimStart();
     if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;
+
+    // Pass 1: which own-def keys on this line have at least one occurrence
+    // DEF_INTRODUCERS already catches? Those are fully handled per-occurrence
+    // below — no fallback exclusion needed (or wanted) for them.
+    CALL_RE.lastIndex = 0;
+    let probe: RegExpExecArray | null;
+    const introducerCaught = new Set<string>();
+    while ((probe = CALL_RE.exec(line)) !== null) {
+      const name = probe[2]!;
+      const key = `${name} ${i + 1}`;
+      if (ownDefLines.has(key) && DEF_INTRODUCERS.test(line.slice(0, probe.index))) introducerCaught.add(key);
+    }
+
+    // Pass 2: the real collection. Own-def keys with no introducer occurrence
+    // fall back to excluding just their first occurrence on the line.
     CALL_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
+    const fallbackExcluded = new Set<string>();
     while ((m = CALL_RE.exec(line)) !== null && out.size < 512) {
       const receiver = m[1];
       const name = m[2]!;
       if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
       if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
       const key = `${name} ${i + 1}`;
-      if (ownDefLines.has(key)) continue;
+      if (ownDefLines.has(key) && !introducerCaught.has(key)) {
+        if (!fallbackExcluded.has(key)) {
+          fallbackExcluded.add(key);
+          continue;
+        }
+      }
       if (!out.has(key)) out.set(key, receiver ? { name, line: i + 1, receiver } : { name, line: i + 1 });
     }
   }
