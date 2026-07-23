@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.12.0](https://github.com/maxgfr/codeindex/compare/v2.11.1...v2.12.0) (2026-07-23)
+
+
+### Bug Fixes
+
+* **docker:** ship docs/SEMANTIC.md referenced by MIGRATION.md ([4563004](https://github.com/maxgfr/codeindex/commit/4563004e598608f6c1aa2913b8be8fa639ef9b63))
+* **extract:** export-alias symbols cite the original declaration's line ([c3f4c69](https://github.com/maxgfr/codeindex/commit/c3f4c69bdcb063f75a77ea0251db33003f603fdf)), closes [#9](https://github.com/maxgfr/codeindex/issues/9)
+* **pkg:** ship docs/SEMANTIC.md in the npm tarball ([584ee1f](https://github.com/maxgfr/codeindex/commit/584ee1f399b4695585a830e8910489345fa686c5))
+
+
+### Features
+
+* **callers:** add buildRawCallerIndex for ungated raw recall ([#8](https://github.com/maxgfr/codeindex/issues/8)) ([4ef2553](https://github.com/maxgfr/codeindex/commit/4ef2553b9368d2adb14dd2c950a5509450cd9f71))
+* **embed:** default pull URL with sha256 verification ([5e74ba0](https://github.com/maxgfr/codeindex/commit/5e74ba0f6e6ef55f3c741a021f1800088be43e15))
+* **embed:** official static model conversion toolchain ([b0430cf](https://github.com/maxgfr/codeindex/commit/b0430cff1498ff8c8716c0d1c56183f8ab771618))
+* **mcp:** report effective search tier instead of degrading silently ([acc158f](https://github.com/maxgfr/codeindex/commit/acc158f9df9a6706c1318f3b3aa75a6f7e3b8a79))
+
+
+### Performance Improvements
+
+* **mcp:** memoize the embedding index across server requests ([0c47a72](https://github.com/maxgfr/codeindex/commit/0c47a72960c171f6f03f4618c3aa65ddea88d053))
+
 ## [2.11.1](https://github.com/maxgfr/codeindex/compare/v2.11.0...v2.11.1) (2026-07-23)
 
 
