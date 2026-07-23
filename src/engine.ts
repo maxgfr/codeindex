@@ -115,13 +115,25 @@ export {
   resolveEmbedPullUrl,
 } from "./embed/model.js";
 export type { StaticEmbedModel } from "./embed/model.js";
-export { encode, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
-export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings } from "./embed/index.js";
-export type { EmbeddingIndex, EmbeddingRecord } from "./embed/index.js";
+export { encode, quantize, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
+export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits } from "./embed/index.js";
+export type { EmbeddingIndex, EmbeddingRecord, EmbeddingUnit } from "./embed/index.js";
 export { searchSemantic } from "./embed/search.js";
 export type { SemanticSearchOptions, SemanticSearchResult } from "./embed/search.js";
-// HTTP endpoint tier (v2.11 preview — NOT wired into the CLI/MCP here).
-export { embedViaEndpoint, resolveEmbedEndpoint } from "./embed/endpoint.js";
+// HTTP endpoint tier (v2.11.0 — the "rich" tier). The engine is a fetch consumer
+// of a containerized embedding server (CODEINDEX_EMBED_ENDPOINT): float vectors
+// run through the SAME L2+int8 quantize pipeline, then the same integer ranking.
+// Deterministic PER IMAGE DIGEST (not byte-golden). The library never
+// orchestrates docker — `codeindex embed serve` (CLI) only prints/runs it.
+export {
+  embedViaEndpoint,
+  resolveEmbedEndpoint,
+  embedEndpointUrl,
+  healthzUrl,
+  probeEndpoint,
+  encodeQueryViaEndpoint,
+  buildEndpointIndex,
+} from "./embed/endpoint.js";
 export type { EmbedEndpointOptions } from "./embed/endpoint.js";
 
 // Architecture rules: forbidden edges + cycles/orphans builtins (issue #4).

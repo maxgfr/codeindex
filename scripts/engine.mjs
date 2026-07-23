@@ -9447,11 +9447,25 @@ function roundHalfToEven(x) {
   if (diff > 0.5) return f + 1;
   return f % 2 === 0 ? f : f + 1;
 }
+function quantize(vec) {
+  const dim = vec.length;
+  const out2 = new Int8Array(dim);
+  let sumsq = 0;
+  for (let d = 0; d < dim; d++) sumsq += vec[d] * vec[d];
+  const norm2 = Math.sqrt(sumsq);
+  if (norm2 === 0) return out2;
+  for (let d = 0; d < dim; d++) {
+    let q = roundHalfToEven(vec[d] / norm2 * QUANT);
+    if (q > QUANT) q = QUANT;
+    else if (q < -QUANT) q = -QUANT;
+    out2[d] = q;
+  }
+  return out2;
+}
 function encode(model, text) {
   const { dim, weights } = model;
-  const out2 = new Int8Array(dim);
   const ids = tokenize(text, model);
-  if (ids.length === 0) return out2;
+  if (ids.length === 0) return new Int8Array(dim);
   const pooled = new Float64Array(dim);
   for (const id of ids) {
     const base = id * dim;
@@ -9459,17 +9473,7 @@ function encode(model, text) {
   }
   const inv = 1 / ids.length;
   for (let d = 0; d < dim; d++) pooled[d] *= inv;
-  let sumsq = 0;
-  for (let d = 0; d < dim; d++) sumsq += pooled[d] * pooled[d];
-  const norm2 = Math.sqrt(sumsq);
-  if (norm2 === 0) return out2;
-  for (let d = 0; d < dim; d++) {
-    let q = roundHalfToEven(pooled[d] / norm2 * QUANT);
-    if (q > QUANT) q = QUANT;
-    else if (q < -QUANT) q = -QUANT;
-    out2[d] = q;
-  }
-  return out2;
+  return quantize(pooled);
 }
 function intDot(a, b) {
   const n = Math.min(a.length, b.length);
@@ -9493,8 +9497,8 @@ function symbolText(rel, name2, signature, summary) {
 function fileText(rel, title, summary, headings) {
   return [title ?? "", summary ?? "", ...headings, rel.replace(/\//g, " ")].join("\n");
 }
-function buildEmbeddingIndex(scan2, model) {
-  const records = [];
+function embeddingUnits(scan2) {
+  const units = [];
   for (const f of scan2.files) {
     const seen = /* @__PURE__ */ new Set();
     let hadSymbol = false;
@@ -9502,20 +9506,22 @@ function buildEmbeddingIndex(scan2, model) {
       if (seen.has(s.name)) continue;
       seen.add(s.name);
       hadSymbol = true;
-      records.push({
-        file: f.rel,
-        symbol: s.name,
-        line: s.line,
-        vec: encode(model, symbolText(f.rel, s.name, s.signature, f.summary))
-      });
+      units.push({ file: f.rel, symbol: s.name, line: s.line, text: symbolText(f.rel, s.name, s.signature, f.summary) });
     }
     if (!hadSymbol) {
       const text = fileText(f.rel, f.title, f.summary, f.headings);
-      if (text.replace(/\s+/g, "")) {
-        records.push({ file: f.rel, vec: encode(model, text) });
-      }
+      if (text.replace(/\s+/g, "")) units.push({ file: f.rel, text });
     }
   }
+  return units;
+}
+function buildEmbeddingIndex(scan2, model) {
+  const records = embeddingUnits(scan2).map((u) => {
+    const rec = { file: u.file, vec: encode(model, u.text) };
+    if (u.symbol !== void 0) rec.symbol = u.symbol;
+    if (u.line !== void 0) rec.line = u.line;
+    return rec;
+  });
   return { embedVersion: EMBED_VERSION, modelId: model.modelId, dim: model.dim, records };
 }
 function serializeEmbeddings(index) {
@@ -9572,10 +9578,10 @@ var init_embed = __esm({
 function searchSemantic(scan2, query, index, opts = {}) {
   const limit = opts.limit ?? DEFAULT_LIMIT2;
   const lexical = searchIndex(scan2, query, { limit: Math.max(limit, 50), fuzzy: opts.fuzzy });
-  if (!opts.model || !index || index.records.length === 0) {
+  const q = opts.queryVec ?? (opts.model ? encode(opts.model, query) : void 0);
+  if (!q || !index || index.records.length === 0) {
     return lexical.slice(0, limit);
   }
-  const q = encode(opts.model, query);
   const bestByFile = /* @__PURE__ */ new Map();
   for (const r of index.records) {
     const dot = intDot(q, r.vec);
@@ -9611,6 +9617,99 @@ var init_search = __esm({
     init_encode();
     DEFAULT_LIMIT2 = 20;
     RRF_K = 60;
+  }
+});
+
+// src/embed/endpoint.ts
+function resolveEmbedEndpoint(opts = {}) {
+  const url = opts.url ?? process.env.CODEINDEX_EMBED_ENDPOINT;
+  return url && url.trim() ? url.trim() : void 0;
+}
+function stripTrailingSlash(url) {
+  return url.replace(/\/+$/, "");
+}
+function embedEndpointUrl(base) {
+  const b = stripTrailingSlash(base);
+  return b.endsWith("/embed") ? b : b + "/embed";
+}
+function healthzUrl(base) {
+  return stripTrailingSlash(base).replace(/\/embed$/, "") + "/healthz";
+}
+function resolveTimeout(opts) {
+  if (typeof opts.timeoutMs === "number") return opts.timeoutMs;
+  const env = Number(process.env.CODEINDEX_EMBED_TIMEOUT_MS);
+  return Number.isFinite(env) && env > 0 ? env : 3e4;
+}
+async function embedViaEndpoint(texts, opts = {}) {
+  const base = resolveEmbedEndpoint(opts);
+  if (!base) throw new Error("no embedding endpoint configured (set CODEINDEX_EMBED_ENDPOINT or pass opts.url)");
+  const url = embedEndpointUrl(base);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), resolveTimeout(opts));
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...opts.headers ?? {} },
+      body: JSON.stringify({ texts }),
+      signal: controller.signal
+    });
+    if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
+    const data = await res.json();
+    const vectors = data.vectors;
+    if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number"))) {
+      throw new Error(`embedding endpoint ${url} returned a malformed { vectors } payload`);
+    }
+    return vectors;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function probeEndpoint(base, opts = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), resolveTimeout(opts));
+  try {
+    const res = await fetch(healthzUrl(base), { signal: controller.signal, headers: opts.headers });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function encodeQueryViaEndpoint(query, opts = {}) {
+  const [vec] = await embedViaEndpoint([query], opts);
+  if (!vec) throw new Error("embedding endpoint returned no vector for the query");
+  return quantize(vec);
+}
+async function buildEndpointIndex(scan2, opts = {}) {
+  const units = embeddingUnits(scan2);
+  const batchSize = opts.batchSize && opts.batchSize > 0 ? opts.batchSize : 64;
+  const records = [];
+  let dim = 0;
+  for (let i2 = 0; i2 < units.length; i2 += batchSize) {
+    const batch = units.slice(i2, i2 + batchSize);
+    const vectors = await embedViaEndpoint(batch.map((u) => u.text), opts);
+    if (vectors.length !== batch.length) {
+      throw new Error(`embedding endpoint returned ${vectors.length} vectors for ${batch.length} texts`);
+    }
+    for (let j = 0; j < batch.length; j++) {
+      const u = batch[j];
+      const vec = quantize(vectors[j]);
+      if (vec.length > dim) dim = vec.length;
+      const rec = { file: u.file, vec };
+      if (u.symbol !== void 0) rec.symbol = u.symbol;
+      if (u.line !== void 0) rec.line = u.line;
+      records.push(rec);
+    }
+  }
+  return { embedVersion: EMBED_VERSION, modelId: "endpoint", dim, records };
+}
+var init_endpoint = __esm({
+  "src/embed/endpoint.ts"() {
+    "use strict";
+    init_encode();
+    init_model();
+    init_embed();
   }
 });
 
@@ -10009,7 +10108,7 @@ function str(v) {
 function strArray(v) {
   return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? v : void 0;
 }
-function callTool(name2, args2) {
+async function callTool(name2, args2) {
   const repo = str(args2.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
@@ -10146,6 +10245,16 @@ function callTool(name2, args2) {
     const limit = typeof args2.limit === "number" ? args2.limit : void 0;
     const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
     if (args2.semantic === true) {
+      const endpoint = resolveEmbedEndpoint();
+      if (endpoint) {
+        try {
+          const index = await buildEndpointIndex(scan2);
+          const queryVec = await encodeQueryViaEndpoint(query);
+          return JSON.stringify(searchSemantic(scan2, query, index, { queryVec, limit, fuzzy }), null, 2);
+        } catch {
+          return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy }), null, 2);
+        }
+      }
       const modelDir = resolveEmbedModelDir(repo);
       const model = modelDir ? loadEmbedModel(modelDir) : void 0;
       if (model) {
@@ -10158,15 +10267,16 @@ function callTool(name2, args2) {
   if (name2 === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
-    return JSON.stringify(
-      {
-        embedVersion: EMBED_VERSION,
-        model: model ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize } : { present: false },
-        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null
-      },
-      null,
-      2
-    );
+    const endpoint = resolveEmbedEndpoint();
+    const mode = endpoint ? "endpoint" : model ? "static" : "none";
+    const status = {
+      embedVersion: EMBED_VERSION,
+      mode,
+      model: model ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize } : { present: false },
+      endpoint: endpoint ?? null
+    };
+    if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
+    return JSON.stringify(status, null, 2);
   }
   if (name2 === "check_rules") {
     const rules = parseRules(args2.rules);
@@ -10192,9 +10302,9 @@ async function runMcpServer() {
       continue;
     }
     const requests = Array.isArray(parsed) ? parsed : [parsed];
-    for (const req of requests) handle2(req);
+    for (const req of requests) await handle2(req);
   }
-  function handle2(req) {
+  async function handle2(req) {
     if (req.id === void 0 || req.id === null) return;
     try {
       if (req.method === "initialize") {
@@ -10215,7 +10325,7 @@ async function runMcpServer() {
         const name2 = str(params.name) ?? "";
         const args2 = params.arguments ?? {};
         try {
-          const text = callTool(name2, args2);
+          const text = await callTool(name2, args2);
           send({ id: req.id, result: { content: [{ type: "text", text }] } });
         } catch (e) {
           send({
@@ -10257,6 +10367,7 @@ var init_mcp = __esm({
     init_model();
     init_embed();
     init_search();
+    init_endpoint();
     repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
     scopeProps = {
       scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -10483,7 +10594,7 @@ var init_mcp = __esm({
             },
             semantic: {
               type: "boolean",
-              description: "RRF-fuse the deterministic static-embedding tier with lexical when a model asset is present (default false; silently lexical-only when no model)"
+              description: "RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. Degrades silently to lexical-only when neither is available/reachable \u2014 see embed_status."
             }
           },
           required: ["repo", "query"]
@@ -10491,7 +10602,7 @@ var init_mcp = __esm({
       },
       {
         name: "embed_status",
-        description: "Report the deterministic static-embedding tier: whether a model asset is resolved (opt-in, never shipped in the package), its modelId/dim, EMBED_VERSION, and any configured HTTP endpoint. Use to check whether `search` with semantic:true will actually fuse embeddings or degrade to lexical.",
+        description: "Report the embedding tier: the effective mode (none/static/endpoint; endpoint > static model), the resolved model (opt-in, never shipped in the package) with its modelId/dim, EMBED_VERSION, and the configured HTTP endpoint with its reachability. Use to check whether `search` with semantic:true will fuse embeddings or degrade to lexical.",
         inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] }
       },
       {
@@ -10912,37 +11023,7 @@ init_model();
 init_encode();
 init_embed();
 init_search();
-
-// src/embed/endpoint.ts
-function resolveEmbedEndpoint(opts = {}) {
-  const url = opts.url ?? process.env.CODEINDEX_EMBED_ENDPOINT;
-  return url && url.trim() ? url.trim() : void 0;
-}
-async function embedViaEndpoint(texts, opts = {}) {
-  const url = resolveEmbedEndpoint(opts);
-  if (!url) throw new Error("no embedding endpoint configured (set CODEINDEX_EMBED_ENDPOINT or pass opts.url)");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 3e4);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...opts.headers ?? {} },
-      body: JSON.stringify({ texts }),
-      signal: controller.signal
-    });
-    if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
-    const data = await res.json();
-    const vectors = data.vectors;
-    if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number"))) {
-      throw new Error(`embedding endpoint ${url} returned a malformed { vectors } payload`);
-    }
-    return vectors;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// src/engine.ts
+init_endpoint();
 init_rules();
 init_coupling();
 init_repomap();
@@ -10978,6 +11059,8 @@ init_rules();
 init_model();
 init_embed();
 init_search();
+init_endpoint();
+init_util();
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
 
 Usage: engine.mjs <command> [flags]
@@ -10996,13 +11079,17 @@ Commands:
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
   search      Keyless BM25 lexical search over symbol names, path segments,
               markdown headings and summaries: cli.mjs search "<query>" --repo <dir>.
-              --semantic fuses in the deterministic static-embedding tier (RRF)
-              when a model is present; degrades to lexical (exit 0) when absent
-  embed       Deterministic static-embedding tier (opt-in by model asset):
-                embed status   Report the resolved model + EMBED_VERSION (JSON)
-                embed build    Write embeddings.bin into --out <dir> from the repo
+              --semantic fuses in an embedding tier (RRF) \u2014 the HTTP endpoint
+              (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model;
+              degrades to lexical (exit 0) when neither is available/reachable
+  embed       Embedding tiers (opt-in). Precedence: endpoint > static model:
+                embed status   Effective mode (none/static/endpoint), model +
+                               EMBED_VERSION, and endpoint reachability (JSON)
+                embed build    Write embeddings.bin into --out <dir> (static tier)
                 embed pull     Fetch the model asset into CODEINDEX_EMBED_DIR (or
                                <repo>/.codeindex/models/) \u2014 needs CODEINDEX_EMBED_URL
+                embed serve    Print (or --run) the docker command that starts the
+                               containerized embedding server (rich tier)
   rules       Architecture rules (forbidden edges, cycles, orphans) validated
               against the link-graph: --config <codeindex.rules.json>; exits 1
               on any error-severity violation (a CI gate)
@@ -11030,8 +11117,10 @@ Flags:
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
-  --semantic          \`search\`: RRF-fuse the deterministic static-embedding tier
-                      with lexical (needs a model asset; lexical-only otherwise)
+  --semantic          \`search\`: RRF-fuse an embedding tier with lexical \u2014 the
+                      HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
+                      local static model (lexical-only when neither is available)
+  --run               \`embed serve\`: run the docker command instead of printing it
   --recall            \`callers\`: recall-oriented binding (issue #7) \u2014 relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
@@ -11072,6 +11161,7 @@ function parseFlags(args2) {
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
     else if (a === "--semantic") flags2.semantic = true;
     else if (a === "--recall") flags2.recall = true;
+    else if (a === "--run") flags2.run = true;
     else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -11182,18 +11272,37 @@ async function runCli(argv) {
     if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
     if (flags2.semantic) {
-      const modelDir = resolveEmbedModelDir(flags2.repo);
-      const model = modelDir ? loadEmbedModel(modelDir) : void 0;
-      if (!model) {
-        process.stderr.write(
-          "codeindex: semantic search unavailable (no embedding model present) \u2014 returning lexical results; run `codeindex embed pull` to enable it\n"
-        );
+      const endpoint = resolveEmbedEndpoint();
+      const lexical = () => {
         const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
         emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+      };
+      if (endpoint) {
+        try {
+          const index = await buildEndpointIndex(scan2);
+          const queryVec = await encodeQueryViaEndpoint(flags2.positional);
+          const results = searchSemantic(scan2, flags2.positional, index, { queryVec, limit: flags2.limit, fuzzy: flags2.fuzzy });
+          emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+        } catch (e) {
+          process.stderr.write(
+            `codeindex: embedding endpoint ${endpoint} unavailable (${e instanceof Error ? e.message : e}) \u2014 returning lexical results
+`
+          );
+          lexical();
+        }
       } else {
-        const index = buildEmbeddingIndex(scan2, model);
-        const results = searchSemantic(scan2, flags2.positional, index, { model, limit: flags2.limit, fuzzy: flags2.fuzzy });
-        emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+        const modelDir = resolveEmbedModelDir(flags2.repo);
+        const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+        if (!model) {
+          process.stderr.write(
+            "codeindex: semantic search unavailable (no embedding model or endpoint) \u2014 returning lexical results; run `codeindex embed pull` or set CODEINDEX_EMBED_ENDPOINT to enable it\n"
+          );
+          lexical();
+        } else {
+          const index = buildEmbeddingIndex(scan2, model);
+          const results = searchSemantic(scan2, flags2.positional, index, { model, limit: flags2.limit, fuzzy: flags2.fuzzy });
+          emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+        }
       }
     } else {
       const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
@@ -11204,12 +11313,45 @@ async function runCli(argv) {
     const modelDir = resolveEmbedModelDir(flags2.repo);
     if (sub === "status") {
       const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+      const endpoint = resolveEmbedEndpoint();
+      const mode = endpoint ? "endpoint" : model ? "static" : "none";
       const status = {
         embedVersion: EMBED_VERSION,
+        mode,
         model: model ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize } : { present: false },
-        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null
+        endpoint: endpoint ?? null
       };
+      if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
       emit(JSON.stringify(status, null, 2) + "\n", flags2.out);
+    } else if (sub === "serve") {
+      const dockerArgs = ["run", "-d", "-p", "8756:8756", "ghcr.io/maxgfr/codeindex-embed:latest"];
+      const oneLiner = `docker ${dockerArgs.join(" ")}`;
+      if (!have("docker")) {
+        process.stderr.write(
+          "codeindex: docker not found on PATH. Install Docker, then run:\n  " + oneLiner + "\n"
+        );
+        process.exitCode = 1;
+        return;
+      }
+      if (flags2.run) {
+        process.stderr.write(`codeindex: starting embedding server \u2192 ${oneLiner}
+`);
+        const res = sh("docker", dockerArgs);
+        if (res.stdout.trim()) process.stdout.write(res.stdout.trim() + "\n");
+        if (!res.ok) {
+          process.stderr.write(res.stderr || "codeindex: docker run failed\n");
+          process.exitCode = 1;
+          return;
+        }
+        process.stderr.write(
+          'codeindex: server starting on http://localhost:8756 \u2014 then:\n  CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 codeindex search "<query>" --repo . --semantic\n'
+        );
+      } else {
+        process.stdout.write(oneLiner + "\n");
+        process.stderr.write(
+          'codeindex: run the line above to start the embedding server (or `embed serve --run`), then:\n  CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 codeindex search "<query>" --repo . --semantic\n'
+        );
+      }
     } else if (sub === "build") {
       if (!flags2.out) throw new Error("embed build needs --out <dir>");
       if (!modelDir) {
@@ -11256,7 +11398,7 @@ async function runCli(argv) {
       process.stderr.write(`codeindex: model written to ${join12(destDir, "model.json")}
 `);
     } else {
-      throw new Error("embed needs a subcommand: pull | build | status");
+      throw new Error("embed needs a subcommand: status | build | pull | serve");
     }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
@@ -11332,6 +11474,7 @@ export {
   betweennessOf,
   buildCallerIndex,
   buildEmbeddingIndex,
+  buildEndpointIndex,
   buildGraph,
   buildIndexArtifacts,
   buildModules,
@@ -11359,9 +11502,12 @@ export {
   detectWorkspaces,
   diffFiles,
   diffHunks,
+  embedEndpointUrl,
   embedViaEndpoint,
+  embeddingUnits,
   enclosingSymbol,
   encode,
+  encodeQueryViaEndpoint,
   ensureGrammars,
   escapeRegExp,
   extToLang,
@@ -11380,6 +11526,7 @@ export {
   hasEmbedModel,
   have,
   headCommit,
+  healthzUrl,
   insertAfterSymbol,
   insertBeforeSymbol,
   intDot,
@@ -11397,6 +11544,8 @@ export {
   pagerankOf,
   parseGitignore,
   parseRules,
+  probeEndpoint,
+  quantize,
   rankHotspots,
   rankedKeywords,
   readMemory,

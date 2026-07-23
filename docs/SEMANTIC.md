@@ -72,17 +72,23 @@ at scale.
 ## CLI
 
 ```sh
-# Is a model active? (JSON: modelId, dim, EMBED_VERSION, endpoint)
+# Effective mode (none/static/endpoint), model, EMBED_VERSION, endpoint + its
+# reachability (JSON). Precedence: endpoint > static model.
 codeindex embed status --repo <dir>
 
 # Fetch the model asset (needs CODEINDEX_EMBED_URL — the official asset is
 # unpublished, so this fails cleanly with instructions when unset).
 codeindex embed pull --repo <dir>
 
-# Build embeddings.bin from the repo into --out <dir>.
+# Build embeddings.bin from the repo into --out <dir> (static tier only).
 codeindex embed build --repo <dir> --out <dir>
 
-# Search: RRF-fuse semantic + lexical. Degrades to lexical (exit 0) with no model.
+# Print (or --run) the docker command that starts the rich-tier embedding server.
+codeindex embed serve            # prints the one-liner
+codeindex embed serve --run      # runs it (needs docker)
+
+# Search: RRF-fuse an embedding tier + lexical. Degrades to lexical (exit 0)
+# when no tier is available/reachable.
 codeindex search "http client retry" --repo <dir> --semantic
 ```
 
@@ -122,9 +128,10 @@ embedding was closest for that file).
 |---|---|
 | nothing | BM25 lexical |
 | + fuzzy | BM25 + trigram fallback for `df==0` terms (v2.9.0) |
-| + model asset | RRF-fused deterministic semantic search |
-| + HTTP endpoint | rich tier (v2.11 — `embedViaEndpoint`, not wired here) |
-| `--semantic`, no asset | lexical + stderr note, **exit 0** |
+| + model asset | RRF-fused deterministic static semantic search |
+| + HTTP endpoint (`CODEINDEX_EMBED_ENDPOINT`) | rich tier — **wins over a static model** (v2.11.0) |
+| `--semantic`, nothing available | lexical + stderr note, **exit 0** |
+| endpoint set but unreachable/timeout | lexical + stderr note, **exit 0** (never falls back to the static model) |
 
 ## Library
 
@@ -146,10 +153,77 @@ if (model) {
 `searchSemantic(scan, query, index, opts)` with no `opts.model` (or no index)
 returns the pure lexical ranking — the same silent degradation the CLI uses.
 
-## The v2.11 endpoint tier (preview only)
+## The rich tier: containerized HTTP embedding endpoint (v2.11.0)
 
-`embedViaEndpoint(texts, opts)` POSTs `{ texts }` → `{ vectors }` to
-`CODEINDEX_EMBED_ENDPOINT`. It ships now for a stable surface but is **not wired
-into the CLI/MCP** and is **not covered by any determinism guarantee** (endpoint
-vectors are float and provider-dependent). The library never orchestrates
-docker; running such a server is a user/CI concern.
+The **rich tier** lets the engine consume a real neural embedding model (e.g.
+all-MiniLM-L6-v2) served by a local container, instead of the static lookup
+table. It is opt-in via one env var:
+
+```sh
+CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
+  codeindex search "auth token" --repo . --semantic
+```
+
+### Precedence
+
+`endpoint > static model > none`. Setting `CODEINDEX_EMBED_ENDPOINT` is an
+**explicit** user intent, so it wins over any local `model.json`. `embed status`
+reports the effective `mode`. If the endpoint is defined but
+unreachable/times-out/malformed, the search degrades straight to **lexical**
+(stderr note, exit 0) — it does **not** silently fall back to the static model.
+
+### How the float vectors join the deterministic pipeline
+
+The engine POSTs corpus and query texts to the endpoint, receives **float**
+vectors, then runs them through the **exact same** tail as the static tier —
+`quantize()` in `encode.ts`: L2-normalize → int8 at the fixed `1/127` scale
+(round-half-to-even, clamp). Ranking stays a pure integer dot product. So the
+only tier-specific step is the encoder; fusion and ranking are shared code.
+
+Corpus embeddings for the endpoint tier are built **at search time**
+(`buildEndpointIndex`) and are **never serialized** to `embeddings.bin`: unlike
+the static tier, endpoint vectors are float and provider-dependent, so this tier
+is **deterministic per image digest**, not byte-golden. Pin the digest for
+reproducibility:
+
+```sh
+docker run -d -p 8756:8756 ghcr.io/maxgfr/codeindex-embed@sha256:<digest>
+```
+
+### HTTP protocol (implement your own server)
+
+`CODEINDEX_EMBED_ENDPOINT` is the server **base URL**. The client derives:
+
+| method + path | request | response |
+|---|---|---|
+| `POST {base}/embed` | `{ "texts": ["…", …] }` | `{ "vectors": [[…float…], …] }` (same order, one row per text) |
+| `GET {base}/healthz` | — | `200` (any body) when ready |
+
+Notes: any embedding dimension is accepted (the engine quantizes whatever it
+receives); vectors need not be pre-normalized (the engine L2-normalizes anyway);
+the request times out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000).
+`codeindex embed serve` prints/`--run`s the docker command for the official
+image; the **library never orchestrates docker** (that is CLI-only).
+
+The reference server is `docker/embed/` (transformers.js + all-MiniLM-L6-v2,
+model baked in at build, offline at run, non-root, `:8756`), published to
+`ghcr.io/maxgfr/codeindex-embed` by `.github/workflows/embed-image.yml`.
+
+### Library
+
+```ts
+import {
+  buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint,
+  searchSemantic, quantize,
+} from "@maxgfr/codeindex";
+
+if (await probeEndpoint("http://localhost:8756")) {
+  const scan = scanRepo("/repo");
+  const index = await buildEndpointIndex(scan);              // float → int8 corpus
+  const queryVec = await encodeQueryViaEndpoint("auth token");
+  const results = searchSemantic(scan, "auth token", index, { queryVec });
+}
+```
+
+`embedViaEndpoint(texts, opts)` is the low-level client (`{ texts }` →
+`{ vectors }`).

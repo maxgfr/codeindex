@@ -22,6 +22,13 @@ import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, resolveEmbedPullUrl } from "./embed/model.js";
 import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
+import {
+  resolveEmbedEndpoint,
+  buildEndpointIndex,
+  encodeQueryViaEndpoint,
+  probeEndpoint,
+} from "./embed/endpoint.js";
+import { have, sh } from "./util.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
@@ -41,13 +48,17 @@ Commands:
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
   search      Keyless BM25 lexical search over symbol names, path segments,
               markdown headings and summaries: cli.mjs search "<query>" --repo <dir>.
-              --semantic fuses in the deterministic static-embedding tier (RRF)
-              when a model is present; degrades to lexical (exit 0) when absent
-  embed       Deterministic static-embedding tier (opt-in by model asset):
-                embed status   Report the resolved model + EMBED_VERSION (JSON)
-                embed build    Write embeddings.bin into --out <dir> from the repo
+              --semantic fuses in an embedding tier (RRF) — the HTTP endpoint
+              (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model;
+              degrades to lexical (exit 0) when neither is available/reachable
+  embed       Embedding tiers (opt-in). Precedence: endpoint > static model:
+                embed status   Effective mode (none/static/endpoint), model +
+                               EMBED_VERSION, and endpoint reachability (JSON)
+                embed build    Write embeddings.bin into --out <dir> (static tier)
                 embed pull     Fetch the model asset into CODEINDEX_EMBED_DIR (or
                                <repo>/.codeindex/models/) — needs CODEINDEX_EMBED_URL
+                embed serve    Print (or --run) the docker command that starts the
+                               containerized embedding server (rich tier)
   rules       Architecture rules (forbidden edges, cycles, orphans) validated
               against the link-graph: --config <codeindex.rules.json>; exits 1
               on any error-severity violation (a CI gate)
@@ -75,8 +86,10 @@ Flags:
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
-  --semantic          \`search\`: RRF-fuse the deterministic static-embedding tier
-                      with lexical (needs a model asset; lexical-only otherwise)
+  --semantic          \`search\`: RRF-fuse an embedding tier with lexical — the
+                      HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
+                      local static model (lexical-only when neither is available)
+  --run               \`embed serve\`: run the docker command instead of printing it
   --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
@@ -101,6 +114,7 @@ interface CliFlags {
   fuzzy: boolean; // search: trigram fuzzy fallback for df==0 terms (default true)
   semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
   recall?: boolean; // callers: recall-oriented binding
+  run?: boolean; // `embed serve`: actually run the docker command (default: print)
   projectRoot?: string; // scip: override Metadata.project_root
   positional?: string; // e.g. the grep pattern or search query
 }
@@ -141,6 +155,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--no-fuzzy") flags.fuzzy = false;
     else if (a === "--semantic") flags.semantic = true;
     else if (a === "--recall") flags.recall = true;
+    else if (a === "--run") flags.run = true;
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -264,20 +279,42 @@ export async function runCli(argv: string[]): Promise<void> {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan = scanRepo(flags.repo, scanOptions(flags));
     if (flags.semantic) {
-      const modelDir = resolveEmbedModelDir(flags.repo);
-      const model = modelDir ? loadEmbedModel(modelDir) : undefined;
-      if (!model) {
-        // Degradation: --semantic without a model → lexical results + a stderr
-        // note, exit 0. The results shape is a superset of the lexical one.
-        process.stderr.write(
-          "codeindex: semantic search unavailable (no embedding model present) — returning lexical results; run `codeindex embed pull` to enable it\n",
-        );
-        const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy });
+      const endpoint = resolveEmbedEndpoint();
+      const lexical = (): void => {
+        const results = searchIndex(scan, flags.positional!, { limit: flags.limit, fuzzy: flags.fuzzy });
         emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+      };
+      if (endpoint) {
+        // Rich tier. The endpoint takes PRECEDENCE over a local static model:
+        // configuring CODEINDEX_EMBED_ENDPOINT is an explicit user intent. An
+        // unreachable/timed-out/malformed endpoint degrades straight to lexical
+        // (a stderr note, exit 0) — NOT to the static model.
+        try {
+          const index = await buildEndpointIndex(scan);
+          const queryVec = await encodeQueryViaEndpoint(flags.positional);
+          const results = searchSemantic(scan, flags.positional, index, { queryVec, limit: flags.limit, fuzzy: flags.fuzzy });
+          emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+        } catch (e) {
+          process.stderr.write(
+            `codeindex: embedding endpoint ${endpoint} unavailable (${e instanceof Error ? e.message : e}) — returning lexical results\n`,
+          );
+          lexical();
+        }
       } else {
-        const index = buildEmbeddingIndex(scan, model);
-        const results = searchSemantic(scan, flags.positional, index, { model, limit: flags.limit, fuzzy: flags.fuzzy });
-        emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+        const modelDir = resolveEmbedModelDir(flags.repo);
+        const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+        if (!model) {
+          // Degradation: --semantic without a model or endpoint → lexical results
+          // + a stderr note, exit 0. The results shape is a superset of lexical.
+          process.stderr.write(
+            "codeindex: semantic search unavailable (no embedding model or endpoint) — returning lexical results; run `codeindex embed pull` or set CODEINDEX_EMBED_ENDPOINT to enable it\n",
+          );
+          lexical();
+        } else {
+          const index = buildEmbeddingIndex(scan, model);
+          const results = searchSemantic(scan, flags.positional, index, { model, limit: flags.limit, fuzzy: flags.fuzzy });
+          emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+        }
       }
     } else {
       const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy });
@@ -288,14 +325,54 @@ export async function runCli(argv: string[]): Promise<void> {
     const modelDir = resolveEmbedModelDir(flags.repo);
     if (sub === "status") {
       const model = modelDir ? loadEmbedModel(modelDir) : undefined;
-      const status = {
+      const endpoint = resolveEmbedEndpoint();
+      // Effective mode with precedence: endpoint > static model > none.
+      const mode: "none" | "static" | "endpoint" = endpoint ? "endpoint" : model ? "static" : "none";
+      const status: Record<string, unknown> = {
         embedVersion: EMBED_VERSION,
+        mode,
         model: model
           ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
           : { present: false },
-        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null,
+        endpoint: endpoint ?? null,
       };
+      // When an endpoint is configured, actually probe its reachability.
+      if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
       emit(JSON.stringify(status, null, 2) + "\n", flags.out);
+    } else if (sub === "serve") {
+      // Convenience only — the LIBRARY never orchestrates docker (engine.ts is
+      // side-effect-free). This lives in the CLI: it prints (or, with --run,
+      // executes) the docker command that starts the embedding server image.
+      const dockerArgs = ["run", "-d", "-p", "8756:8756", "ghcr.io/maxgfr/codeindex-embed:latest"];
+      const oneLiner = `docker ${dockerArgs.join(" ")}`;
+      if (!have("docker")) {
+        process.stderr.write(
+          "codeindex: docker not found on PATH. Install Docker, then run:\n  " + oneLiner + "\n",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      if (flags.run) {
+        process.stderr.write(`codeindex: starting embedding server → ${oneLiner}\n`);
+        const res = sh("docker", dockerArgs);
+        if (res.stdout.trim()) process.stdout.write(res.stdout.trim() + "\n"); // container id
+        if (!res.ok) {
+          process.stderr.write(res.stderr || "codeindex: docker run failed\n");
+          process.exitCode = 1;
+          return;
+        }
+        process.stderr.write(
+          "codeindex: server starting on http://localhost:8756 — then:\n" +
+            "  CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 codeindex search \"<query>\" --repo . --semantic\n",
+        );
+      } else {
+        // Print the command for the user to run (default; no side effects).
+        process.stdout.write(oneLiner + "\n");
+        process.stderr.write(
+          "codeindex: run the line above to start the embedding server (or `embed serve --run`), then:\n" +
+            "  CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 codeindex search \"<query>\" --repo . --semantic\n",
+        );
+      }
     } else if (sub === "build") {
       if (!flags.out) throw new Error("embed build needs --out <dir>");
       if (!modelDir) {
@@ -340,7 +417,7 @@ export async function runCli(argv: string[]): Promise<void> {
       writeFileSync(join(destDir, "model.json"), body);
       process.stderr.write(`codeindex: model written to ${join(destDir, "model.json")}\n`);
     } else {
-      throw new Error("embed needs a subcommand: pull | build | status");
+      throw new Error("embed needs a subcommand: status | build | pull | serve");
     }
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");

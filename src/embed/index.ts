@@ -34,11 +34,21 @@ function fileText(rel: string, title: string | undefined, summary: string | unde
   return [title ?? "", summary ?? "", ...headings, rel.replace(/\//g, " ")].join("\n");
 }
 
-// Build the corpus embedding index from a scan + a loaded model. Pure and
-// deterministic (encode is byte-stable, scan order is fixed) → two builds of an
-// unchanged repo produce byte-identical serialized bytes.
-export function buildEmbeddingIndex(scan: RepoScan, model: StaticEmbedModel): EmbeddingIndex {
-  const records: EmbeddingRecord[] = [];
+// One corpus item to embed: its target (file, optional symbol/line) plus the
+// exact text to encode. This is the SINGLE definition of "what the corpus is",
+// shared by the static tier (buildEmbeddingIndex) and the endpoint tier
+// (buildEndpointIndex) so both embed byte-identical texts in the same order and
+// differ ONLY in the encoder. Deterministic: scan order (files by rel) then
+// declaration order within a file, deduped by symbol name (bm25 parity).
+export interface EmbeddingUnit {
+  file: string;
+  symbol?: string;
+  line?: number;
+  text: string;
+}
+
+export function embeddingUnits(scan: RepoScan): EmbeddingUnit[] {
+  const units: EmbeddingUnit[] = [];
   for (const f of scan.files) {
     const seen = new Set<string>();
     let hadSymbol = false;
@@ -46,20 +56,26 @@ export function buildEmbeddingIndex(scan: RepoScan, model: StaticEmbedModel): Em
       if (seen.has(s.name)) continue; // dedupe by name within a file (bm25 parity)
       seen.add(s.name);
       hadSymbol = true;
-      records.push({
-        file: f.rel,
-        symbol: s.name,
-        line: s.line,
-        vec: encode(model, symbolText(f.rel, s.name, s.signature, f.summary)),
-      });
+      units.push({ file: f.rel, symbol: s.name, line: s.line, text: symbolText(f.rel, s.name, s.signature, f.summary) });
     }
     if (!hadSymbol) {
       const text = fileText(f.rel, f.title, f.summary, f.headings);
-      if (text.replace(/\s+/g, "")) {
-        records.push({ file: f.rel, vec: encode(model, text) });
-      }
+      if (text.replace(/\s+/g, "")) units.push({ file: f.rel, text });
     }
   }
+  return units;
+}
+
+// Build the corpus embedding index from a scan + a loaded model. Pure and
+// deterministic (encode is byte-stable, scan order is fixed) → two builds of an
+// unchanged repo produce byte-identical serialized bytes.
+export function buildEmbeddingIndex(scan: RepoScan, model: StaticEmbedModel): EmbeddingIndex {
+  const records: EmbeddingRecord[] = embeddingUnits(scan).map((u) => {
+    const rec: EmbeddingRecord = { file: u.file, vec: encode(model, u.text) };
+    if (u.symbol !== undefined) rec.symbol = u.symbol;
+    if (u.line !== undefined) rec.line = u.line;
+    return rec;
+  });
   return { embedVersion: EMBED_VERSION, modelId: model.modelId, dim: model.dim, records };
 }
 

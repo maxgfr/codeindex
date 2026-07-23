@@ -28,6 +28,7 @@ import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
+import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -285,7 +286,7 @@ const TOOLS = [
         semantic: {
           type: "boolean",
           description:
-            "RRF-fuse the deterministic static-embedding tier with lexical when a model asset is present (default false; silently lexical-only when no model)",
+            "RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. Degrades silently to lexical-only when neither is available/reachable — see embed_status.",
         },
       },
       required: ["repo", "query"],
@@ -294,7 +295,7 @@ const TOOLS = [
   {
     name: "embed_status",
     description:
-      "Report the deterministic static-embedding tier: whether a model asset is resolved (opt-in, never shipped in the package), its modelId/dim, EMBED_VERSION, and any configured HTTP endpoint. Use to check whether `search` with semantic:true will actually fuse embeddings or degrade to lexical.",
+      "Report the embedding tier: the effective mode (none/static/endpoint; endpoint > static model), the resolved model (opt-in, never shipped in the package) with its modelId/dim, EMBED_VERSION, and the configured HTTP endpoint with its reachability. Use to check whether `search` with semantic:true will fuse embeddings or degrade to lexical.",
     inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
   },
   {
@@ -320,7 +321,7 @@ function strArray(v: unknown): string[] | undefined {
   return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? (v as string[]) : undefined;
 }
 
-function callTool(name: string, args: Record<string, unknown>): string {
+async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const repo = str(args.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
@@ -458,6 +459,18 @@ function callTool(name: string, args: Record<string, unknown>): string {
     const limit = typeof args.limit === "number" ? args.limit : undefined;
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     if (args.semantic === true) {
+      const endpoint = resolveEmbedEndpoint();
+      if (endpoint) {
+        // Rich tier — endpoint takes PRECEDENCE over a local static model. An
+        // unreachable/malformed endpoint degrades to lexical (no throw).
+        try {
+          const index = await buildEndpointIndex(scan);
+          const queryVec = await encodeQueryViaEndpoint(query);
+          return JSON.stringify(searchSemantic(scan, query, index, { queryVec, limit, fuzzy }), null, 2);
+        } catch {
+          return JSON.stringify(searchIndex(scan, query, { limit, fuzzy }), null, 2);
+        }
+      }
       const modelDir = resolveEmbedModelDir(repo);
       const model = modelDir ? loadEmbedModel(modelDir) : undefined;
       if (model) {
@@ -471,17 +484,18 @@ function callTool(name: string, args: Record<string, unknown>): string {
   if (name === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
     const model = modelDir ? loadEmbedModel(modelDir) : undefined;
-    return JSON.stringify(
-      {
-        embedVersion: EMBED_VERSION,
-        model: model
-          ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
-          : { present: false },
-        endpoint: process.env.CODEINDEX_EMBED_ENDPOINT ?? null,
-      },
-      null,
-      2,
-    );
+    const endpoint = resolveEmbedEndpoint();
+    const mode: "none" | "static" | "endpoint" = endpoint ? "endpoint" : model ? "static" : "none";
+    const status: Record<string, unknown> = {
+      embedVersion: EMBED_VERSION,
+      mode,
+      model: model
+        ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
+        : { present: false },
+      endpoint: endpoint ?? null,
+    };
+    if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
+    return JSON.stringify(status, null, 2);
   }
   if (name === "check_rules") {
     const rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
@@ -512,10 +526,10 @@ export async function runMcpServer(): Promise<void> {
     // JSON-RPC 2.0 batch: answer each member (a batching client would
     // otherwise hang forever on a silently dropped array).
     const requests = Array.isArray(parsed) ? (parsed as RpcRequest[]) : [parsed as RpcRequest];
-    for (const req of requests) handle(req);
+    for (const req of requests) await handle(req);
   }
 
-  function handle(req: RpcRequest): void {
+  async function handle(req: RpcRequest): Promise<void> {
     if (req.id === undefined || req.id === null) return; // notification — no response
 
     try {
@@ -537,7 +551,7 @@ export async function runMcpServer(): Promise<void> {
         const name = str(params.name) ?? "";
         const args = (params.arguments ?? {}) as Record<string, unknown>;
         try {
-          const text = callTool(name, args);
+          const text = await callTool(name, args);
           send({ id: req.id, result: { content: [{ type: "text", text }] } });
         } catch (e) {
           send({

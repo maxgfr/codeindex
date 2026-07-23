@@ -1,0 +1,58 @@
+name: Embed image
+
+# Publishes the rich-tier embedding server image (Role B):
+# ghcr.io/maxgfr/codeindex-embed. Unlike the distribution image (built inside the
+# release job because semantic-release's GITHUB_TOKEN pushes don't retrigger
+# workflows), this image is driven by ordinary HUMAN pushes that touch
+# docker/embed/** — those DO trigger `on: push`, so a plain path-filtered
+# workflow is correct here (no anti-recursion gymnastics needed). The version is
+# read from the committed docker/embed/VERSION file (starts at 1.0.0); bump it in
+# the same commit that changes the server/model.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/embed/**"
+      - ".github/workflows/embed-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read image version
+        id: meta
+        run: echo "version=$(cat docker/embed/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Multi-arch (amd64 + arm64). The model is baked at build time, so both
+      # legs download it once during their build — no runtime network needed.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/embed
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}
+            ghcr.io/maxgfr/codeindex-embed:latest

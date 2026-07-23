@@ -130,14 +130,38 @@ lexical, and `--semantic` without a model returns lexical results on **exit 0**
 resolved from `CODEINDEX_EMBED_DIR` or `<repo>/.codeindex/models/`.
 
 ```sh
-codeindex embed status --repo .              # is a model active? (JSON)
+codeindex embed status --repo .              # effective mode + reachability (JSON)
 codeindex embed build  --repo . --out .codeindex   # write embeddings.bin
 codeindex search "http client retry" --repo . --semantic
 ```
 
 `codeindex index` also writes `embeddings.bin` next to `graph.json` when a model
 is present. Fusion reuses the engine's `rrf` helper (k=60); `SCHEMA_VERSION` is
-untouched (a dedicated `EMBED_VERSION` keys the sidecar). Full details:
+untouched (a dedicated `EMBED_VERSION` keys the sidecar).
+
+#### Three embedding modes (precedence: endpoint > static > none)
+
+| mode | trigger | determinism |
+|---|---|---|
+| **none** | no model, no endpoint | — (pure lexical) |
+| **static** | a `model.json` on disk | byte-deterministic (goldens) |
+| **endpoint** | `CODEINDEX_EMBED_ENDPOINT` set | per **image digest** |
+
+The **rich (endpoint) tier** points the engine at a local containerized
+embedding server (all-MiniLM-L6-v2). The endpoint's float vectors flow through
+the *same* L2 + int8-quantize + integer-ranking pipeline as the static tier.
+Setting the env var is explicit intent, so it **wins over** a local model; an
+unreachable endpoint degrades to lexical (exit 0), not to the static model.
+
+```sh
+codeindex embed serve            # print the docker run one-liner (or --run it)
+docker run -d -p 8756:8756 ghcr.io/maxgfr/codeindex-embed:latest
+# reproducible: pin the digest → ghcr.io/maxgfr/codeindex-embed@sha256:<digest>
+CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
+  codeindex search "auth token" --repo . --semantic
+```
+
+Full details incl. the HTTP protocol (build your own server):
 [docs/SEMANTIC.md](./docs/SEMANTIC.md).
 
 ## Use as an MCP server

@@ -1,0 +1,6 @@
+# Keep the build context tiny: never ship a local install or a locally-warmed
+# model cache into the builder (they are produced INSIDE the build stage).
+node_modules
+models
+npm-debug.log
+*.log

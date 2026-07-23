@@ -87,14 +87,36 @@ export function roundHalfToEven(x: number): number {
   return f % 2 === 0 ? f : f + 1; // exactly .5 → nearest even
 }
 
+// L2-normalize a float vector and quantize it to int8 at the fixed 1/127 scale
+// (round-half-to-even, clamp to [-127,127]) — the SHARED tail of both tiers. The
+// static encoder feeds its mean-pooled vector here; the endpoint tier feeds each
+// float embedding it receives. Because the quantization is byte-identical, a
+// given float vector maps to the same int8 bytes and the integer-dot ranking is
+// consistent across tiers. A zero-norm input yields an all-zero vector (never
+// NaN — it simply ranks last).
+export function quantize(vec: ArrayLike<number>): Int8Array {
+  const dim = vec.length;
+  const out = new Int8Array(dim);
+  let sumsq = 0;
+  for (let d = 0; d < dim; d++) sumsq += vec[d]! * vec[d]!;
+  const norm = Math.sqrt(sumsq);
+  if (norm === 0) return out; // zero vector — nothing to rank on
+  for (let d = 0; d < dim; d++) {
+    let q = roundHalfToEven((vec[d]! / norm) * QUANT);
+    if (q > QUANT) q = QUANT;
+    else if (q < -QUANT) q = -QUANT;
+    out[d] = q;
+  }
+  return out;
+}
+
 // Encode a text to an int8 unit-ish vector. Empty / all-OOV / zero-norm inputs
 // yield an all-zero vector (dot-products against it are 0 — it simply ranks
 // last), never NaN. Pure and deterministic: same model + text → same bytes.
 export function encode(model: StaticEmbedModel, text: string): Int8Array {
   const { dim, weights } = model;
-  const out = new Int8Array(dim);
   const ids = tokenize(text, model);
-  if (ids.length === 0) return out;
+  if (ids.length === 0) return new Int8Array(dim);
 
   // mean-pool in double precision, fixed order.
   const pooled = new Float64Array(dim);
@@ -105,20 +127,8 @@ export function encode(model: StaticEmbedModel, text: string): Int8Array {
   const inv = 1 / ids.length;
   for (let d = 0; d < dim; d++) pooled[d]! *= inv;
 
-  // L2-normalize.
-  let sumsq = 0;
-  for (let d = 0; d < dim; d++) sumsq += pooled[d]! * pooled[d]!;
-  const norm = Math.sqrt(sumsq);
-  if (norm === 0) return out; // zero vector — nothing to rank on
-
-  // quantize to int8 at the fixed 1/127 scale, round-half-to-even, clamp.
-  for (let d = 0; d < dim; d++) {
-    let q = roundHalfToEven((pooled[d]! / norm) * QUANT);
-    if (q > QUANT) q = QUANT;
-    else if (q < -QUANT) q = -QUANT;
-    out[d] = q;
-  }
-  return out;
+  // L2-normalize + int8-quantize (the shared tail, identical to the endpoint tier).
+  return quantize(pooled);
 }
 
 // Integer dot product of two int8 vectors (the ranking primitive). Widened to a

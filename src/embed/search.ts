@@ -13,6 +13,10 @@ export interface SemanticSearchOptions extends SearchOptions {
   // The loaded static model, needed to encode the QUERY into the same int8 space
   // as the corpus. Absent → the search degrades to pure lexical (no throw).
   model?: StaticEmbedModel;
+  // A pre-encoded int8 query vector — the endpoint tier's escape hatch: it has
+  // no local model but has already quantized the endpoint's float query vector
+  // through the SAME pipeline as the corpus. Wins over `model` when both are set.
+  queryVec?: Int8Array;
   // RRF damping (default 60), exposed for parity with the shared rrf helper.
   rrfK?: number;
 }
@@ -45,11 +49,13 @@ export function searchSemantic(
   // fuse meaningfully, then trim after fusion.
   const lexical = searchIndex(scan, query, { limit: Math.max(limit, 50), fuzzy: opts.fuzzy });
 
-  if (!opts.model || !index || index.records.length === 0) {
+  // Resolve the query vector: an already-encoded one (endpoint tier) wins;
+  // otherwise encode via the local model. No vector, no index, or an empty index
+  // → pure-lexical degradation.
+  const q = opts.queryVec ?? (opts.model ? encode(opts.model, query) : undefined);
+  if (!q || !index || index.records.length === 0) {
     return lexical.slice(0, limit); // pure-lexical degradation
   }
-
-  const q = encode(opts.model, query);
   // Best (highest integer dot) record per file, remembering its symbol.
   const bestByFile = new Map<string, { score: number; symbol?: string }>();
   for (const r of index.records) {
