@@ -193,6 +193,41 @@ describe("MCP server", () => {
     expect(sem.results.length).toBeGreaterThan(0);
   }, 20_000);
 
+  it("search semantic:true with a configured but unreachable endpoint reports tier: lexical with the failure reason", async () => {
+    // A URL guaranteed to refuse connections: bind a port, then free it.
+    const dead = http.createServer();
+    await new Promise<void>((r) => dead.listen(0, "127.0.0.1", r));
+    const port = (dead.address() as AddressInfo).port;
+    await new Promise<void>((r) => dead.close(() => r()));
+    const deadUrl = `http://127.0.0.1:${port}`;
+
+    const res = await mcpSession(
+      [
+        { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+        { method: "notifications/initialized" },
+        {
+          id: 2,
+          method: "tools/call",
+          params: { name: "search", arguments: { repo: REPO, query: "http client retry", semantic: true } },
+        },
+      ],
+      { CODEINDEX_EMBED_ENDPOINT: deadUrl, CODEINDEX_EMBED_DIR: undefined },
+    );
+
+    expect(res.get(2)!.result!.isError).toBeUndefined();
+    const sem = JSON.parse(res.get(2)!.result!.content![0]!.text) as {
+      results: { file: string }[];
+      tier: string;
+      degradedReason?: string;
+    };
+    // Distinct from the "nothing configured" reason — this one carries the
+    // actual (short) failure, an endpoint that IS configured but unreachable.
+    expect(sem.tier).toBe("lexical");
+    expect(sem.degradedReason).toBeDefined();
+    expect(sem.degradedReason).toMatch(/embedding endpoint failed/i);
+    expect(sem.results[0]!.file).toBe("src/client.ts");
+  }, 20_000);
+
   it("answers every member of a JSON-RPC batch", async () => {
     const res = await mcpBatch([
       { id: 1, method: "ping" },
