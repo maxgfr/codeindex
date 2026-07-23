@@ -19,7 +19,11 @@ WORKDIR /build
 # transformers.js statically imports onnxruntime-node, so we pin it explicitly as
 # a real dependency (it ships prebuilt linux x64/arm64 binaries — no compiler
 # needed on slim, and buildx installs the right one per arch). --omit=optional
-# still drops the heavy `sharp` image-I/O dep we never use.
+# only skips packages reachable exclusively via an optional edge (upstream's own
+# optional onnxruntime-node, already pinned above as required regardless) — it
+# does NOT drop `sharp`: sharp is a REGULAR dependency of @xenova/transformers,
+# required on the feature-extraction path (see the prune step below), so it
+# always installs.
 COPY package.json ./
 RUN npm install --omit=optional --no-audit --no-fund
 
