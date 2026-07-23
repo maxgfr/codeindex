@@ -33,7 +33,7 @@ COPY --chown=node:node scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs .
 # resolveGrammarDir() in engine.mjs.
 COPY --chown=node:node scripts/grammars ./scripts/grammars
 COPY --chown=node:node package.json README.md LICENSE ./
-COPY --chown=node:node docs/MIGRATION.md ./docs/MIGRATION.md
+COPY --chown=node:node docs/MIGRATION.md docs/SEMANTIC.md ./docs/
 
 # Drop root: the image only ever reads its own files and the bind-mounted
 # repo under /work, never writes inside /app.
