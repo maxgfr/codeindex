@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.10.0](https://github.com/maxgfr/codeindex/compare/v2.9.0...v2.10.0) (2026-07-23)
+
+
+### Features
+
+* **embed:** deterministic static-embedding tier with RRF-fused semantic search ([38126f2](https://github.com/maxgfr/codeindex/commit/38126f2701887c59445576d3d8e9e3dda452dafe))
+
 # [2.9.0](https://github.com/maxgfr/codeindex/compare/v2.8.1...v2.9.0) (2026-07-23)
 
 
