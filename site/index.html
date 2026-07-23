@@ -1,0 +1,3463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!--
+  DIRECTION CONTRACT (Impeccable — new-work, inferred from an explicit, fully
+  prescriptive brief; no interactive answer channel was available in this
+  session, so the world below is stated as an assumption, not a negotiated
+  choice — flag for review if a maintainer wants to steer it differently).
+
+  THESIS: codeindex's whole claim is "measured, not declared" — so the page
+  reads like the lab notebook that produced the numbers, not a hype landing
+  page. Refuses the near-black/neon-terminal look that every AI dev-tool
+  page ships.
+  OWN-WORLD: an engineering measurement pad — pale quad-ruled paper (light)
+  / graphite lab-at-night (dark), blueprint-blue as the one accent, a rust/
+  amber "pencil" ink reserved for honesty callouts, monospace for every
+  number for that measured data reads as data, titleblock-style uppercase
+  eyebrows (REV, SCALE-style annotations), corner registration crosshairs
+  on cards.
+  STORY: a developer evaluating a repo-indexing tool sees the headline
+  speed/token claims, then immediately gets the receipts — a real chart, real
+  tables sourced from one embedded JSON blob, and the honest caveats (ctags
+  is faster, 01x wins warm reindex) placed next to the wins, not hidden.
+  FIRST VIEWPORT: titleblock eyebrow + h1 "codeindex" + one-line pitch +
+  license/version/tool-count pills, install one-liners in a bordered spec
+  box to the side, on the ruled-paper ground.
+  FORM: a one-page technical data sheet — hero, KPI row, benchmarks (chart +
+  tables driven by the embedded JSON), features grid, tabbed quickstart,
+  honest comparison table, titleblock footer. No concept roll was run: the
+  brief pins content, order and every number, so only the visual world was a
+  live decision.
+-->
+<!-- Impeccable: PRODUCT.md/DESIGN.md were not written for this repo — this is
+     a single prescribed deliverable (site/index.html) under an external task
+     brief that fixes content, section order and every figure; the durable
+     decision record lives in this comment instead of new repo-root docs. -->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>codeindex — zero-install repo indexing engine</title>
+<meta
+  name="description"
+  content="codeindex: a zero-install, deterministic repo-indexing engine. One vendorable file, a TypeScript/JS library, a CLI, and 26 MCP tools. Byte-identical outputs, keyless BM25 + trigram fuzzy + deterministic semantic search, SCIP export, and measured benchmarks against 01x-in/codeindex, universal-ctags and scip-typescript."
+/>
+<link
+  rel="icon"
+  href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23101720'/%3E%3Cpath d='M7 7 17 9 M17 9 10 18 M7 7 10 18' stroke='%233987e5' stroke-width='1.5' fill='none'/%3E%3Ccircle cx='7' cy='7' r='2.3' fill='%233987e5'/%3E%3Ccircle cx='17' cy='9' r='2.3' fill='%233987e5'/%3E%3Ccircle cx='10' cy='18' r='2.3' fill='%233987e5'/%3E%3C/svg%3E"
+/>
+
+<style>
+  /* ============ Tokens ============ */
+  :root {
+    color-scheme: light;
+    --paper: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #f5f7f9;
+    --ink: #14181d;
+    --ink-2: #4b525c;
+    --muted: #616b77;
+    --grid: #d7dee5;
+    --border: rgba(20, 24, 29, 0.14);
+    --accent: #2a78d6;
+    --accent-strong: #184f95;
+    --accent-wash: rgba(42, 120, 214, 0.1);
+    --context: #717a84;
+    --annotation: #a8460f;
+    --annotation-wash: rgba(168, 70, 15, 0.08);
+    --code-bg: #10151b;
+    --code-ink: #e7ecf2;
+    --code-accent: #6fb1ff;
+    --btn-bg: var(--accent-strong);
+    --btn-ink: #ffffff;
+    --focus-ring: #a8460f;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+      sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --paper: #0f1216;
+      --surface: #171b20;
+      --surface-2: #1d2229;
+      --ink: #f2f4f6;
+      --ink-2: #c7ccd3;
+      --muted: #8b929b;
+      --grid: #262c33;
+      --border: rgba(255, 255, 255, 0.12);
+      --accent: #3987e5;
+      --accent-strong: #3987e5;
+      --accent-wash: rgba(57, 135, 229, 0.16);
+      --context: #6b7480;
+      --annotation: #e2884f;
+      --annotation-wash: rgba(226, 136, 79, 0.14);
+      --btn-bg: var(--accent);
+      --btn-ink: #0f1216;
+      --focus-ring: #e2884f;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #0f1216;
+    --surface: #171b20;
+    --surface-2: #1d2229;
+    --ink: #f2f4f6;
+    --ink-2: #c7ccd3;
+    --muted: #8b929b;
+    --grid: #262c33;
+    --border: rgba(255, 255, 255, 0.12);
+    --accent: #3987e5;
+    --accent-strong: #3987e5;
+    --accent-wash: rgba(57, 135, 229, 0.16);
+    --context: #6b7480;
+    --annotation: #e2884f;
+    --annotation-wash: rgba(226, 136, 79, 0.14);
+    --btn-bg: var(--accent);
+    --btn-ink: #0f1216;
+    --focus-ring: #e2884f;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --paper: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #f5f7f9;
+    --ink: #14181d;
+    --ink-2: #4b525c;
+    --muted: #616b77;
+    --grid: #d7dee5;
+    --border: rgba(20, 24, 29, 0.14);
+    --accent: #2a78d6;
+    --accent-strong: #184f95;
+    --accent-wash: rgba(42, 120, 214, 0.1);
+    --context: #717a84;
+    --annotation: #a8460f;
+    --annotation-wash: rgba(168, 70, 15, 0.08);
+    --btn-bg: var(--accent-strong);
+    --btn-ink: #ffffff;
+    --focus-ring: #a8460f;
+  }
+
+  /* ============ Reset ============ */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    background-image: repeating-linear-gradient(
+        var(--grid) 0 1px,
+        transparent 1px 28px
+      ),
+      repeating-linear-gradient(
+        90deg,
+        var(--grid) 0 1px,
+        transparent 1px 28px
+      );
+    background-attachment: fixed;
+  }
+  img,
+  svg {
+    max-width: 100%;
+  }
+  a {
+    color: var(--accent-strong);
+    text-underline-offset: 0.15em;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    line-height: 1.15;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  p {
+    margin: 0 0 1em;
+  }
+  ul,
+  ol {
+    padding-left: 1.2em;
+  }
+  :focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  ::selection {
+    background: var(--accent-wash);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  .skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 0.6em 1em;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    z-index: 100;
+    transition: top 0.15s ease;
+  }
+  .skip-link:focus {
+    top: 1rem;
+  }
+
+  .wrap {
+    max-width: 68rem;
+    margin: 0 auto;
+    padding: 0 1.25rem;
+  }
+
+  /* ============ Titleblock micro-typography ============ */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    margin: 0 0 0.9em;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 1.4em;
+    height: 1px;
+    background: var(--accent);
+    display: inline-block;
+  }
+  .rev-pill {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink-2);
+    padding: 0.15em 0.55em;
+    border-radius: 999px;
+  }
+
+  /* ============ Header / nav ============ */
+  header.site {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: saturate(140%) blur(6px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.8rem 0;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .brand:focus-visible {
+    outline-offset: 4px;
+  }
+  .brand-mark {
+    width: 1.5em;
+    height: 1.5em;
+    flex: none;
+  }
+  nav.primary {
+    display: flex;
+    align-items: center;
+    gap: 1.4rem;
+  }
+  nav.primary a:not(.btn) {
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 0.92rem;
+  }
+  nav.primary a:not(.btn):hover {
+    color: var(--ink);
+    text-decoration: underline;
+  }
+  .nav-links {
+    display: flex;
+    gap: 1.2rem;
+  }
+  @media (max-width: 720px) {
+    .nav-links {
+      display: none;
+    }
+  }
+
+  .theme-toggle {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--ink-2);
+    border-radius: 999px;
+    padding: 0.35em 0.8em;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+  }
+  .theme-toggle:hover {
+    color: var(--ink);
+    border-color: var(--accent);
+  }
+
+  /* ============ Buttons / pills / badges ============ */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-decoration: none;
+    padding: 0.65em 1.1em;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
+  .btn-primary {
+    background: var(--btn-bg);
+    color: var(--btn-ink);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.08);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--ink);
+    border-color: var(--border);
+  }
+  .btn-ghost:hover {
+    border-color: var(--accent);
+    color: var(--accent-strong);
+  }
+
+  .pill-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 1.1rem 0 1.6rem;
+  }
+  .pill {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.02em;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink-2);
+    padding: 0.3em 0.7em;
+    border-radius: 999px;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+  }
+  a.pill:hover {
+    border-color: var(--accent);
+    color: var(--accent-strong);
+  }
+  .pill .dot {
+    width: 0.5em;
+    height: 0.5em;
+    border-radius: 50%;
+    background: var(--accent);
+    flex: none;
+  }
+
+  /* ============ Corner registration crosshair (signature ornament) === */
+  .card {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .card::before,
+  .card::after {
+    content: "";
+    position: absolute;
+    width: 11px;
+    height: 11px;
+    opacity: 0.45;
+    background: linear-gradient(var(--accent), var(--accent)) center / 100%
+        1.4px no-repeat,
+      linear-gradient(var(--accent), var(--accent)) center / 1.4px 100%
+        no-repeat;
+    pointer-events: none;
+  }
+  .card::before {
+    top: 7px;
+    left: 7px;
+  }
+  .card::after {
+    bottom: 7px;
+    right: 7px;
+  }
+
+  /* ============ Hero ============ */
+  .hero {
+    padding: 3.4rem 0 3rem;
+  }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 2.5rem;
+    align-items: start;
+  }
+  @media (max-width: 880px) {
+    .hero-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  .hero h1 {
+    font-size: clamp(2.4rem, 6vw, 3.6rem);
+    margin: 0 0 0.3em;
+  }
+  .hero .pitch {
+    font-size: clamp(1.05rem, 2.2vw, 1.25rem);
+    color: var(--ink-2);
+    max-width: 42em;
+    margin-bottom: 0.9em;
+  }
+  .hero .lede {
+    color: var(--ink-2);
+    max-width: 46em;
+  }
+  .hero-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    margin: 1.4rem 0 0.4rem;
+  }
+
+  .spec-box {
+    padding: 1.1rem 1.2rem 1.3rem;
+  }
+  .spec-box .eyebrow {
+    margin-bottom: 0.7em;
+  }
+  .tab-strip {
+    display: flex;
+    gap: 0.3rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.8rem;
+  }
+  .tab-strip [role="tab"] {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 0.5em 0.2em;
+    margin-right: 0.9em;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    translate: 0 1px;
+  }
+  .tab-strip [role="tab"][aria-selected="true"] {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+  }
+  .tab-strip [role="tab"]:hover {
+    color: var(--ink);
+  }
+
+  .code {
+    position: relative;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 0.83rem;
+    overflow: hidden;
+  }
+  .code .code-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.45em 0.7em;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  .code .code-dots {
+    display: flex;
+    gap: 0.35em;
+  }
+  .code .code-dots span {
+    width: 0.55em;
+    height: 0.55em;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
+    display: block;
+  }
+  .code pre {
+    margin: 0;
+    padding: 0.9em 1em 1em;
+    overflow-x: auto;
+    tab-size: 2;
+  }
+  .code code {
+    white-space: pre;
+  }
+  .copy-btn {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--code-ink);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+    padding: 0.2em 0.55em;
+    cursor: pointer;
+  }
+  .copy-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+  .copy-btn[data-copied="true"]::after {
+    content: " ✓";
+  }
+  .comment {
+    color: #8b95a3;
+  }
+  .tok-accent {
+    color: var(--code-accent);
+  }
+
+  /* ============ Section chrome ============ */
+  section {
+    padding: 3.4rem 0;
+    border-top: 1px solid var(--border);
+  }
+  section > .wrap > .section-head {
+    max-width: 46em;
+    margin-bottom: 2rem;
+  }
+  h2 {
+    font-size: clamp(1.5rem, 3.4vw, 2rem);
+    margin: 0 0 0.4em;
+  }
+  .section-head p {
+    color: var(--ink-2);
+  }
+
+  /* ============ Stat tiles ============ */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  @media (min-width: 640px) {
+    .stat-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (min-width: 960px) {
+    .stat-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  .stat {
+    background: var(--surface);
+    padding: 1.3rem 1.3rem 1.2rem;
+    position: relative;
+  }
+  .stat .stat-label {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 0.5em;
+  }
+  .stat .stat-value {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: clamp(1.5rem, 3vw, 1.9rem);
+    color: var(--ink);
+    line-height: 1.1;
+  }
+  .stat .stat-value .unit {
+    font-size: 0.5em;
+    color: var(--ink-2);
+    font-weight: 600;
+    margin-left: 0.3em;
+  }
+  .stat .stat-context {
+    margin-top: 0.55em;
+    font-size: 0.84rem;
+    color: var(--ink-2);
+  }
+  .stat .stat-context sup {
+    color: var(--annotation);
+    font-weight: 700;
+  }
+
+  /* ============ Honesty callouts (pencil notes) ============ */
+  .honesty {
+    list-style: none;
+    padding: 0;
+    margin: 1.4rem 0 2rem;
+    display: grid;
+    gap: 0.6rem;
+  }
+  .honesty li {
+    border-left: 3px solid var(--annotation);
+    background: var(--annotation-wash);
+    padding: 0.7em 0.9em;
+    font-size: 0.92rem;
+    color: var(--ink-2);
+    border-radius: 0 6px 6px 0;
+  }
+  .honesty li strong {
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    display: block;
+    margin-bottom: 0.2em;
+    color: var(--annotation);
+  }
+
+  /* ============ Chart ============ */
+  .chart-card {
+    padding: 1.4rem 1.5rem 1.2rem;
+    margin-bottom: 2rem;
+  }
+  .chart-card h3 {
+    font-size: 1rem;
+    margin: 0 0 0.2em;
+  }
+  .chart-note {
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+  .chart-svg-wrap {
+    overflow-x: auto;
+  }
+  .chart-legend {
+    display: flex;
+    gap: 1.4rem;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-2);
+    margin-top: 0.8rem;
+  }
+  .chart-legend .lg-swatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+  }
+  .chart-legend .lg-swatch::before {
+    content: "";
+    width: 0.9em;
+    height: 0.9em;
+    border-radius: 2px;
+    background: var(--sw, var(--accent));
+  }
+  .chart-caption {
+    margin-top: 0.9rem;
+    font-size: 0.84rem;
+    color: var(--ink-2);
+  }
+
+  /* ============ Tables ============ */
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 1.4rem;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.86rem;
+    background: var(--surface);
+  }
+  caption {
+    text-align: left;
+    caption-side: top;
+    padding: 0.9rem 1rem 0.2rem;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  caption .cap-note {
+    display: block;
+    font-weight: 400;
+    color: var(--ink-2);
+    font-size: 0.82rem;
+    margin-top: 0.3em;
+  }
+  th,
+  td {
+    padding: 0.55em 0.85em;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    background: var(--surface-2);
+  }
+  td {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-2);
+  }
+  td:first-child {
+    color: var(--ink);
+    font-family: var(--sans);
+    font-weight: 600;
+  }
+  tr:last-child td {
+    border-bottom: none;
+  }
+  td.is-na {
+    color: var(--annotation);
+    font-style: italic;
+  }
+  td.is-bool-true {
+    color: var(--accent-strong);
+    font-weight: 700;
+  }
+
+  details.full-dataset {
+    margin-top: 1.6rem;
+  }
+  details.full-dataset > summary {
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--accent-strong);
+    padding: 0.6em 0;
+  }
+  details.full-dataset[open] > summary {
+    margin-bottom: 0.6rem;
+  }
+
+  .env-line {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 1rem;
+  }
+  .methodology-link {
+    margin-top: 1.4rem;
+    font-size: 0.92rem;
+  }
+
+  /* ============ Features grid ============ */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+    gap: 1rem;
+  }
+  .feature {
+    padding: 1.2rem 1.3rem 1.3rem;
+  }
+  .feature .f-icon {
+    width: 2rem;
+    height: 2rem;
+    color: var(--accent);
+    margin-bottom: 0.7em;
+  }
+  .feature h3 {
+    font-size: 1rem;
+    margin: 0 0 0.35em;
+  }
+  .feature p {
+    font-size: 0.88rem;
+    color: var(--ink-2);
+    margin: 0;
+  }
+  .feature code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--surface-2);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+
+  /* ============ Quickstart tabs ============ */
+  .quickstart-panel[hidden] {
+    display: none;
+  }
+  .quickstart-panel p {
+    color: var(--ink-2);
+    font-size: 0.92rem;
+  }
+  .quickstart-panel .code + .code {
+    margin-top: 0.8rem;
+  }
+  .qs-link {
+    font-size: 0.88rem;
+  }
+
+  /* ============ Comparison ============ */
+  .compare-wrap table td,
+  .compare-wrap table th {
+    white-space: normal;
+    vertical-align: top;
+  }
+  .compare-wrap td:first-child {
+    white-space: nowrap;
+  }
+
+  /* ============ Footer ============ */
+  footer.site {
+    border-top: 1px solid var(--border);
+    padding: 2rem 0 2.4rem;
+  }
+  .footer-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    font-size: 0.85rem;
+    color: var(--ink-2);
+  }
+  .footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.1rem;
+  }
+  .footer-links a {
+    color: var(--ink-2);
+    text-decoration: none;
+  }
+  .footer-links a:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+  }
+  .footer-fine {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--muted);
+    margin-top: 1rem;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  noscript .ns-banner {
+    display: block;
+    background: var(--annotation-wash);
+    border: 1px solid var(--annotation);
+    color: var(--ink);
+    padding: 1rem 1.2rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site">
+  <div class="wrap nav-row">
+    <a class="brand" href="#top">
+      <svg
+        class="brand-mark"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <rect width="24" height="24" rx="5" fill="#101720" />
+        <path
+          d="M7 7 17 9 M17 9 10 18 M7 7 10 18"
+          stroke="#3987e5"
+          stroke-width="1.5"
+          fill="none"
+        />
+        <circle cx="7" cy="7" r="2.3" fill="#3987e5" />
+        <circle cx="17" cy="9" r="2.3" fill="#3987e5" />
+        <circle cx="10" cy="18" r="2.3" fill="#3987e5" />
+      </svg>
+      codeindex
+    </a>
+    <nav class="primary" aria-label="Primary">
+      <div class="nav-links">
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#features">Features</a>
+        <a href="#quickstart">Quickstart</a>
+        <a href="#compare">Compare</a>
+      </div>
+      <a
+        class="btn btn-ghost"
+        href="https://github.com/maxgfr/codeindex"
+        >GitHub</a
+      >
+      <button
+        type="button"
+        class="theme-toggle"
+        id="theme-toggle"
+        aria-label="Toggle color theme"
+      >
+        <span aria-hidden="true" id="theme-toggle-icon">◐</span>
+        <span id="theme-toggle-label">system</span>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <!-- ============ HERO ============ -->
+  <section class="hero" id="top" style="border-top: none">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">Technical data sheet · measured, not declared</p>
+        <h1>codeindex</h1>
+        <p class="pitch">
+          Zero-install, deterministic repo-indexing engine — one vendorable
+          file, a library, a CLI, and 26 MCP tools.
+        </p>
+        <p class="lede">
+          Walks a repo, extracts symbols and imports across 15 languages,
+          resolves cross-file references into a typed link-graph, and
+          renders byte-identical artifacts every time it runs. Vendor the
+          single <code>engine.mjs</code>, install it from npm or Homebrew, or
+          run it from a container — nothing else to install, ever.
+        </p>
+        <div class="pill-row" aria-label="Project badges">
+          <a
+            class="pill"
+            href="https://github.com/maxgfr/codeindex/blob/main/LICENSE"
+            ><span class="dot" aria-hidden="true"></span>MIT license</a
+          >
+          <span class="pill">v2.11.0</span>
+          <span class="pill">Node ≥ 18</span>
+          <a class="pill" href="https://www.npmjs.com/package/@maxgfr/codeindex"
+            >npm · @maxgfr/codeindex</a
+          >
+          <span class="pill">ghcr.io/maxgfr/codeindex</span>
+          <span class="pill">0 runtime deps</span>
+        </div>
+        <div class="hero-ctas">
+          <a
+            class="btn btn-primary"
+            href="https://github.com/maxgfr/codeindex"
+            >View on GitHub</a
+          >
+          <a
+            class="btn btn-ghost"
+            href="https://www.npmjs.com/package/@maxgfr/codeindex"
+            >npm package</a
+          >
+          <a class="btn btn-ghost" href="#benchmarks">Jump to benchmarks ↓</a>
+        </div>
+      </div>
+
+      <div class="card spec-box">
+        <p class="eyebrow" style="margin-bottom: 0.6em">Install</p>
+        <div class="tab-strip" role="tablist" aria-label="Install method">
+          <button
+            role="tab"
+            id="install-tab-npm"
+            aria-controls="install-panel-npm"
+            aria-selected="true"
+            tabindex="0"
+          >
+            npm
+          </button>
+          <button
+            role="tab"
+            id="install-tab-brew"
+            aria-controls="install-panel-brew"
+            aria-selected="false"
+            tabindex="-1"
+          >
+            brew
+          </button>
+          <button
+            role="tab"
+            id="install-tab-docker"
+            aria-controls="install-panel-docker"
+            aria-selected="false"
+            tabindex="-1"
+          >
+            docker
+          </button>
+        </div>
+
+        <div
+          role="tabpanel"
+          id="install-panel-npm"
+          aria-labelledby="install-tab-npm"
+        >
+          <div class="code">
+            <div class="code-bar">
+              <span class="code-dots" aria-hidden="true"
+                ><span></span><span></span><span></span
+              ></span>
+              <button class="copy-btn" data-copy-target="cmd-npm">
+                copy
+              </button>
+            </div>
+            <pre><code id="cmd-npm">npm i -g @maxgfr/codeindex</code></pre>
+          </div>
+        </div>
+        <div
+          role="tabpanel"
+          id="install-panel-brew"
+          aria-labelledby="install-tab-brew"
+          hidden
+        >
+          <div class="code">
+            <div class="code-bar">
+              <span class="code-dots" aria-hidden="true"
+                ><span></span><span></span><span></span
+              ></span>
+              <button class="copy-btn" data-copy-target="cmd-brew">
+                copy
+              </button>
+            </div>
+            <pre><code id="cmd-brew">brew install maxgfr/tap/codeindex</code></pre>
+          </div>
+        </div>
+        <div
+          role="tabpanel"
+          id="install-panel-docker"
+          aria-labelledby="install-tab-docker"
+          hidden
+        >
+          <div class="code">
+            <div class="code-bar">
+              <span class="code-dots" aria-hidden="true"
+                ><span></span><span></span><span></span
+              ></span>
+              <button class="copy-btn" data-copy-target="cmd-docker">
+                copy
+              </button>
+            </div>
+            <pre><code id="cmd-docker">docker run --rm -v "$PWD":/work \
+  ghcr.io/maxgfr/codeindex scan --repo /work</code></pre>
+          </div>
+        </div>
+        <p class="chart-caption" style="margin-top: 0.9rem">
+          Same zero-dependency <code>engine.mjs</code> bundle behind all
+          three — CLI, library import, and Docker image.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STAT TILES ============ -->
+  <section aria-labelledby="stats-heading" style="border-top: none">
+    <div class="wrap">
+      <h2 id="stats-heading" class="sr-only">Key measured numbers</h2>
+      <div class="stat-grid" id="stat-grid">
+        <!-- filled by JS from the embedded benchmark data; noscript fallback below -->
+      </div>
+      <noscript>
+        <p class="chart-caption" style="margin-top: 1rem">
+          Key numbers (JavaScript disabled — see full figures in
+          <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md"
+            >BENCHMARKS.md</a
+          >): cold index on <code>vercel/next.js</code> — codeindex 9,398 ms
+          vs 01x-in/codeindex init 86,062 ms; 32.9× fewer tokens than raw
+          grep for a single-symbol lookup; 15 languages; 0 runtime
+          dependencies; byte-identical rebuilds on 7/7 measured repos; 26 MCP
+          tools.
+        </p>
+      </noscript>
+    </div>
+  </section>
+
+  <!-- ============ BENCHMARKS ============ -->
+  <section id="benchmarks" aria-labelledby="benchmarks-heading">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Fig. 01 — measured, reproducible</p>
+        <h2 id="benchmarks-heading">Benchmarks</h2>
+        <p>
+          Measured against 01x-in/codeindex, universal-ctags and
+          scip-typescript with a reproducible harness
+          (<code>scripts/bench/</code>) — median of 5 runs, one warmup
+          discarded. Every number on this page comes from the same
+          <code>site/benchmarks.json</code> committed to this repo; nothing
+          here is rounded or typed in by hand. Full methodology and every
+          scenario:
+          <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md"
+            >BENCHMARKS.md</a
+          >.
+        </p>
+      </div>
+
+      <ul class="honesty">
+        <li>
+          <strong>ctags is faster, on purpose</strong>
+          <code>universal-ctags</code> wins cold-index time in every repo
+          below — it only extracts flat definitions from a regex/parser
+          pass. No call graph, no import resolution, no cross-file links; a
+          <code>tags</code> file, not an index.
+        </li>
+        <li>
+          <strong>01x's warm reindex wins, honestly</strong>
+          01x-in/codeindex's live SQLite model reindexes one touched file in
+          11 ms on <code>vercel/next.js</code>, against codeindex's 1,828 ms
+          for the same touch. codeindex renders static, byte-stable
+          artifacts on every run instead of mutating a database — a real
+          architectural tradeoff, not a bug to fix.
+        </li>
+        <li>
+          <strong>the next.js cold-init number sits at a timeout edge</strong>
+          01x's cold <code>init</code> on <code>vercel/next.js</code> runs
+          85–125 s on this machine — close to this harness's 120 s
+          per-process spawn timeout. The 86,062 ms figure below is an
+          authentic measurement from this session, not a clean average; read
+          it next to that boundary, and next to 01x-in's own published
+          121,037 ms for the same operation on their machine, their SHA.
+        </li>
+        <li>
+          <strong>n/a means measured-and-failed, never zero</strong>
+          scip-typescript and 01x-in both failed to cold-index 2 of 7 repos
+          this session (<code>npm install failed</code> /
+          <code>no tsconfig</code>) — shown as <code>n/a (reason)</code>,
+          exactly as the harness recorded it.
+        </li>
+      </ul>
+
+      <div class="card chart-card">
+        <h3>Cold index — <code>vercel/next.js</code> (20,000 files)</h3>
+        <p class="chart-note">
+          Full process spawn per run into a fresh output dir. Files capped at
+          codeindex's own default walk limit (20,000) — the repo has more
+          source files on disk than that cap; hover or focus a bar for the
+          exact reading.
+        </p>
+        <div class="chart-svg-wrap" id="cold-chart-wrap"></div>
+        <p class="chart-caption" id="cold-chart-caption"></p>
+      </div>
+
+      <div id="benchmark-tables">
+        <!-- cold / warm / tokens tables + full-dataset <details> filled by JS -->
+      </div>
+      <noscript>
+        <p class="chart-caption">
+          Full tables require JavaScript to render from the embedded dataset
+          without retyping numbers by hand. See the same data as plain
+          Markdown in
+          <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md"
+            >BENCHMARKS.md</a
+          >
+          or
+          <a href="https://github.com/maxgfr/codeindex/blob/main/site/benchmarks.json"
+            >site/benchmarks.json</a
+          >.
+        </p>
+      </noscript>
+    </div>
+  </section>
+
+  <!-- ============ FEATURES ============ -->
+  <section id="features" aria-labelledby="features-heading">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Fig. 02 — capabilities</p>
+        <h2 id="features-heading">Features</h2>
+        <p>
+          Everything below ships in the same zero-dependency bundle — no
+          feature is an optional add-on package.
+        </p>
+      </div>
+      <div class="feature-grid">
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="6"/><path d="M15 15 21 21"/><circle cx="10" cy="10" r="2" fill="currentColor" stroke="none"/></svg>
+          <h3>Keyless search + deterministic fuzzy</h3>
+          <p>
+            BM25 lexical ranking over symbol names, path segments and
+            headings. A term with zero document frequency falls back to a
+            byte-deterministic character-trigram match (Dice ≥ 0.6) — typo
+            tolerance with no embeddings. Disable with
+            <code>--no-fuzzy</code>.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <h3>Deterministic semantic tier</h3>
+          <p>
+            An opt-in static <code>token → vector</code> lookup table — no
+            neural forward pass. Encode → mean-pool → L2-normalize →
+            round-half-to-even int8 quantize; ranking is a pure integer dot
+            product, byte-identical everywhere. No model on disk, no
+            behavior change.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          <h3>Rich embedding tier <span class="sr-only">— v2.11.0</span></h3>
+          <p>
+            Point at a containerized HTTP endpoint
+            (<code>ghcr.io/maxgfr/codeindex-embed</code>, all-MiniLM-L6-v2)
+            via <code>CODEINDEX_EMBED_ENDPOINT</code>. Wins over the static
+            tier by explicit intent; degrades to lexical on exit 0 if
+            unreachable — never a silent fallback to the wrong model.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8 7.3 16 7.3M7 8 11 16M17 8 13 16"/></svg>
+          <h3>Call graph &amp; caller index</h3>
+          <p>
+            Typed <code>import</code> / <code>call</code> / <code>use</code>
+            / <code>doc-link</code> / <code>mention</code> edges at file and
+            module level. Per-symbol callers and references resolve in-proc
+            in sub-millisecond time on an already-loaded warm scan.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><path d="M4 12a8 8 0 0 1 14-5M20 12a8 8 0 0 1-14 5"/><path d="M18 4v3h-3M6 20v-3h3"/></svg>
+          <h3>Graph analytics</h3>
+          <p>
+            Louvain communities, PageRank &amp; betweenness centrality,
+            dead-code detection, complexity × churn hotspots, change
+            coupling, surprise-edge detection, and a tests→code map — all
+            derived from the same link-graph.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><path d="M6 3h9l5 5v13H6z"/><path d="M15 3v5h5M9 13l2 2 4-4"/></svg>
+          <h3>SCIP export</h3>
+          <p>
+            <code>index.scip</code> via a hand-rolled zero-dependency
+            protobuf encoder — validated against the official
+            <code>scip</code> CLI's <code>stats</code>/<code>lint</code>.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="7" height="6" rx="1"/><rect x="14" y="4" width="7" height="6" rx="1"/><rect x="8.5" y="14" width="7" height="6" rx="1"/><path d="M6.5 10v2a2 2 0 0 0 2 2h1M17.5 10v2a2 2 0 0 1-2 2h-1"/></svg>
+          <h3>Multi-ecosystem workspaces</h3>
+          <p>
+            npm/yarn, pnpm, lerna, nx, cargo, go.work, maven, gradle, uv and
+            Composer — detected and named without running any of their own
+            tooling.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><path d="M4 20 15 9l3 3-11 11H4z"/><path d="M13 11 16 8l3 3-3 3"/></svg>
+          <h3>Symbolic edits over MCP</h3>
+          <p>
+            <code>replace_symbol_body</code>, <code>insert_after_symbol</code
+            >, <code>insert_before_symbol</code> — precise edits addressed by
+            symbol name, not by line ranges that drift.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="2"/></svg>
+          <h3>mermaid &amp; repo map</h3>
+          <p>
+            Render a mermaid dependency diagram or a plain-text repo map
+            directly from the graph — no separate diagramming step.
+          </p>
+        </article>
+        <article class="card feature">
+          <svg class="f-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+          <h3>Byte-deterministic outputs</h3>
+          <p>
+            Two cold builds of an unchanged repo produce identical
+            <code>graph.json</code>/<code>symbols.json</code> — confirmed on
+            7 of 7 measured repos this session. 01x's SQLite DB embeds ids
+            and timestamps, so it isn't byte-comparable by design.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ QUICKSTART ============ -->
+  <section id="quickstart" aria-labelledby="quickstart-heading">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Fig. 03 — usage</p>
+        <h2 id="quickstart-heading">Quickstart</h2>
+        <p>Five ways in — pick the one matching your integration.</p>
+      </div>
+
+      <div class="card" style="padding: 1.3rem 1.4rem 1.5rem">
+        <div class="tab-strip" role="tablist" aria-label="Quickstart method">
+          <button role="tab" id="qs-tab-lib" aria-controls="qs-panel-lib" aria-selected="true" tabindex="0">Library</button>
+          <button role="tab" id="qs-tab-cli" aria-controls="qs-panel-cli" aria-selected="false" tabindex="-1">CLI</button>
+          <button role="tab" id="qs-tab-mcp" aria-controls="qs-panel-mcp" aria-selected="false" tabindex="-1">MCP</button>
+          <button role="tab" id="qs-tab-docker" aria-controls="qs-panel-docker" aria-selected="false" tabindex="-1">Docker</button>
+          <button role="tab" id="qs-tab-vendor" aria-controls="qs-panel-vendor" aria-selected="false" tabindex="-1">Vendoring</button>
+        </div>
+
+        <div class="quickstart-panel" role="tabpanel" id="qs-panel-lib" aria-labelledby="qs-tab-lib">
+          <p>Install it as a regular dependency and import the pure functions.</p>
+          <div class="code">
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="lib-cmd">copy</button></div>
+            <pre><code id="lib-cmd">npm i @maxgfr/codeindex</code></pre>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="lib-ts">copy</button></div>
+            <pre><code id="lib-ts"><span class="tok-accent">import</span> { scanRepo, ENGINE_VERSION } <span class="tok-accent">from</span> <span class="comment">"@maxgfr/codeindex"</span>;
+
+<span class="tok-accent">const</span> scan = scanRepo(<span class="comment">"/path/to/repo"</span>);</code></pre>
+          </div>
+          <p class="qs-link">
+            Skills and CLI tools that don't want an npm dependency should
+            still prefer <a href="#" data-qs-jump="vendor">vendoring</a> —
+            see the Vendoring tab.
+          </p>
+        </div>
+
+        <div class="quickstart-panel" role="tabpanel" id="qs-panel-cli" aria-labelledby="qs-tab-cli" hidden>
+          <p>The CLI ships in the same package as the library.</p>
+          <div class="code">
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="cli-cmd">copy</button></div>
+            <pre><code id="cli-cmd"><span class="comment"># or: brew install maxgfr/tap/codeindex</span>
+npm i -g @maxgfr/codeindex
+
+codeindex index   --repo . --out .codeindex
+codeindex graph   --repo . &gt; graph.json
+codeindex scip    --repo . --out index.scip
+codeindex callers --repo .
+codeindex search  <span class="comment">"http client retry"</span> --repo .</code></pre>
+          </div>
+        </div>
+
+        <div class="quickstart-panel" role="tabpanel" id="qs-panel-mcp" aria-labelledby="qs-tab-mcp" hidden>
+          <p>
+            Serves the engine over stdio: 26 tools, including
+            <code>scan_summary</code>, <code>graph</code>,
+            <code>symbols</code>, <code>find_symbol</code>,
+            <code>find_references</code>, <code>callers</code>,
+            <code>search</code>, <code>repo_map</code>,
+            <code>hotspots</code>, <code>coupling</code>,
+            <code>dead_code</code>, <code>complexity</code>,
+            <code>mermaid</code>, <code>grep</code>,
+            <code>replace_symbol_body</code>,
+            <code>insert_after_symbol</code>,
+            <code>insert_before_symbol</code>, memory tools,
+            <code>workspaces</code>, <code>churn</code>,
+            <code>check_rules</code> and <code>embed_status</code>.
+          </p>
+          <div class="code">
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="mcp-cmd">copy</button></div>
+            <pre><code id="mcp-cmd">claude mcp add codeindex -- codeindex mcp</code></pre>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="mcp-json">copy</button></div>
+            <pre><code id="mcp-json">{
+  <span class="comment">"mcpServers"</span>: {
+    <span class="comment">"codeindex"</span>: {
+      <span class="comment">"command"</span>: <span class="comment">"codeindex"</span>,
+      <span class="comment">"args"</span>: [<span class="comment">"mcp"</span>]
+    }
+  }
+}</code></pre>
+          </div>
+        </div>
+
+        <div class="quickstart-panel" role="tabpanel" id="qs-panel-docker" aria-labelledby="qs-tab-docker" hidden>
+          <p>
+            Multi-arch (<code>linux/amd64</code>, <code>linux/arm64</code>) —
+            nothing inside but <code>node</code> and the bundle, no
+            <code>npm install</code>.
+          </p>
+          <div class="code">
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="docker-cmd">copy</button></div>
+            <pre><code id="docker-cmd">docker run --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex scan --repo /work
+docker run --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex index --repo /work --out /work/.codeindex
+docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
+          </div>
+          <p class="qs-link">
+            Pin by digest in CI or anywhere reproducibility matters:
+            <code>ghcr.io/maxgfr/codeindex@sha256:…</code>. The rich
+            semantic-search tier ships separately as
+            <code>ghcr.io/maxgfr/codeindex-embed</code>.
+          </p>
+        </div>
+
+        <div class="quickstart-panel" role="tabpanel" id="qs-panel-vendor" aria-labelledby="qs-tab-vendor" hidden>
+          <p>
+            Consumers who don't want an npm dependency vendor
+            <code>scripts/engine.mjs</code> + <code>engine.d.mts</code> at a
+            pinned release tag instead — the model
+            ultraindex, ultradoc, ultrasec, ultraeval, reconstruct,
+            construct and ultra11y all use, so each stays a standalone,
+            single-file install.
+          </p>
+          <div class="code">
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="vendor-cmd">copy</button></div>
+            <pre><code id="vendor-cmd">node scripts/sync-engine.mjs --ref v2.11.0</code></pre>
+          </div>
+          <p class="qs-link">
+            Full steps and version-constant semantics:
+            <a href="https://github.com/maxgfr/codeindex/blob/main/docs/MIGRATION.md"
+              >docs/MIGRATION.md</a
+            >.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ COMPARE ============ -->
+  <section id="compare" aria-labelledby="compare-heading">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Fig. 04 — honest comparison</p>
+        <h2 id="compare-heading">How it compares</h2>
+        <p>
+          Different tools, different models — not a ranking. Numbers below
+          are from the same measured session as Benchmarks; everything else
+          is a factual description of each tool's architecture.
+        </p>
+      </div>
+      <div class="table-wrap compare-wrap">
+        <table>
+          <caption>
+            Tool comparison
+            <span class="cap-note"
+              >codeindex vs. 01x-in/codeindex, universal-ctags,
+              scip-typescript and Serena.</span
+            >
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Tool</th>
+              <th scope="col">Model</th>
+              <th scope="col">Language coverage</th>
+              <th scope="col">Install</th>
+              <th scope="col">Worth knowing</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>codeindex</td>
+              <td>
+                Static byte-stable artifacts
+                (<code>graph.json</code>/<code>symbols.json</code>), rebuilt
+                each run with an incremental cache
+              </td>
+              <td>
+                15 (regex, always on) / 10 (tree-sitter AST, opt-in
+                grammars)
+              </td>
+              <td>npm i -g, brew, or docker — zero runtime deps</td>
+              <td>
+                A single-file incremental reindex is slower than a live
+                database (see Benchmarks)
+              </td>
+            </tr>
+            <tr>
+              <td>01x-in/codeindex</td>
+              <td>
+                Live SQLite DB (<code>.codeindex/</code>) the CLI opens on
+                every invocation
+              </td>
+              <td>4</td>
+              <td>Binary install, plus external ast-grep (~49 MB)</td>
+              <td>
+                Cold <code>init</code> shells out to ast-grep per file —
+                ~9.2× slower than codeindex's cold index on
+                <code>vercel/next.js</code> this session; wins single-file
+                warm reindex decisively
+              </td>
+            </tr>
+            <tr>
+              <td>universal-ctags</td>
+              <td>A flat <code>tags</code> file</td>
+              <td>Broad, generic parser rules</td>
+              <td>Binary install</td>
+              <td>
+                Fastest cold index in this report — definitions only, no
+                call graph, no import resolution, no cross-file links
+              </td>
+            </tr>
+            <tr>
+              <td>scip-typescript</td>
+              <td>SCIP index via the TypeScript compiler API</td>
+              <td>TypeScript only</td>
+              <td>Requires a full npm install of the target repo first</td>
+              <td>
+                That npm install isn't counted in its own timing; failed to
+                cold-index 2 of 7 repos this session
+              </td>
+            </tr>
+            <tr>
+              <td>Serena</td>
+              <td>LSP client orchestrating per-language language servers</td>
+              <td>Any language with an LSP server</td>
+              <td>Requires running the language server(s)</td>
+              <td>
+                Not measured in this harness — a different integration
+                model (a live LSP session), not a static index
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div class="footer-row">
+      <span>MIT © 2026 maxgfr</span>
+      <div class="footer-links">
+        <a href="https://github.com/maxgfr/codeindex">GitHub</a>
+        <a href="https://www.npmjs.com/package/@maxgfr/codeindex">npm</a>
+        <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md">Benchmarks</a>
+        <a href="https://github.com/maxgfr/codeindex/blob/main/docs/MIGRATION.md">Migration</a>
+        <a href="https://github.com/maxgfr/codeindex/blob/main/docs/SEMANTIC.md">Semantic search</a>
+        <a href="https://github.com/maxgfr/codeindex/blob/main/LICENSE">License</a>
+      </div>
+    </div>
+    <p class="footer-fine" id="env-line">
+      brew tap: maxgfr/tap/codeindex · this page makes zero external
+      requests — no CDN, no remote fonts, no analytics.
+    </p>
+  </div>
+</footer>
+
+<script id="benchmarks-data" type="application/json">{
+  "generatedAt": "2026-07-23T09:03:13.384Z",
+  "environment": {
+    "node": "v24.10.0",
+    "cpu": "Apple M5",
+    "ram": "16.0 GB",
+    "date": "2026-07-23T09:03:13.384Z"
+  },
+  "nominalRuns": 5,
+  "sections": [
+    {
+      "id": "cold",
+      "title": "Cold index",
+      "note": "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs.",
+      "headers": [
+        "Repo",
+        "Files",
+        "codeindex (ms)",
+        "ctags -R (ms)",
+        "scip-typescript (ms)",
+        "01x init (ms)"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "223",
+            "value": 223,
+            "kind": "int"
+          },
+          {
+            "display": "500",
+            "value": 500.06787499999973,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "45",
+            "value": 44.932124999999814,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "1506",
+            "value": 1506.0056669999994,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "129",
+            "value": 129,
+            "kind": "int"
+          },
+          {
+            "display": "277",
+            "value": 277.2011250000014,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "20",
+            "value": 20.479167000001326,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "1661",
+            "value": 1661.3131250000006,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "230",
+            "value": 230,
+            "kind": "int"
+          },
+          {
+            "display": "101",
+            "value": 100.64829200000167,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "21",
+            "value": 20.709209000000556,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (npm install failed)",
+            "na": "npm install failed"
+          },
+          {
+            "display": "994",
+            "value": 993.7054169999974,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "227",
+            "value": 227,
+            "kind": "int"
+          },
+          {
+            "display": "307",
+            "value": 306.80633300000045,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "26",
+            "value": 26.08679200000188,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "1265",
+            "value": 1265.3727080000026,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "2823",
+            "value": 2823,
+            "kind": "int"
+          },
+          {
+            "display": "1746",
+            "value": 1745.7529589999976,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "371",
+            "value": 370.6429999999964,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "13409",
+            "value": 13409.103833000001,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "132",
+            "value": 132,
+            "kind": "int"
+          },
+          {
+            "display": "103",
+            "value": 102.81020799998078,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "24",
+            "value": 23.66250000000582,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (no tsconfig)",
+            "na": "no tsconfig"
+          },
+          {
+            "display": "449",
+            "value": 448.6750409999804,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "20000",
+            "value": 20000,
+            "kind": "int"
+          },
+          {
+            "display": "9398",
+            "value": 9397.78575000001,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "3431",
+            "value": 3430.5689589999965,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (npm install failed)",
+            "na": "npm install failed"
+          },
+          {
+            "display": "86062 (3×)",
+            "value": 86062.197583,
+            "kind": "ms",
+            "runs": 3
+          }
+        ]
+      ]
+    },
+    {
+      "id": "warm",
+      "title": "Warm / incremental",
+      "note": "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). 01x re-indexes the single touched file.",
+      "headers": [
+        "Repo",
+        "codeindex warm rerun (ms)",
+        "codeindex +1 file (ms)",
+        "01x reindex file (ms)"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "85",
+            "value": 84.8174580000341,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "100",
+            "value": 99.57120799995027,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 11.840208999929018,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "72",
+            "value": 71.96170799992979,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "79",
+            "value": 79.00895799999125,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "29",
+            "value": 29.09854199993424,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "77",
+            "value": 76.65287499991246,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "82",
+            "value": 81.74166699999478,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "14",
+            "value": 13.790917000034824,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "95",
+            "value": 94.83487499994226,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "120",
+            "value": 120.27654199989047,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12.23208300000988,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "339",
+            "value": 339.11254200001713,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "344",
+            "value": 344.07499999995343,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (reindex exit 1)",
+            "na": "reindex exit 1"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "66",
+            "value": 66.46991700003855,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "73",
+            "value": 73.05125000001863,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11",
+            "value": 11.012832999927923,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "1775",
+            "value": 1774.7403749999357,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1828",
+            "value": 1827.6198330000043,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11",
+            "value": 11.223957999958657,
+            "kind": "ms",
+            "runs": 5
+          }
+        ]
+      ]
+    },
+    {
+      "id": "queries",
+      "title": "Queries (find-symbol / references / callers)",
+      "note": "`find-symbol in-proc` / `references in-proc`: a single API call on an already-loaded warm scan (call timed alone). `caller-index in-proc`: builds the whole-scan caller index (not just callers-of-symbol). `full-index spawn`: a full `codeindex symbols` CLI process — Node startup PLUS a cold buildIndexArtifacts and serialization of the entire symbol table, i.e. NOT a single-symbol lookup. `01x find-symbol`: one query against its primed SQLite DB. `ctags lookup`: scans the tags file for the symbol.",
+      "headers": [
+        "Repo",
+        "Symbol",
+        "find-symbol in-proc (ms)",
+        "full-index spawn (ms)",
+        "references in-proc (ms)",
+        "caller-index in-proc (ms)",
+        "01x find-symbol (ms)",
+        "ctags lookup (ms)"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.0816249999916181,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "466",
+            "value": 466.46804199996404,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 8.315874999971129,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.18445800000336,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.466790999984369,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.2710829999996349,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.05604200006928295,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "275",
+            "value": 275.0899999999674,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "3",
+            "value": 2.7519169999286532,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 2.128917000023648,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.073165999958292,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.37262500007636845,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.004916999954730272,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "116",
+            "value": 115.86512499989476,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.9022500000428408,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.04079200001433492,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "7",
+            "value": 7.079458000021987,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.3734999999869615,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.02266699995379895,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "321",
+            "value": 320.9722499999916,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "15",
+            "value": 15.017083000042476,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.5757500000763685,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "6",
+            "value": 6.265124999918044,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.15508300007786602,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.09729100007098168,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1860",
+            "value": 1860.327707999968,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "49",
+            "value": 48.66375000006519,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "4",
+            "value": 3.6094159999629483,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.40708400006406,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "7",
+            "value": 6.594459000043571,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "0",
+            "value": 0.003333000000566244,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "108",
+            "value": 107.57041599997319,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.9912089999997988,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.03775000001769513,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 4.967875000089407,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.04383300000336021,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "1",
+            "value": 0.9722090000286698,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "9600",
+            "value": 9600.275417000055,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "579",
+            "value": 579.3360419999808,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "323",
+            "value": 323.13791699998546,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.037040999974124,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "121",
+            "value": 120.59866599994712,
+            "kind": "ms",
+            "runs": 5
+          }
+        ]
+      ]
+    },
+    {
+      "id": "tokens",
+      "title": "Token economy (single-symbol lookup)",
+      "note": "Two methods side by side: 01x's published formula (grep_lines×30 vs len×5+200) and an honest bytes/4 measurement of a raw grep vs our structured JSON. Ratio > 1 means the index returns less context to the model.",
+      "headers": [
+        "Repo",
+        "Symbol",
+        "grep lines",
+        "01x formula ratio",
+        "grep tokens (measured)",
+        "index tokens (measured)",
+        "measured ratio"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "103",
+            "value": 103,
+            "kind": "int"
+          },
+          {
+            "display": "12.1",
+            "value": 12.117647058823529,
+            "kind": "ratio"
+          },
+          {
+            "display": "2280",
+            "value": 2280,
+            "kind": "int"
+          },
+          {
+            "display": "39",
+            "value": 39,
+            "kind": "int"
+          },
+          {
+            "display": "58.8",
+            "value": 58.825806451612905,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "816",
+            "value": 816,
+            "kind": "int"
+          },
+          {
+            "display": "113.9",
+            "value": 113.86046511627907,
+            "kind": "ratio"
+          },
+          {
+            "display": "13400",
+            "value": 13400,
+            "kind": "int"
+          },
+          {
+            "display": "36",
+            "value": 36,
+            "kind": "int"
+          },
+          {
+            "display": "377.5",
+            "value": 377.46478873239437,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "11",
+            "value": 11,
+            "kind": "int"
+          },
+          {
+            "display": "1.3",
+            "value": 1.2941176470588236,
+            "kind": "ratio"
+          },
+          {
+            "display": "242",
+            "value": 242,
+            "kind": "int"
+          },
+          {
+            "display": "182",
+            "value": 182,
+            "kind": "int"
+          },
+          {
+            "display": "1.3",
+            "value": 1.3328748280605227,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "1149",
+            "value": 1149,
+            "kind": "int"
+          },
+          {
+            "display": "153.2",
+            "value": 153.2,
+            "kind": "ratio"
+          },
+          {
+            "display": "23865",
+            "value": 23865,
+            "kind": "int"
+          },
+          {
+            "display": "70",
+            "value": 70,
+            "kind": "int"
+          },
+          {
+            "display": "342.1",
+            "value": 342.14336917562724,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "48",
+            "value": 48,
+            "kind": "int"
+          },
+          {
+            "display": "5.3",
+            "value": 5.333333333333333,
+            "kind": "ratio"
+          },
+          {
+            "display": "2047",
+            "value": 2047,
+            "kind": "int"
+          },
+          {
+            "display": "62",
+            "value": 62,
+            "kind": "int"
+          },
+          {
+            "display": "32.9",
+            "value": 32.87550200803213,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "115",
+            "value": 115,
+            "kind": "int"
+          },
+          {
+            "display": "15.3",
+            "value": 15.333333333333334,
+            "kind": "ratio"
+          },
+          {
+            "display": "2423",
+            "value": 2423,
+            "kind": "int"
+          },
+          {
+            "display": "196",
+            "value": 196,
+            "kind": "int"
+          },
+          {
+            "display": "12.3",
+            "value": 12.347770700636943,
+            "kind": "ratio"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "1389",
+            "value": 1389,
+            "kind": "int"
+          },
+          {
+            "display": "160.3",
+            "value": 160.26923076923077,
+            "kind": "ratio"
+          },
+          {
+            "display": "39811",
+            "value": 39811,
+            "kind": "int"
+          },
+          {
+            "display": "102",
+            "value": 102,
+            "kind": "int"
+          },
+          {
+            "display": "390.3",
+            "value": 390.3014705882353,
+            "kind": "ratio"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "determinism",
+      "title": "Determinism (byte-identical rebuild)",
+      "note": "Two cold builds byte-compared (graph.json + symbols.json). 01x keeps a SQLite DB (embedded ids/timestamps) that is not byte-comparable, so determinism is not claimed for it here.",
+      "headers": [
+        "Repo",
+        "codeindex (byte-identical)",
+        "01x"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (SQLite)",
+            "na": "SQLite"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "size",
+      "title": "Index size on disk",
+      "note": "Our artifacts (graph.json + symbols.json + cache.json) vs 01x's `.codeindex/` SQLite DB vs the ctags `tags` file.",
+      "headers": [
+        "Repo",
+        "codeindex artifacts",
+        "01x .codeindex",
+        "ctags tags"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "2.0 MB",
+            "value": 2104890,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.0 MB",
+            "value": 1089536,
+            "kind": "bytes"
+          },
+          {
+            "display": "524.4 KB",
+            "value": 536948,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "1.2 MB",
+            "value": 1210398,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.1 MB",
+            "value": 1134592,
+            "kind": "bytes"
+          },
+          {
+            "display": "267.2 KB",
+            "value": 273617,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "332.3 KB",
+            "value": 340319,
+            "kind": "bytes"
+          },
+          {
+            "display": "104.0 KB",
+            "value": 106496,
+            "kind": "bytes"
+          },
+          {
+            "display": "238.2 KB",
+            "value": 243957,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "1.2 MB",
+            "value": 1246731,
+            "kind": "bytes"
+          },
+          {
+            "display": "908.0 KB",
+            "value": 929792,
+            "kind": "bytes"
+          },
+          {
+            "display": "282.3 KB",
+            "value": 289058,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "12.6 MB",
+            "value": 13240864,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.3 MB",
+            "value": 1359872,
+            "kind": "bytes"
+          },
+          {
+            "display": "4.4 MB",
+            "value": 4633149,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "277.1 KB",
+            "value": 283737,
+            "kind": "bytes"
+          },
+          {
+            "display": "84.0 KB",
+            "value": 86016,
+            "kind": "bytes"
+          },
+          {
+            "display": "87.9 KB",
+            "value": 90016,
+            "kind": "bytes"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "69.8 MB",
+            "value": 73195786,
+            "kind": "bytes"
+          },
+          {
+            "display": "17.2 MB",
+            "value": 17985536,
+            "kind": "bytes"
+          },
+          {
+            "display": "80.8 MB",
+            "value": 84698993,
+            "kind": "bytes"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "install",
+      "title": "Install footprint",
+      "note": "Measured, not declared. Our tarball is the unpacked size from `npm pack --dry-run`.",
+      "headers": [
+        "Tool",
+        "Install footprint",
+        "Notes"
+      ],
+      "rows": [
+        [
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "23.1 MB",
+            "value": 24254336,
+            "kind": "bytes"
+          },
+          {
+            "display": "zero runtime dependencies; single engine.mjs",
+            "value": "zero runtime dependencies; single engine.mjs",
+            "kind": "text"
+          }
+        ],
+        [
+          {
+            "display": "01x",
+            "value": "01x",
+            "kind": "text"
+          },
+          {
+            "display": "8.1 MB",
+            "value": 8470946,
+            "kind": "bytes"
+          },
+          {
+            "display": "binary only; + ast-grep 49.1 MB required",
+            "value": "binary only; + ast-grep 49.1 MB required",
+            "kind": "text"
+          }
+        ],
+        [
+          {
+            "display": "scip-typescript",
+            "value": "scip-typescript",
+            "kind": "text"
+          },
+          {
+            "display": "binary + target-repo node_modules",
+            "value": "binary + target-repo node_modules",
+            "kind": "text"
+          },
+          {
+            "display": "requires a full npm install of each indexed repo (see cold column)",
+            "value": "requires a full npm install of each indexed repo (see cold column)",
+            "kind": "text"
+          }
+        ]
+      ]
+    }
+  ]
+}
+</script>
+
+<script>
+  (function () {
+    "use strict";
+
+    /* ---------- Theme toggle (light / dark / system) ---------- */
+    var root = document.documentElement;
+    var STORAGE_KEY = "codeindex-theme";
+    var toggleBtn = document.getElementById("theme-toggle");
+    var iconEl = document.getElementById("theme-toggle-icon");
+    var labelEl = document.getElementById("theme-toggle-label");
+    var order = ["system", "light", "dark"];
+    var icons = { system: "◐", light: "☀", dark: "☾" };
+
+    function applyTheme(mode) {
+      if (mode === "system") {
+        root.removeAttribute("data-theme");
+      } else {
+        root.setAttribute("data-theme", mode);
+      }
+      iconEl.textContent = icons[mode];
+      labelEl.textContent = mode;
+      toggleBtn.setAttribute(
+        "aria-label",
+        "Color theme: " + mode + ". Activate to cycle."
+      );
+    }
+
+    var stored = null;
+    try {
+      stored = localStorage.getItem(STORAGE_KEY);
+    } catch (e) {
+      /* storage unavailable — fall through to system */
+    }
+    var current = order.indexOf(stored) === -1 ? "system" : stored;
+    applyTheme(current);
+
+    toggleBtn.addEventListener("click", function () {
+      var idx = (order.indexOf(current) + 1) % order.length;
+      current = order[idx];
+      applyTheme(current);
+      try {
+        localStorage.setItem(STORAGE_KEY, current);
+      } catch (e) {
+        /* ignore */
+      }
+    });
+
+    /* ---------- Copy-to-clipboard ---------- */
+    document.querySelectorAll(".copy-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var targetId = btn.getAttribute("data-copy-target");
+        var el = document.getElementById(targetId);
+        if (!el) return;
+        var text = el.textContent;
+        var done = function () {
+          btn.setAttribute("data-copied", "true");
+          var label = btn.textContent.replace(" ✓", "");
+          setTimeout(function () {
+            btn.removeAttribute("data-copied");
+          }, 1600);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, done);
+        } else {
+          done();
+        }
+      });
+    });
+
+    /* ---------- Generic ARIA tabs (install + quickstart) ---------- */
+    function wireTabs(tablistSelector) {
+      document.querySelectorAll(tablistSelector).forEach(function (list) {
+        var tabs = Array.prototype.slice.call(
+          list.querySelectorAll('[role="tab"]')
+        );
+        function select(tab, focus) {
+          tabs.forEach(function (t) {
+            var selected = t === tab;
+            t.setAttribute("aria-selected", selected ? "true" : "false");
+            t.tabIndex = selected ? 0 : -1;
+            var panel = document.getElementById(
+              t.getAttribute("aria-controls")
+            );
+            if (panel) panel.hidden = !selected;
+          });
+          if (focus) tab.focus();
+        }
+        tabs.forEach(function (tab, i) {
+          tab.addEventListener("click", function () {
+            select(tab, false);
+          });
+          tab.addEventListener("keydown", function (e) {
+            var next = null;
+            if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+              next = tabs[(i + 1) % tabs.length];
+            } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+              next = tabs[(i - 1 + tabs.length) % tabs.length];
+            } else if (e.key === "Home") {
+              next = tabs[0];
+            } else if (e.key === "End") {
+              next = tabs[tabs.length - 1];
+            }
+            if (next) {
+              e.preventDefault();
+              select(next, true);
+            }
+          });
+        });
+      });
+    }
+    wireTabs('[role="tablist"]');
+
+    document.querySelectorAll("[data-qs-jump]").forEach(function (a) {
+      a.addEventListener("click", function (e) {
+        e.preventDefault();
+        var tab = document.getElementById(
+          "qs-tab-" + a.getAttribute("data-qs-jump")
+        );
+        if (tab) tab.click();
+      });
+    });
+
+    /* ---------- Benchmarks: single source of truth ---------- */
+    var raw = document.getElementById("benchmarks-data").textContent;
+    var data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      console.error("codeindex site: failed to parse embedded benchmarks JSON", e);
+      return;
+    }
+
+    function bySectionId(id) {
+      return data.sections.filter(function (s) {
+        return s.id === id;
+      })[0];
+    }
+    function rowByFirstCell(section, text) {
+      return section.rows.filter(function (r) {
+        return r[0].value === text;
+      })[0];
+    }
+
+    /* ----- render one section as a table ----- */
+    function renderTable(section) {
+      var wrap = document.createElement("div");
+      wrap.className = "table-wrap";
+      var table = document.createElement("table");
+      var caption = document.createElement("caption");
+      caption.textContent = section.title;
+      var noteSpan = document.createElement("span");
+      noteSpan.className = "cap-note";
+      noteSpan.textContent = section.note;
+      caption.appendChild(noteSpan);
+      table.appendChild(caption);
+
+      var thead = document.createElement("thead");
+      var htr = document.createElement("tr");
+      section.headers.forEach(function (h) {
+        var th = document.createElement("th");
+        th.scope = "col";
+        th.textContent = h;
+        htr.appendChild(th);
+      });
+      thead.appendChild(htr);
+      table.appendChild(thead);
+
+      var tbody = document.createElement("tbody");
+      section.rows.forEach(function (row) {
+        var tr = document.createElement("tr");
+        row.forEach(function (cell) {
+          var td = document.createElement("td");
+          td.textContent = cell.display;
+          if (cell.na) {
+            td.className = "is-na";
+            td.title = "n/a: " + cell.na;
+          }
+          if (cell.kind === "bool" && cell.value === true) {
+            td.className = "is-bool-true";
+          }
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      return wrap;
+    }
+
+    var tablesHost = document.getElementById("benchmark-tables");
+    var primaryIds = ["cold", "warm", "tokens"];
+    var secondaryIds = ["queries", "determinism", "size", "install"];
+
+    primaryIds.forEach(function (id) {
+      var s = bySectionId(id);
+      if (s) tablesHost.appendChild(renderTable(s));
+    });
+
+    var details = document.createElement("details");
+    details.className = "full-dataset";
+    var summary = document.createElement("summary");
+    summary.textContent =
+      "Show full measured dataset (queries, determinism, index size, install footprint)";
+    details.appendChild(summary);
+    secondaryIds.forEach(function (id) {
+      var s = bySectionId(id);
+      if (s) details.appendChild(renderTable(s));
+    });
+    tablesHost.appendChild(details);
+
+    var env = data.environment || {};
+    var envLine = document.getElementById("env-line");
+    if (envLine) {
+      envLine.textContent =
+        "Measured on Node " +
+        env.node +
+        " · " +
+        env.cpu +
+        " · " +
+        env.ram +
+        " RAM · " +
+        (env.date || "").slice(0, 10) +
+        ". brew tap: maxgfr/tap/codeindex · zero external requests on this page.";
+    }
+    var methodP = document.createElement("p");
+    methodP.className = "methodology-link";
+    methodP.innerHTML =
+      'Full methodology, fairness notes and every scenario: <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md">BENCHMARKS.md</a>.';
+    tablesHost.appendChild(methodP);
+
+    /* ----- KPI stat tiles, derived from the same data ----- */
+    var cold = bySectionId("cold");
+    var warmSection = bySectionId("warm");
+    var tokens = bySectionId("tokens");
+    var determinism = bySectionId("determinism");
+
+    var nextRow = rowByFirstCell(cold, "vercel/next.js");
+    var codeindexMs = nextRow[2].value;
+    var ctagsMs = nextRow[3].value;
+    var x01Ms = nextRow[5].value;
+    var speedRatio = (x01Ms / codeindexMs).toFixed(1);
+    var ctagsFasterBy = (codeindexMs / ctagsMs).toFixed(1);
+
+    var tokenRow = rowByFirstCell(tokens, "socialgouv/code-du-travail-numerique");
+    var measuredRatioDisplay = tokenRow[6].display;
+
+    var detTrue = determinism.rows.filter(function (r) {
+      return r[1].value === true;
+    }).length;
+    var detTotal = determinism.rows.length;
+
+    var stats = [
+      {
+        label: "Cold index — vercel/next.js",
+        value: nextRow[2].display,
+        unit: "ms",
+        context:
+          "vs " +
+          nextRow[5].display.replace(" (3×)", "") +
+          " ms for 01x-in's cold init<sup>*</sup> — ~" +
+          speedRatio +
+          "× faster, same machine &amp; SHA this session.",
+      },
+      {
+        label: "Tokens per lookup",
+        value: measuredRatioDisplay + "×",
+        unit: "",
+        context:
+          "fewer tokens than raw grep for one symbol lookup (" +
+          tokenRow[0].display +
+          ", measured).",
+      },
+      {
+        label: "Languages",
+        value: "15",
+        unit: "",
+        context:
+          "always-on regex extraction; 10 of them also get tree-sitter AST precision when the grammar sidecar is present.",
+      },
+      {
+        label: "Runtime dependencies",
+        value: "0",
+        unit: "",
+        context: "one zero-dependency engine.mjs — devDependencies only.",
+      },
+      {
+        label: "Byte-identical rebuilds",
+        value: detTrue + "/" + detTotal,
+        unit: "repos",
+        context:
+          "two cold builds, same bytes, every measured repo (SCHEMA_VERSION 4).",
+      },
+      {
+        label: "MCP tools",
+        value: "26",
+        unit: "",
+        context:
+          "over stdio: scan, graph, symbols, search, callers, symbolic edits, memory, rules…",
+      },
+    ];
+
+    var statGrid = document.getElementById("stat-grid");
+    stats.forEach(function (s) {
+      var el = document.createElement("div");
+      el.className = "stat";
+      el.innerHTML =
+        '<p class="stat-label">' +
+        s.label +
+        '</p><p class="stat-value">' +
+        s.value +
+        (s.unit ? ' <span class="unit">' + s.unit + "</span>" : "") +
+        '</p><p class="stat-context">' +
+        s.context +
+        "</p>";
+      statGrid.appendChild(el);
+    });
+
+    var coldCaption = document.getElementById("cold-chart-caption");
+    if (coldCaption) {
+      coldCaption.innerHTML =
+        "<sup>*</sup> 01x-in/codeindex's cold init on this repo sits at this harness's spawn-timeout boundary (see honesty notes above and BENCHMARKS.md). ctags -R was faster still (" +
+        nextRow[3].display +
+        " ms) but extracts flat definitions only — no call graph, no cross-file links.";
+    }
+
+    /* ----- flagship chart: cold index, vercel/next.js, 3 bars ----- */
+    (function renderChart() {
+      var wrap = document.getElementById("cold-chart-wrap");
+      if (!wrap) return;
+      var rowsSpec = [
+        { label: "codeindex", ms: codeindexMs, display: nextRow[2].display, emphasis: true },
+        { label: "ctags -R", ms: ctagsMs, display: nextRow[3].display, emphasis: false },
+        { label: "01x init", ms: x01Ms, display: nextRow[5].display, emphasis: false },
+      ];
+      var maxMs = Math.max.apply(
+        null,
+        rowsSpec.map(function (r) {
+          return r.ms;
+        })
+      );
+      var W = 680,
+        left = 100,
+        right = 150,
+        barH = 34,
+        gap = 18,
+        top = 12,
+        axisH = 26;
+      var plotW = W - left - right;
+      var H = top + rowsSpec.length * (barH + gap) - gap + axisH + 8;
+
+      var ticks = [0, 20000, 40000, 60000, 80000].filter(function (t) {
+        return t <= Math.ceil(maxMs / 10000) * 10000;
+      });
+
+      var svg =
+        '<svg viewBox="0 0 ' +
+        W +
+        " " +
+        H +
+        '" role="img" aria-labelledby="cold-chart-title cold-chart-desc" width="100%" height="' +
+        H +
+        '">' +
+        "<title id=\"cold-chart-title\">Cold index time on vercel/next.js, in milliseconds, codeindex vs ctags -R vs 01x init</title>" +
+        '<desc id="cold-chart-desc">' +
+        rowsSpec
+          .map(function (r) {
+            return r.label + ": " + r.display + " ms.";
+          })
+          .join(" ") +
+        "</desc>";
+
+      // gridlines + axis labels
+      ticks.forEach(function (t) {
+        var x = left + (t / maxMs) * plotW;
+        svg +=
+          '<line x1="' +
+          x +
+          '" y1="' +
+          top +
+          '" x2="' +
+          x +
+          '" y2="' +
+          (H - axisH) +
+          '" stroke="var(--grid)" stroke-width="1"/>';
+        svg +=
+          '<text x="' +
+          x +
+          '" y="' +
+          (H - axisH + 16) +
+          '" font-family="var(--mono)" font-size="10" fill="var(--muted)" text-anchor="middle">' +
+          t.toLocaleString("en-US") +
+          "</text>";
+      });
+      svg +=
+        '<line x1="' +
+        left +
+        '" y1="' +
+        (H - axisH) +
+        '" x2="' +
+        (left + plotW) +
+        '" y2="' +
+        (H - axisH) +
+        '" stroke="var(--context)" stroke-width="1"/>';
+
+      rowsSpec.forEach(function (r, i) {
+        var y = top + i * (barH + gap);
+        var w = Math.max(2, (r.ms / maxMs) * plotW);
+        var color = r.emphasis ? "var(--accent)" : "var(--context)";
+        svg +=
+          '<g tabindex="0" role="group" aria-label="' +
+          r.label +
+          ": " +
+          r.display +
+          ' milliseconds">' +
+          '<title>' +
+          r.label +
+          ": " +
+          r.display +
+          " ms</title>" +
+          '<text x="' +
+          (left - 10) +
+          '" y="' +
+          (y + barH / 2 + 4) +
+          '" font-family="var(--mono)" font-size="12" fill="var(--ink-2)" text-anchor="end">' +
+          r.label +
+          "</text>" +
+          '<rect x="' +
+          left +
+          '" y="' +
+          y +
+          '" width="' +
+          w +
+          '" height="' +
+          barH +
+          '" rx="3" fill="' +
+          color +
+          '"/>' +
+          '<text x="' +
+          (left + w + 10) +
+          '" y="' +
+          (y + barH / 2 + 4) +
+          '" font-family="var(--mono)" font-size="12" font-weight="700" fill="var(--ink)" text-anchor="start">' +
+          r.display +
+          " ms</text>" +
+          "</g>";
+      });
+
+      svg += "</svg>";
+      wrap.innerHTML = svg;
+
+      var legend = document.createElement("div");
+      legend.className = "chart-legend";
+      legend.innerHTML =
+        '<span class="lg-swatch" style="--sw:var(--accent)">codeindex</span>' +
+        '<span class="lg-swatch" style="--sw:var(--context)">ctags -R / 01x init — context</span>';
+      wrap.after(legend);
+    })();
+  })();
+</script>
+</body>
+</html>

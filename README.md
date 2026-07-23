@@ -1,5 +1,7 @@
 # codeindex
 
+[![Site](https://img.shields.io/badge/site-maxgfr.github.io%2Fcodeindex-2a78d6)](https://maxgfr.github.io/codeindex/)
+
 Self-contained, deterministic **repo-indexing engine**: file walking, language
 detection, symbol/import extraction (tree-sitter AST with a regex fallback),
 import resolution, a typed cross-file link-graph, and graph analytics — shipped
