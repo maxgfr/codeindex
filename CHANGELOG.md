@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.11.0](https://github.com/maxgfr/codeindex/compare/v2.10.0...v2.11.0) (2026-07-23)
+
+
+### Bug Fixes
+
+* **embed-image:** cap request body and batch size on the embedding server ([67c28cd](https://github.com/maxgfr/codeindex/commit/67c28cd9d19398b237c0e98fdb85eb690a9d598b))
+* **extract:** emit symbols for export aliases ([7fcb94d](https://github.com/maxgfr/codeindex/commit/7fcb94dbc3059e8adbae4f2dab3a91343b8e4cf4))
+
+
+### Features
+
+* **embed:** containerized HTTP embedding endpoint tier ([971b922](https://github.com/maxgfr/codeindex/commit/971b922ca5d79f5323416d321d312c67eaccf4e0))
+
 # [2.10.0](https://github.com/maxgfr/codeindex/compare/v2.9.0...v2.10.0) (2026-07-23)
 
 
