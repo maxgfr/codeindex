@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-07-24T15:39:13.435Z",
+  "generatedAt": "2026-07-24T18:23:29.632Z",
   "environment": {
     "node": "v24.10.0",
     "cpu": "Apple M5",
     "ram": "16.0 GB",
-    "date": "2026-07-24T15:39:13.435Z"
+    "date": "2026-07-24T18:23:29.632Z"
   },
   "nominalRuns": 5,
   "sections": [
@@ -36,14 +36,14 @@
             "kind": "int"
           },
           {
-            "display": "433",
-            "value": 432.8391660000002,
+            "display": "468",
+            "value": 467.8135,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "30",
-            "value": 29.51012499999979,
+            "value": 29.903957999999875,
             "kind": "ms",
             "runs": 5
           },
@@ -56,14 +56,14 @@
             "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "2073",
-            "value": 2072.696082999999,
+            "display": "2406",
+            "value": 2405.793207999999,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1710",
-            "value": 1709.6134579999998,
+            "display": "1863",
+            "value": 1863.3060000000005,
             "kind": "ms",
             "runs": 5
           },
@@ -84,14 +84,14 @@
             "kind": "int"
           },
           {
-            "display": "254",
-            "value": 253.55512499999895,
+            "display": "262",
+            "value": 261.7357919999995,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "17",
-            "value": 17.314291999999114,
+            "value": 17.283667000003334,
             "kind": "ms",
             "runs": 5
           },
@@ -104,20 +104,20 @@
             "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "2362",
-            "value": 2362.2352089999986,
+            "display": "2516",
+            "value": 2515.8115410000028,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "843",
-            "value": 842.5819169999959,
+            "display": "884",
+            "value": 884.4407080000019,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "78",
-            "value": 77.73591599999781,
+            "display": "77",
+            "value": 77.23145900000236,
             "kind": "ms",
             "runs": 5
           }
@@ -134,14 +134,14 @@
             "kind": "int"
           },
           {
-            "display": "84",
-            "value": 84.4641249999986,
+            "display": "92",
+            "value": 91.95045799999934,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "18",
-            "value": 18.436957999998413,
+            "display": "19",
+            "value": 18.683167000002868,
             "kind": "ms",
             "runs": 5
           },
@@ -154,20 +154,20 @@
             "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "817",
-            "value": 816.9926660000056,
+            "display": "935",
+            "value": 935.065499999997,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "765",
-            "value": 765.3902090000047,
+            "display": "996",
+            "value": 995.7294170000096,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "62",
-            "value": 62.42254200000025,
+            "display": "79",
+            "value": 78.64087499999732,
             "kind": "ms",
             "runs": 5
           }
@@ -184,14 +184,14 @@
             "kind": "int"
           },
           {
-            "display": "276",
-            "value": 275.67504099999496,
+            "display": "327",
+            "value": 326.60770800001046,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "24",
-            "value": 23.63683299999684,
+            "display": "25",
+            "value": 24.605540999997174,
             "kind": "ms",
             "runs": 5
           },
@@ -204,20 +204,20 @@
             "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "1120",
-            "value": 1120.073166999995,
+            "display": "1263",
+            "value": 1262.8913330000069,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "967",
-            "value": 967.2492920000077,
+            "display": "1043",
+            "value": 1043.3317499999976,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "88",
-            "value": 88.21229099998891,
+            "display": "141",
+            "value": 140.6889999999985,
             "kind": "ms",
             "runs": 5
           }
@@ -234,14 +234,14 @@
             "kind": "int"
           },
           {
-            "display": "1673",
-            "value": 1673.364916000006,
+            "display": "1848",
+            "value": 1848.0559170000051,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "319",
-            "value": 319.07633299999,
+            "display": "338",
+            "value": 338.0035410000128,
             "kind": "ms",
             "runs": 5
           },
@@ -254,20 +254,20 @@
             "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "7017",
-            "value": 7017.460791999998,
+            "display": "7405",
+            "value": 7404.807874999999,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "9991",
-            "value": 9990.802082999988,
+            "display": "10233",
+            "value": 10233.254583000002,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "892",
-            "value": 891.6427919999987,
+            "display": "916",
+            "value": 915.541292000009,
             "kind": "ms",
             "runs": 5
           }
@@ -284,14 +284,14 @@
             "kind": "int"
           },
           {
-            "display": "91",
-            "value": 90.55887499998789,
+            "display": "96",
+            "value": 96.17612499999814,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "23",
-            "value": 22.89508299998124,
+            "display": "24",
+            "value": 23.681666999997105,
             "kind": "ms",
             "runs": 5
           },
@@ -304,20 +304,20 @@
             "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "927",
-            "value": 927.209291999985,
+            "display": "998",
+            "value": 998.0101250000007,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "585",
-            "value": 584.5357080000103,
+            "display": "592",
+            "value": 591.5022080000199,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "65",
-            "value": 64.51237499999115,
+            "value": 64.77225000000908,
             "kind": "ms",
             "runs": 5
           }
@@ -334,14 +334,14 @@
             "kind": "int"
           },
           {
-            "display": "7957",
-            "value": 7957.341000000015,
+            "display": "8322",
+            "value": 8321.795416000008,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "3133",
-            "value": 3133.092457999999,
+            "display": "3158",
+            "value": 3158.068333000003,
             "kind": "ms",
             "runs": 5
           },
@@ -362,8 +362,8 @@
             "na": "repo too large for a bench-time full index (~30k files)"
           },
           {
-            "display": "10809",
-            "value": 10809.185958000016,
+            "display": "11169",
+            "value": 11168.776125000033,
             "kind": "ms",
             "runs": 5
           }
@@ -388,14 +388,14 @@
             "kind": "text"
           },
           {
-            "display": "48",
-            "value": 47.53304200002458,
+            "display": "49",
+            "value": 49.45716699998593,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "78",
-            "value": 77.68554199999198,
+            "display": "79",
+            "value": 78.92516700003762,
             "kind": "ms",
             "runs": 5
           },
@@ -411,14 +411,14 @@
             "kind": "text"
           },
           {
-            "display": "41",
-            "value": 41.20187499996973,
+            "display": "42",
+            "value": 42.049333000031766,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "64",
-            "value": 64.13641600002302,
+            "display": "67",
+            "value": 66.556333000015,
             "kind": "ms",
             "runs": 5
           },
@@ -434,14 +434,14 @@
             "kind": "text"
           },
           {
-            "display": "45",
-            "value": 45.1359999999986,
+            "display": "48",
+            "value": 47.611290999979246,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "60",
-            "value": 59.526708999997936,
+            "display": "63",
+            "value": 62.91758299997309,
             "kind": "ms",
             "runs": 5
           },
@@ -457,14 +457,14 @@
             "kind": "text"
           },
           {
-            "display": "45",
-            "value": 45.462541999993846,
+            "display": "48",
+            "value": 47.68937499995809,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "86",
-            "value": 86.04679099994246,
+            "display": "88",
+            "value": 87.57495899999049,
             "kind": "ms",
             "runs": 5
           },
@@ -480,14 +480,14 @@
             "kind": "text"
           },
           {
-            "display": "131",
-            "value": 131.2895000000135,
+            "display": "134",
+            "value": 134.23908299999312,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "324",
-            "value": 324.0850840000203,
+            "display": "340",
+            "value": 339.5745839999872,
             "kind": "ms",
             "runs": 5
           },
@@ -503,14 +503,14 @@
             "kind": "text"
           },
           {
-            "display": "42",
-            "value": 42.46029100002488,
+            "display": "44",
+            "value": 43.7711249999702,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "59",
-            "value": 59.038125000020955,
+            "display": "60",
+            "value": 59.976625000010245,
             "kind": "ms",
             "runs": 5
           },
@@ -526,14 +526,14 @@
             "kind": "text"
           },
           {
-            "display": "867",
-            "value": 866.6619579999824,
+            "display": "887",
+            "value": 886.9694579999777,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1612",
-            "value": 1612.360915999976,
+            "display": "1668",
+            "value": 1668.3239999999641,
             "kind": "ms",
             "runs": 5
           },
@@ -572,25 +572,25 @@
           },
           {
             "display": "0",
-            "value": 0.08920899999793619,
+            "value": 0.086291000014171,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "437",
-            "value": 437.2402920000022,
+            "display": "444",
+            "value": 443.6915409999783,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.08312500000465661,
+            "value": 0.08141699997941032,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "5",
-            "value": 4.968417000025511,
+            "value": 4.975667000049725,
             "kind": "ms",
             "runs": 5
           },
@@ -600,7 +600,7 @@
           },
           {
             "display": "0",
-            "value": 0.25366699998266995,
+            "value": 0.25424999999813735,
             "kind": "ms",
             "runs": 5
           }
@@ -618,25 +618,25 @@
           },
           {
             "display": "0",
-            "value": 0.04416699998546392,
+            "value": 0.049583999963942915,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "250",
-            "value": 250.15179100004025,
+            "display": "252",
+            "value": 252.46054200001527,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04654200002551079,
+            "value": 0.04766599996946752,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 2.049750000005588,
+            "value": 2.0299579999991693,
             "kind": "ms",
             "runs": 5
           },
@@ -646,7 +646,7 @@
           },
           {
             "display": "0",
-            "value": 0.362208999984432,
+            "value": 0.380416999978479,
             "kind": "ms",
             "runs": 5
           }
@@ -664,25 +664,25 @@
           },
           {
             "display": "0",
-            "value": 0.003999999957159162,
+            "value": 0.0040419999859295785,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "84",
-            "value": 83.68941600003745,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.020499999984167516,
+            "display": "87",
+            "value": 87.44900000002235,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.0779999999795109,
+            "value": 0.019749999977648258,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.08541699999477714,
             "kind": "ms",
             "runs": 5
           },
@@ -692,7 +692,7 @@
           },
           {
             "display": "0",
-            "value": 0.2854580000275746,
+            "value": 0.2997079999768175,
             "kind": "ms",
             "runs": 5
           }
@@ -710,25 +710,25 @@
           },
           {
             "display": "0",
-            "value": 0.02458299999125302,
+            "value": 0.024291999987326562,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "279",
-            "value": 279.3057919999701,
+            "display": "300",
+            "value": 299.79845800000476,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.06766599998809397,
+            "value": 0.0735829999903217,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 1.4722919999621809,
+            "value": 1.4482919999863952,
             "kind": "ms",
             "runs": 5
           },
@@ -738,7 +738,7 @@
           },
           {
             "display": "0",
-            "value": 0.11883299995679408,
+            "value": 0.1213749999878928,
             "kind": "ms",
             "runs": 5
           }
@@ -756,25 +756,25 @@
           },
           {
             "display": "0",
-            "value": 0.10645799996564165,
+            "value": 0.09487500000977889,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1641",
-            "value": 1640.8057920000283,
+            "display": "1662",
+            "value": 1662.1787499999627,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.14358299999730662,
+            "value": 0.14191700000083074,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "5",
-            "value": 4.606124999991152,
+            "value": 5.080917000013869,
             "kind": "ms",
             "runs": 5
           },
@@ -784,7 +784,7 @@
           },
           {
             "display": "6",
-            "value": 5.93650000001071,
+            "value": 5.897874999966007,
             "kind": "ms",
             "runs": 5
           }
@@ -802,25 +802,25 @@
           },
           {
             "display": "0",
-            "value": 0.0032080000382848084,
+            "value": 0.0038330000243149698,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "90",
-            "value": 90.36754200002179,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.00604200002271682,
+            "display": "92",
+            "value": 91.65441700001247,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04100000002654269,
+            "value": 0.005999999993946403,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.1122909999685362,
             "kind": "ms",
             "runs": 5
           },
@@ -830,7 +830,7 @@
           },
           {
             "display": "0",
-            "value": 0.041250000009313226,
+            "value": 0.04158299998380244,
             "kind": "ms",
             "runs": 5
           }
@@ -848,25 +848,25 @@
           },
           {
             "display": "1",
-            "value": 0.7679580000112765,
+            "value": 0.7446670000208542,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "7759",
-            "value": 7758.518500000006,
+            "display": "9292",
+            "value": 9292.273667000001,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 1.5064589999965392,
+            "value": 1.676000000035856,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "318",
-            "value": 318.37612499995157,
+            "display": "320",
+            "value": 319.9830420000362,
             "kind": "ms",
             "runs": 5
           },
@@ -875,8 +875,8 @@
             "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "97",
-            "value": 96.97824999998556,
+            "display": "107",
+            "value": 107.07595800003037,
             "kind": "ms",
             "runs": 5
           }
@@ -886,7 +886,7 @@
     {
       "id": "mcp-sessions",
       "title": "MCP sessions (activate + per-call queries)",
-      "note": "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
+      "note": "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify, falcon, and now codeindex load prebuilt artifacts rather than rebuilding — codeindex primes a persisted `.codeindex/` index and its MCP server preloads it on the first call (a pure optimization: served responses stay byte-identical to a cold build), the same pattern as `falcon mcp serve` / graphify-mcp, so its parse cost lives in the Cold index column (the `codeindex` cold cell, where it already sits) and `activate->ready` here reflects load-not-rebuild. The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
       "headers": [
         "Repo",
         "Server",
@@ -914,26 +914,26 @@
             "kind": "text"
           },
           {
-            "display": "363",
-            "value": 362.9,
+            "display": "53",
+            "value": 53.1,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "13",
-            "value": 12.6,
+            "value": 12.5,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "12",
-            "value": 11.9,
+            "value": 12.3,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "11",
-            "value": 11,
+            "display": "12",
+            "value": 11.6,
             "kind": "ms",
             "runs": 5
           }
@@ -955,20 +955,498 @@
             "kind": "text"
           },
           {
-            "display": "2116",
-            "value": 2116.4,
+            "display": "2167",
+            "value": 2166.9,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "154",
-            "value": 153.7,
+            "display": "145",
+            "value": 144.5,
             "kind": "ms",
             "runs": 5
+          },
+          {
+            "display": "251",
+            "value": 251.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "107",
+            "value": 107.3,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
           },
           {
             "display": "258",
-            "value": 258.2,
+            "value": 258,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "46",
+            "value": 45.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "9",
+            "value": 9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 8.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 8.2,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "618",
+            "value": 617.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "130",
+            "value": 130.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "374",
+            "value": 373.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "105",
+            "value": 104.7,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "217",
+            "value": 216.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "15",
+            "value": 14.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "56",
+            "value": 55.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "15",
+            "value": 15.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "16",
+            "value": 16,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "16",
+            "value": 15.6,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "636",
+            "value": 635.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "143",
+            "value": 143,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "131",
+            "value": 131.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "106",
+            "value": 106.1,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "219",
+            "value": 219.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "8",
+            "value": 8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "55",
+            "value": 54.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "26",
+            "value": 26.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "15",
+            "value": 15.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "15",
+            "value": 15,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "775",
+            "value": 775.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "147",
+            "value": 146.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "153",
+            "value": 152.8,
             "kind": "ms",
             "runs": 5
           },
@@ -981,8 +1459,8 @@
         ],
         [
           {
-            "display": "BurntSushi/ripgrep",
-            "value": "BurntSushi/ripgrep",
+            "display": "pallets/flask",
+            "value": "pallets/flask",
             "kind": "text"
           },
           {
@@ -991,167 +1469,13 @@
             "kind": "text"
           },
           {
-            "display": "WalkBuilder",
-            "value": "WalkBuilder",
+            "display": "Flask",
+            "value": "Flask",
             "kind": "text"
           },
           {
-            "display": "248",
-            "value": 248.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "BurntSushi/ripgrep",
-            "value": "BurntSushi/ripgrep",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "WalkBuilder",
-            "value": "WalkBuilder",
-            "kind": "text"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "236",
-            "value": 236,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 8.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 8.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 7.7,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "602",
-            "value": 602.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "143",
-            "value": 142.5,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "366",
-            "value": 365.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "107",
-            "value": 106.6,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "209",
-            "value": 208.5,
+            "display": "210",
+            "value": 210.3,
             "kind": "ms",
             "runs": 5
           },
@@ -1162,332 +1486,8 @@
             "runs": 5
           },
           {
-            "display": "1",
-            "value": 1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "11",
-            "value": 10.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "76",
-            "value": 76.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "13",
-            "value": 13.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "13",
-            "value": 12.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "12",
-            "value": 12.3,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "598",
-            "value": 598.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "155",
-            "value": 155.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "146",
-            "value": 145.5,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "108",
-            "value": 107.7,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "209",
-            "value": 208.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "7",
-            "value": 6.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "188",
-            "value": 187.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "13",
-            "value": 13.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "12",
-            "value": 12.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "12",
-            "value": 11.7,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "719",
-            "value": 718.5,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "156",
-            "value": 155.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "151",
-            "value": 151,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "106",
-            "value": 106.3,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "206",
-            "value": 205.9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "4",
-            "value": 4.4,
+            "display": "5",
+            "value": 4.6,
             "kind": "ms",
             "runs": 5
           },
@@ -1513,8 +1513,8 @@
             "kind": "text"
           },
           {
-            "display": "8",
-            "value": 8.1,
+            "display": "9",
+            "value": 8.6,
             "kind": "ms",
             "runs": 5
           },
@@ -1554,26 +1554,26 @@
             "kind": "text"
           },
           {
-            "display": "1491",
-            "value": 1491,
+            "display": "207",
+            "value": 207.3,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "113",
-            "value": 113.2,
+            "display": "125",
+            "value": 125,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "111",
-            "value": 111,
+            "display": "126",
+            "value": 126.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "110",
-            "value": 110.4,
+            "display": "125",
+            "value": 124.6,
             "kind": "ms",
             "runs": 5
           }
@@ -1595,26 +1595,26 @@
             "kind": "text"
           },
           {
-            "display": "1538",
-            "value": 1538.3,
+            "display": "1788",
+            "value": 1787.6,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "617",
-            "value": 617,
+            "display": "631",
+            "value": 631.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "248",
-            "value": 248,
+            "display": "252",
+            "value": 251.5,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "108",
-            "value": 107.7,
+            "display": "105",
+            "value": 105.3,
             "kind": "ms",
             "runs": 5
           }
@@ -1636,8 +1636,8 @@
             "kind": "text"
           },
           {
-            "display": "461",
-            "value": 461.1,
+            "display": "474",
+            "value": 474,
             "kind": "ms",
             "runs": 5
           },
@@ -1649,7 +1649,7 @@
           },
           {
             "display": "1",
-            "value": 0.8,
+            "value": 0.9,
             "kind": "ms",
             "runs": 5
           },
@@ -1675,8 +1675,8 @@
             "kind": "text"
           },
           {
-            "display": "21",
-            "value": 21.4,
+            "display": "25",
+            "value": 24.5,
             "kind": "ms",
             "runs": 5
           },
@@ -1716,26 +1716,26 @@
             "kind": "text"
           },
           {
-            "display": "83",
-            "value": 82.8,
+            "display": "48",
+            "value": 47.6,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10",
-            "value": 10.2,
+            "display": "12",
+            "value": 12.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10",
-            "value": 10.3,
+            "display": "14",
+            "value": 13.6,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10",
-            "value": 9.8,
+            "display": "13",
+            "value": 12.6,
             "kind": "ms",
             "runs": 5
           }
@@ -1757,26 +1757,26 @@
             "kind": "text"
           },
           {
-            "display": "594",
-            "value": 593.7,
+            "display": "634",
+            "value": 634,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "158",
-            "value": 157.8,
+            "display": "146",
+            "value": 146.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "121",
-            "value": 120.8,
+            "display": "120",
+            "value": 119.6,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "108",
-            "value": 107.5,
+            "display": "106",
+            "value": 105.5,
             "kind": "ms",
             "runs": 5
           }
@@ -1798,14 +1798,14 @@
             "kind": "text"
           },
           {
-            "display": "197",
-            "value": 197.3,
+            "display": "232",
+            "value": 231.5,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 0.7,
+            "value": 0.8,
             "kind": "ms",
             "runs": 5
           },
@@ -1837,8 +1837,8 @@
             "kind": "text"
           },
           {
-            "display": "7",
-            "value": 6.8,
+            "display": "8",
+            "value": 7.5,
             "kind": "ms",
             "runs": 5
           },
@@ -1878,26 +1878,26 @@
             "kind": "text"
           },
           {
-            "display": "7655",
-            "value": 7655.4,
+            "display": "1617",
+            "value": 1616.8,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1167",
-            "value": 1166.5,
+            "display": "1359",
+            "value": 1359.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1208",
-            "value": 1207.7,
+            "display": "1370",
+            "value": 1370.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1206",
-            "value": 1206.1,
+            "display": "1368",
+            "value": 1368.3,
             "kind": "ms",
             "runs": 5
           }
@@ -1985,8 +1985,8 @@
             "kind": "text"
           },
           {
-            "display": "162",
-            "value": 162.3,
+            "display": "164",
+            "value": 164.4,
             "kind": "ms",
             "runs": 5
           },
@@ -2896,8 +2896,8 @@
             "kind": "text"
           },
           {
-            "display": "39",
-            "value": 39,
+            "display": "38",
+            "value": 38,
             "kind": "int"
           },
           {
@@ -3305,7 +3305,7 @@
           },
           {
             "display": "5.0 MB",
-            "value": 5274031,
+            "value": 5273742,
             "kind": "bytes"
           },
           {
@@ -3340,7 +3340,7 @@
           },
           {
             "display": "2.0 MB",
-            "value": 2110507,
+            "value": 2110468,
             "kind": "bytes"
           },
           {
@@ -3412,7 +3412,7 @@
           },
           {
             "display": "1.3 MB",
-            "value": 1403274,
+            "value": 1403300,
             "kind": "bytes"
           },
           {
@@ -3448,7 +3448,7 @@
           },
           {
             "display": "13.7 MB",
-            "value": 14333248,
+            "value": 14330911,
             "kind": "bytes"
           },
           {
@@ -3510,7 +3510,7 @@
           },
           {
             "display": "80.8 MB",
-            "value": 84698852,
+            "value": 84698636,
             "kind": "bytes"
           },
           {
@@ -3547,7 +3547,7 @@
           },
           {
             "display": "23.3 MB",
-            "value": 24456239,
+            "value": 24468671,
             "kind": "bytes"
           },
           {

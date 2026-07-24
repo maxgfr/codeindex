@@ -148,13 +148,13 @@ _Full process spawn per run into a fresh output dir. scip-typescript excludes it
 
 | Repo | Files | codeindex (ms) | ctags -R (ms) | scip-typescript (ms) | 01x init (ms) | serena project index (ms) | graphify update (ms) | falcon index (ms) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| BurntSushi/ripgrep | 223 | 433 | 30 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 2073 | 1710 | n/a (rust not supported) |
-| gin-gonic/gin | 129 | 254 | 17 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 2362 | 843 | 78 |
-| nrwl/nx-examples | 230 | 84 | 18 | n/a (npm install failed) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 817 | 765 | 62 |
-| pallets/flask | 227 | 276 | 24 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 1120 | 967 | 88 |
-| socialgouv/code-du-travail-numerique | 2823 | 1673 | 319 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 7017 | 9991 | 892 |
-| t3-oss/create-t3-turbo | 132 | 91 | 23 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 927 | 585 | 65 |
-| vercel/next.js | 20000 | 7957 | 3133 | n/a (npm install failed) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | 10809 |
+| BurntSushi/ripgrep | 223 | 468 | 30 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 2406 | 1863 | n/a (rust not supported) |
+| gin-gonic/gin | 129 | 262 | 17 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 2516 | 884 | 77 |
+| nrwl/nx-examples | 230 | 92 | 19 | n/a (npm install failed) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 935 | 996 | 79 |
+| pallets/flask | 227 | 327 | 25 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 1263 | 1043 | 141 |
+| socialgouv/code-du-travail-numerique | 2823 | 1848 | 338 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 7405 | 10233 | 916 |
+| t3-oss/create-t3-turbo | 132 | 96 | 24 | n/a (no tsconfig) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 998 | 592 | 65 |
+| vercel/next.js | 20000 | 8322 | 3158 | n/a (npm install failed) | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | 11169 |
 
 ## Warm / incremental
 
@@ -162,13 +162,13 @@ _Re-index with a warm cache present, then with exactly one file touched (comment
 
 | Repo | codeindex warm rerun (ms) | codeindex +1 file (ms) | 01x reindex file (ms) |
 | --- | --- | --- | --- |
-| BurntSushi/ripgrep | 48 | 78 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
-| gin-gonic/gin | 41 | 64 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
-| nrwl/nx-examples | 45 | 60 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
-| pallets/flask | 45 | 86 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
-| socialgouv/code-du-travail-numerique | 131 | 324 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
-| t3-oss/create-t3-turbo | 42 | 59 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
-| vercel/next.js | 867 | 1612 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
+| BurntSushi/ripgrep | 49 | 79 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
+| gin-gonic/gin | 42 | 67 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
+| nrwl/nx-examples | 48 | 63 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
+| pallets/flask | 48 | 88 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
+| socialgouv/code-du-travail-numerique | 134 | 340 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
+| t3-oss/create-t3-turbo | 44 | 60 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
+| vercel/next.js | 887 | 1668 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) |
 
 ## Queries (find-symbol / references / callers)
 
@@ -176,48 +176,48 @@ _`find-symbol in-proc` / `references in-proc`: a single API call on an already-l
 
 | Repo | Symbol | find-symbol in-proc (ms) | full-index spawn (ms) | references in-proc (ms) | caller-index in-proc (ms) | 01x find-symbol (ms) | ctags lookup (ms) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| BurntSushi/ripgrep | WalkBuilder | 0 | 437 | 0 | 5 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
-| gin-gonic/gin | New | 0 | 250 | 0 | 2 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
-| nrwl/nx-examples | environment | 0 | 84 | 0 | 0 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
-| pallets/flask | Flask | 0 | 279 | 0 | 1 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
-| socialgouv/code-du-travail-numerique | ElementBuilder | 0 | 1641 | 0 | 5 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 6 |
-| t3-oss/create-t3-turbo | Route | 0 | 90 | 0 | 0 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
-| vercel/next.js | NextResponse | 1 | 7759 | 2 | 318 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 97 |
+| BurntSushi/ripgrep | WalkBuilder | 0 | 444 | 0 | 5 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
+| gin-gonic/gin | New | 0 | 252 | 0 | 2 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
+| nrwl/nx-examples | environment | 0 | 87 | 0 | 0 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
+| pallets/flask | Flask | 0 | 300 | 0 | 1 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
+| socialgouv/code-du-travail-numerique | ElementBuilder | 0 | 1662 | 0 | 5 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 6 |
+| t3-oss/create-t3-turbo | Route | 0 | 92 | 0 | 0 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 0 |
+| vercel/next.js | NextResponse | 1 | 9292 | 2 | 320 | n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)) | 107 |
 
 ## MCP sessions (activate + per-call queries)
 
-_All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured._
+_All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify, falcon, and now codeindex load prebuilt artifacts rather than rebuilding — codeindex primes a persisted `.codeindex/` index and its MCP server preloads it on the first call (a pure optimization: served responses stay byte-identical to a cold build), the same pattern as `falcon mcp serve` / graphify-mcp, so its parse cost lives in the Cold index column (the `codeindex` cold cell, where it already sits) and `activate->ready` here reflects load-not-rebuild. The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured._
 
 | Repo | Server | Symbol | activate->ready (ms) | find-symbol (ms) | references (ms) | file-overview (ms) |
 | --- | --- | --- | --- | --- | --- | --- |
-| BurntSushi/ripgrep | codeindex | WalkBuilder | 363 | 13 | 12 | 11 |
-| BurntSushi/ripgrep | serena | WalkBuilder | 2116 | 154 | 258 | 109 |
-| BurntSushi/ripgrep | graphify | WalkBuilder | 248 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| BurntSushi/ripgrep | codeindex | WalkBuilder | 53 | 13 | 12 | 12 |
+| BurntSushi/ripgrep | serena | WalkBuilder | 2167 | 145 | 251 | 107 |
+| BurntSushi/ripgrep | graphify | WalkBuilder | 258 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
 | BurntSushi/ripgrep | falcon | WalkBuilder | n/a (rust not supported) | n/a (rust not supported) | n/a (rust not supported) | n/a (rust not supported) |
-| gin-gonic/gin | codeindex | New | 236 | 8 | 8 | 8 |
-| gin-gonic/gin | serena | New | 602 | 143 | 366 | 107 |
-| gin-gonic/gin | graphify | New | 209 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| gin-gonic/gin | falcon | New | 11 | 0 | 0 | 0 |
-| nrwl/nx-examples | codeindex | environment | 76 | 13 | 13 | 12 |
-| nrwl/nx-examples | serena | environment | 598 | 155 | 146 | 108 |
-| nrwl/nx-examples | graphify | environment | 209 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| nrwl/nx-examples | falcon | environment | 7 | 0 | 0 | 0 |
-| pallets/flask | codeindex | Flask | 188 | 13 | 12 | 12 |
-| pallets/flask | serena | Flask | 719 | 156 | 151 | 106 |
-| pallets/flask | graphify | Flask | 206 | 1 | 4 | n/a (basename-keyed file nodes — n/a by design) |
-| pallets/flask | falcon | Flask | 8 | 0 | 0 | 0 |
-| socialgouv/code-du-travail-numerique | codeindex | ElementBuilder | 1491 | 113 | 111 | 110 |
-| socialgouv/code-du-travail-numerique | serena | ElementBuilder | 1538 | 617 | 248 | 108 |
-| socialgouv/code-du-travail-numerique | graphify | ElementBuilder | 461 | 2 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| socialgouv/code-du-travail-numerique | falcon | ElementBuilder | 21 | 0 | 0 | 0 |
-| t3-oss/create-t3-turbo | codeindex | Route | 83 | 10 | 10 | 10 |
-| t3-oss/create-t3-turbo | serena | Route | 594 | 158 | 121 | 108 |
-| t3-oss/create-t3-turbo | graphify | Route | 197 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| t3-oss/create-t3-turbo | falcon | Route | 7 | 0 | 0 | 0 |
-| vercel/next.js | codeindex | NextResponse | 7655 | 1167 | 1208 | 1206 |
+| gin-gonic/gin | codeindex | New | 46 | 9 | 8 | 8 |
+| gin-gonic/gin | serena | New | 618 | 130 | 374 | 105 |
+| gin-gonic/gin | graphify | New | 217 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| gin-gonic/gin | falcon | New | 15 | 0 | 0 | 0 |
+| nrwl/nx-examples | codeindex | environment | 56 | 15 | 16 | 16 |
+| nrwl/nx-examples | serena | environment | 636 | 143 | 131 | 106 |
+| nrwl/nx-examples | graphify | environment | 219 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| nrwl/nx-examples | falcon | environment | 8 | 0 | 0 | 0 |
+| pallets/flask | codeindex | Flask | 55 | 26 | 15 | 15 |
+| pallets/flask | serena | Flask | 775 | 147 | 153 | 109 |
+| pallets/flask | graphify | Flask | 210 | 1 | 5 | n/a (basename-keyed file nodes — n/a by design) |
+| pallets/flask | falcon | Flask | 9 | 0 | 0 | 0 |
+| socialgouv/code-du-travail-numerique | codeindex | ElementBuilder | 207 | 125 | 126 | 125 |
+| socialgouv/code-du-travail-numerique | serena | ElementBuilder | 1788 | 631 | 252 | 105 |
+| socialgouv/code-du-travail-numerique | graphify | ElementBuilder | 474 | 2 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| socialgouv/code-du-travail-numerique | falcon | ElementBuilder | 25 | 0 | 0 | 0 |
+| t3-oss/create-t3-turbo | codeindex | Route | 48 | 12 | 14 | 13 |
+| t3-oss/create-t3-turbo | serena | Route | 634 | 146 | 120 | 106 |
+| t3-oss/create-t3-turbo | graphify | Route | 232 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| t3-oss/create-t3-turbo | falcon | Route | 8 | 0 | 0 | 0 |
+| vercel/next.js | codeindex | NextResponse | 1617 | 1359 | 1370 | 1368 |
 | vercel/next.js | serena | NextResponse | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
 | vercel/next.js | graphify | NextResponse | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
-| vercel/next.js | falcon | NextResponse | 162 | 0 | 0 | 0 |
+| vercel/next.js | falcon | NextResponse | 164 | 0 | 0 | 0 |
 
 ## Token economy (single-symbol lookup)
 
@@ -261,7 +261,7 @@ _Context cost of each MCP answer: tokens ~= bytes/4 of the tool-call response te
 | socialgouv/code-du-travail-numerique | falcon | 52 | 52 | 118 |
 | t3-oss/create-t3-turbo | codeindex | 251 | 298 | 197 |
 | t3-oss/create-t3-turbo | serena | 160 | 292 | 18 |
-| t3-oss/create-t3-turbo | graphify | 39 | 98 | n/a (basename-keyed file nodes — n/a by design) |
+| t3-oss/create-t3-turbo | graphify | 38 | 98 | n/a (basename-keyed file nodes — n/a by design) |
 | t3-oss/create-t3-turbo | falcon | 99 | 99 | 101 |
 | vercel/next.js | codeindex | 210 | 5595 | 548 |
 | vercel/next.js | serena | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
@@ -316,4 +316,4 @@ _This section records the measurement machine and session date; it is explicitly
 - Node: v24.10.0
 - CPU: Apple M5
 - RAM: 16.0 GB
-- Date: 2026-07-24T15:39:13.435Z
+- Date: 2026-07-24T18:23:29.632Z
