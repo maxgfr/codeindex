@@ -113,6 +113,21 @@ function serenaRepoGate(comp, lang) {
   return null;
 }
 
+// serena (LSP) and graphify (Python graph + community clustering) build a full
+// in-memory index of the whole repo. Above this file count that is a multi-GB,
+// multi-minute job that measures language-server / interpreter memory limits
+// rather than retrieval, and would OOM the harness itself. The streaming
+// indexers (codeindex, ctags, scip-typescript, falcon) stay and are measured.
+// Positive exclusion only, keyed on the static approxFiles in repos.mjs, so
+// synthetic --repo-dir repos (no approxFiles) always pass — harness invariant.
+const HEAVY_INDEX_MAX_FILES = 8000;
+function heavyIndexGate(server, ctx) {
+  if (server !== "serena" && server !== "graphify") return null;
+  const n = ctx.repo.approxFiles ?? 0;
+  if (n <= HEAVY_INDEX_MAX_FILES) return null;
+  return `repo too large for a bench-time full index (~${Math.round(n / 1000)}k files)`;
+}
+
 let selfMcp; // memoized: does THIS build's CLI ship the `mcp` command? The
 // parallel src/ workflow may rename things — probe, never assume (spec §2.4).
 function selfMcpAvailable() {
@@ -126,6 +141,8 @@ function mcpGate(server, comp, ctx) {
   if (!c.available) return c.reason ?? "not installed";
   const byLang = adapterOf(server, comp).perRepoSupport(ctx.repo.lang);
   if (byLang) return byLang; // falcon: "rust not supported" — the only one
+  const heavy = heavyIndexGate(server, ctx);
+  if (heavy) return heavy; // serena/graphify on an oversized monorepo (next.js)
   if (server === "serena") return serenaRepoGate(comp, ctx.repo.lang);
   return null;
 }
@@ -306,7 +323,9 @@ function scenarioCold(ctxs, comp, cfg) {
       const c = comp[server];
       if (!c.available) return na(c.reason);
       const adapter = adapterOf(server, comp);
-      const gate = adapter.perRepoSupport(ctx.repo.lang) ?? (server === "serena" ? serenaRepoGate(comp, ctx.repo.lang) : null);
+      const gate = adapter.perRepoSupport(ctx.repo.lang)
+        ?? heavyIndexGate(server, ctx)
+        ?? (server === "serena" ? serenaRepoGate(comp, ctx.repo.lang) : null);
       if (gate) return na(gate);
       const work = copySource(dir);
       try {
@@ -319,7 +338,7 @@ function scenarioCold(ctxs, comp, cfg) {
   }
   return {
     id: "cold", title: "Cold index",
-    note: "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally); `falcon index` writes its parquet artifact set. All three are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table.",
+    note: "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally); `falcon index` writes its parquet artifact set. All three are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags, scip-typescript, falcon) are kept and measured there.",
     headers: ["Repo", "Files", "codeindex (ms)", "ctags -R (ms)", "scip-typescript (ms)", "01x init (ms)", "serena project index (ms)", "graphify update (ms)", "falcon index (ms)"],
     rows,
   };
@@ -465,7 +484,7 @@ function scenarioMcpSessions(ctxs, comp, cfg) {
   }
   return {
     id: "mcp-sessions", title: "MCP sessions (activate + per-call queries)",
-    note: "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references.",
+    note: "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
     headers: ["Repo", "Server", "Symbol", "activate->ready (ms)", "find-symbol (ms)", "references (ms)", "file-overview (ms)"],
     rows,
   };
@@ -563,7 +582,9 @@ function scenarioDeterminism(ctxs, comp, _cfg) {
     // (so graph.json omits built_at_commit); graph.json bytes ONLY, the
     // report/HTML artifacts embed dates and are excluded.
     let graphifyCell = na(comp.graphify.reason);
-    if (comp.graphify.available) {
+    const graphifyHeavy = heavyIndexGate("graphify", ctx);
+    if (graphifyHeavy) graphifyCell = na(graphifyHeavy);
+    else if (comp.graphify.available) {
       const adapter = adapterOf("graphify", comp);
       const work = copySource(dir);
       try {
@@ -671,12 +692,16 @@ function scenarioSize(ctxs, comp, _cfg) {
             falconCell = p.ok && existsSync(a) ? { v: dirBytes(a), k: "bytes" } : na(p.reason ?? "index failed");
           }
         }
-        if (comp.graphify.available) {
+        const graphifyHeavy = heavyIndexGate("graphify", ctx);
+        if (graphifyHeavy) graphifyCell = na(graphifyHeavy);
+        else if (comp.graphify.available) {
           const p = adapterOf("graphify", comp).prime(work);
           const g = join(work, "graphify-out", "graph.json");
           graphifyCell = p.ok && existsSync(g) ? { v: statSync(g).size, k: "bytes" } : na(p.reason ?? "update failed");
         }
-        if (comp.serena.available) {
+        const serenaHeavy = heavyIndexGate("serena", ctx);
+        if (serenaHeavy) serenaCell = na(serenaHeavy);
+        else if (comp.serena.available) {
           const gate = serenaRepoGate(comp, ctx.repo.lang);
           if (gate) serenaCell = na(gate);
           else {

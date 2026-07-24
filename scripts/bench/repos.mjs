@@ -67,6 +67,10 @@ export const REPOS = [
     sha: "203177bb7505837801281c7d1eb008519a242010",
     lang: "typescript",
     symbol: "NextResponse",
+    // ~30k files on disk. Streaming indexers (codeindex, ctags, scip-typescript,
+    // falcon) handle it; the full in-memory indexers (serena's LSP, graphify's
+    // Python graph+clustering) are gated off here — see HEAVY_INDEX_MAX_FILES.
+    approxFiles: 30000,
     // Reference figures published by 01x-in for comparison (not asserted here):
     ref01x: { coldMs: 121037, files: 11064 },
   },
