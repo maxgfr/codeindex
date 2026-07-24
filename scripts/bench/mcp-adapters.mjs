@@ -137,10 +137,16 @@ function serenaAdapter(opts) {
     // One `project index` on the scratch copy so MCP calls hit the MD5
     // content-hash cache; also absorbs the one-time per-language language-
     // server download into ~/.serena/language_servers (machine warmup).
+    // On a repo without .serena/project.yml, auto-generation asks one
+    // interactive [y/N] question PER additionally-detected language; a bare
+    // EOF aborts the whole index ("Error: EOF when reading a line" [probed]).
+    // Newlines take the default (N: main language only) — total and
+    // language-agnostic, and needed on EVERY cold run since cleanCold removes
+    // the generated project.yml along with the cache.
     prime(dir) {
       if (!bin) return { ok: false, reason: "serena binary not found" };
       const r = runCmd(bin, ["project", "index", dir, "--log-level", "ERROR", "--timeout", "30"],
-        { cwd: dir, env: benchEnv(), timeoutMs: PRIME_TIMEOUT_MS });
+        { cwd: dir, env: benchEnv(), input: "\n".repeat(64), timeoutMs: PRIME_TIMEOUT_MS });
       return r.ok ? { ok: true } : { ok: false, reason: primeReason(r) };
     },
     // Project cache only. NEVER touch ~/.serena — deleting it would re-trigger

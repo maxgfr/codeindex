@@ -14,7 +14,14 @@
 // Output line:
 //   { ok, reason?, activation: {ms, runs}, queries: {findMs, refsMs,
 //     overviewMs, runs}, bytes: {find, refs, overview},
-//     toolUsed: {find, refs, overview}, defFile, overviewFile }
+//     toolUsed: {find, refs, overview}, taskErrors: {find, refs, overview},
+//     defFile, overviewFile }
+//
+// A per-TASK failure (tool error / timeout on one call) never voids the
+// session: the task's ms/bytes stay null and its reason lands in taskErrors,
+// while activation and the other tasks keep their measurements — the
+// orchestrator renders per-cell n/a. Only activation/prime failures fail the
+// whole probe.
 //
 // activation  = spawn -> first successful find response on PRIMED artifacts
 //               (prime() once before the loop, artifacts kept; child killed
@@ -201,13 +208,14 @@ async function main() {
     queries: { findMs: null, refsMs: null, overviewMs: null, runs: null },
     bytes: { find: null, refs: null, overview: null },
     toolUsed: { find: null, refs: null, overview: null },
+    taskErrors: { find: null, refs: null, overview: null },
   };
   const effRuns = [];
   for (const [task, msKey] of [["find", "findMs"], ["refs", "refsMs"], ["overview", "overviewMs"]]) {
     const call = task === "find" ? findCall : tasks[task]?.(ctx);
     if (!call) continue; // server lacks the tool — nulls render as n/a upstream
     const r = await medianCalls(client, adapter, a, call);
-    if (!r.ok) { await client.close(); return fail(`${task}: ${r.reason}`); }
+    if (!r.ok) { out.taskErrors[task] = r.reason; continue; } // this task -> n/a; keep the rest
     out.queries[msKey] = round1(r.ms);
     out.bytes[task] = byteLen(r.text);
     out.toolUsed[task] = call.name;
@@ -222,6 +230,7 @@ async function main() {
     queries: out.queries,
     bytes: out.bytes,
     toolUsed: out.toolUsed,
+    taskErrors: out.taskErrors,
     defFile,
     overviewFile: a.file,
   });
