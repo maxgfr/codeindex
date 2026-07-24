@@ -14,7 +14,7 @@
   page ships.
   OWN-WORLD: an engineering measurement pad — pale quad-ruled paper (light)
   / graphite lab-at-night (dark), blueprint-blue as the one accent, a rust/
-  amber "pencil" ink reserved for honesty callouts, monospace for every
+  amber "pencil" ink reserved for annotations, monospace for every
   number for that measured data reads as data, titleblock-style uppercase
   eyebrows (REV, SCALE-style annotations), corner registration crosshairs
   on cards.
@@ -627,33 +627,6 @@
     font-weight: 700;
   }
 
-  /* ============ Honesty callouts (pencil notes) ============ */
-  .honesty {
-    list-style: none;
-    padding: 0;
-    margin: 1.4rem 0 2rem;
-    display: grid;
-    gap: 0.6rem;
-  }
-  .honesty li {
-    border-left: 3px solid var(--annotation);
-    background: var(--annotation-wash);
-    padding: 0.7em 0.9em;
-    font-size: 0.92rem;
-    color: var(--ink-2);
-    border-radius: 0 6px 6px 0;
-  }
-  .honesty li strong {
-    color: var(--ink);
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    display: block;
-    margin-bottom: 0.2em;
-    color: var(--annotation);
-  }
-
   /* ============ Chart ============ */
   .chart-card {
     padding: 1.4rem 1.5rem 1.2rem;
@@ -671,8 +644,6 @@
   .chart-svg-wrap {
     overflow-x: auto;
   }
-  .chart-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; margin-bottom: 2rem; }
-  @media (max-width: 720px) { .chart-duo { grid-template-columns: 1fr; } }
   .bars { display: flex; flex-direction: column; gap: 0.7rem; }
   .barrow { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 0.7rem; }
   .barrow .rl { font-family: var(--mono); font-size: 0.74rem; color: var(--ink-2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -856,6 +827,7 @@
   }
 
   /* ============ Verdict matrix ============ */
+  .vm-heading { font-size: 1.05rem; margin: 2.2rem 0 0.4rem; }
   .vmatrix-wrap { overflow-x: auto; margin-bottom: 26px; }
   table.vmatrix { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 640px; font-family: var(--mono); font-size: 0.8rem; }
   table.vmatrix thead th { padding: 6px 6px 12px; text-align: center; font-weight: 600; color: var(--ink-2); letter-spacing: 0.01em; }
@@ -1136,13 +1108,11 @@
           Key numbers (JavaScript disabled — see full figures in
           <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md"
             >BENCHMARKS.md</a
-          >): cold index on <code>vercel/next.js</code> (20,000 files) —
-          codeindex builds the full typed cross-file graph in seconds (ctags
-          is faster but flat); the warm reindex is codeindex's uncontested
-          number — a sub-second rerun, one touched file in about a second and a
-          half; far fewer tokens than a raw grep dump for a single-symbol
-          lookup; 15 languages; 0 runtime dependencies; byte-identical rebuilds
-          on 7/7 measured repos; 26 MCP tools.
+          >): a full typed cross-file graph built in seconds; a warm rerun of
+          <code>vercel/next.js</code> under a second, one touched file in about
+          a second and a half; far fewer tokens than a raw grep dump for a
+          single-symbol lookup; 15 languages; 0 runtime dependencies;
+          byte-identical rebuilds on 7/7 measured repos; 26 MCP tools.
         </p>
       </noscript>
     </div>
@@ -1169,78 +1139,44 @@
         </p>
       </div>
 
-      <ul class="honesty">
-        <li>
-          <strong>ctags is faster, on purpose</strong>
-          <code>universal-ctags</code> wins cold-index time in every repo
-          below — it only extracts flat definitions from a regex/parser
-          pass. No call graph, no import resolution, no cross-file links; a
-          <code>tags</code> file, not an index.
-        </li>
-        <li>
-          <strong>warm reindex is codeindex's strongest, uncontested number</strong>
-          A warm rerun of <code>vercel/next.js</code> re-indexes in
-          <span id="honesty-warm-rerun">—</span> and a single touched file in
-          <span id="honesty-warm-plus1">—</span>, via the incremental cache
-          fastpath. No other tool here exposes a comparable user-visible
-          single-file reindex, so this is a column with no competitor to beat.
-        </li>
-        <li>
-          <strong>the MCP server loads a primed index — new in v2.15.0</strong>
-          codeindex's MCP server now reads the persisted <code>.codeindex</code>
-          index at first touch instead of re-scanning, so activation on
-          <code>vercel/next.js</code> dropped from 7.7 s to 1.6 s — the same
-          "load a prebuilt artifact" model as the fastest servers here, while
-          still answering from a full typed graph. Responses stay byte-identical
-          to a cold build.
-        </li>
-        <li>
-          <strong>serena buys precision with latency</strong>
-          <code>Serena</code>'s references come from a live language server and
-          are type-aware — a precision the static tools don't claim. The cost is
-          the slowest activation and per-call latency in the table, the largest
-          install (114 MB + language servers), and no on-disk artifact to
-          reproduce or diff.
-        </li>
-        <li>
-          <strong>graphify is quick per call but not reproducible</strong>
-          <code>Graphify</code> answers a single lookup in ~1 ms, but its
-          <code>graph.json</code> is <em>not</em> byte-identical across rebuilds
-          on 5 of the 6 measurable repos, its file nodes are basename-keyed (no
-          file-overview tool), and it needs a 140 MB Python venv.
-        </li>
-        <li>
-          <strong>serena and graphify skip next.js — measured, not hidden</strong>
-          A full LSP or Python-graph index of a 30k-file monorepo is a
-          multi-minute, multi-GB job that measures indexer memory limits, not
-          retrieval, so both read <code>n/a (repo too large…)</code> there. The
-          streaming indexers — codeindex and ctags — are measured on it.
-        </li>
-      </ul>
-
       <div class="card chart-card">
-        <h3>Cold index — <code>vercel/next.js</code> (20,000 files)</h3>
+        <h3>Cold index — <code>code-du-travail</code></h3>
         <p class="chart-note">
-          Full process spawn per run into a fresh output dir. Files capped at
-          codeindex's own default walk limit (20,000) — the repo has more
-          source files on disk than that cap; hover or focus a bar for the
-          exact reading.
+          2,823 files, every tool measured on the same repo. Lower is faster.
         </p>
-        <div class="chart-svg-wrap" id="cold-chart-wrap"></div>
-        <p class="chart-caption" id="cold-chart-caption"></p>
+        <div class="bars" id="cold-mid-bars"></div>
       </div>
 
-      <div class="chart-duo">
-        <div class="card chart-card" style="margin-bottom:0">
-          <h3>Cold index — <code>code-du-travail</code></h3>
-          <p class="chart-note">2,823 files. codeindex builds the full graph in a fraction of Serena/Graphify's time; ctags does far less. Lower is faster.</p>
-          <div class="bars" id="cold-mid-bars"></div>
-        </div>
-        <div class="card chart-card" style="margin-bottom:0">
-          <h3>Warm reindex — codeindex, uncontested</h3>
-          <p class="chart-note">Warm rerun, then one file touched — the incremental fastpath. No competitor exposes a comparable single-file reindex. Lower is faster.</p>
-          <div class="bars" id="warm-bars"></div>
-        </div>
+      <div class="card chart-card">
+        <h3>Warm reindex — against codeindex's own cold build</h3>
+        <p class="chart-note">
+          No competitor here exposes an incremental reindex, so the baseline is
+          the cold build of the same repo: what a rerun costs once the cache is
+          warm, and what one touched file costs. Lower is faster.
+        </p>
+        <div class="bars" id="warm-bars"></div>
+      </div>
+
+      <h3 class="vm-heading">Axis by axis</h3>
+      <p class="chart-note">
+        One row per thing an agent-tooling team weighs. A filled tile marks the
+        leader on that axis — hover any cell for the measured number. Where a
+        rival wins it stays at the top of the table, unedited: ctags takes both
+        cold-index rows because a flat <code>tags</code> pass is a smaller job
+        than a typed cross-file graph. The rows below it are the ones that job
+        buys.
+      </p>
+      <div class="vmatrix-wrap">
+        <table class="vmatrix" id="vmatrix">
+          <thead><tr id="vmatrix-head"></tr></thead>
+          <tbody id="vmatrix-body"></tbody>
+        </table>
+      </div>
+      <div class="vm-legend">
+        <span><span class="vm-sw vm-win"></span> codeindex leads</span>
+        <span><span class="vm-sw vm-lead"></span> a competitor leads</span>
+        <span><span class="vm-sw vm-tie"></span> tie / not this tool's job</span>
+        <span style="color: var(--muted)">— = n/a (not measurable)</span>
       </div>
 
       <div id="benchmark-tables">
@@ -1509,26 +1445,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
   <section id="compare" aria-labelledby="compare-heading">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Fig. 04 — honest comparison</p>
+        <p class="eyebrow">Fig. 04 — what each tool is</p>
         <h2 id="compare-heading">How it compares</h2>
         <p>
-          Each row is one thing an agent-tooling team weighs. A filled tile marks
-          the leader on that axis — hover any cell for the measured number.
-          codeindex leads 9 of 12; where a rival wins, it's shown here, not
-          hidden. Numbers are from the same measured session as Benchmarks.
+          The axis-by-axis scoreboard sits with the
+          <a href="#benchmarks">benchmarks</a>, where its numbers come from. This
+          is the shape of each tool: what it models, what it covers, what it
+          costs to install.
         </p>
-      </div>
-      <div class="vmatrix-wrap">
-        <table class="vmatrix" id="vmatrix">
-          <thead><tr id="vmatrix-head"></tr></thead>
-          <tbody id="vmatrix-body"></tbody>
-        </table>
-      </div>
-      <div class="vm-legend">
-        <span><span class="vm-sw vm-win"></span> codeindex leads</span>
-        <span><span class="vm-sw vm-lead"></span> a competitor leads</span>
-        <span><span class="vm-sw vm-tie"></span> tie / not this tool's job</span>
-        <span style="color: var(--muted)">— = n/a (not measurable)</span>
       </div>
       <div class="table-wrap compare-wrap">
         <table>
@@ -4711,10 +4635,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     }
     var warmRerunMs = warmRerunCol >= 0 ? fmtMs(warmNextRow[warmRerunCol]) : "—";
     var warmPlus1Ms = warmPlus1Col >= 0 ? fmtMs(warmNextRow[warmPlus1Col]) : "—";
-    var wrSpan = document.getElementById("honesty-warm-rerun");
-    if (wrSpan) wrSpan.textContent = warmRerunMs;
-    var wpSpan = document.getElementById("honesty-warm-plus1");
-    if (wpSpan) wpSpan.textContent = warmPlus1Ms;
 
     var stats = [
       {
@@ -4779,148 +4699,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       statGrid.appendChild(el);
     });
 
-    var coldCaption = document.getElementById("cold-chart-caption");
-    if (coldCaption) {
-      coldCaption.innerHTML =
-        "ctags -R is faster (" +
-        ctagsColdDisp +
-        " ms) but extracts flat definitions only — no call graph, no cross-file links, no incremental reindex. codeindex builds the full typed graph and byte-identical artifacts, and reindexes one touched file in " +
-        warmPlus1Ms +
-        ".";
-    }
-
-    /* ----- flagship chart: cold index, vercel/next.js ----- */
-    (function renderChart() {
-      var wrap = document.getElementById("cold-chart-wrap");
-      if (!wrap) return;
-      var rowsSpec = [
-        { label: "codeindex", ms: codeindexMs, display: codeindexColdDisp, emphasis: true },
-        { label: "ctags -R", ms: ctagsMs, display: ctagsColdDisp, emphasis: false },
-      ];
-      var maxMs = Math.max.apply(
-        null,
-        rowsSpec.map(function (r) {
-          return r.ms;
-        })
-      );
-      var W = 680,
-        left = 100,
-        right = 150,
-        barH = 34,
-        gap = 18,
-        top = 12,
-        axisH = 26;
-      var plotW = W - left - right;
-      var H = top + rowsSpec.length * (barH + gap) - gap + axisH + 8;
-
-      var ticks = [0, 20000, 40000, 60000, 80000].filter(function (t) {
-        return t <= Math.ceil(maxMs / 10000) * 10000;
-      });
-
-      var svg =
-        '<svg viewBox="0 0 ' +
-        W +
-        " " +
-        H +
-        '" role="img" aria-labelledby="cold-chart-title cold-chart-desc" width="100%" height="' +
-        H +
-        '">' +
-        "<title id=\"cold-chart-title\">Cold index time on vercel/next.js, in milliseconds, codeindex vs ctags -R</title>" +
-        '<desc id="cold-chart-desc">' +
-        rowsSpec
-          .map(function (r) {
-            return r.label + ": " + r.display + " ms.";
-          })
-          .join(" ") +
-        "</desc>";
-
-      // gridlines + axis labels
-      ticks.forEach(function (t) {
-        var x = left + (t / maxMs) * plotW;
-        svg +=
-          '<line x1="' +
-          x +
-          '" y1="' +
-          top +
-          '" x2="' +
-          x +
-          '" y2="' +
-          (H - axisH) +
-          '" stroke="var(--grid)" stroke-width="1"/>';
-        svg +=
-          '<text x="' +
-          x +
-          '" y="' +
-          (H - axisH + 16) +
-          '" font-family="var(--mono)" font-size="10" fill="var(--muted)" text-anchor="middle">' +
-          t.toLocaleString("en-US") +
-          "</text>";
-      });
-      svg +=
-        '<line x1="' +
-        left +
-        '" y1="' +
-        (H - axisH) +
-        '" x2="' +
-        (left + plotW) +
-        '" y2="' +
-        (H - axisH) +
-        '" stroke="var(--context)" stroke-width="1"/>';
-
-      rowsSpec.forEach(function (r, i) {
-        var y = top + i * (barH + gap);
-        var w = Math.max(2, (r.ms / maxMs) * plotW);
-        var color = r.emphasis ? "var(--accent)" : "var(--context)";
-        svg +=
-          '<g tabindex="0" role="group" aria-label="' +
-          r.label +
-          ": " +
-          r.display +
-          ' milliseconds">' +
-          '<title>' +
-          r.label +
-          ": " +
-          r.display +
-          " ms</title>" +
-          '<text x="' +
-          (left - 10) +
-          '" y="' +
-          (y + barH / 2 + 4) +
-          '" font-family="var(--mono)" font-size="12" fill="var(--ink-2)" text-anchor="end">' +
-          r.label +
-          "</text>" +
-          '<rect x="' +
-          left +
-          '" y="' +
-          y +
-          '" width="' +
-          w +
-          '" height="' +
-          barH +
-          '" rx="3" fill="' +
-          color +
-          '"/>' +
-          '<text x="' +
-          (left + w + 10) +
-          '" y="' +
-          (y + barH / 2 + 4) +
-          '" font-family="var(--mono)" font-size="12" font-weight="700" fill="var(--ink)" text-anchor="start">' +
-          r.display +
-          " ms</text>" +
-          "</g>";
-      });
-
-      svg += "</svg>";
-      wrap.innerHTML = svg;
-
-      var legend = document.createElement("div");
-      legend.className = "chart-legend";
-      legend.innerHTML =
-        '<span class="lg-swatch" style="--sw:var(--accent)">codeindex</span>' +
-        '<span class="lg-swatch" style="--sw:var(--context)">ctags -R — context</span>';
-      wrap.after(legend);
-    })();
-
     /* ----- cold code-du-travail + warm reindex bar charts ----- */
     (function renderBarCharts() {
       function bars(el, items) {
@@ -4959,13 +4737,20 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         ]);
       }
       var warm = bySectionId("warm");
-      if (warm) {
+      if (warm && cold) {
+        // Baseline = codeindex's OWN cold build of the same repo, read from the
+        // cold section. No competitor exposes an incremental reindex, so this is
+        // the only honest comparison available for this axis.
         var wRerun = colIndex(warm, /rerun/i);
         var wPlus1 = colIndex(warm, /\+1|1 file/i);
+        var coldCi = colIndex(cold, /codeindex/i);
         var items = [];
         warm.rows.forEach(function (r) {
-          var name = String(r[0].value).split("/").pop();
-          items.push({ label: name, ms: cell(r, wRerun).value, disp: cell(r, wRerun).display, me: true });
+          var repo = String(r[0].value);
+          var name = repo.split("/").pop();
+          var coldRow = rowByFirstCell(cold, repo);
+          items.push({ label: name + " — cold", ms: cell(coldRow || [], coldCi).value, disp: cell(coldRow || [], coldCi).display });
+          items.push({ label: "↳ warm rerun", ms: cell(r, wRerun).value, disp: cell(r, wRerun).display, me: true });
           items.push({ label: "↳ +1 file", ms: cell(r, wPlus1).value, disp: cell(r, wPlus1).display, sub: true });
         });
         bars(document.getElementById("warm-bars"), items);
@@ -4994,6 +4779,11 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           ["na", "—", "re-indexes lazily inside a live LSP session"],
           ["na", "—", "rebuilds via the cold command"],
           ["na", "—", "no incremental mode"]] },
+        { a: "Cross-file call graph", s: "resolved imports + call edges", c: [
+          ["win", "yes", "typed file/module graph: resolved imports, call edges, re-exports — the artifact everything else is derived from"],
+          ["tie", "live", "references on demand from the language server; no persisted graph"],
+          ["tie", "yes", "Python-built graph.json, basename-keyed file nodes"],
+          ["na", "no", "flat tags file — definitions only, no edges between them"]] },
         { a: "Warm query latency", s: "in-proc, warm host", c: [
           ["win", "~0ms", "find-symbol / references 0–2 ms on a loaded scan"],
           ["tie", "120ms", "106–616 ms per call — LSP round trip"],
