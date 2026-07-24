@@ -37,8 +37,11 @@ export const SCHEMA_VERSION = 4;
 // resolved export-alias symbol also cite the original declaration's own line
 // (and endLine, when the AST tier populated one) instead of the export
 // statement's line — a citation-precision fix (issue #9) for consumers
-// (ultradoc) that use file:line as evidence.
-export const EXTRACTOR_VERSION = 9;
+// (ultradoc) that use file:line as evidence; v10 stops the regex tier
+// emitting a spurious exported class symbol named "extends" for
+// `export default class extends Base {}` (issue #11) — the file-stem
+// default symbol is unchanged.
+export const EXTRACTOR_VERSION = 10;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

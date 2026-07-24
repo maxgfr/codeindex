@@ -1,7 +1,9 @@
-// Regression tests for GitHub issues #2 (detectWorkspaces gaps) and #6
+// Regression tests for GitHub issues #2 (detectWorkspaces gaps), #6
 // (reconstruct-migration gaps: categorize asset set, .astro, workspace
-// naming/nx/go.work/warnings, walk excluded-count). Issue #3 (grep negation
-// globs) lives in review-fixes.test.ts next to the other grep-parity suites.
+// naming/nx/go.work/warnings, walk excluded-count) and #11 (regex tier
+// capturing "extends" as an anonymous default class's name). Issue #3 (grep
+// negation globs) lives in review-fixes.test.ts next to the other grep-parity
+// suites.
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { detectWorkspaces } from "../src/workspaces.js";
 import { categorize } from "../src/categorize.js";
 import { extToLang } from "../src/lang/common.js";
+import { jsTs } from "../src/lang/js-ts.js";
 import { walk } from "../src/walk.js";
 import { scanRepo } from "../src/scan.js";
 
@@ -231,5 +234,23 @@ describe("issue #6: walk/scan excluded count", () => {
   it("stays zero on a clean tree", () => {
     const root = scratchRepo({ "a.ts": "export {};\n" });
     expect(walk(root).excluded).toBe(0);
+  });
+});
+
+describe("issue #11: export default class extends Base", () => {
+  it("emits only the file-stem default symbol, never a class named `extends`", () => {
+    const syms = jsTs.extract("base.ts", "export default class extends Base {}\n");
+    expect(syms).toContainEqual(
+      expect.objectContaining({ name: "base", kind: "default", line: 1, exported: true }),
+    );
+    expect(syms.some((s) => s.name === "extends")).toBe(false);
+  });
+
+  it("still captures the class name of a NAMED default class that extends", () => {
+    const syms = jsTs.extract("sub.ts", "export default class Sub extends Base {}\n");
+    expect(syms).toContainEqual(
+      expect.objectContaining({ name: "Sub", kind: "class", exported: true }),
+    );
+    expect(syms.some((s) => s.kind === "default")).toBe(false);
   });
 });

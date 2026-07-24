@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "2.12.0";
 declare const SCHEMA_VERSION = 4;
-declare const EXTRACTOR_VERSION = 9;
+declare const EXTRACTOR_VERSION = 10;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "use" | "mention";
 type Tier = 0 | 1 | 2;

@@ -138,6 +138,11 @@ describe("JS/TS export parity (regex tier)", () => {
     );
     const named = jsTs.extract("named.js", "export default function realName() {}\n");
     expect(named.some((s) => s.name === "named")).toBe(false);
+    const anonExtends = jsTs.extract("base.ts", "export default class extends Base {}\n");
+    expect(anonExtends).toContainEqual(
+      expect.objectContaining({ name: "base", kind: "default", exported: true }),
+    );
+    expect(anonExtends.some((s) => s.name === "extends")).toBe(false);
   });
 
   it("export default Foo; marks the original and keeps the byte-compat `default` symbol", () => {
