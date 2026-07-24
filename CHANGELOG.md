@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.14.0](https://github.com/maxgfr/codeindex/compare/v2.13.0...v2.14.0) (2026-07-24)
+
+
+### Bug Fixes
+
+* **ast:** re-derive the MCP grammar warm per call, not once per repo path ([cdef284](https://github.com/maxgfr/codeindex/commit/cdef2845b18f21fe5ed3d56af85efab4a29f0634))
+* **bench:** assert non-optional section slices in the smoke test (strict typecheck) ([93538cb](https://github.com/maxgfr/codeindex/commit/93538cbb95fdd5eac75d498e784409e7fcd2a367))
+* **bench:** fairness and robustness fixes from live end-to-end validation ([7d77a28](https://github.com/maxgfr/codeindex/commit/7d77a28b290d9ee5cd5001275876b48d523f427e))
+* **bench:** gate serena and graphify off oversized monorepos (next.js) ([4f9bad3](https://github.com/maxgfr/codeindex/commit/4f9bad3d4d7be794c9cebb1ec8793403d00fa0d5))
+* **mcp:** refresh scan_summary commit after a git HEAD move on an unchanged worktree ([e3420e5](https://github.com/maxgfr/codeindex/commit/e3420e522d1c851146e84c78124f50bdd7d4a390))
+
+
+### Features
+
+* **bench:** add MCP adapters and detection for serena, graphify, falcon ([0d7c186](https://github.com/maxgfr/codeindex/commit/0d7c186bd811c02c2924d0ab4ba5ee7ddd42eb2d))
+* **bench:** add MCP stdio client and standalone probe child ([f10a5ac](https://github.com/maxgfr/codeindex/commit/f10a5acbd7dc8c951b887f3ffa82f92f260f6b6d))
+* **bench:** wire MCP scenarios into the orchestrator and embed methodology ([171aed6](https://github.com/maxgfr/codeindex/commit/171aed6715cdb864fdcabe89fc1b5c6742949af9))
+* **engine:** split buildIndexArtifacts into scan + buildArtifactsFromScan ([8dcce08](https://github.com/maxgfr/codeindex/commit/8dcce08f87ef27e3e18d14a8e7c9e35d656cf981))
+* **grammars:** slim pull/cache tier + shared-cache resolution + per-release asset ([013b762](https://github.com/maxgfr/codeindex/commit/013b762586ee1af448ae89386a04e017a355a2f6))
+* **mcp:** optional serverInfo override on runMcpServer ([00e3af7](https://github.com/maxgfr/codeindex/commit/00e3af7b9f3e1f611ea0667fbac33eb9b439f7d9))
+* **scan:** change-tracking flags + precomputedWalk on RepoScan ([e50db6b](https://github.com/maxgfr/codeindex/commit/e50db6b4998d40aa39505d73dfc20717aa20b254))
+
+
+### Performance Improvements
+
+* **ast:** warm only the grammars for languages present ([f596654](https://github.com/maxgfr/codeindex/commit/f59665468863ede1ee446a2fd231eb5d97113ae9))
+* **cli:** index fastpath — reuse on-disk artifacts when the scan is unchanged ([a9fae84](https://github.com/maxgfr/codeindex/commit/a9fae849699a5736adbaf9facd175c48a1437aab))
+* **engine:** shared per-scan derived-structure cache ([455b30f](https://github.com/maxgfr/codeindex/commit/455b30fbd85301174bc252117df0946cf5c7c36b))
+* **mcp:** session-level scan + artifacts memoization behind the stat oracle ([a8790db](https://github.com/maxgfr/codeindex/commit/a8790dbfb1b3243f3a1f0b1330b07e0ad5d3f30e))
+* **walk:** dirent-typed walk — one lstat per entry, zero stats for ignored dirs ([47a8de7](https://github.com/maxgfr/codeindex/commit/47a8de7fe9f3cb5c2aa98c3507100501ebddf90a))
+
 # [2.13.0](https://github.com/maxgfr/codeindex/compare/v2.12.0...v2.13.0) (2026-07-24)
 
 
