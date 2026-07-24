@@ -1,6 +1,7 @@
 // Regression tests for GitHub issues #2 (detectWorkspaces gaps), #6
 // (reconstruct-migration gaps: categorize asset set, .astro, workspace
-// naming/nx/go.work/warnings, walk excluded-count) and #11 (regex tier
+// naming/nx/go.work/warnings, walk excluded-count), #10 (configurable
+// per-file call cap + replaceable ignore-dir set) and #11 (regex tier
 // capturing "extends" as an anonymous default class's name). Issue #3 (grep
 // negation globs) lives in review-fixes.test.ts next to the other grep-parity
 // suites.
@@ -14,6 +15,7 @@ import { extToLang } from "../src/lang/common.js";
 import { jsTs } from "../src/lang/js-ts.js";
 import { walk } from "../src/walk.js";
 import { scanRepo } from "../src/scan.js";
+import { collectCallsRegex } from "../src/extract/code.js";
 
 function scratchRepo(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "ci-issues-"));
@@ -234,6 +236,25 @@ describe("issue #6: walk/scan excluded count", () => {
   it("stays zero on a clean tree", () => {
     const root = scratchRepo({ "a.ts": "export {};\n" });
     expect(walk(root).excluded).toBe(0);
+  });
+});
+
+describe("issue #10: maxCallsPerFile", () => {
+  // Six distinct call sites, one per line — enough to overflow a cap of 3.
+  const SIX_CALLS = "alpha();\nbravo();\ncharlie();\ndelta();\necho();\nfoxtrot();\n";
+
+  it("caps the regex collector at maxCalls (default 512 unchanged)", () => {
+    expect(collectCallsRegex(SIX_CALLS).length).toBe(6); // > 5 distinct sites, uncapped
+    expect(collectCallsRegex(SIX_CALLS, [], 3).length).toBeLessThanOrEqual(3);
+  });
+
+  it("threads scanRepo({ maxCallsPerFile }) down to the extracted FileRecord", () => {
+    const root = scratchRepo({ "src/many.ts": SIX_CALLS });
+    const capped = scanRepo(root, { maxCallsPerFile: 3 }).files.find((f) => f.rel === "src/many.ts")!;
+    expect(capped.calls!.length).toBeLessThanOrEqual(3);
+    // Without the option the same file yields more — the default cap still holds.
+    const full = scanRepo(root).files.find((f) => f.rel === "src/many.ts")!;
+    expect(full.calls!.length).toBeGreaterThan(3);
   });
 });
 

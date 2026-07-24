@@ -155,6 +155,7 @@ interface ScanOptions {
     gitignore?: boolean;
     maxBytes?: number;
     maxFiles?: number;
+    maxCallsPerFile?: number;
     out?: string;
     cache?: Map<string, {
         hash: string;
@@ -202,7 +203,9 @@ interface CodeInfo {
     }[];
     importedNames?: string[];
 }
-declare function extractCode(rel: string, ext: string, content: string): CodeInfo;
+declare function extractCode(rel: string, ext: string, content: string, opts?: {
+    maxCallsPerFile?: number;
+}): CodeInfo;
 
 interface MarkdownInfo {
     title?: string;
@@ -229,7 +232,9 @@ interface AstResult {
     }[];
     importedNames: string[];
 }
-declare function extractAst(rel: string, ext: string, content: string): AstResult | undefined;
+declare function extractAst(rel: string, ext: string, content: string, opts?: {
+    maxCalls?: number;
+}): AstResult | undefined;
 
 type Resolution = {
     kind: "resolved";

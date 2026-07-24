@@ -171,6 +171,14 @@ describe("AST call-site + imported-name collection", () => {
     // Swift has no committed grammar → extractAst is undefined, so no calls.
     expect(extractAst("s.swift", ".swift", "f()")).toBeUndefined();
   });
+
+  it("honors opts.maxCalls as the per-file call-site cap (issue #10)", () => {
+    const src = "export function run() {\n  alpha();\n  bravo();\n  charlie();\n  delta();\n}\n";
+    // Default: all four distinct call sites survive.
+    expect(extractAst("caps.ts", ".ts", src)!.calls.length).toBe(4);
+    // Capped: at most 2 — dedup/sort semantics unchanged, then sliced.
+    expect(extractAst("caps.ts", ".ts", src, { maxCalls: 2 })!.calls.length).toBeLessThanOrEqual(2);
+  });
 });
 
 describe("Scala AST extraction", () => {

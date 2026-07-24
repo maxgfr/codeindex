@@ -302,12 +302,13 @@ const DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bm
 export function collectCallsRegex(
   content: string,
   symbols: Pick<CodeSymbol, "name" | "line">[] = [],
+  maxCalls: number = 512,
 ): { name: string; line: number; receiver?: string }[] {
   const out = new Map<string, { name: string; line: number; receiver?: string }>();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
   const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
-  for (let i = 0; i < lines.length && out.size < 512; i++) {
+  for (let i = 0; i < lines.length && out.size < maxCalls; i++) {
     const line = lines[i]!;
     // Cheap comment guard: a line-leading comment marker means no calls here
     // (block-comment interiors and strings stay best-effort, like the symbol
@@ -332,7 +333,7 @@ export function collectCallsRegex(
     CALL_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     const fallbackExcluded = new Set<string>();
-    while ((m = CALL_RE.exec(line)) !== null && out.size < 512) {
+    while ((m = CALL_RE.exec(line)) !== null && out.size < maxCalls) {
       const receiver = m[1];
       const name = m[2]!;
       if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
@@ -350,13 +351,16 @@ export function collectCallsRegex(
   return [...out.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line));
 }
 
-export function extractCode(rel: string, ext: string, content: string): CodeInfo {
+// `opts.maxCallsPerFile` overrides the per-file call-site cap (default 512) on
+// BOTH extraction tiers — AST and regex — so recall-oriented consumers can raise
+// it. Dedup/sort semantics are unchanged; absent, output is byte-identical.
+export function extractCode(rel: string, ext: string, content: string, opts: { maxCallsPerFile?: number } = {}): CodeInfo {
   // Symbols come from tree-sitter when a grammar is loaded for this extension
   // (AST-exact: real nesting, precise kinds, structural export), else the regex
   // extractors. Imports/pkg stay on the battle-tested regex path here — their
   // resolution is covered by resolve tests and the e2e ratchet; the new-language
   // AST importers land with their resolvers.
-  const ast = extractAst(rel, ext, content);
+  const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile });
   const symbols = (ast ? ast.symbols : extractSymbols(rel, ext, content)).slice(0, 400);
   // Add barrel re-exports the local def didn't already cover.
   const known = new Set(symbols.map((s) => s.name));
@@ -378,7 +382,7 @@ export function extractCode(rel: string, ext: string, content: string): CodeInfo
     // collector otherwise, so caller indexes exist without the wasm sidecar.
     // `symbols` (this file's own regex-extracted defs) lets the collector
     // exclude a definition's own name+line from its call candidates.
-    calls: ast ? ast.calls : collectCallsRegex(content, symbols),
+    calls: ast ? ast.calls : collectCallsRegex(content, symbols, opts.maxCallsPerFile),
     importedNames: ast?.importedNames,
   };
 }

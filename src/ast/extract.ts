@@ -399,8 +399,9 @@ function readReceiver(node: TSNode | null): string | undefined {
 // dedicated member-call node's `name`; "constructor" reads the constructed type.
 // A qualified call also carries the immediate `receiver` name (see readReceiver).
 // Names are filtered to plausible identifiers (≥ 2 chars), deduped by name+line,
-// sorted, and capped, so the set stays small and deterministic.
-function collectCalls(root: TSNode, spec: LangSpec): { name: string; line: number; receiver?: string }[] {
+// sorted, and capped (default MAX_CALLS; overridable via maxCalls), so the set
+// stays small and deterministic.
+function collectCalls(root: TSNode, spec: LangSpec, maxCalls: number = MAX_CALLS): { name: string; line: number; receiver?: string }[] {
   if (!spec.calls) return [];
   const out: { name: string; line: number; receiver?: string }[] = [];
   const seen = new Set<string>();
@@ -439,7 +440,7 @@ function collectCalls(root: TSNode, spec: LangSpec): { name: string; line: numbe
   };
   visit(root);
   out.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
-  return out.slice(0, MAX_CALLS);
+  return out.slice(0, maxCalls);
 }
 
 // Collect JS/TS named-import bindings: `import { a, b as c } from "x"` →
@@ -476,7 +477,8 @@ function collectImportedNames(root: TSNode, spec: LangSpec): string[] {
 // Extract declared symbols from one file via its committed grammar. Returns
 // undefined when no grammar is loaded for the extension (caller falls back to the
 // regex extractor). Walks top-level declarations plus one level of nested members.
-export function extractAst(rel: string, ext: string, content: string): AstResult | undefined {
+// `opts.maxCalls` overrides the per-file call-site cap (default MAX_CALLS).
+export function extractAst(rel: string, ext: string, content: string, opts: { maxCalls?: number } = {}): AstResult | undefined {
   const key = grammarKeyForExt(ext);
   if (!key || !grammarReady(key)) return undefined;
   const spec = SPECS[key];
@@ -697,7 +699,7 @@ export function extractAst(rel: string, ext: string, content: string): AstResult
 
     const refs = collectImports(root, spec);
     const idents = collectRefIdents(root, new Set(symbols.map((s) => s.name)));
-    const calls = collectCalls(root, spec);
+    const calls = collectCalls(root, spec, opts.maxCalls);
     const importedNames = collectImportedNames(root, spec);
     let pkg: string | undefined;
     if (spec.lang === "java") {

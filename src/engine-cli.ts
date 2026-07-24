@@ -82,6 +82,7 @@ Flags:
   --no-gitignore      Do not honor .gitignore files (default: honored)
   --max-files <n>     Cap walked files (default 20000)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
+  --max-calls <n>     Per-file call-site cap for extraction (default 512)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20)
@@ -105,6 +106,7 @@ interface CliFlags {
   gitignore: boolean;
   maxFiles?: number;
   maxBytes?: number;
+  maxCalls?: number;
   noAst: boolean;
   since?: string;
   ignoreCase?: boolean;
@@ -146,6 +148,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--no-gitignore") flags.gitignore = false;
     else if (a === "--max-files") flags.maxFiles = num();
     else if (a === "--max-bytes") flags.maxBytes = num();
+    else if (a === "--max-calls") flags.maxCalls = num();
     else if (a === "--ignore-case") flags.ignoreCase = true;
     else if (a === "--max-hits") flags.maxHits = num();
     else if (a === "--budget-tokens") flags.budgetTokens = num();
@@ -176,6 +179,7 @@ function scanOptions(flags: CliFlags): BuildIndexOptions {
     gitignore: flags.gitignore,
     maxFiles: flags.maxFiles,
     maxBytes: flags.maxBytes,
+    maxCallsPerFile: flags.maxCalls,
   };
 }
 

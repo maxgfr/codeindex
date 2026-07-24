@@ -38,6 +38,10 @@ export interface ScanOptions {
   gitignore?: boolean;
   maxBytes?: number;
   maxFiles?: number;
+  // Per-file call-site cap for extraction (default 512, both AST and regex
+  // tiers). Raising it trades index size for call-graph recall; dedup/sort
+  // semantics are unchanged. Absent, output is byte-identical to before.
+  maxCallsPerFile?: number;
   out?: string; // absolute output dir to exclude from the scan (self-index guard)
   // Previous build's extraction cache (rel → {hash, record, size?, mtimeMs?}). A
   // file whose (size,mtime) key matches skips read+hash entirely (the stat
@@ -144,7 +148,7 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
         // Non-markdown prose (.rst/.txt): title from basename, no link graph.
         record.title = basename(f.rel);
       } else if (kind === "code") {
-        const code = extractCode(f.rel, f.ext, content);
+        const code = extractCode(f.rel, f.ext, content, { maxCallsPerFile: opts.maxCallsPerFile });
         record.title = basename(f.rel);
         record.summary = code.summary;
         record.symbols = code.symbols;
