@@ -8,9 +8,8 @@ import resolution, a typed cross-file link-graph, and graph analytics — shippe
 as a single zero-dependency `engine.mjs` that consumer tools **vendor** (copy
 into their repo) instead of installing.
 
-Extracted from [ultraindex](https://github.com/maxgfr/ultraindex) 5.1.0's core,
-and consumed by the ultra* skill family (ultraindex, ultradoc, ultrasec,
-ultraeval, reconstruct, construct, ultra11y).
+Designed for downstream tools — agent skills, CLIs, CI gates — that vendor the
+engine as a single file instead of taking an npm dependency.
 
 ## What it does
 
@@ -44,7 +43,7 @@ const { scan, graph, symbols } = buildIndexArtifacts("/path/to/repo");
 
 The AST tier is optional: without a `grammars/` directory next to the bundle
 the engine silently uses its regex tier. Only tools that want AST precision
-(e.g. ultraindex) also vendor `scripts/grammars/` (~17 MiB of wasm).
+also vendor `scripts/grammars/` (~17 MiB of wasm).
 
 ## Use from npm
 
@@ -62,8 +61,8 @@ const scan = scanRepo("/path/to/repo");
 ```
 
 The CLI ships in the same package — see **Use as a CLI** below for the global
-install command. Skills should still prefer vendoring: it keeps their own
-bundle single-file and pinned to an exact commit without an npm dependency.
+install command. Consumer tools should still prefer vendoring: it keeps their
+own bundle single-file and pinned to an exact commit without an npm dependency.
 
 ## Use as a CLI
 
@@ -186,8 +185,8 @@ into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.
 ## Versioning
 
 - `ENGINE_VERSION` — the release tag, embedded greppably in the bundle.
-- `SCHEMA_VERSION` — the `graph.json`/`symbols.json` shape (continues
-  ultraindex's lineage; currently 4). Consumers reject mismatched artifacts.
+- `SCHEMA_VERSION` — the `graph.json`/`symbols.json` shape (currently 4).
+  Consumers reject mismatched artifacts.
 - `EXTRACTOR_VERSION` — the extraction output shape; incremental caches keyed
   on it are discarded wholesale when it bumps.
 
@@ -218,8 +217,8 @@ pnpm check:build   # proves the committed bundle is byte-reproducible
 pnpm test:e2e      # opt-in: pinned real-repo builds with ratchets
 ```
 
-The compat suite pins the exact bytes ultraindex 5.1.0 produced for the
-`mini-repo` fixture — the proof that extraction was lossless.
+The compat suite pins golden bytes for the `mini-repo` fixture — the proof
+that extraction stays lossless across releases.
 
 ## License
 

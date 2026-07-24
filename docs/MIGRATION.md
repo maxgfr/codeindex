@@ -1,4 +1,4 @@
-# Migrating a skill onto the codeindex engine
+# Migrating a consumer tool onto the codeindex engine
 
 The engine ships as two files, released together at every tag:
 
@@ -6,12 +6,12 @@ The engine ships as two files, released together at every tag:
 - `scripts/engine.d.mts` — TypeScript declarations for the bundle
 
 Consumers **vendor** them (commit a copy) — never an npm dependency — so every
-skill stays standalone-installable.
+consumer stays standalone-installable.
 
 ## Vendoring steps
 
-1. Copy `scripts/sync-engine.mjs` (reference implementation lives in the
-   ultraeval repo) into your repo and run:
+1. Add a small `scripts/sync-engine.mjs` to your repo (a ~50-line fetch script
+   with the behavior described below) and run:
 
    ```sh
    node scripts/sync-engine.mjs --ref v1.0.0
@@ -40,8 +40,7 @@ skill stays standalone-installable.
 
 The AST tier is optional: without a `grammars/` directory next to the vendored
 bundle the engine uses its regex tier (15 languages). Only vendor
-`scripts/grammars/` (~17 MiB wasm) if you need AST-exact symbols (ultraindex
-does; nobody else should).
+`scripts/grammars/` (~17 MiB wasm) if you need AST-exact symbols.
 
 ## Version constants
 
@@ -53,7 +52,7 @@ does; nobody else should).
 
 `buildGraph(...)` / `buildIndexArtifacts(...)` accept
 `meta: { version, schemaVersion }` so a consumer stamps its own identity into
-artifacts it persists (ultraindex does this to keep its graph.json lineage).
+artifacts it persists and keeps its own `graph.json` lineage.
 
 ## v2.9.0 — `search` trigram fuzzy fallback
 
@@ -130,39 +129,31 @@ untouched, so **no re-pin is required**; a consumer that deliberately wants
 `.codeindex` walked can pass `ignoreDirs` (replace semantics, also new in
 this release) with its own set.
 
-## Per-skill mapping (what to replace with what)
+## Typical mapping (what to replace with what)
 
-| Skill | Replace | With (engine export) |
-|---|---|---|
-| **ultraeval** | `walkFiles`, `SKIP_DIRS` | `scanRepo` (gitignore on by default) |
-| | `importsOf` + `resolveImport` (JS/TS+py regex) | `FileRecord.refs` (kind `import`) + `buildResolveContext`/`resolveImport` |
-| | `gitChurn`, `changedFiles` | `gitChurn`, `changedSince` |
-| | keeps | cycle DFS, hotspot scoring, todos/maxIndent, ANALYSIS.md rendering |
-| **construct** | walker clone + language histogram + test count | `scanRepo` (`.languages`) + `isTestPath` |
-| **ultraindex** | the whole core (walk/scan/extract/resolve/modules/graph/calls/analytics/renderers) | vendored engine + shim `src/engine.ts` re-exporting it; pass `meta: { version: VERSION, schemaVersion: SCHEMA_VERSION }` to keep graph.json byte-lineage |
-| | keeps | store/manifest, encyclopedia, merge/entries, find/ask, check/verify, embeddings, orchestrate |
-| **ultradoc** | walker, `EXT_LANG` map, symbol `RULES` + `applyExportLists` | `scanRepo`, `extToLang`/`languageOf`, `extractSymbols`/`buildSymbolIndex` |
-| | `PKG_MANIFESTS` workspace probing | `detectWorkspaces` |
-| | `rgSearch` + JS fallback | `grepRepo` |
-| | keeps | issues/PRs/SO/web retrieval, citations, DOC.md |
-| **ultra11y** | walker + glob scoping | `walk`/`scanRepo` with `include`/`exclude` |
-| | tsconfig path-alias resolution | `buildResolveContext` + `resolveImport` |
-| | keeps | its JSX component graph and every WCAG check |
-| **reconstruct** | walker + gitignore parser + `categorize` | `scanRepo`, `categorize` |
-| | `EXT_LANGUAGE` | `extToLang` |
-| | workspace detection + dep graph + cycle + topo | `detectWorkspaces` (packages/dependsOn/cycle/topoOrder) |
-| | `resolveModule` | `resolveImport` |
-| | keeps | framework adapters (routes), data-model inference, PRD rendering |
-| **ultrasec** | walker + gitignore + scope + symlink guard | `scanRepo` (`scope`, `gitignore` — its own semantics, ported here) |
-| | per-language defs/imports/calls extraction | `extractCode` (`symbols`/`refs`/`calls`) |
-| | `resolveImport` | `resolveImport` |
-| | `buildGraph` (import+call edges, symbolDefs) | `buildGraph` + `resolveCallEdges` |
-| | `callersBySymbol`, `enclosingSymbol` (raw-recall taint-BFS input) | `buildRawCallerIndex` (issue #8) — every name-matched call site keyed by the raw callee name, no def resolution or gating, `enclosingSymbol` computed per site. `buildCallerIndex` is **NOT** a substitute here: it is def-resolved and gated (language-family filter, JS/TS import gate, same-file self-declaration skip) and will silently drop sites a recall consumer needs. Both are bounded by `FileRecord.calls`'s per-file 512-call cap (dedup by name+line) — a file with more raw call sites than that loses sites upstream of either function. |
-| | keeps | taint source→sink enumeration, external scanners, EPSS/KEV/CVSS, SARIF |
+What a consumer usually deletes from its own codebase, and the engine export
+that replaces it:
+
+| Hand-rolled piece | Engine replacement |
+|---|---|
+| file walker + skip lists + gitignore parser | `walk` / `scanRepo` (gitignore on by default; `include`/`exclude`/`scope`) |
+| extension→language map | `extToLang` / `languageOf` |
+| per-language symbol/import/call regexes | `extractCode` / `extractSymbols` (`symbols`/`refs`/`calls`), `buildSymbolIndex` |
+| import resolution (tsconfig paths, package `exports`, go.mod, Cargo…) | `buildResolveContext` + `resolveImport` |
+| workspace/monorepo probing | `detectWorkspaces` (packages/dependsOn/cycle/topoOrder) |
+| dependency/link graph construction | `buildGraph` + `resolveCallEdges` |
+| grep with ripgrep + JS fallback | `grepRepo` |
+| git churn / changed-files helpers | `gitChurn`, `changedSince` |
+| language histogram, test detection | `scanRepo` (`.languages`) + `isTestPath` |
+| caller lookup, precision-gated | `buildCallerIndex` (def-resolved and gated: language-family filter, JS/TS import gate, same-file self-declaration skip) |
+| caller lookup, raw recall (e.g. taint-BFS input) | `buildRawCallerIndex` (issue #8) — every name-matched call site keyed by the raw callee name, no def resolution or gating, `enclosingSymbol` computed per site. `buildCallerIndex` is **NOT** a substitute here: its gates silently drop sites a recall consumer needs. Both are bounded by `FileRecord.calls`'s per-file 512-call cap (dedup by name+line) — a file with more raw call sites than that loses sites upstream of either function. |
+
+What a consumer keeps is everything above the index: its own scoring,
+rendering, retrieval and domain logic.
 
 ## Golden-diff adjudication (every migration)
 
-Capture the skill's load-bearing artifact **before** touching code (a committed
+Capture the consumer's load-bearing artifact **before** touching code (a committed
 snapshot test), migrate, then adjudicate every diff:
 
 - **Accept + document**: file-set changes from better ignore rules (gitignore
