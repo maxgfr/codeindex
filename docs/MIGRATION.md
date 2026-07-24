@@ -129,6 +129,69 @@ untouched, so **no re-pin is required**; a consumer that deliberately wants
 `.codeindex` walked can pass `ignoreDirs` (replace semantics, also new in
 this release) with its own set.
 
+## v2.14.0 — incremental fastpaths (all additive, no re-pin required)
+
+Pure fastpaths: every entry point still produces byte-identical artifacts for
+unchanged inputs, so **no re-pin is required** and no consumer needs to act.
+`SCHEMA_VERSION` / `EMBED_VERSION` / `EXTRACTOR_VERSION` are untouched; the new
+surface is additive (semver-minor).
+
+- **`RepoScan.contentUnchanged` / `RepoScan.cacheDirty` + `ScanOptions.precomputedWalk`.**
+  Two derived read-only flags: `contentUnchanged` is true when a `cache` was
+  supplied and every kept file reused its cached record (stat fastpath or exact
+  content-hash) with an unchanged file set; `cacheDirty` is true when persisting
+  the cache would change any byte (a hash/size/mtime drift, a file-set
+  difference, or no cache at all). `precomputedWalk` lets a caller that already
+  walked hand its `WalkResult` to `scanRepo` instead of re-walking — it must
+  come from `walk(root, <the same options>)`.
+- **`buildArtifactsFromScan(scan, opts)` export.** The downstream half of
+  `buildIndexArtifacts` (resolve → graph → communities → centrality → symbol
+  index) split out as its own export; `buildIndexArtifacts` is now `scanRepo` +
+  this call. A consumer already holding a `RepoScan` builds artifacts without
+  re-walking; the extracted body is verbatim, so output is byte-identical.
+- **`cache.json` additive meta keys.** Writes gain a fixed-order `meta` block —
+  `engineVersion`, `commit`, `graphSha1`, `symbolsSha1`, and `embed`
+  (`{ embedVersion, modelId, sha1 }`) only when `embeddings.bin` was written.
+  Old engines ignore these keys (they only check schema/extractor); an old cache
+  lacking them never fastpaths but still reuses records. `cache.json` embeds
+  mtimes so it never was cross-machine byte-reproducible — no determinism
+  surface changes.
+- **CLI `index` fastpath.** `index` skips `buildArtifactsFromScan`, both renders
+  and every artifact write when a guard proves the run would reproduce the
+  on-disk bytes: `scan.contentUnchanged`, `meta.engineVersion` matches,
+  `meta.commit` matches the scan's commit (graph.json embeds the commit — an
+  identical tree under a new HEAD rebuilds), the sha1 of the on-disk
+  graph/symbols equals the recorded shas, and the embed leg holds (no model, or
+  the model's embedVersion+modelId and `embeddings.bin` sha match — a model swap
+  rebuilds the sidecar). Any failure — deleted, truncated or tampered artifacts
+  included — falls through to the full rebuild that rewrites everything, so the
+  fastpath self-heals on corruption; `cache.json` is rewritten on the fastpath
+  only when `scan.cacheDirty`.
+- **MCP session scan + artifacts cache.** The long-lived server memoizes a
+  single scan and its artifacts across tool calls: `getScan` re-runs `scanRepo`
+  with the prior scan re-expressed as its `cache`, so scan.ts's stat/hash oracle
+  decides freshness and an unchanged repo returns the SAME `RepoScan` object,
+  while `getArtifacts` lazily runs `buildArtifactsFromScan` memoized on scan
+  object identity (rendered strings are never cached). Any successful edit tool
+  (`replace_symbol_body`, `insert_after_/insert_before_symbol`) drops the entry
+  — a controlled write landing in the same mtime tick at the same byte count
+  would fool the (size, mtime) fastpath; `write_memory` needs no invalidation
+  (`.codeindex/` is off the walk since v2.13.0).
+- **`runMcpServer` serverInfo override.** `runMcpServer(opts?)` accepts
+  `{ serverInfo?: { name?, version? } }` so a consumer embedding the server
+  announces its own identity in the `initialize` response; omitted fields keep
+  the `{ name: "codeindex", version: ENGINE_VERSION }` defaults, the zero-arg
+  call is unchanged, and `McpServerOptions` is exported from the barrel.
+- **Lazy grammar warm — covering-set guarantee.** The CLI and MCP server warm
+  only the grammars for languages actually present (`grammarKeysForExts` over
+  the walked extensions) rather than every grammar at startup. The walk's
+  extension set is a superset of what `scanRepo` keeps (scope/include/exclude
+  only filter further), so every extracted file has its grammar loaded before
+  extraction and AST output stays byte-identical — including a language whose
+  first file appears mid-session (the MCP warm re-derives per call). The
+  **pre-existing cache-tier caveat is unchanged**: a record reused by hash may
+  have been extracted under a different grammar tier.
+
 ## Typical mapping (what to replace with what)
 
 What a consumer usually deletes from its own codebase, and the engine export
