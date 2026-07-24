@@ -29,7 +29,15 @@ export interface IndexArtifacts {
 // exact composition (and mutation order — it matters for byte-stable output)
 // that ultraindex's build performs before its prose rendering.
 export function buildIndexArtifacts(repo: string, opts: BuildIndexOptions = {}): IndexArtifacts {
-  const scan = scanRepo(repo, opts);
+  return buildArtifactsFromScan(scanRepo(repo, opts), opts);
+}
+
+// Everything downstream of the scan: resolve → group → graph → communities →
+// centrality → tests-map → surprises → symbol index, in the same (load-bearing)
+// mutation order as buildIndexArtifacts — which is now just scanRepo + this.
+// Lets a caller that already holds a RepoScan build the artifacts without
+// re-walking the repo.
+export function buildArtifactsFromScan(scan: RepoScan, opts: BuildIndexOptions = {}): IndexArtifacts {
   const ctx = buildResolveContext(scan);
   const { modules, moduleOf } = buildModules(scan);
   const graph = buildGraph(scan, ctx, modules, moduleOf, opts.meta);

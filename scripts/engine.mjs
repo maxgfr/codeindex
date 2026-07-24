@@ -9116,7 +9116,9 @@ var init_graph_json = __esm({
 
 // src/pipeline.ts
 function buildIndexArtifacts(repo, opts = {}) {
-  const scan2 = scanRepo(repo, opts);
+  return buildArtifactsFromScan(scanRepo(repo, opts), opts);
+}
+function buildArtifactsFromScan(scan2, opts = {}) {
   const ctx = buildResolveContext(scan2);
   const { modules, moduleOf } = buildModules(scan2);
   const graph = buildGraph(scan2, ctx, modules, moduleOf, opts.meta);
@@ -11607,6 +11609,7 @@ export {
   applyCentrality,
   basicTokenize,
   betweennessOf,
+  buildArtifactsFromScan,
   buildCallerIndex,
   buildEmbeddingIndex,
   buildEndpointIndex,

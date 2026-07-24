@@ -78,8 +78,9 @@ export { renderGraphJson } from "./render/graph-json.js";
 export { renderScip } from "./render/scip.js";
 export type { RenderScipOptions } from "./render/scip.js";
 
-// One-call pipeline.
-export { buildIndexArtifacts } from "./pipeline.js";
+// One-call pipeline (buildArtifactsFromScan: the scan-onward half, for callers
+// that already hold a RepoScan).
+export { buildIndexArtifacts, buildArtifactsFromScan } from "./pipeline.js";
 export type { BuildIndexOptions, IndexArtifacts } from "./pipeline.js";
 
 // Git utilities.
