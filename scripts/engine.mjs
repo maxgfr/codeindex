@@ -10366,10 +10366,8 @@ function getArtifacts(repo, opts = {}) {
   return buildArtifactsFromScan(scan2, opts);
 }
 async function warmGrammarsForRepo(repo) {
-  if (warmedRepos.has(repo)) return;
   const { files } = walk(repo, {});
   await ensureGrammars(grammarKeysForExts(files.map((f) => f.ext)));
-  warmedRepos.add(repo);
 }
 async function callTool(name2, args2) {
   const repo = str(args2.repo);
@@ -10626,7 +10624,7 @@ async function runMcpServer(opts = {}) {
     }
   }
 }
-var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, sessionCache, warmedRepos, SCANLESS_TOOLS;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, sessionCache, SCANLESS_TOOLS;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -10906,7 +10904,6 @@ var init_mcp = __esm({
         }
       }
     ];
-    warmedRepos = /* @__PURE__ */ new Set();
     SCANLESS_TOOLS = /* @__PURE__ */ new Set([
       "workspaces",
       "churn",

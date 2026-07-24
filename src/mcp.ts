@@ -503,21 +503,26 @@ export function getArtifacts(repo: string, opts: SessionScanOptions = {}): Index
   return buildArtifactsFromScan(scan, opts);
 }
 
-// Warm ONLY the grammars for languages present in `repo`, memoized per repo
-// path. The server no longer warms every committed grammar at startup — most
-// sessions touch one repo and a handful of languages — so each scan-needing
-// tool warms the walk-derived set on first touch instead. ensureGrammars is
-// idempotent and near-free once loaded, so the memo's real job is skipping the
-// repeat WALK, not the load. Determinism: the walk's extension set is a superset
-// of what scanRepo keeps (scope/include/exclude only filter further), so every
-// extracted file has its grammar loaded; Language.load calls are independent, so
-// warming fewer grammars cannot alter the parse of a loaded one.
-const warmedRepos = new Set<string>();
+// Warm the grammars for the languages CURRENTLY present in `repo`, re-derived on
+// EVERY scan-needing call — never frozen on first touch. The server no longer
+// warms every committed grammar at startup; most sessions touch one repo and a
+// handful of languages, so each scan-needing tool warms the walk-derived set
+// itself. It MUST re-derive per call because the session cache (getScan) is built
+// to pick up mid-session file adds/edits/removes: a language whose first file
+// appears only AFTER the initial scan-needing call must still get its grammar
+// warmed, or that file falls to the regex tier and its symbols diverge from a
+// cold build on the identical on-disk state — a byte-identity break. (A per-
+// repo-path memo froze the grammar set at first touch and silently missed
+// exactly this case.) ensureGrammars is idempotent and near-free once a grammar
+// is loaded — it warms only newly-seen keys — so the sole repeated cost is the
+// walk; the wasm for a given language loads at most once. Determinism: the walk's
+// extension set is a superset of what scanRepo keeps (scope/include/exclude only
+// filter further), so every extracted file has its grammar loaded; Language.load
+// calls are independent, so warming fewer grammars cannot alter the parse of a
+// loaded one.
 export async function warmGrammarsForRepo(repo: string): Promise<void> {
-  if (warmedRepos.has(repo)) return;
   const { files } = walk(repo, {});
   await ensureGrammars(grammarKeysForExts(files.map((f) => f.ext)));
-  warmedRepos.add(repo);
 }
 
 // Tools that never scan the file tree (git/grep/memory/embed-status only) — they
@@ -534,7 +539,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   const repo = str(args.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
-  // Scan-needing tools warm the present-language grammars (memoized per repo)
+  // Scan-needing tools warm the present-language grammars (re-derived per call)
   // before any scan so extraction takes the AST tier; scan-less tools skip it.
   if (!SCANLESS_TOOLS.has(name)) await warmGrammarsForRepo(repo);
 
@@ -762,8 +767,9 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     version: opts.serverInfo?.version ?? ENGINE_VERSION,
   };
   // No startup warm: each scan-needing tool warms the present-language grammars
-  // for its repo on first touch (warmGrammarsForRepo), so a session that never
-  // scans — or only touches one language — loads no unused wasm.
+  // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
+  // so a session that never scans — or only touches one language — loads no
+  // unused wasm, and a language first seen mid-session still gets warmed.
 
   const send = (msg: Record<string, unknown>): void => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");

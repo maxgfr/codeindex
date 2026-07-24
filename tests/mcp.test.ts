@@ -696,6 +696,49 @@ describe("MCP session cache — e2e over one long-lived server", () => {
     }
   }, 20_000);
 
+  it("warms a language whose first file appears mid-session — no regex-tier divergence from a cold build", async () => {
+    // A brand-new repo seen as TS-only at first touch: graph#1 warms ONLY the
+    // typescript grammar; `go` is never loaded in this child process until a .go
+    // file appears. The session cache (getScan) is explicitly built to pick up
+    // mid-session file adds, so the grammar warm MUST re-derive per call — a memo
+    // frozen on the repo path would leave `go` unloaded and route the new file to
+    // the regex tier, diverging from a cold build on the identical on-disk state.
+    const repo = mkdtempSync(join(tmpdir(), "ci-mcp-lazygrammar-"));
+    writeFileSync(join(repo, "app.ts"), "export function app(): number {\n  return 1;\n}\n");
+
+    const session = mcpStagedSession({});
+    try {
+      const g1 = await session.call(1, "graph", { repo });
+      expect(g1.result!.isError).toBeUndefined();
+
+      // Add a Go file mid-session. `const` has NO rule in the go regex tier
+      // (src/lang/go.ts) and a struct type is kinded "type" by the AST but
+      // "struct" by regex, so the two tiers produce different symbols for it.
+      writeFileSync(
+        join(repo, "srv.go"),
+        "package srv\n\nconst MaxConns = 100\n\ntype Server struct {\n\taddr string\n}\n\nfunc (s *Server) Handle() error {\n\treturn nil\n}\n\nfunc NewServer(addr string) *Server {\n\treturn &Server{addr: addr}\n}\n",
+      );
+
+      // symbols_overview shows the mechanism directly: only the AST tier emits the
+      // `const MaxConns` symbol, so its presence proves `go` was warmed on THIS
+      // call — i.e. the warm re-derived the grammar set after the file appeared.
+      const ov = await session.call(2, "symbols_overview", { repo, file: "srv.go" });
+      expect(ov.result!.isError).toBeUndefined();
+      expect(ov.result!.content![0]!.text).toContain("MaxConns");
+
+      // The headline guarantee: the mid-session graph is byte-identical to what a
+      // cold process renders on the SAME on-disk state (this test process has every
+      // grammar warmed via tests/setup.ts, so buildIndexArtifacts extracts srv.go
+      // via AST — the correct tier). A frozen per-repo-path warm would render
+      // srv.go via regex and break these bytes.
+      const g2 = await session.call(3, "graph", { repo });
+      expect(g2.result!.isError).toBeUndefined();
+      expect(g2.result!.content![0]!.text).toBe(renderGraphJson(buildIndexArtifacts(repo).graph));
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
   it("scan_summary reports the CURRENT HEAD after a git commit moves it, not the primed one", async () => {
     const repo = tmpFixtureCopy("ci-mcp-scancommit-");
     const git = gitIn(repo);
