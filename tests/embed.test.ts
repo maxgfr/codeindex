@@ -60,7 +60,7 @@ function file(
   };
 }
 function scanOf(files: FileRecord[]): RepoScan {
-  return { root: "/repo", files, languages: {}, docText: new Map(), mtimes: new Map(), capped: false, excluded: 0 };
+  return { root: "/repo", files, languages: {}, docText: new Map(), mtimes: new Map(), capped: false, excluded: 0, contentUnchanged: false, cacheDirty: true };
 }
 
 describe("model loading (opt-in by asset)", () => {

@@ -246,7 +246,7 @@ function fingerprintFile(rel: string, hash: string): FileRecord {
   return { rel, ext: ".ts", size: 0, lines: 1, hash, kind: "code", lang: "typescript", headings: [], symbols: [], refs: [] };
 }
 function fingerprintScanOf(files: FileRecord[]): RepoScan {
-  return { root: "/repo", files, languages: {}, docText: new Map(), mtimes: new Map(), capped: false, excluded: 0 };
+  return { root: "/repo", files, languages: {}, docText: new Map(), mtimes: new Map(), capped: false, excluded: 0, contentUnchanged: false, cacheDirty: true };
 }
 
 describe("scanFingerprint", () => {

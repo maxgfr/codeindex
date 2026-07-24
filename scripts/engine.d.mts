@@ -148,6 +148,8 @@ interface RepoScan {
     mtimes: Map<string, number>;
     capped: boolean;
     excluded: number;
+    contentUnchanged: boolean;
+    cacheDirty: boolean;
 }
 interface ScanOptions {
     include?: string[];
@@ -166,6 +168,7 @@ interface ScanOptions {
         mtimeMs?: number;
     }>;
     fullHash?: boolean;
+    precomputedWalk?: WalkResult;
 }
 declare function scanRepo(root: string, opts?: ScanOptions): RepoScan;
 

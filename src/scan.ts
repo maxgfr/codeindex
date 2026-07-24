@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import type { FileRecord } from "./types.js";
-import { walk, readText } from "./walk.js";
+import { walk, readText, type WalkResult } from "./walk.js";
 import { headCommit } from "./git.js";
 import { sha1 } from "./hash.js";
 import { classify, MARKDOWN_EXT } from "./classify.js";
@@ -27,6 +27,20 @@ export interface RepoScan {
   // rules — see WalkResult.excluded). Surfaced so a consumer can report how
   // much of the tree was filtered out of the index.
   excluded: number;
+  // Change-tracking flags. DERIVED ONLY — they never influence records or
+  // ordering, so artifacts stay byte-identical whether or not anyone reads them.
+  //
+  // True iff a cache was supplied AND every kept file reused its cached record
+  // (via the stat fastpath or an exact content-hash match) AND the kept file
+  // set equals the cache's key set — i.e. this scan proved the indexed content
+  // identical to the previous build's. Docs never take the fastpath (see the
+  // docs exemption below), so their contribution is always an exact hash check.
+  contentUnchanged: boolean;
+  // True iff persisting this scan's cache would change at least one byte of the
+  // previous cache: some kept file's (hash, size, mtimeMs) differs from its
+  // cache entry, the kept file set differs from the cache's key set, or no
+  // cache was supplied at all. False means a cache rewrite would be pure churn.
+  cacheDirty: boolean;
 }
 
 export interface ScanOptions {
@@ -53,6 +67,12 @@ export interface ScanOptions {
   cache?: Map<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }>;
   // Disable the stat fastpath: read and re-hash every file (see BuildOptions).
   fullHash?: boolean;
+  // A walk result to use INSTEAD of walking here. MUST come from
+  // walk(root, <the same options as this scan>) — a walk of a different root
+  // or with different walk options would silently desynchronize the records
+  // from the tree. Exists for callers that already walked (e.g. a freshness
+  // probe) so scanRepo does not pay a second full directory traversal.
+  precomputedWalk?: WalkResult;
 }
 
 function countLines(s: string): number {
@@ -68,12 +88,14 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
   const scoped = opts.scope ? [...(opts.include ?? []), `${opts.scope.replace(/\/+$/, "")}/**`] : opts.include;
   const include = compileGlobs(scoped);
   const exclude = compileGlobs(opts.exclude);
-  const { files: walked, capped, excluded } = walk(root, {
-    maxFileBytes: opts.maxBytes,
-    maxFiles: opts.maxFiles,
-    gitignore: opts.gitignore,
-    ignoreDirs: opts.ignoreDirs,
-  });
+  const { files: walked, capped, excluded } =
+    opts.precomputedWalk ??
+    walk(root, {
+      maxFileBytes: opts.maxBytes,
+      maxFiles: opts.maxFiles,
+      gitignore: opts.gitignore,
+      ignoreDirs: opts.ignoreDirs,
+    });
   // Never index our own output (e.g. a committed `docs/ultraindex/`), or builds
   // would describe the encyclopedia instead of the code.
   const outPrefix = opts.out ? opts.out.replace(/\/+$/, "") + "/" : null;
@@ -82,6 +104,15 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
   const languages: Record<string, number> = {};
   const docText = new Map<string, string>();
   const mtimes = new Map<string, number>();
+
+  // Change-tracking accumulators (see RepoScan.contentUnchanged / cacheDirty).
+  // Derived only — nothing below feeds them back into records or ordering.
+  const cache = opts.cache;
+  // Every kept file so far reused its cached record (fastpath or hash match).
+  // Starts false with no cache: nothing can be proven unchanged against nothing.
+  let allReused = cache !== undefined;
+  // With no cache, persisting one is all new bytes — dirty by definition.
+  let cacheDirty = cache === undefined;
 
   for (const f of walked) {
     if (outPrefix && (f.abs === opts.out || f.abs.startsWith(outPrefix))) continue;
@@ -125,8 +156,16 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     if (cached && cached.hash === hash) {
       files.push(cached.record);
       if (kind === "doc" && content) docText.set(f.rel, content);
+      // Content proven identical, but a (size, mtimeMs) drift — e.g. a bare
+      // touch, or an old cache without stat keys — still rewrites cache bytes.
+      if (cached.size !== f.size || cached.mtimeMs !== f.mtimeMs) cacheDirty = true;
       continue;
     }
+
+    // Past both reuse paths: this file is new to the cache or its content
+    // changed — the scan is not proven unchanged and the cache must be rewritten.
+    allReused = false;
+    cacheDirty = true;
 
     const record: FileRecord = {
       rel: f.rel,
@@ -176,5 +215,24 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
   }
 
   files.sort(byKey((f) => f.rel));
-  return { root, commit: headCommit(root), files, languages, docText, mtimes, capped, excluded };
+  // File-set equality: reuse requires a cache entry and rels are unique, so
+  // with allReused the kept set is a subset of the cache keys — equality is
+  // then exactly a count match. A count mismatch (file added, deleted, or
+  // newly filtered) also means the persisted key set changes: dirty.
+  if (cache !== undefined && files.length !== cache.size) {
+    allReused = false;
+    cacheDirty = true;
+  }
+  return {
+    root,
+    commit: headCommit(root),
+    files,
+    languages,
+    docText,
+    mtimes,
+    capped,
+    excluded,
+    contentUnchanged: allReused,
+    cacheDirty,
+  };
 }

@@ -6526,7 +6526,7 @@ function scanRepo(root, opts = {}) {
   const scoped = opts.scope ? [...opts.include ?? [], `${opts.scope.replace(/\/+$/, "")}/**`] : opts.include;
   const include = compileGlobs(scoped);
   const exclude = compileGlobs(opts.exclude);
-  const { files: walked, capped, excluded } = walk(root, {
+  const { files: walked, capped, excluded } = opts.precomputedWalk ?? walk(root, {
     maxFileBytes: opts.maxBytes,
     maxFiles: opts.maxFiles,
     gitignore: opts.gitignore,
@@ -6537,6 +6537,9 @@ function scanRepo(root, opts = {}) {
   const languages = {};
   const docText = /* @__PURE__ */ new Map();
   const mtimes = /* @__PURE__ */ new Map();
+  const cache = opts.cache;
+  let allReused = cache !== void 0;
+  let cacheDirty = cache === void 0;
   for (const f of walked) {
     if (outPrefix && (f.abs === opts.out || f.abs.startsWith(outPrefix))) continue;
     if (include && !include(f.rel)) continue;
@@ -6555,8 +6558,11 @@ function scanRepo(root, opts = {}) {
     if (cached && cached.hash === hash) {
       files.push(cached.record);
       if (kind === "doc" && content) docText.set(f.rel, content);
+      if (cached.size !== f.size || cached.mtimeMs !== f.mtimeMs) cacheDirty = true;
       continue;
     }
+    allReused = false;
+    cacheDirty = true;
     const record = {
       rel: f.rel,
       ext: f.ext,
@@ -6598,7 +6604,22 @@ function scanRepo(root, opts = {}) {
     files.push(record);
   }
   files.sort(byKey((f) => f.rel));
-  return { root, commit: headCommit(root), files, languages, docText, mtimes, capped, excluded };
+  if (cache !== void 0 && files.length !== cache.size) {
+    allReused = false;
+    cacheDirty = true;
+  }
+  return {
+    root,
+    commit: headCommit(root),
+    files,
+    languages,
+    docText,
+    mtimes,
+    capped,
+    excluded,
+    contentUnchanged: allReused,
+    cacheDirty
+  };
 }
 var init_scan = __esm({
   "src/scan.ts"() {
