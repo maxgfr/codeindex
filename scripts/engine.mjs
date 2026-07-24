@@ -10339,6 +10339,7 @@ function getScan(repo, opts = {}) {
     const fresh = scanRepo(repo, { ...opts, cache: sessionCache.cacheMap });
     if (fresh.contentUnchanged) {
       if (fresh.cacheDirty) sessionCache.cacheMap = toCacheMap(fresh);
+      if (sessionCache.scan.commit !== fresh.commit) sessionCache.scan.commit = fresh.commit;
       return sessionCache.scan;
     }
     sessionCache = { key, scan: fresh, cacheMap: toCacheMap(fresh) };

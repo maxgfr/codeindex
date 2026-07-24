@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { getArtifacts, getScan, memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint, toCacheMap } from "../src/mcp.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
+import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
 import type { RepoScan } from "../src/scan.js";
 import type { FileRecord } from "../src/types.js";
@@ -534,6 +535,21 @@ function tmpFixtureCopy(prefix: string): string {
   return repo;
 }
 
+// A `git -C dir` runner with a fixed author/committer identity so `commit`
+// works in any CI environment (no reliance on a global user.name/user.email).
+function gitIn(dir: string): (...args: string[]) => void {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@e",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@e",
+  };
+  return (...args: string[]) => {
+    execFileSync("git", ["-C", dir, ...args], { stdio: "pipe", env });
+  };
+}
+
 describe("getScan (session-level single-entry scan cache)", () => {
   it("returns the SAME RepoScan object across two calls on an unchanged repo", () => {
     const repo = tmpFixtureCopy("ci-scan-memo-");
@@ -571,6 +587,30 @@ describe("getScan (session-level single-entry scan cache)", () => {
     const scoped = getScan(repo, { scope: "src" });
     expect(scoped).not.toBe(all);
     expect(scoped.files.every((f) => f.rel.startsWith("src/"))).toBe(true);
+  });
+
+  it("a git HEAD move with an unchanged worktree refreshes `commit` yet keeps the SAME scan object", () => {
+    const repo = tmpFixtureCopy("ci-scan-gitcommit-");
+    const git = gitIn(repo);
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const s1 = getScan(repo, {});
+    const c1 = s1.commit;
+    expect(c1).toBeTruthy();
+    expect(c1).toBe(headCommit(repo)); // baseline: cache primed at C1
+
+    // Move HEAD with an EMPTY commit: a new commit object over an IDENTICAL tree,
+    // no worktree file rewritten — so the stat fastpath still matches every file
+    // and the next scan is contentUnchanged. `commit` (headCommit) is NOT part of
+    // that stat/hash oracle, so without the refresh the old C1 would leak out.
+    git("commit", "-q", "--allow-empty", "-m", "two");
+    const c2 = headCommit(repo);
+    expect(c2).not.toBe(c1);
+
+    const s2 = getScan(repo, {});
+    expect(s2).toBe(s1); // object identity preserved — derived WeakMap/artifacts stay warm
+    expect(s2.commit).toBe(c2); // ...but the stale commit is refreshed to what a cold scanRepo reports
   });
 });
 
@@ -651,6 +691,36 @@ describe("MCP session cache — e2e over one long-lived server", () => {
       const text1 = g1.result!.content![0]!.text;
       expect(text1).toContain('"schemaVersion"');
       expect(g2.result!.content![0]!.text).toBe(text1); // second render from memoized artifacts
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
+  it("scan_summary reports the CURRENT HEAD after a git commit moves it, not the primed one", async () => {
+    const repo = tmpFixtureCopy("ci-mcp-scancommit-");
+    const git = gitIn(repo);
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const session = mcpStagedSession({});
+    try {
+      // First call primes the session cache against this repo at commit C1.
+      const r1 = await session.call(1, "scan_summary", { repo });
+      expect(r1.result!.isError).toBeUndefined();
+      const c1 = (JSON.parse(r1.result!.content![0]!.text) as { commit?: string }).commit;
+      expect(c1).toBe(headCommit(repo));
+
+      // Move HEAD with an empty commit — identical tree, untouched worktree — so
+      // the freshness oracle proves the content unchanged and the SAME cached
+      // scan comes back. A stale-commit read would still report C1 here.
+      git("commit", "-q", "--allow-empty", "-m", "two");
+      const c2 = headCommit(repo);
+      expect(c2).not.toBe(c1);
+
+      const r2 = await session.call(2, "scan_summary", { repo });
+      expect(r2.result!.isError).toBeUndefined();
+      const reported = (JSON.parse(r2.result!.content![0]!.text) as { commit?: string }).commit;
+      expect(reported).toBe(c2); // == what a cold process would report on identical on-disk state
     } finally {
       session.close();
     }

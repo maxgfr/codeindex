@@ -467,6 +467,19 @@ export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
       // stat-only drift (e.g. a bare touch) still refreshes the cache map so
       // the next call's stat fastpath keys on the new (size, mtimeMs).
       if (fresh.cacheDirty) sessionCache.cacheMap = toCacheMap(fresh);
+      // `commit` (headCommit(root)) is NOT part of the stat/hash freshness
+      // oracle: a git HEAD move that leaves the worktree untouched — commit /
+      // commit --amend / reset --soft / checkout to an identical-tree branch —
+      // changes headCommit without altering any file's size or mtime, so
+      // contentUnchanged stays true while the cached scan's commit went stale.
+      // `fresh` recomputed it just now (exactly what a cold process reports), so
+      // sync it onto the returned object; otherwise scan_summary would emit the
+      // OLD commit a from-scratch scanRepo never would. Mutate the SAME object
+      // rather than clone — cloning would forfeit the identity the artifacts and
+      // derived.ts WeakMap key on. Safe: no artifact carries commit (graph /
+      // symbols render byte-identically regardless), so nothing memoized here
+      // depends on this field.
+      if (sessionCache.scan.commit !== fresh.commit) sessionCache.scan.commit = fresh.commit;
       return sessionCache.scan;
     }
     sessionCache = { key, scan: fresh, cacheMap: toCacheMap(fresh) };
