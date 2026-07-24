@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.16.0](https://github.com/maxgfr/codeindex/compare/v2.15.0...v2.16.0) (2026-07-24)
+
+
+### Features
+
+* **ast:** expose warmGrammars — the one-call AST warm-up consumers were missing ([af7011c](https://github.com/maxgfr/codeindex/commit/af7011c374a34bdcedf6da42fc6700c23ae5abd9))
+
 # [2.15.0](https://github.com/maxgfr/codeindex/compare/v2.14.0...v2.15.0) (2026-07-24)
 
 
