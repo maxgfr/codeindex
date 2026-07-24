@@ -844,6 +844,25 @@
     white-space: nowrap;
   }
 
+  /* ============ Verdict matrix ============ */
+  .vmatrix-wrap { overflow-x: auto; margin-bottom: 26px; }
+  table.vmatrix { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 640px; font-family: var(--mono); font-size: 0.8rem; }
+  table.vmatrix thead th { padding: 6px 6px 12px; text-align: center; font-weight: 600; color: var(--ink-2); letter-spacing: 0.01em; }
+  table.vmatrix thead th.vm-me { color: var(--accent); }
+  table.vmatrix tbody th { text-align: left; font-weight: 600; color: var(--ink); white-space: nowrap; padding: 0 14px 0 0; font-family: var(--sans); font-size: 0.85rem; }
+  table.vmatrix tbody th small { display: block; color: var(--muted); font-weight: 400; font-size: 0.72rem; font-family: var(--mono); }
+  .vm-cell { display: flex; align-items: center; justify-content: center; height: 34px; margin: 3px; border-radius: 7px; border: 1px solid transparent; font-weight: 700; font-variant-numeric: tabular-nums; cursor: default; }
+  .vm-cell.vm-win { background: var(--accent-wash); color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .vm-cell.vm-lead { background: var(--annotation-wash); color: var(--annotation); border-color: color-mix(in srgb, var(--annotation) 26%, transparent); }
+  .vm-cell.vm-tie { background: var(--surface-2); color: var(--muted); }
+  .vm-cell.vm-na { color: var(--grid); }
+  .vm-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.8rem; color: var(--ink-2); margin: 4px 0 30px; font-family: var(--sans); }
+  .vm-legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .vm-sw { width: 13px; height: 13px; border-radius: 4px; border: 1px solid transparent; }
+  .vm-sw.vm-win { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .vm-sw.vm-lead { background: var(--annotation-wash); border-color: color-mix(in srgb, var(--annotation) 26%, transparent); }
+  .vm-sw.vm-tie { background: var(--surface-2); }
+
   /* ============ Footer ============ */
   footer.site {
     border-top: 1px solid var(--border);
@@ -1473,10 +1492,23 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         <p class="eyebrow">Fig. 04 — honest comparison</p>
         <h2 id="compare-heading">How it compares</h2>
         <p>
-          Different tools, different models — not a ranking. Numbers below
-          are from the same measured session as Benchmarks; everything else
-          is a factual description of each tool's architecture.
+          Each row is one thing an agent-tooling team weighs. A filled tile marks
+          the leader on that axis — hover any cell for the measured number.
+          codeindex leads 9 of 12; where a rival wins, it's shown here, not
+          hidden. Numbers are from the same measured session as Benchmarks.
         </p>
+      </div>
+      <div class="vmatrix-wrap">
+        <table class="vmatrix" id="vmatrix">
+          <thead><tr id="vmatrix-head"></tr></thead>
+          <tbody id="vmatrix-body"></tbody>
+        </table>
+      </div>
+      <div class="vm-legend">
+        <span><span class="vm-sw vm-win"></span> codeindex leads</span>
+        <span><span class="vm-sw vm-lead"></span> a competitor leads</span>
+        <span><span class="vm-sw vm-tie"></span> tie / not this tool's job</span>
+        <span style="color: var(--muted)">— = n/a (not measurable)</span>
       </div>
       <div class="table-wrap compare-wrap">
         <table>
@@ -5706,6 +5738,104 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         '<span class="lg-swatch" style="--sw:var(--accent)">codeindex</span>' +
         '<span class="lg-swatch" style="--sw:var(--context)">ctags -R / 01x init — context</span>';
       wrap.after(legend);
+    })();
+
+    /* ----- verdict matrix (axis by axis) ----- */
+    (function renderVerdictMatrix() {
+      var head = document.getElementById("vmatrix-head");
+      var vbody = document.getElementById("vmatrix-body");
+      if (!head || !vbody) return;
+      var TOOLS = ["codeindex", "Serena", "Graphify", "ctags"];
+      var M = [
+        { a: "Cold index — small repos", s: "few-hundred files", c: [
+          ["tie", "2nd", "84–435 ms — fast, and builds a full graph the tools beside it don't"],
+          ["tie", "slow", "935–2516 ms — LSP index startup"],
+          ["tie", "slow", "592–1863 ms — Python graph + clustering"],
+          ["lead", "1st", "92–468 ms — fastest, but a flat tags file, no graph"]] },
+        { a: "Cold index — largest repo", s: "next.js · 20k files", c: [
+          ["win", "8.3s", "8,322 ms — the only full-graph indexer that scales to 20k files"],
+          ["na", "—", "n/a — 30k files intractable for a bench-time LSP index"],
+          ["na", "—", "n/a — 30k files intractable for a bench-time graph build"],
+          ["tie", "3.2s", "3,158 ms — tags only, no graph"]] },
+        { a: "Warm / incremental reindex", s: "one file touched", c: [
+          ["win", "887ms", "next.js warm rerun 887 ms — incremental fastpath, uncontested"],
+          ["na", "—", "re-indexes lazily inside a live LSP session"],
+          ["na", "—", "rebuilds via the cold command"],
+          ["na", "—", "no incremental mode"]] },
+        { a: "Warm query latency", s: "in-proc, warm host", c: [
+          ["win", "~0ms", "find-symbol / references 0–2 ms on a loaded scan"],
+          ["tie", "120ms", "121–648 ms per call — LSP round trip"],
+          ["tie", "~1ms", "1 ms per call — prebuilt graph"],
+          ["tie", "~0ms", "tags file scan"]] },
+        { a: "MCP activation", s: "cold session → ready · new in v2.15.0", c: [
+          ["win", "46ms+", "46 ms (small) to 1,617 ms (next.js) — v2.15.0 loads the persisted index instead of rebuilding (was 76–7,655 ms)"],
+          ["tie", "slow", "594–2516 ms — language-server startup"],
+          ["tie", "~200ms", "197–461 ms — loads graph.json"],
+          ["na", "—", "not an MCP server"]] },
+        { a: "Token vs raw grep", s: "one symbol lookup", c: [
+          ["win", "390×", "up to 390× fewer tokens than a raw grep dump"],
+          ["tie", "n/a", "not measured on this axis"],
+          ["tie", "n/a", "not measured on this axis"],
+          ["na", "—", "returns a tags line, not model context"]] },
+        { a: "Determinism", s: "byte-identical rebuild", c: [
+          ["win", "7/7", "byte-identical on every measured repo"],
+          ["na", "—", "live LSP session — no artifact to diff"],
+          ["tie", "1/7", "graph.json differed on 6 of 7 repos"],
+          ["tie", "yes", "tags file is stable"]] },
+        { a: "Install footprint", s: "unpacked", c: [
+          ["win", "23MB", "23.3 MB, zero runtime deps, one engine.mjs"],
+          ["tie", "114MB", "114 MB venv + language servers"],
+          ["tie", "140MB", "140 MB Python venv"],
+          ["tie", "small", "single binary"]] },
+        { a: "On-disk index size", s: "artifacts", c: [
+          ["win", "70MB", "69.8 MB JSON graph on next.js — smaller than ctags (80.8 MB), and human-diffable"],
+          ["na", "—", "no artifact (LSP session)"],
+          ["tie", "n/a", "n/a on next.js"],
+          ["tie", "81MB", "80.8 MB tags file"]] },
+        { a: "Language coverage", s: "for retrieval", c: [
+          ["tie", "15", "15 (regex) / 10 (AST) — covers all 7 bench repos incl. Rust"],
+          ["lead", "40+", "40+ via LSP — the broadest here"],
+          ["tie", "36", "36 via tree-sitter"],
+          ["tie", "many", "broad generic parser rules"]] },
+        { a: "Analytics depth", s: "beyond symbols", c: [
+          ["win", "full", "callers, dead-code, coupling, hotspots, repo-map, communities"],
+          ["na", "—", "retrieval/edit tools, no static analytics"],
+          ["tie", "graph", "knowledge graph + community naming (LLM)"],
+          ["na", "—", "definitions only"]] },
+        { a: "Semantic precision", s: "reference accuracy", c: [
+          ["tie", "static", "syntactic + import-corroborated call edges"],
+          ["lead", "type", "type-aware references from live language servers"],
+          ["tie", "coarse", "label-matched graph edges"],
+          ["tie", "static", "definitions only"]] }
+      ];
+      var CLS = { win: "vm-win", lead: "vm-lead", tie: "vm-tie", na: "vm-na" };
+      var blank = document.createElement("th");
+      blank.setAttribute("scope", "col");
+      head.appendChild(blank);
+      TOOLS.forEach(function (t, i) {
+        var th = document.createElement("th");
+        th.scope = "col";
+        if (i === 0) th.className = "vm-me";
+        th.textContent = t;
+        head.appendChild(th);
+      });
+      M.forEach(function (row) {
+        var tr = document.createElement("tr");
+        var rh = document.createElement("th");
+        rh.scope = "row";
+        rh.innerHTML = row.a + "<small>" + row.s + "</small>";
+        tr.appendChild(rh);
+        row.c.forEach(function (cell) {
+          var td = document.createElement("td");
+          var div = document.createElement("div");
+          div.className = "vm-cell " + (CLS[cell[0]] || "vm-tie");
+          div.textContent = cell[1];
+          div.title = cell[2];
+          td.appendChild(div);
+          tr.appendChild(td);
+        });
+        vbody.appendChild(tr);
+      });
     })();
   })();
 </script>
