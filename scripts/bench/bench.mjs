@@ -163,7 +163,7 @@ function runProbe(ctx, server, comp, cfg) {
   const gate = mcpGate(server, comp, ctx);
   if (gate) return { ok: false, reason: gate };
   const sym = ctx.symbol();
-  const file = ctx.codeFile();
+  const file = ctx.probeFile();
   if (!sym) return { ok: false, reason: "no symbol extracted" };
   if (!file) return { ok: false, reason: "no code file" };
   const args = [
@@ -207,6 +207,19 @@ function makeCtx(repo) {
     codeFile() {
       const f = this.scan().files.find((x) => x.kind === "code" && x.symbols?.length) ?? this.scan().files.find((x) => x.kind === "code");
       return f?.rel;
+    },
+    // MCP probe file target: the def file of the representative symbol — the
+    // same file for every server, and by construction in the repo's main
+    // language (serena activates ONE language per project; falcon skips rust
+    // files even on repos it otherwise indexes — the first-code-file pick
+    // could land on a file outside both scopes and n/a the overview cell for
+    // reasons that have nothing to do with the tool). Falls back to codeFile().
+    probeFile() {
+      try {
+        const hit = engine.findSymbol(this.scan(), this.symbol())?.[0];
+        if (hit?.file) return hit.file;
+      } catch { /* fall through */ }
+      return this.codeFile();
     },
   };
 }
@@ -452,7 +465,7 @@ function scenarioMcpSessions(ctxs, comp, cfg) {
   }
   return {
     id: "mcp-sessions", title: "MCP sessions (activate + per-call queries)",
-    note: "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation. falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references.",
+    note: "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references.",
     headers: ["Repo", "Server", "Symbol", "activate->ready (ms)", "find-symbol (ms)", "references (ms)", "file-overview (ms)"],
     rows,
   };
@@ -573,7 +586,10 @@ function scenarioDeterminism(ctxs, comp, _cfg) {
         const work = copySource(dir);
         try {
           const art = join(work, ".falcon", "artifacts");
-          const snap = () => Object.fromEntries(readdirSync(art).map((f) => [f, readFileSync(join(art, f))]));
+          // Regular files only: v0.6.4's artifact set is flat (verified), but a
+          // future subdir must degrade the comparison, never crash the harness.
+          const snap = () => Object.fromEntries(readdirSync(art, { withFileTypes: true })
+            .filter((e) => e.isFile()).map((e) => [e.name, readFileSync(join(art, e.name))]));
           const s1 = adapter.prime(work).ok && existsSync(art) ? snap() : undefined;
           adapter.cleanCold(work);
           const s2 = adapter.prime(work).ok && existsSync(art) ? snap() : undefined;
@@ -633,26 +649,18 @@ function scenarioSize(ctxs, comp, _cfg) {
 
     // serena / graphify / falcon artifacts — one shared scratch copy (their
     // artifact dirs are disjoint), primed per tool, measured, then discarded.
+    // Prime ORDER is load-bearing: falcon indexes every non-dot dir in the
+    // work tree, so it must run FIRST (before graphify-out exists — measured
+    // +5.5% falcon artifact bytes on the fixture otherwise); graphify ignores
+    // dot-dirs (.falcon, verified: zero falcon-path nodes in graph.json);
+    // serena's .serena cache covers only its main-language source files, which
+    // neither .falcon (parquet) nor graphify-out (json/html/md) contains.
     let serenaCell = na(comp.serena.reason);
     let graphifyCell = na(comp.graphify.reason);
     let falconCell = na(comp.falcon.reason);
     if (comp.serena.available || comp.graphify.available || comp.falcon.available) {
       const work = copySource(dir);
       try {
-        if (comp.serena.available) {
-          const gate = serenaRepoGate(comp, ctx.repo.lang);
-          if (gate) serenaCell = na(gate);
-          else {
-            const p = adapterOf("serena", comp).prime(work);
-            const d = join(work, ".serena");
-            serenaCell = p.ok && existsSync(d) ? { v: dirBytes(d), k: "bytes" } : na(p.reason ?? "index failed");
-          }
-        }
-        if (comp.graphify.available) {
-          const p = adapterOf("graphify", comp).prime(work);
-          const g = join(work, "graphify-out", "graph.json");
-          graphifyCell = p.ok && existsSync(g) ? { v: statSync(g).size, k: "bytes" } : na(p.reason ?? "update failed");
-        }
         if (comp.falcon.available) {
           const adapter = adapterOf("falcon", comp);
           const gate = adapter.perRepoSupport(ctx.repo.lang);
@@ -661,6 +669,20 @@ function scenarioSize(ctxs, comp, _cfg) {
             const p = adapter.prime(work);
             const a = join(work, ".falcon", "artifacts");
             falconCell = p.ok && existsSync(a) ? { v: dirBytes(a), k: "bytes" } : na(p.reason ?? "index failed");
+          }
+        }
+        if (comp.graphify.available) {
+          const p = adapterOf("graphify", comp).prime(work);
+          const g = join(work, "graphify-out", "graph.json");
+          graphifyCell = p.ok && existsSync(g) ? { v: statSync(g).size, k: "bytes" } : na(p.reason ?? "update failed");
+        }
+        if (comp.serena.available) {
+          const gate = serenaRepoGate(comp, ctx.repo.lang);
+          if (gate) serenaCell = na(gate);
+          else {
+            const p = adapterOf("serena", comp).prime(work);
+            const d = join(work, ".serena");
+            serenaCell = p.ok && existsSync(d) ? { v: dirBytes(d), k: "bytes" } : na(p.reason ?? "index failed");
           }
         }
       } finally { rmrf(work); }
@@ -698,10 +720,14 @@ function scenarioInstall(_ctxs, comp, _cfg) {
   }
   rows.push([{ v: "codeindex", k: "text" }, ourCell, { v: "zero runtime dependencies; single engine.mjs", k: "text" }]);
 
-  // 01x binary + required ast-grep.
+  // 01x binary + required ast-grep. The binary is measured when it IS the 01x
+  // binary — available, or unavailable only because ast-grep is missing. A
+  // recorded path with any other reason (e.g. the PATH name collision with our
+  // own `codeindex` bin) is NOT 01x and must never be stat'd as its footprint.
   let oxCell = na(comp["01x"].reason ?? "not installed");
   let oxNote = "requires ast-grep in PATH";
-  if (comp["01x"].path && existsSync(comp["01x"].path)) {
+  const oxIs01x = comp["01x"].available || comp["01x"].reason === "ast-grep missing";
+  if (oxIs01x && comp["01x"].path && existsSync(comp["01x"].path)) {
     oxCell = { v: statSync(comp["01x"].path).size, k: "bytes" };
     if (comp.astGrep.available) oxNote = `binary only; + ast-grep ${(statSync(comp.astGrep.path).size / 1024 / 1024).toFixed(1)} MB required`;
   }
