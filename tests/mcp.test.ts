@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { memoizedEmbeddingIndex, scanFingerprint } from "../src/mcp.js";
+import { memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint } from "../src/mcp.js";
 import type { RepoScan } from "../src/scan.js";
 import type { FileRecord } from "../src/types.js";
 
@@ -319,6 +319,45 @@ describe("memoizedEmbeddingIndex (single-entry cache)", () => {
     const index = await memoizedEmbeddingIndex({ mode: "static", identity: "unit-d", scan }, build);
     expect(calls).toBe(2);
     expect(index.dim).toBe(1);
+  });
+});
+
+describe("memoizedEmbedModel (single-entry static-model cache)", () => {
+  const modelJson = (modelId: string) => JSON.stringify({ modelId, dim: 1, vocab: ["a"], weights: [[1]] });
+
+  it("same (dir, mtime, size) returns the SAME parsed instance — no re-read", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-model-memo-"));
+    writeFileSync(join(dir, "model.json"), modelJson("memo-same"));
+    const m1 = memoizedEmbedModel(dir);
+    const m2 = memoizedEmbedModel(dir);
+    expect(m1?.modelId).toBe("memo-same");
+    expect(m2).toBe(m1); // cached object, not a fresh parse
+  });
+
+  it("an in-place re-pull (changed model.json) invalidates the cache and reloads", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-model-memo-"));
+    writeFileSync(join(dir, "model.json"), modelJson("memo-v1"));
+    const m1 = memoizedEmbedModel(dir);
+    // A different byte length changes the size component of the key, so the
+    // cache invalidates even where the filesystem's mtime granularity is coarse.
+    writeFileSync(join(dir, "model.json"), modelJson("memo-v2-longer"));
+    const m2 = memoizedEmbedModel(dir);
+    expect(m1?.modelId).toBe("memo-v1");
+    expect(m2?.modelId).toBe("memo-v2-longer");
+    expect(m2).not.toBe(m1);
+  });
+
+  it("returns undefined when the dir has no model.json (the not-present case)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-model-memo-"));
+    expect(memoizedEmbedModel(dir)).toBeUndefined();
+  });
+
+  it("never caches a failed load — the throw propagates, then a now-valid file loads", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-model-memo-"));
+    writeFileSync(join(dir, "model.json"), "{ this is not JSON");
+    expect(() => memoizedEmbedModel(dir)).toThrow();
+    writeFileSync(join(dir, "model.json"), modelJson("memo-recovered"));
+    expect(memoizedEmbedModel(dir)?.modelId).toBe("memo-recovered");
   });
 });
 

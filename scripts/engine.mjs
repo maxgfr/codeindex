@@ -10178,10 +10178,13 @@ var init_viz = __esm({
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
+  memoizedEmbedModel: () => memoizedEmbedModel,
   memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
   runMcpServer: () => runMcpServer,
   scanFingerprint: () => scanFingerprint
 });
+import { statSync as statSync4 } from "fs";
+import { join as join12 } from "path";
 import { createInterface } from "readline";
 function str(v) {
   return typeof v === "string" && v ? v : void 0;
@@ -10201,6 +10204,19 @@ async function memoizedEmbeddingIndex(key, build) {
   const index = await build();
   embeddingIndexCache = { key: cacheKey, index };
   return index;
+}
+function memoizedEmbedModel(modelDir) {
+  let stat;
+  try {
+    stat = statSync4(join12(modelDir, "model.json"));
+  } catch {
+    return void 0;
+  }
+  const key = `${modelDir}:${stat.mtimeMs}:${stat.size}`;
+  if (embedModelCache && embedModelCache.key === key) return embedModelCache.model;
+  const model = loadEmbedModel(modelDir);
+  if (model) embedModelCache = { key, model };
+  return model;
 }
 async function callTool(name2, args2) {
   const repo = str(args2.repo);
@@ -10356,7 +10372,7 @@ async function callTool(name2, args2) {
         }
       }
       const modelDir = resolveEmbedModelDir(repo);
-      const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+      const model = modelDir ? memoizedEmbedModel(modelDir) : void 0;
       if (model) {
         const index = await memoizedEmbeddingIndex(
           { mode: "static", identity: `${modelDir}#${model.modelId}`, scan: scan2 },
@@ -10376,7 +10392,7 @@ async function callTool(name2, args2) {
   }
   if (name2 === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
-    const model = modelDir ? loadEmbedModel(modelDir) : void 0;
+    const model = modelDir ? memoizedEmbedModel(modelDir) : void 0;
     const endpoint = resolveEmbedEndpoint();
     const mode = endpoint ? "endpoint" : model ? "static" : "none";
     const status = {
@@ -10451,7 +10467,7 @@ async function runMcpServer() {
     }
   }
 }
-var repoProp, scopeProps, TOOLS, embeddingIndexCache;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -11154,7 +11170,7 @@ init_pipeline();
 init_graph_json();
 init_symbols_json();
 import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "fs";
-import { join as join12, resolve } from "path";
+import { join as join13, resolve } from "path";
 init_scan();
 init_callers();
 init_workspaces();
@@ -11322,7 +11338,7 @@ async function runCli(argv) {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync2(outDir, { recursive: true });
-    const cachePath = join12(outDir, "cache.json");
+    const cachePath = join13(outDir, "cache.json");
     let cache;
     try {
       const parsed = JSON.parse(readFileSync6(cachePath, "utf8"));
@@ -11332,8 +11348,8 @@ async function runCli(argv) {
     } catch {
     }
     const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
-    writeFileSync3(join12(outDir, "graph.json"), renderGraphJson(graph));
-    writeFileSync3(join12(outDir, "symbols.json"), renderSymbolsJson(symbols));
+    writeFileSync3(join13(outDir, "graph.json"), renderGraphJson(graph));
+    writeFileSync3(join13(outDir, "symbols.json"), renderSymbolsJson(symbols));
     const files = {};
     for (const f of scan2.files) {
       const entry = { hash: f.hash, record: f, size: f.size };
@@ -11350,7 +11366,7 @@ async function runCli(argv) {
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
     if (model) {
       const index = buildEmbeddingIndex(scan2, model);
-      writeFileSync3(join12(outDir, "embeddings.bin"), serializeEmbeddings(index));
+      writeFileSync3(join13(outDir, "embeddings.bin"), serializeEmbeddings(index));
       embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
     }
     process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${embedNote}${scan2.capped ? " (capped)" : ""}
@@ -11482,14 +11498,14 @@ async function runCli(argv) {
       mkdirSync2(flags2.out, { recursive: true });
       const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
       const index = buildEmbeddingIndex(scan2, model);
-      writeFileSync3(join12(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      writeFileSync3(join13(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
       const { url, sha256 } = resolveEmbedPullUrl();
-      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join12(flags2.repo, ".codeindex", "models");
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join13(flags2.repo, ".codeindex", "models");
       mkdirSync2(destDir, { recursive: true });
-      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join12(destDir, "model.json")}
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join13(destDir, "model.json")}
 `);
       let body2;
       try {
@@ -11510,8 +11526,8 @@ async function runCli(argv) {
         process.exitCode = 1;
         return;
       }
-      writeFileSync3(join12(destDir, "model.json"), body2);
-      process.stderr.write(`codeindex: model written to ${join12(destDir, "model.json")}
+      writeFileSync3(join13(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join13(destDir, "model.json")}
 `);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");

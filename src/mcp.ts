@@ -5,6 +5,8 @@
 // `repo` path and returns JSON text content.
 //
 // Register in an MCP client as:  node scripts/engine.mjs mcp
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
@@ -25,7 +27,7 @@ import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel } from "./embed/model.js";
+import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, type StaticEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex, type EmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
@@ -366,6 +368,31 @@ export async function memoizedEmbeddingIndex(
   return index;
 }
 
+// A SINGLE entry — never an unbounded map — holding the most recent parse.
+let embedModelCache: { key: string; model: StaticEmbedModel } | undefined;
+
+// model.json is 10-30 MB with the real asset; reading + JSON.parsing it on
+// EVERY request dominates static-tier latency, so the parsed model is memoized
+// across requests. One statSync per request keys the cache on
+// (dir, mtimeMs, size) so an in-place re-pull invalidates on the next call.
+// Same discipline as memoizedEmbeddingIndex: a failed load is NEVER cached —
+// the throw propagates and the cache is left as it was, so the next request
+// retries from scratch. A missing model.json returns undefined (the
+// not-present case, exactly like loadEmbedModel).
+export function memoizedEmbedModel(modelDir: string): StaticEmbedModel | undefined {
+  let stat;
+  try {
+    stat = statSync(join(modelDir, "model.json"));
+  } catch {
+    return undefined;
+  }
+  const key = `${modelDir}:${stat.mtimeMs}:${stat.size}`;
+  if (embedModelCache && embedModelCache.key === key) return embedModelCache.model;
+  const model = loadEmbedModel(modelDir);
+  if (model) embedModelCache = { key, model };
+  return model;
+}
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const repo = str(args.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
@@ -530,7 +557,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
         }
       }
       const modelDir = resolveEmbedModelDir(repo);
-      const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+      const model = modelDir ? memoizedEmbedModel(modelDir) : undefined;
       if (model) {
         const index = await memoizedEmbeddingIndex(
           { mode: "static", identity: `${modelDir}#${model.modelId}`, scan },
@@ -552,7 +579,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   }
   if (name === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
-    const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+    const model = modelDir ? memoizedEmbedModel(modelDir) : undefined;
     const endpoint = resolveEmbedEndpoint();
     const mode: "none" | "static" | "endpoint" = endpoint ? "endpoint" : model ? "static" : "none";
     const status: Record<string, unknown> = {
