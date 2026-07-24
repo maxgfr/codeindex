@@ -1,0 +1,89 @@
+name: Grammars repin
+
+# The tree-sitter grammar wasms under scripts/grammars/ are VENDORED (committed)
+# so the engine runs with `node` alone — no npm install, no network. The flip
+# side is that a fresh upstream grammar release never reaches those committed
+# bytes on its own: they freeze at whatever versions were last vendored by hand
+# (several are even exact-pinned in devDependencies). This job re-pins them.
+#
+# It bumps the tree-sitter-* / web-tree-sitter devDependencies to their latest
+# releases, re-vendors the wasm (`pnpm grammars`), rebuilds the reproducible
+# bundle (`pnpm build` — web-tree-sitter's JS is inlined into engine.mjs by
+# tsup, so its wasm and its bundled runtime move together), then runs the full
+# gate (typecheck / test / reproducible-bundle). Only if every gate is green AND
+# something actually changed does it push the result straight to `main`. On any
+# failure the run simply goes red and the next cron retries — no branch, no PR.
+#
+# GITHUB_TOKEN is enough here: it can push to this repo, and GitHub's
+# anti-recursion rule means that push does NOT re-trigger CI/release workflows
+# (the gate already ran in this job before the push), so a grammar bump never
+# accidentally cuts a release.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * *" # daily, 03:41 UTC (offset from other repos' crons)
+
+permissions:
+  contents: write
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Match ci.yml's build node so the reproducible bundle is byte-identical.
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Bump tree-sitter grammar devDependencies to latest
+        run: pnpm update --latest "tree-sitter-*" "@tree-sitter-grammars/*" web-tree-sitter
+
+      - name: Re-vendor grammar wasm and rebuild the bundle
+        run: |
+          pnpm run grammars
+          pnpm run build
+
+      - name: Stop if nothing changed
+        id: diff
+        run: |
+          if git diff --quiet -- package.json pnpm-lock.yaml scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Grammars already up to date — nothing to re-pin."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate — typecheck / test
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          pnpm run typecheck
+          pnpm test
+
+      - name: Commit re-pinned grammars
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json pnpm-lock.yaml scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars
+          git commit -m "chore(grammars): bump tree-sitter grammars to latest and re-vendor wasm"
+
+      # Reproducible-bundle gate LAST, against the just-committed tree: it rebuilds
+      # and `git diff --exit-code`s, proving the committed bytes are what source
+      # produces. If it fails the job goes red before the push, so main is never
+      # left with a non-reproducible bundle.
+      - name: Gate — reproducible bundle
+        if: steps.diff.outputs.changed == 'true'
+        run: pnpm run check:build
+
+      - name: Push to main
+        if: steps.diff.outputs.changed == 'true'
+        run: git push
