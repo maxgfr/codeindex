@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, cpSync, mkdtempSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, cpSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -303,6 +303,77 @@ describe("index fastpath", () => {
     expect(after.engineVersion).toBe(engine.ENGINE_VERSION);
     expect(after.graphSha1).toMatch(/^[0-9a-f]{40}$/);
     expect(after.symbolsSha1).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  // The embed leg of the guard deliberately checks embedVersion + modelId ON
+  // TOP of the sidecar sha: after a model swap the on-disk embeddings.bin
+  // still matches the OLD run's sha, so a sha-only guard would fastpath and
+  // silently reuse vectors computed by the wrong model. Each sub-condition
+  // gets a tripwire below so a future "simplification" back to sha-only
+  // cannot land unnoticed.
+  const MODEL_DIR = fileURLToPath(new URL("./fixtures/embed-model", import.meta.url));
+  const MODEL_ENV = { ...process.env, CODEINDEX_EMBED_DIR: MODEL_DIR };
+  const runIndexWith = (env: NodeJS.ProcessEnv, out: string) =>
+    spawnSync(process.execPath, [CLI, "index", "--repo", REPO, "--out", out], { encoding: "utf8", env });
+
+  it("warm rerun with a model fastpaths and leaves embeddings.bin untouched", () => {
+    const out = freshOut();
+    expect(runIndexWith(MODEL_ENV, out).status).toBe(0);
+    const bin = readFileSync(join(out, "embeddings.bin"));
+    const binMtime = statSync(join(out, "embeddings.bin")).mtimeMs;
+    const res = runIndexWith(MODEL_ENV, out);
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain("(unchanged — artifacts reused)");
+    // Reused, not rewritten: same bytes AND the file was never re-opened for write.
+    expect(statSync(join(out, "embeddings.bin")).mtimeMs).toBe(binMtime);
+    expect(readFileSync(join(out, "embeddings.bin")).equals(bin)).toBe(true);
+  });
+
+  it("a model swap fails the embed leg and rebuilds embeddings.bin with the new model", () => {
+    const out = freshOut();
+    expect(runIndexWith(MODEL_ENV, out).status).toBe(0);
+    const oldBin = readFileSync(join(out, "embeddings.bin"));
+    // Same weights, different identity — exactly the case a sha-only guard
+    // would wrongly fastpath (the on-disk bin still matches the old meta sha).
+    const swappedDir = mkdtempSync(join(tmpdir(), "ci-fastpath-model-"));
+    const model = JSON.parse(engine.readText(join(MODEL_DIR, "model.json"))) as { modelId: string };
+    model.modelId = "codeindex-fixture-tiny-8d-swapped";
+    writeFileSync(join(swappedDir, "model.json"), JSON.stringify(model));
+    const res = runIndexWith({ ...process.env, CODEINDEX_EMBED_DIR: swappedDir }, out);
+    expect(res.status).toBe(0);
+    expect(res.stderr).not.toContain("(unchanged — artifacts reused)");
+    expect(res.stderr).toContain("model codeindex-fixture-tiny-8d-swapped");
+    expect(readFileSync(join(out, "embeddings.bin")).equals(oldBin)).toBe(false);
+    const cache = JSON.parse(engine.readText(join(out, "cache.json"))) as { embed?: { modelId?: string } };
+    expect(cache.embed?.modelId).toBe("codeindex-fixture-tiny-8d-swapped");
+  });
+
+  it("a corrupted embeddings.bin fails the sha sub-condition and is repaired byte-identical", () => {
+    const out = freshOut();
+    expect(runIndexWith(MODEL_ENV, out).status).toBe(0);
+    const cold = readFileSync(join(out, "embeddings.bin"));
+    writeFileSync(join(out, "embeddings.bin"), "corrupted");
+    const res = runIndexWith(MODEL_ENV, out); // sidecar sha mismatch → full path
+    expect(res.status).toBe(0);
+    expect(res.stderr).not.toContain("(unchanged — artifacts reused)");
+    expect(readFileSync(join(out, "embeddings.bin")).equals(cold)).toBe(true);
+  });
+
+  it("a cache claiming a different embedVersion fails the guard and rebuilds", () => {
+    const out = freshOut();
+    expect(runIndexWith(MODEL_ENV, out).status).toBe(0);
+    const cachePath = join(out, "cache.json");
+    const tampered = JSON.parse(engine.readText(cachePath)) as { embed?: { embedVersion?: number } };
+    tampered.embed!.embedVersion = 0; // an incompatible sidecar format
+    writeFileSync(cachePath, JSON.stringify(tampered) + "\n");
+    const bin = readFileSync(join(out, "embeddings.bin"));
+    const res = runIndexWith(MODEL_ENV, out);
+    expect(res.status).toBe(0);
+    expect(res.stderr).not.toContain("(unchanged — artifacts reused)");
+    // The full path re-derives the identical bin and heals the meta.
+    expect(readFileSync(join(out, "embeddings.bin")).equals(bin)).toBe(true);
+    const after = JSON.parse(engine.readText(cachePath)) as { embed?: { embedVersion?: number } };
+    expect(after.embed?.embedVersion).toBe(engine.EMBED_VERSION);
   });
 });
 
