@@ -78,7 +78,7 @@ rows at one global scale. The download is **sha256-verified** against
 `EMBED_ASSET_SHA256` (`src/embed/model.ts`) before it is written; a mismatch
 fails the pull and writes nothing. The asset is **never** committed to git or
 shipped in the npm tarball — it lives only in the release. Reproduce it
-byte-for-byte with the pinned toolchain in [`scripts/embed-asset/`](../scripts/embed-asset/).
+byte-for-byte with the pinned toolchain in [`scripts/embed-asset/`](https://github.com/maxgfr/codeindex/tree/main/scripts/embed-asset).
 
 ## CLI
 
@@ -110,12 +110,19 @@ codeindex search "http client retry" --repo <dir> --semantic
 
 ## Artifact: `embeddings.bin`
 
+### Layout (the `deserializeEmbeddings` contract)
+
 ```
-"CIE1"                     4-byte ASCII magic
-uint32 LE header length
-UTF-8 JSON header          { embedVersion, modelId, dim, count, records:[{file,symbol,line}] }
-int8 body                  count × dim signed bytes (row-major)
+offset 0            "CIE1"            4-byte ASCII magic
+offset 4            uint32 LE         header length (headerLen)
+offset 8            UTF-8 JSON header { embedVersion, modelId, dim, count, records:[{file,symbol,line}] }
+offset 8+headerLen  int8 body         count × dim signed bytes (row-major)
 ```
+
+This is exactly what `deserializeEmbeddings` (`src/embed/index.ts`) reads back:
+it throws on a bad magic (a corrupt or foreign file fails loudly instead of
+being misread), parses the JSON header, and slices the packed body at
+`8 + headerLen`.
 
 The header carries **no absolute path and no timestamp**; records follow scan
 order (files sorted by `rel`, symbols in declaration order). Two builds of an

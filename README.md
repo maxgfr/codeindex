@@ -129,9 +129,13 @@ and the `embeddings.bin` artifact are byte-identical across builds and platforms
 It is **opt-in by asset**: with no model on disk the engine silently stays
 lexical, and `--semantic` without a model returns lexical results on **exit 0**
 (a stderr note only). Models are **never** shipped in the package; a model is
-resolved from `CODEINDEX_EMBED_DIR` or `<repo>/.codeindex/models/`.
+resolved from `CODEINDEX_EMBED_DIR` or `<repo>/.codeindex/models/`. Getting one
+is zero-config: `codeindex embed pull` fetches the official `embed-model-v1`
+release asset, sha256-verified before anything is written.
 
 ```sh
+codeindex embed pull   --repo .              # fetch the official model asset into
+                                             # CODEINDEX_EMBED_DIR (or <repo>/.codeindex/models/); sha256-verified
 codeindex embed status --repo .              # effective mode + reachability (JSON)
 codeindex embed build  --repo . --out .codeindex   # write embeddings.bin
 codeindex search "http client retry" --repo . --semantic
