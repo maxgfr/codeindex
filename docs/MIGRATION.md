@@ -191,6 +191,34 @@ surface is additive (semver-minor).
   first file appears mid-session (the MCP warm re-derives per call). The
   **pre-existing cache-tier caveat is unchanged**: a record reused by hash may
   have been extracted under a different grammar tier.
+- **Slim grammars-pull tier (`grammars pull` / `grammars status`).** The AST
+  wasm sidecar (`scripts/grammars/`, ~17 MiB) stays optional and opt-in by
+  presence, but a consumer that vendors only `engine.mjs` no longer has to
+  vendor the wasm to get AST-exact symbols. `resolveGrammarsTier` /
+  `resolveGrammarsDir` now resolve in order **adjacent > env > cache > regex**:
+  the bundle-adjacent `grammars/` dir wins if present (the offline, no-network
+  story is untouched), then `CODEINDEX_GRAMMARS_DIR`, then the shared
+  version-scoped cache `sharedGrammarsCacheDir()`
+  (`<XDG_CACHE_HOME|~/.cache>/codeindex/grammars/<ENGINE_VERSION>`), else nothing
+  resolvable → the regex tier exactly as today. `codeindex grammars pull`
+  fetches the per-release `grammars-<ENGINE_VERSION>.tar.gz` asset (built and
+  uploaded to the `v<ENGINE_VERSION>` tag by the release workflow) plus its
+  `.sha256` sidecar, verifies the digest, and extracts atomically into that
+  cache with a zero-dep inline ustar reader (path-traversal-guarded, no spawned
+  `tar`); it is idempotent (a matching marker skips the ~22 MB download) and
+  `CODEINDEX_GRAMMARS_URL` overrides the source (private mirror, unverified,
+  like the embed-pull precedent). `codeindex grammars status` reports the active
+  tier, resolved dir, pinned `ENGINE_VERSION`, and whether a pull is needed
+  (JSON). The **guarantee**: the same committed wasm bytes loaded from the cache
+  produce byte-identical AST extraction as from a bundle-adjacent dir (same wasm
+  → same AST → same symbols), so `SCHEMA_VERSION` / `EXTRACTOR_VERSION` are
+  untouched and **no re-pin is required**. **Offline-safe**: `grammars pull`
+  never runs during indexing, and a failed/absent pull only ever leaves the
+  cache empty — it never throws into the scan, which silently uses the regex
+  tier. New exports: `resolveGrammarsTier`, `resolveGrammarsDir`,
+  `sharedGrammarsCacheDir`, `GrammarsTier` / `GrammarsTierName`,
+  `resolveGrammarsPullTarget`, `fetchGrammarsTarball`, `fetchExpectedSha256`,
+  `extractGrammarsTarball`, `GrammarsPullTarget`.
 
 ## Typical mapping (what to replace with what)
 

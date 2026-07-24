@@ -45,6 +45,27 @@ The AST tier is optional: without a `grammars/` directory next to the bundle
 the engine silently uses its regex tier. Only tools that want AST precision
 also vendor `scripts/grammars/` (~17 MiB of wasm).
 
+### Slim grammars (pull instead of vendor)
+
+Consumers that want AST precision but not the ~17 MiB of vendored wasm can
+`codeindex grammars pull` the grammars once into a shared, per-machine cache
+(`<XDG_CACHE_HOME|~/.cache>/codeindex/grammars/<ENGINE_VERSION>`) instead:
+
+```sh
+codeindex grammars status   # active tier (adjacent/env/cache/none) + whether a pull is needed
+codeindex grammars pull     # fetch the per-release grammars asset, sha256-verified, into the cache
+```
+
+Resolution is **adjacent > env > cache > regex**: a bundle-adjacent `grammars/`
+still wins if present (offline setups are untouched), then
+`CODEINDEX_GRAMMARS_DIR`, then the pulled cache. `pull` fetches the official
+`grammars-<version>.tar.gz` release asset (its `.sha256` sidecar is verified
+before anything is written) and extracts it atomically; the same wasm bytes
+produce **byte-identical** AST extraction from the cache as from a vendored dir.
+It is fully **offline-safe**: with no grammars resolvable anywhere — and after a
+failed or absent pull — the engine silently falls back to the regex tier exactly
+as it does today; a pull never throws into indexing.
+
 ## Use from npm
 
 For consumers who don't want to vendor the bundle, `@maxgfr/codeindex` also
