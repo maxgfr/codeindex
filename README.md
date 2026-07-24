@@ -17,7 +17,7 @@ engine as a single file instead of taking an npm dependency.
   and count caps (`capped` flag, never silent truncation), symlink-cycle guard.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
   imports, headings, hashes — with an incremental cache fastpath.
-- **Extract symbols** via tree-sitter (10 languages, when the wasm sidecar is
+- **Extract symbols** via tree-sitter (13 languages, when the wasm sidecar is
   present) or per-language regex rules (15 languages, always available).
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
