@@ -685,7 +685,7 @@ declare function renderMermaid(graph: Graph, opts?: MermaidOptions): string;
 
 declare function runMcpServer(): Promise<void>;
 
-declare function sha1(s: string): string;
+declare function sha1(s: string | Uint8Array): string;
 declare function shortHash(s: string, n?: number): string;
 
 declare function byStr(a: string, b: string): number;

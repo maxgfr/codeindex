@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
-import { buildIndexArtifacts, type BuildIndexOptions } from "./pipeline.js";
+import { buildIndexArtifacts, buildArtifactsFromScan, type BuildIndexOptions } from "./pipeline.js";
+import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
@@ -215,45 +216,141 @@ export async function runCli(argv: string[]): Promise<void> {
     // Incremental cache: reuse per-file records when (schema, extractor) match —
     // same invalidation discipline as ultraindex's cache.json.
     const cachePath = join(outDir, "cache.json");
-    let cache: Map<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }> | undefined;
+    type CacheEntry = { hash: string; record: FileRecord; size?: number; mtimeMs?: number };
+    // ADDITIVE meta keys describing the artifacts the cache-writing run put on
+    // disk. Old engines ignore them (they only check schema/extractor above);
+    // old caches lacking them simply never take the fastpath below (their
+    // per-file records are still reused). cache.json embeds mtimes, so it was
+    // never cross-machine byte-reproducible — no determinism surface changes.
+    type CacheMeta = {
+      engineVersion?: string;
+      commit?: string;
+      graphSha1?: string;
+      symbolsSha1?: string;
+      embed?: { embedVersion?: number; modelId?: string; sha1?: string };
+    };
+    let cache: Map<string, CacheEntry> | undefined;
+    let meta: CacheMeta = {};
     try {
       const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as {
         schemaVersion: number;
         extractorVersion: number;
-        files: Record<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }>;
-      };
+        files: Record<string, CacheEntry>;
+      } & CacheMeta;
       if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
         cache = new Map(Object.entries(parsed.files));
+        meta = {
+          engineVersion: parsed.engineVersion,
+          commit: parsed.commit,
+          graphSha1: parsed.graphSha1,
+          symbolsSha1: parsed.symbolsSha1,
+          embed: parsed.embed,
+        };
       }
     } catch {
       // no cache yet (or unreadable) — cold build
     }
-    const { scan, graph, symbols } = buildIndexArtifacts(flags.repo, { ...scanOptions(flags), cache, out: outDir });
-    writeFileSync(join(outDir, "graph.json"), renderGraphJson(graph));
-    writeFileSync(join(outDir, "symbols.json"), renderSymbolsJson(symbols));
-    const files: Record<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }> = {};
-    for (const f of scan.files) {
-      const entry: { hash: string; record: FileRecord; size?: number; mtimeMs?: number } = { hash: f.hash, record: f, size: f.size };
-      const mtime = scan.mtimes.get(f.rel);
-      if (mtime !== undefined) entry.mtimeMs = mtime;
-      files[f.rel] = entry;
-    }
-    writeFileSync(
-      cachePath,
-      JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n",
-    );
-    // Deterministic embeddings sidecar: written next to graph.json ONLY when a
-    // model asset is present (opt-in). Silently skipped otherwise — no model, no
-    // embeddings.bin, no impact on the graph/symbols consumers.
-    let embedNote = "";
+    const scan = scanRepo(flags.repo, { ...scanOptions(flags), cache, out: outDir });
     const modelDir = resolveEmbedModelDir(flags.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : undefined;
-    if (model) {
-      const index = buildEmbeddingIndex(scan, model);
-      writeFileSync(join(outDir, "embeddings.bin"), serializeEmbeddings(index));
-      embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
+
+    const graphPath = join(outDir, "graph.json");
+    const symbolsPath = join(outDir, "symbols.json");
+    const embedPath = join(outDir, "embeddings.bin");
+    // sha of an on-disk artifact, or undefined when it is missing/unreadable —
+    // never equal to a defined meta sha, so a deleted artifact fails the guard.
+    const artifactSha = (path: string): string | undefined => {
+      try {
+        return sha1(readFileSync(path));
+      } catch {
+        return undefined;
+      }
+    };
+    const writeCache = (out: Pick<CacheMeta, "graphSha1" | "symbolsSha1" | "embed">): void => {
+      const files: Record<string, CacheEntry> = {};
+      for (const f of scan.files) {
+        const entry: CacheEntry = { hash: f.hash, record: f, size: f.size };
+        const mtime = scan.mtimes.get(f.rel);
+        if (mtime !== undefined) entry.mtimeMs = mtime;
+        files[f.rel] = entry;
+      }
+      // Fixed key order; JSON.stringify drops the undefined-valued keys
+      // (commit outside a git worktree, embed without a model) cleanly.
+      writeFileSync(
+        cachePath,
+        JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          extractorVersion: EXTRACTOR_VERSION,
+          engineVersion: ENGINE_VERSION,
+          commit: scan.commit,
+          graphSha1: out.graphSha1,
+          symbolsSha1: out.symbolsSha1,
+          embed: out.embed,
+          files,
+        }) + "\n",
+      );
+    };
+
+    // FASTPATH GUARD — skip the whole downstream pipeline only when this scan
+    // is proven identical to the run that wrote the on-disk artifacts:
+    // contentUnchanged means this scan's records are object-identical to that
+    // run's; downstream is a pure function of (records, docText, commit,
+    // meta-opts) and the CLI never sets meta/previousCommunities;
+    // engineVersion pins the version stamp; commit must match because
+    // graph.json embeds it (identical trees under a new HEAD must rebuild);
+    // the shas prove the on-disk bytes are that run's output. ANY failure —
+    // deleted or tampered artifacts included — falls through to the full
+    // build, which rewrites everything (self-healing).
+    const embedUnchanged =
+      !model ||
+      (meta.embed !== undefined &&
+        meta.embed.embedVersion === EMBED_VERSION &&
+        meta.embed.modelId === model.modelId &&
+        meta.embed.sha1 !== undefined &&
+        artifactSha(embedPath) === meta.embed.sha1);
+    const fastpath =
+      scan.contentUnchanged &&
+      meta.engineVersion === ENGINE_VERSION &&
+      meta.commit === scan.commit &&
+      meta.graphSha1 !== undefined &&
+      artifactSha(graphPath) === meta.graphSha1 &&
+      meta.symbolsSha1 !== undefined &&
+      artifactSha(symbolsPath) === meta.symbolsSha1 &&
+      embedUnchanged;
+
+    if (fastpath) {
+      // Artifacts verified byte-identical to what this build would produce —
+      // leave them untouched. Rewrite cache.json only when the scan says its
+      // bytes would change (e.g. an mtime drifted); the meta is carried
+      // forward verbatim since the guard just proved it describes the disk.
+      if (scan.cacheDirty) writeCache(meta);
+      process.stderr.write(
+        `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
+      );
+    } else {
+      const { graph, symbols } = buildArtifactsFromScan(scan);
+      const graphJson = renderGraphJson(graph);
+      const symbolsJson = renderSymbolsJson(symbols);
+      writeFileSync(graphPath, graphJson);
+      writeFileSync(symbolsPath, symbolsJson);
+      // Deterministic embeddings sidecar: written next to graph.json ONLY when a
+      // model asset is present (opt-in). Silently skipped otherwise — no model, no
+      // embeddings.bin, no impact on the graph/symbols consumers.
+      let embedNote = "";
+      let embedMeta: CacheMeta["embed"];
+      if (model) {
+        const index = buildEmbeddingIndex(scan, model);
+        const bytes = serializeEmbeddings(index);
+        writeFileSync(embedPath, bytes);
+        embedMeta = { embedVersion: EMBED_VERSION, modelId: model.modelId, sha1: sha1(bytes) };
+        embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
+      }
+      // cache.json is written LAST so its meta always describes artifacts that
+      // are already on disk — a crash mid-way leaves stale meta whose shas
+      // fail the guard on the next run (safe: it just rebuilds).
+      writeCache({ graphSha1: sha1(graphJson), symbolsSha1: sha1(symbolsJson), embed: embedMeta });
+      process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${embedNote}${scan.capped ? " (capped)" : ""}\n`);
     }
-    process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${embedNote}${scan.capped ? " (capped)" : ""}\n`);
   } else if (cmd === "scan") {
     const { scan } = buildIndexArtifacts(flags.repo, scanOptions(flags));
     const summary = {

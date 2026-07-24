@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { appendFileSync, copyFileSync, cpSync, mkdtempSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -195,6 +195,114 @@ describe("index command (single pass + incremental cache)", () => {
     run(); // warm — must reuse the cache and reproduce the exact bytes
     expect(engine.readText(join(out, "graph.json"))).toBe(cold);
     expect(engine.readText(join(out, "symbols.json"))).toBe(coldSymbols);
+  });
+});
+
+describe("index fastpath", () => {
+  // CODEINDEX_EMBED_DIR is neutralized so a dev shell's model never turns the
+  // embed leg of the guard on for these runs.
+  const ENV = { ...process.env, CODEINDEX_EMBED_DIR: "" };
+  const runIndex = (repo: string, out: string): void => {
+    execFileSync(process.execPath, [CLI, "index", "--repo", repo, "--out", out], { encoding: "utf8", env: ENV });
+  };
+  const freshOut = (): string => join(mkdtempSync(join(tmpdir(), "ci-fastpath-")), "out");
+  // A mutable copy of the fixture: content/mtime edits must never touch the
+  // shared checkout. The copy is not a git worktree — commit is absent on both
+  // sides of the guard, which must still fastpath.
+  const freshRepo = (): string => {
+    const dir = join(mkdtempSync(join(tmpdir(), "ci-fastpath-repo-")), "repo");
+    cpSync(REPO, dir, { recursive: true });
+    return dir;
+  };
+
+  it("warm rerun is byte-identical and rewrites nothing", () => {
+    const out = freshOut();
+    runIndex(REPO, out);
+    const graph = engine.readText(join(out, "graph.json"));
+    const symbols = engine.readText(join(out, "symbols.json"));
+    const graphMtime = statSync(join(out, "graph.json")).mtimeMs;
+    const symbolsMtime = statSync(join(out, "symbols.json")).mtimeMs;
+    const cacheMtime = statSync(join(out, "cache.json")).mtimeMs;
+    const res = spawnSync(process.execPath, [CLI, "index", "--repo", REPO, "--out", out], { encoding: "utf8", env: ENV });
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain("(unchanged — artifacts reused)");
+    expect(engine.readText(join(out, "graph.json"))).toBe(graph);
+    expect(engine.readText(join(out, "symbols.json"))).toBe(symbols);
+    // Reused, not rewritten: the artifacts AND the clean cache keep their mtimes.
+    expect(statSync(join(out, "graph.json")).mtimeMs).toBe(graphMtime);
+    expect(statSync(join(out, "symbols.json")).mtimeMs).toBe(symbolsMtime);
+    expect(statSync(join(out, "cache.json")).mtimeMs).toBe(cacheMtime);
+  });
+
+  it("a bare touch leaves artifacts untouched but refreshes cache.json's mtime key", () => {
+    const repo = freshRepo();
+    const out = freshOut();
+    runIndex(repo, out);
+    const graphMtime = statSync(join(out, "graph.json")).mtimeMs;
+    const symbolsMtime = statSync(join(out, "symbols.json")).mtimeMs;
+    const target = join(repo, "src", "util.ts");
+    const later = new Date(Date.now() + 5000);
+    utimesSync(target, later, later);
+    const touched = statSync(target).mtimeMs;
+    runIndex(repo, out);
+    expect(statSync(join(out, "graph.json")).mtimeMs).toBe(graphMtime);
+    expect(statSync(join(out, "symbols.json")).mtimeMs).toBe(symbolsMtime);
+    const cache = JSON.parse(engine.readText(join(out, "cache.json"))) as {
+      files: Record<string, { mtimeMs?: number }>;
+    };
+    expect(cache.files["src/util.ts"]!.mtimeMs).toBe(touched);
+  });
+
+  it("a content edit rebuilds, byte-identical to a cold build into a fresh out dir", () => {
+    const repo = freshRepo();
+    const warm = freshOut();
+    runIndex(repo, warm);
+    runIndex(repo, warm); // reach the fastpath state first
+    appendFileSync(join(repo, "src", "util.ts"), "\nexport function fastpathProbe(): number {\n  return 42;\n}\n");
+    runIndex(repo, warm); // guard must fail → full rebuild
+    const cold = freshOut();
+    runIndex(repo, cold);
+    expect(engine.readText(join(warm, "symbols.json"))).toContain("fastpathProbe");
+    expect(engine.readText(join(warm, "graph.json"))).toBe(engine.readText(join(cold, "graph.json")));
+    expect(engine.readText(join(warm, "symbols.json"))).toBe(engine.readText(join(cold, "symbols.json")));
+  });
+
+  it("a corrupted graph.json is repaired on the next run", () => {
+    const out = freshOut();
+    runIndex(REPO, out);
+    const coldGraph = engine.readText(join(out, "graph.json"));
+    writeFileSync(join(out, "graph.json"), "{ corrupted\n");
+    runIndex(REPO, out); // sha mismatch → full path rewrites the artifact
+    expect(engine.readText(join(out, "graph.json"))).toBe(coldGraph);
+  });
+
+  it("an old-format cache.json without meta keys rebuilds without crashing and gains them", () => {
+    const out = freshOut();
+    runIndex(REPO, out);
+    const parsed = JSON.parse(engine.readText(join(out, "cache.json"))) as Record<string, unknown>;
+    // Strip the meta keys — exactly what a cache written by an older engine looks like.
+    writeFileSync(
+      join(out, "cache.json"),
+      JSON.stringify({
+        schemaVersion: parsed.schemaVersion,
+        extractorVersion: parsed.extractorVersion,
+        files: parsed.files,
+      }) + "\n",
+    );
+    const coldGraph = engine.readText(join(out, "graph.json"));
+    const graphMtime = statSync(join(out, "graph.json")).mtimeMs;
+    runIndex(REPO, out);
+    expect(engine.readText(join(out, "graph.json"))).toBe(coldGraph);
+    // It really took the full path (rewrote the artifact) — never the fastpath.
+    expect(statSync(join(out, "graph.json")).mtimeMs).not.toBe(graphMtime);
+    const after = JSON.parse(engine.readText(join(out, "cache.json"))) as {
+      engineVersion?: string;
+      graphSha1?: string;
+      symbolsSha1?: string;
+    };
+    expect(after.engineVersion).toBe(engine.ENGINE_VERSION);
+    expect(after.graphSha1).toMatch(/^[0-9a-f]{40}$/);
+    expect(after.symbolsSha1).toMatch(/^[0-9a-f]{40}$/);
   });
 });
 

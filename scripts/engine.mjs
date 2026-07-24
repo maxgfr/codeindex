@@ -11193,6 +11193,7 @@ init_types();
 init_types();
 init_loader();
 init_pipeline();
+init_hash();
 init_graph_json();
 init_symbols_json();
 import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "fs";
@@ -11366,37 +11367,83 @@ async function runCli(argv) {
     mkdirSync2(outDir, { recursive: true });
     const cachePath = join13(outDir, "cache.json");
     let cache;
+    let meta = {};
     try {
       const parsed = JSON.parse(readFileSync6(cachePath, "utf8"));
       if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
         cache = new Map(Object.entries(parsed.files));
+        meta = {
+          engineVersion: parsed.engineVersion,
+          commit: parsed.commit,
+          graphSha1: parsed.graphSha1,
+          symbolsSha1: parsed.symbolsSha1,
+          embed: parsed.embed
+        };
       }
     } catch {
     }
-    const { scan: scan2, graph, symbols } = buildIndexArtifacts(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
-    writeFileSync3(join13(outDir, "graph.json"), renderGraphJson(graph));
-    writeFileSync3(join13(outDir, "symbols.json"), renderSymbolsJson(symbols));
-    const files = {};
-    for (const f of scan2.files) {
-      const entry = { hash: f.hash, record: f, size: f.size };
-      const mtime = scan2.mtimes.get(f.rel);
-      if (mtime !== void 0) entry.mtimeMs = mtime;
-      files[f.rel] = entry;
-    }
-    writeFileSync3(
-      cachePath,
-      JSON.stringify({ schemaVersion: SCHEMA_VERSION, extractorVersion: EXTRACTOR_VERSION, files }) + "\n"
-    );
-    let embedNote = "";
+    const scan2 = scanRepo(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
-    if (model) {
-      const index = buildEmbeddingIndex(scan2, model);
-      writeFileSync3(join13(outDir, "embeddings.bin"), serializeEmbeddings(index));
-      embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
-    }
-    process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${embedNote}${scan2.capped ? " (capped)" : ""}
+    const graphPath = join13(outDir, "graph.json");
+    const symbolsPath = join13(outDir, "symbols.json");
+    const embedPath = join13(outDir, "embeddings.bin");
+    const artifactSha = (path) => {
+      try {
+        return sha1(readFileSync6(path));
+      } catch {
+        return void 0;
+      }
+    };
+    const writeCache = (out2) => {
+      const files = {};
+      for (const f of scan2.files) {
+        const entry = { hash: f.hash, record: f, size: f.size };
+        const mtime = scan2.mtimes.get(f.rel);
+        if (mtime !== void 0) entry.mtimeMs = mtime;
+        files[f.rel] = entry;
+      }
+      writeFileSync3(
+        cachePath,
+        JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          extractorVersion: EXTRACTOR_VERSION,
+          engineVersion: ENGINE_VERSION,
+          commit: scan2.commit,
+          graphSha1: out2.graphSha1,
+          symbolsSha1: out2.symbolsSha1,
+          embed: out2.embed,
+          files
+        }) + "\n"
+      );
+    };
+    const embedUnchanged = !model || meta.embed !== void 0 && meta.embed.embedVersion === EMBED_VERSION && meta.embed.modelId === model.modelId && meta.embed.sha1 !== void 0 && artifactSha(embedPath) === meta.embed.sha1;
+    const fastpath = scan2.contentUnchanged && meta.engineVersion === ENGINE_VERSION && meta.commit === scan2.commit && meta.graphSha1 !== void 0 && artifactSha(graphPath) === meta.graphSha1 && meta.symbolsSha1 !== void 0 && artifactSha(symbolsPath) === meta.symbolsSha1 && embedUnchanged;
+    if (fastpath) {
+      if (scan2.cacheDirty) writeCache(meta);
+      process.stderr.write(
+        `codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${scan2.capped ? " (capped)" : ""} (unchanged \u2014 artifacts reused)
+`
+      );
+    } else {
+      const { graph, symbols } = buildArtifactsFromScan(scan2);
+      const graphJson = renderGraphJson(graph);
+      const symbolsJson = renderSymbolsJson(symbols);
+      writeFileSync3(graphPath, graphJson);
+      writeFileSync3(symbolsPath, symbolsJson);
+      let embedNote = "";
+      let embedMeta;
+      if (model) {
+        const index = buildEmbeddingIndex(scan2, model);
+        const bytes = serializeEmbeddings(index);
+        writeFileSync3(embedPath, bytes);
+        embedMeta = { embedVersion: EMBED_VERSION, modelId: model.modelId, sha1: sha1(bytes) };
+        embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
+      }
+      writeCache({ graphSha1: sha1(graphJson), symbolsSha1: sha1(symbolsJson), embed: embedMeta });
+      process.stderr.write(`codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${embedNote}${scan2.capped ? " (capped)" : ""}
 `);
+    }
   } else if (cmd === "scan") {
     const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
     const summary = {
