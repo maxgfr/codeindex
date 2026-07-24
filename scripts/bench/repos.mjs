@@ -3,9 +3,9 @@
 // The six primary repos reuse the EXACT slugs + SHAs from
 // tests/e2e-real-repos.test.ts and share its on-disk clone cache
 // (tests/.e2e-cache/<owner__name>@<sha12>), so a bench run reuses whatever the
-// e2e suite already fetched — no double clone. next.js is added for parity with
-// 01x-in/codeindex's own published figure (init cold 121_037 ms for 11_064
-// indexed files, April 2026); its SHA is pinned here and re-pinned deliberately.
+// e2e suite already fetched — no double clone. next.js is added as a large
+// monorepo that exercises the heavy-index gate (serena/graphify are marked n/a
+// above ~8k files); its SHA is pinned here and re-pinned deliberately.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -67,12 +67,10 @@ export const REPOS = [
     sha: "203177bb7505837801281c7d1eb008519a242010",
     lang: "typescript",
     symbol: "NextResponse",
-    // ~30k files on disk. Streaming indexers (codeindex, ctags, scip-typescript,
-    // falcon) handle it; the full in-memory indexers (serena's LSP, graphify's
-    // Python graph+clustering) are gated off here — see HEAVY_INDEX_MAX_FILES.
+    // ~30k files on disk. The streaming indexers (codeindex, ctags) handle it;
+    // the full in-memory indexers (serena's LSP, graphify's Python
+    // graph+clustering) are gated off here — see HEAVY_INDEX_MAX_FILES.
     approxFiles: 30000,
-    // Reference figures published by 01x-in for comparison (not asserted here):
-    ref01x: { coldMs: 121037, files: 11064 },
   },
 ];
 

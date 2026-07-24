@@ -9,11 +9,10 @@
 // runs (default 5) with one warmup discarded; a scenario whose warmup exceeds
 // 60s downgrades to `slowRuns` (3) and the per-cell run count is shown.
 //
-// Fairness, made explicit: 01x-in keeps a live SQLite graph and shells out to
-// ast-grep PER FILE on its cold init; we emit static artifacts. We report two
-// query modes — in-process (warm scan already loaded, API call only) and full
-// CLI spawn — precisely so the reader can separate our algorithm cost from
-// Node's process-startup cost, and compare each to the competitor's model.
+// Fairness, made explicit: we report two query modes — in-process (warm scan
+// already loaded, API call only) and full CLI spawn — precisely so the reader
+// can separate our algorithm cost from Node's process-startup cost, and compare
+// each to a competitor's model.
 //
 // The harness never crashes because a competitor is absent: every competitor
 // spawn is total (see competitors.runCmd) and renders `n/a (reason)`. Exit is 0
@@ -26,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { REPO_ROOT, CLI_PATH, ENGINE_URL, reposFor, clonePinned, pickSymbol } from "./repos.mjs";
 import { detectCompetitors, noCompetitors, runCmd } from "./competitors.mjs";
 import { adapterFor } from "./mcp-adapters.mjs";
-import { formula01x, measuredTokens, byteLen } from "./tokens.mjs";
+import { measuredTokens, byteLen } from "./tokens.mjs";
 import { renderMarkdown, renderJson, na } from "./render.mjs";
 
 const engine = await import(ENGINE_URL.href);
@@ -84,10 +83,10 @@ function runMedian(cfg, thunk, hooks = {}) {
 
 const msCell = (res) => ({ v: res.ms, k: "ms", runs: res.runs });
 
-// ---- MCP competitors (serena / graphify / falcon / self over MCP) -------------
+// ---- MCP competitors (serena / graphify / self over MCP) ----------------------
 
 const PROBE_PATH = fileURLToPath(new URL("./mcp-probe.mjs", import.meta.url));
-const MCP_SERVERS = ["codeindex", "serena", "graphify", "falcon"];
+const MCP_SERVERS = ["codeindex", "serena", "graphify"];
 // Prime / cold-index ops and one whole probe child get the npm-install-class
 // ceiling (spec timeout policy); the probe's per-session timeout is its own.
 const MCP_OP_TIMEOUT_MS = 600_000;
@@ -97,8 +96,7 @@ const MCP_OP_TIMEOUT_MS = 600_000;
 function adapterOf(server, comp) {
   if (server === "codeindex") return adapterFor("codeindex", { engine: CLI_PATH });
   if (server === "serena") return adapterFor("serena", { bin: comp.serena.path });
-  if (server === "graphify") return adapterFor("graphify", { bin: comp.graphify.path, mcpBin: comp.graphify.extra?.mcpPath });
-  return adapterFor("falcon", { bin: comp.falcon.path });
+  return adapterFor("graphify", { bin: comp.graphify.path, mcpBin: comp.graphify.extra?.mcpPath });
 }
 
 // serena's per-repo language-server prerequisites, recorded by detectSerena()
@@ -117,7 +115,7 @@ function serenaRepoGate(comp, lang) {
 // in-memory index of the whole repo. Above this file count that is a multi-GB,
 // multi-minute job that measures language-server / interpreter memory limits
 // rather than retrieval, and would OOM the harness itself. The streaming
-// indexers (codeindex, ctags, scip-typescript, falcon) stay and are measured.
+// indexers (codeindex, ctags) stay and are measured.
 // Positive exclusion only, keyed on the static approxFiles in repos.mjs, so
 // synthetic --repo-dir repos (no approxFiles) always pass — harness invariant.
 const HEAVY_INDEX_MAX_FILES = 8000;
@@ -140,7 +138,7 @@ function mcpGate(server, comp, ctx) {
   const c = comp[server];
   if (!c.available) return c.reason ?? "not installed";
   const byLang = adapterOf(server, comp).perRepoSupport(ctx.repo.lang);
-  if (byLang) return byLang; // falcon: "rust not supported" — the only one
+  if (byLang) return byLang; // per-language gate (none of the remaining servers excludes a language)
   const heavy = heavyIndexGate(server, ctx);
   if (heavy) return heavy; // serena/graphify on an oversized monorepo (next.js)
   if (server === "serena") return serenaRepoGate(comp, ctx.repo.lang);
@@ -155,8 +153,8 @@ const probeCache = new Map(); // "slug:server" -> parsed probe JSON | {ok:false,
 const probeScratch = new Map(); // slug -> scratch source copy holding kept artifacts
 
 function probeWorkDir(ctx, server) {
-  // One scratch copy per repo, shared by all four servers: their artifact dirs
-  // (.codeindex/, .serena/, graphify-out/, .falcon/) are disjoint, and the shared
+  // One scratch copy per repo, shared by all three servers: their artifact dirs
+  // (.codeindex/, .serena/, graphify-out/) are disjoint, and the shared
   // clone cache must never grow artifacts (harness invariant). codeindex now
   // primes a persisted .codeindex/ index the same way (its MCP server preloads it
   // on activation), so it too works on the scratch copy rather than in place; it
@@ -229,9 +227,8 @@ function makeCtx(repo) {
     },
     // MCP probe file target: the def file of the representative symbol — the
     // same file for every server, and by construction in the repo's main
-    // language (serena activates ONE language per project; falcon skips rust
-    // files even on repos it otherwise indexes — the first-code-file pick
-    // could land on a file outside both scopes and n/a the overview cell for
+    // language (serena activates ONE language per project — the first-code-file
+    // pick could land on a file outside that scope and n/a the overview cell for
     // reasons that have nothing to do with the tool). Falls back to codeFile().
     probeFile() {
       try {
@@ -241,16 +238,6 @@ function makeCtx(repo) {
       return this.codeFile();
     },
   };
-}
-
-// A scratch copy of the repo with a primed 01x index (.codeindex/). Caller must
-// rmrf(work) when done. Returns undefined if 01x is unavailable.
-function prime01x(comp, dir) {
-  if (!comp["01x"].available) return undefined;
-  const work = copySource(dir);
-  const r = runCmd(comp["01x"].path, ["init", "--yes"], { cwd: work });
-  if (!r.ok) { rmrf(work); return undefined; }
-  return work;
 }
 
 // ---- scenarios ---------------------------------------------------------------
@@ -278,50 +265,11 @@ function scenarioCold(ctxs, comp, cfg) {
       ctagsCell = r.last.ok ? msCell(r) : na(`ctags exit ${r.last.code}`);
     }
 
-    // scip-typescript — needs a TS repo with a tsconfig + node_modules; the
-    // npm install is timed separately and shown inline. Runs in a scratch copy
-    // so the shared clone cache is never polluted with node_modules.
-    let scipCell = na(comp["scip-typescript"].reason);
-    if (comp["scip-typescript"].available) {
-      if (ctx.repo.lang !== "typescript" || !existsSync(join(dir, "tsconfig.json"))) {
-        scipCell = na("no tsconfig");
-      } else {
-        const work = copySource(dir);
-        const inst = runCmd("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: work, timeoutMs: 600_000 });
-        if (!inst.ok) { scipCell = na("npm install failed"); }
-        else {
-          let idx;
-          const r = runMedian({ ...cfg, runs: Math.min(cfg.runs, cfg.slowRuns) },
-            () => runCmd(comp["scip-typescript"].path, ["index", "--output", idx], { cwd: work }),
-            { before: () => { idx = tmpPath("scip.scip"); }, after: () => rmrf(idx) });
-          // Text cell, so surface the effective run count ourselves (ms cells get
-          // this from render); scip is forced to slowRuns, which may be < nominal.
-          const runsAnn = r.runs !== cfg.runs ? ` (${r.runs}×)` : "";
-          scipCell = r.last.ok
-            ? { v: `${Math.round(r.ms)}${runsAnn} (+${Math.round(inst.ms)} install)`, k: "text" }
-            : na("scip index failed");
-        }
-        rmrf(work);
-      }
-    }
-
-    // 01x init — runs in a scratch copy, its .codeindex cleaned before each run
-    // so every measured init is genuinely cold.
-    let oxCell = na(comp["01x"].reason);
-    if (comp["01x"].available) {
-      const work = copySource(dir);
-      const r = runMedian(cfg,
-        () => runCmd(comp["01x"].path, ["init", "--yes"], { cwd: work }),
-        { before: () => { rmrf(join(work, ".codeindex")); rmrf(join(work, ".codeindex.yaml")); } });
-      oxCell = r.last.ok ? msCell(r) : na(`init exit ${r.last.code}`);
-      rmrf(work);
-    }
-
-    // serena / graphify / falcon cold artifact builds — appended at the END
+    // serena / graphify cold artifact builds — appended at the END
     // (site stat tiles read the earlier cells by frozen index). Each runs in
     // its own scratch copy with artifacts cleaned before every measured run,
     // so every build is genuinely cold; 600s ceiling inside adapter.prime.
-    const mcpColdCells = ["serena", "graphify", "falcon"].map((server) => {
+    const mcpColdCells = ["serena", "graphify"].map((server) => {
       const c = comp[server];
       if (!c.available) return na(c.reason);
       const adapter = adapterOf(server, comp);
@@ -336,12 +284,12 @@ function scenarioCold(ctxs, comp, cfg) {
       } finally { rmrf(work); }
     });
 
-    rows.push([{ v: ctx.repo.slug, k: "text" }, { v: files, k: "int" }, msCell(our), ctagsCell, scipCell, oxCell, ...mcpColdCells]);
+    rows.push([{ v: ctx.repo.slug, k: "text" }, { v: files, k: "int" }, msCell(our), ctagsCell, ...mcpColdCells]);
   }
   return {
     id: "cold", title: "Cold index",
-    note: "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally); `falcon index` writes its parquet artifact set. All three are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags, scip-typescript, falcon) are kept and measured there.",
-    headers: ["Repo", "Files", "codeindex (ms)", "ctags -R (ms)", "scip-typescript (ms)", "01x init (ms)", "serena project index (ms)", "graphify update (ms)", "falcon index (ms)"],
+    note: "Full process spawn per run into a fresh output dir. ctags emits a flat `tags` file with `-R` and, on small cold builds, is faster than codeindex's richer graph+symbol artifacts — an honest win for the simpler data model. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally). Both are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags) are kept and measured there.",
+    headers: ["Repo", "Files", "codeindex (ms)", "ctags -R (ms)", "serena project index (ms)", "graphify update (ms)"],
     rows,
   };
 }
@@ -375,33 +323,15 @@ function scenarioWarm(ctxs, comp, cfg) {
       }
       rmrf(out);
 
-      // 01x single-file reindex.
-      let oxCell = na(comp["01x"].reason);
-      if (comp["01x"].available && rel) {
-        const oxWork = prime01x(comp, ctx.dir());
-        if (!oxWork) oxCell = na("init failed");
-        else {
-          const target = join(oxWork, rel);
-          const original = readFileSync(target);
-          let oi = 0; // unique payload per iteration (see the codeindex touch above)
-          const r = runMedian(cfg, () => runCmd(comp["01x"].path, ["reindex", rel], { cwd: oxWork }),
-            { before: () => writeFileSync(target, Buffer.concat([original, Buffer.from(`\n// codeindex-bench-touch ${oi++}\n`)])), after: () => writeFileSync(target, original) });
-          oxCell = r.last.ok ? msCell(r) : na(`reindex exit ${r.last.code}`);
-          rmrf(oxWork);
-        }
-      } else if (!rel) {
-        oxCell = na("no code file");
-      }
-
-      rows.push([{ v: ctx.repo.slug, k: "text" }, msCell(warm), touchCell, oxCell]);
+      rows.push([{ v: ctx.repo.slug, k: "text" }, msCell(warm), touchCell]);
     } finally {
       rmrf(work);
     }
   }
   return {
     id: "warm", title: "Warm / incremental",
-    note: "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). 01x re-indexes the single touched file. Deliberately no serena/graphify/falcon column: none of them exposes a comparable user-visible single-file reindex command (serena re-indexes lazily inside a live LSP session; graphify and falcon rebuild via the cold commands timed above).",
-    headers: ["Repo", "codeindex warm rerun (ms)", "codeindex +1 file (ms)", "01x reindex file (ms)"],
+    note: "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). Deliberately no serena/graphify column: neither exposes a comparable user-visible single-file reindex command (serena re-indexes lazily inside a live LSP session; graphify rebuilds via the cold command timed above).",
+    headers: ["Repo", "codeindex warm rerun (ms)", "codeindex +1 file (ms)"],
     rows,
   };
 }
@@ -420,18 +350,6 @@ function scenarioQueries(ctxs, comp, cfg) {
     const refsInproc = runMedian(cfg, () => engine.findReferences(scan, sym));
     const callersInproc = runMedian(cfg, () => engine.buildCallerIndex(scan, pairs));
 
-    // 01x find-symbol against a primed index.
-    let oxCell = na(comp["01x"].reason);
-    if (comp["01x"].available) {
-      const work = prime01x(comp, dir);
-      if (!work) oxCell = na("init failed");
-      else {
-        const r = runMedian(cfg, () => runCmd(comp["01x"].path, ["query", "find-symbol", sym], { cwd: work }));
-        oxCell = r.last.ok ? msCell(r) : na(`query exit ${r.last.code}`);
-        rmrf(work);
-      }
-    }
-
     // ctags lookup — build a tags file once, then time a symbol lookup in it.
     let ctagsCell = na(comp.ctags.reason);
     if (comp.ctags.available) {
@@ -448,13 +366,13 @@ function scenarioQueries(ctxs, comp, cfg) {
 
     rows.push([
       { v: ctx.repo.slug, k: "text" }, { v: sym, k: "text" },
-      msCell(findInproc), msCell(findSpawn), msCell(refsInproc), msCell(callersInproc), oxCell, ctagsCell,
+      msCell(findInproc), msCell(findSpawn), msCell(refsInproc), msCell(callersInproc), ctagsCell,
     ]);
   }
   return {
     id: "queries", title: "Queries (find-symbol / references / callers)",
-    note: "`find-symbol in-proc` / `references in-proc`: a single API call on an already-loaded warm scan (call timed alone). `caller-index in-proc`: builds the whole-scan caller index (not just callers-of-symbol). `full-index spawn`: a full `codeindex symbols` CLI process — Node startup PLUS a cold buildIndexArtifacts and serialization of the entire symbol table, i.e. NOT a single-symbol lookup. `01x find-symbol`: one query against its primed SQLite DB. `ctags lookup`: scans the tags file for the symbol.",
-    headers: ["Repo", "Symbol", "find-symbol in-proc (ms)", "full-index spawn (ms)", "references in-proc (ms)", "caller-index in-proc (ms)", "01x find-symbol (ms)", "ctags lookup (ms)"],
+    note: "`find-symbol in-proc` / `references in-proc`: a single API call on an already-loaded warm scan (call timed alone). `caller-index in-proc`: builds the whole-scan caller index (not just callers-of-symbol). `full-index spawn`: a full `codeindex symbols` CLI process — Node startup PLUS a cold buildIndexArtifacts and serialization of the entire symbol table, i.e. NOT a single-symbol lookup. `ctags lookup`: scans the tags file for the symbol.",
+    headers: ["Repo", "Symbol", "find-symbol in-proc (ms)", "full-index spawn (ms)", "references in-proc (ms)", "caller-index in-proc (ms)", "ctags lookup (ms)"],
     rows,
   };
 }
@@ -486,7 +404,7 @@ function scenarioMcpSessions(ctxs, comp, cfg) {
   }
   return {
     id: "mcp-sessions", title: "MCP sessions (activate + per-call queries)",
-    note: "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify, falcon, and now codeindex load prebuilt artifacts rather than rebuilding — codeindex primes a persisted `.codeindex/` index and its MCP server preloads it on the first call (a pure optimization: served responses stay byte-identical to a cold build), the same pattern as `falcon mcp serve` / graphify-mcp, so its parse cost lives in the Cold index column (the `codeindex` cold cell, where it already sits) and `activate->ready` here reflects load-not-rebuild. The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
+    note: "All three servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and now codeindex load prebuilt artifacts rather than rebuilding — codeindex primes a persisted `.codeindex/` index and its MCP server preloads it on the first call (a pure optimization: served responses stay byte-identical to a cold build), the same pattern as graphify-mcp, so its parse cost lives in the Cold index column (the `codeindex` cold cell, where it already sits) and `activate->ready` here reflects load-not-rebuild. The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex, which streams, is still measured.",
     headers: ["Repo", "Server", "Symbol", "activate->ready (ms)", "find-symbol (ms)", "references (ms)", "file-overview (ms)"],
     rows,
   };
@@ -498,24 +416,22 @@ function scenarioTokens(ctxs, _comp, _cfg) {
     log(`tokens: ${ctx.repo.slug}`);
     const scan = ctx.scan();
     const sym = ctx.symbol();
-    // Uncapped: grepRepo defaults to DEFAULT_MAX_HITS=200; the 200-cap would both
-    // truncate the measured bytes and feed a bogus line count into 01x's formula.
+    // Uncapped: grepRepo defaults to DEFAULT_MAX_HITS=200; the 200-cap would
+    // truncate the measured bytes and undercount the raw grep line total.
     const hits = engine.grepRepo(ctx.dir(), sym, { maxHits: Number.MAX_SAFE_INTEGER });
     const grepText = hits.map((h) => `${h.file}:${h.line}:${h.text}`).join("\n");
     const grepBytes = byteLen(grepText);
     const indexBytes = byteLen(JSON.stringify(engine.findSymbol(scan, sym)));
-    const f = formula01x(sym, hits.length);
     const m = measuredTokens(grepBytes, indexBytes);
     rows.push([
       { v: ctx.repo.slug, k: "text" }, { v: sym, k: "text" }, { v: hits.length, k: "int" },
-      { v: f.ratio, k: "ratio" },
       { v: Math.round(m.grepTokens), k: "int" }, { v: Math.round(m.indexTokens), k: "int" }, { v: m.ratio, k: "ratio" },
     ]);
   }
   return {
     id: "tokens", title: "Token economy (single-symbol lookup)",
-    note: "Two methods side by side: 01x's published formula (grep_lines×30 vs len×5+200) and an honest bytes/4 measurement of a raw grep vs our structured JSON. Ratio > 1 means the index returns less context to the model.",
-    headers: ["Repo", "Symbol", "grep lines", "01x formula ratio", "grep tokens (measured)", "index tokens (measured)", "measured ratio"],
+    note: "An honest bytes/4 measurement of a raw grep vs our structured JSON. Ratio > 1 means the index returns less context to the model.",
+    headers: ["Repo", "Symbol", "grep lines", "grep tokens (measured)", "index tokens (measured)", "measured ratio"],
     rows,
   };
 }
@@ -543,30 +459,14 @@ function scenarioMcpTokens(ctxs, comp, cfg) {
   }
   return {
     id: "mcp-tokens", title: "MCP token economy (per-call response size)",
-    note: "Context cost of each MCP answer: tokens ~= bytes/4 of the tool-call response text (same convention as the Token economy table). The codeindex rows are the baseline the other servers compare against. falcon's references figure reuses the find-symbol response (same call, see MCP sessions); graphify's file-overview has no equivalent tool. Bigger is not automatically worse: serena's LSP answers carry semantically precise, type-aware references the static tools do not claim — this table measures context cost only, not answer quality.",
+    note: "Context cost of each MCP answer: tokens ~= bytes/4 of the tool-call response text (same convention as the Token economy table). The codeindex rows are the baseline the other servers compare against. graphify's file-overview has no equivalent tool. Bigger is not automatically worse: serena's LSP answers carry semantically precise, type-aware references the static tools do not claim — this table measures context cost only, not answer quality.",
     headers: ["Repo", "Server", "find-symbol tokens", "references tokens", "file-overview tokens"],
     rows,
   };
 }
 
-// metadata.json is compared separately from falcon's parquet set: it embeds
-// two absolute paths (artifacts.path, repo.root) that legitimately differ
-// between out dirs. After dropping them, any remaining difference (timestamp-
-// like fields included) is named in the section note, never hidden.
-function falconMetadataDiff(a, b) {
-  if (!a || !b) return "metadata.json missing";
-  let ma, mb;
-  try { ma = JSON.parse(a.toString("utf8")); mb = JSON.parse(b.toString("utf8")); } catch { return "metadata.json unparseable"; }
-  for (const m of [ma, mb]) { if (m?.artifacts) delete m.artifacts.path; if (m?.repo) delete m.repo.root; }
-  if (JSON.stringify(ma) === JSON.stringify(mb)) return null;
-  const keys = [...new Set([...Object.keys(ma ?? {}), ...Object.keys(mb ?? {})])]
-    .filter((k) => JSON.stringify(ma?.[k]) !== JSON.stringify(mb?.[k])).sort();
-  return `differing fields: ${keys.join(", ")}`;
-}
-
 function scenarioDeterminism(ctxs, comp, _cfg) {
   const rows = [];
-  const falconMetaNotes = [];
   for (const ctx of ctxs) {
     log(`determinism: ${ctx.repo.slug}`);
     const dir = ctx.dir();
@@ -574,7 +474,6 @@ function scenarioDeterminism(ctxs, comp, _cfg) {
     const b = engine.buildIndexArtifacts(dir);
     const same = engine.renderGraphJson(a.graph) === engine.renderGraphJson(b.graph)
       && engine.renderSymbolsJson(a.symbols) === engine.renderSymbolsJson(b.symbols);
-    const oxCell = comp["01x"].available ? na("SQLite") : na(comp["01x"].reason);
 
     // serena — symbols live in an LSP session; nothing on disk is claimed
     // byte-stable, so there is no artifact to compare.
@@ -598,44 +497,12 @@ function scenarioDeterminism(ctxs, comp, _cfg) {
       } finally { rmrf(work); }
     }
 
-    // falcon — two cold `index` runs; the parquet artifact set byte-compared
-    // (the cell), metadata.json separately (the note).
-    let falconCell = na(comp.falcon.reason);
-    if (comp.falcon.available) {
-      const adapter = adapterOf("falcon", comp);
-      const gate = adapter.perRepoSupport(ctx.repo.lang);
-      if (gate) falconCell = na(gate);
-      else {
-        const work = copySource(dir);
-        try {
-          const art = join(work, ".falcon", "artifacts");
-          // Regular files only: v0.6.4's artifact set is flat (verified), but a
-          // future subdir must degrade the comparison, never crash the harness.
-          const snap = () => Object.fromEntries(readdirSync(art, { withFileTypes: true })
-            .filter((e) => e.isFile()).map((e) => [e.name, readFileSync(join(art, e.name))]));
-          const s1 = adapter.prime(work).ok && existsSync(art) ? snap() : undefined;
-          adapter.cleanCold(work);
-          const s2 = adapter.prime(work).ok && existsSync(art) ? snap() : undefined;
-          if (!s1 || !s2) falconCell = na("index failed");
-          else {
-            const names = [...new Set([...Object.keys(s1), ...Object.keys(s2)])].filter((n) => n !== "metadata.json").sort();
-            falconCell = { v: names.every((n) => s1[n] && s2[n] && s1[n].equals(s2[n])), k: "bool" };
-            const d = falconMetadataDiff(s1["metadata.json"], s2["metadata.json"]);
-            if (d) falconMetaNotes.push(`${ctx.repo.slug} — ${d}`);
-          }
-        } finally { rmrf(work); }
-      }
-    }
-
-    rows.push([{ v: ctx.repo.slug, k: "text" }, { v: same, k: "bool" }, oxCell, serenaCell, graphifyCell, falconCell]);
+    rows.push([{ v: ctx.repo.slug, k: "text" }, { v: same, k: "bool" }, serenaCell, graphifyCell]);
   }
-  const falconMetaNote = falconMetaNotes.length
-    ? `falcon's metadata.json, compared separately after dropping its embedded absolute paths (artifacts.path, repo.root), DID differ — ${falconMetaNotes.join("; ")} (timestamp-like fields are named per repo, not folded into the cell).`
-    : "falcon's metadata.json is compared separately after dropping its embedded absolute paths (artifacts.path, repo.root); no field differed — falcon carries no timestamps (it reports determinism.timestamps: \"omitted\").";
   return {
     id: "determinism", title: "Determinism (byte-identical rebuild)",
-    note: "Two cold builds byte-compared (graph.json + symbols.json). 01x keeps a SQLite DB (embedded ids/timestamps) that is not byte-comparable, so determinism is not claimed for it here. graphify: two cold `graphify update` runs, `graph.json` bytes only (its HTML/report artifacts embed dates and are excluded). falcon: two cold `falcon index` runs, all parquet artifacts byte-compared for the cell. " + falconMetaNote,
-    headers: ["Repo", "codeindex (byte-identical)", "01x", "serena", "graphify graph.json", "falcon artifacts"],
+    note: "Two cold builds byte-compared (graph.json + symbols.json). serena keeps its symbols in a live LSP session, so there is no on-disk artifact to compare. graphify: two cold `graphify update` runs, `graph.json` bytes only (its HTML/report artifacts embed dates and are excluded).",
+    headers: ["Repo", "codeindex (byte-identical)", "serena", "graphify graph.json"],
     rows,
   };
 }
@@ -653,14 +520,6 @@ function scenarioSize(ctxs, comp, _cfg) {
     for (const f of ["graph.json", "symbols.json", "cache.json"]) { try { ourBytes += statSync(join(out, f)).size; } catch { /* optional */ } }
     rmrf(out);
 
-    // 01x .codeindex dir.
-    let oxCell = na(comp["01x"].reason);
-    if (comp["01x"].available) {
-      const work = prime01x(comp, dir);
-      if (!work) oxCell = na("init failed");
-      else { oxCell = { v: dirBytes(join(work, ".codeindex")), k: "bytes" }; rmrf(work); }
-    }
-
     // ctags tags file.
     let ctagsCell = na(comp.ctags.reason);
     if (comp.ctags.available) {
@@ -670,30 +529,15 @@ function scenarioSize(ctxs, comp, _cfg) {
       rmrf(tags);
     }
 
-    // serena / graphify / falcon artifacts — one shared scratch copy (their
-    // artifact dirs are disjoint), primed per tool, measured, then discarded.
-    // Prime ORDER is load-bearing: falcon indexes every non-dot dir in the
-    // work tree, so it must run FIRST (before graphify-out exists — measured
-    // +5.5% falcon artifact bytes on the fixture otherwise); graphify ignores
-    // dot-dirs (.falcon, verified: zero falcon-path nodes in graph.json);
-    // serena's .serena cache covers only its main-language source files, which
-    // neither .falcon (parquet) nor graphify-out (json/html/md) contains.
+    // serena / graphify artifacts — one shared scratch copy (their artifact
+    // dirs are disjoint), primed per tool, measured, then discarded. graphify
+    // ignores dot-dirs and serena's .serena cache covers only its main-language
+    // source files, which graphify-out (json/html/md) does not contain.
     let serenaCell = na(comp.serena.reason);
     let graphifyCell = na(comp.graphify.reason);
-    let falconCell = na(comp.falcon.reason);
-    if (comp.serena.available || comp.graphify.available || comp.falcon.available) {
+    if (comp.serena.available || comp.graphify.available) {
       const work = copySource(dir);
       try {
-        if (comp.falcon.available) {
-          const adapter = adapterOf("falcon", comp);
-          const gate = adapter.perRepoSupport(ctx.repo.lang);
-          if (gate) falconCell = na(gate);
-          else {
-            const p = adapter.prime(work);
-            const a = join(work, ".falcon", "artifacts");
-            falconCell = p.ok && existsSync(a) ? { v: dirBytes(a), k: "bytes" } : na(p.reason ?? "index failed");
-          }
-        }
         const graphifyHeavy = heavyIndexGate("graphify", ctx);
         if (graphifyHeavy) graphifyCell = na(graphifyHeavy);
         else if (comp.graphify.available) {
@@ -715,12 +559,12 @@ function scenarioSize(ctxs, comp, _cfg) {
       } finally { rmrf(work); }
     }
 
-    rows.push([{ v: ctx.repo.slug, k: "text" }, { v: ourBytes, k: "bytes" }, oxCell, ctagsCell, serenaCell, graphifyCell, falconCell]);
+    rows.push([{ v: ctx.repo.slug, k: "text" }, { v: ourBytes, k: "bytes" }, ctagsCell, serenaCell, graphifyCell]);
   }
   return {
     id: "size", title: "Index size on disk",
-    note: "Our artifacts (graph.json + symbols.json + cache.json) vs 01x's `.codeindex/` SQLite DB vs the ctags `tags` file vs serena's `.serena/` project cache (document-symbol pickles) vs graphify's MCP-servable `graph.json` alone (its `graphify-out/` also holds an AST cache and report files that never leave the build machine) vs falcon's `.falcon/artifacts` parquet set.",
-    headers: ["Repo", "codeindex artifacts", "01x .codeindex", "ctags tags", "serena .serena", "graphify graph.json", "falcon .falcon/artifacts"],
+    note: "Our artifacts (graph.json + symbols.json + cache.json) vs the ctags `tags` file vs serena's `.serena/` project cache (document-symbol pickles) vs graphify's MCP-servable `graph.json` alone (its `graphify-out/` also holds an AST cache and report files that never leave the build machine).",
+    headers: ["Repo", "codeindex artifacts", "ctags tags", "serena .serena", "graphify graph.json"],
     rows,
   };
 }
@@ -747,25 +591,6 @@ function scenarioInstall(_ctxs, comp, _cfg) {
   }
   rows.push([{ v: "codeindex", k: "text" }, ourCell, { v: "zero runtime dependencies; single engine.mjs", k: "text" }]);
 
-  // 01x binary + required ast-grep. The binary is measured when it IS the 01x
-  // binary — available, or unavailable only because ast-grep is missing. A
-  // recorded path with any other reason (e.g. the PATH name collision with our
-  // own `codeindex` bin) is NOT 01x and must never be stat'd as its footprint.
-  let oxCell = na(comp["01x"].reason ?? "not installed");
-  let oxNote = "requires ast-grep in PATH";
-  const oxIs01x = comp["01x"].available || comp["01x"].reason === "ast-grep missing";
-  if (oxIs01x && comp["01x"].path && existsSync(comp["01x"].path)) {
-    oxCell = { v: statSync(comp["01x"].path).size, k: "bytes" };
-    if (comp.astGrep.available) oxNote = `binary only; + ast-grep ${(statSync(comp.astGrep.path).size / 1024 / 1024).toFixed(1)} MB required`;
-  }
-  rows.push([{ v: "01x", k: "text" }, oxCell, { v: oxNote, k: "text" }]);
-
-  // scip-typescript — binary present, but needs the target repo's node_modules.
-  const scipCell = comp["scip-typescript"].available
-    ? { v: "binary + target-repo node_modules", k: "text" }
-    : na(comp["scip-typescript"].reason);
-  rows.push([{ v: "scip-typescript", k: "text" }, scipCell, { v: "requires a full npm install of each indexed repo (see cold column)", k: "text" }]);
-
   // serena — uv tool venv (serena-agent); its language servers live OUTSIDE
   // the venv in ~/.serena/language_servers and are measured when present.
   {
@@ -790,14 +615,6 @@ function scenarioInstall(_ctxs, comp, _cfg) {
       cell = d ? { v: dirBytes(d), k: "bytes" } : na("uv tool dir not found");
     }
     rows.push([{ v: "graphify", k: "text" }, cell, { v: "uv tool venv (graphifyy); tree-sitter grammar wheels bundled; [mcp] extra required for the MCP server", k: "text" }]);
-  }
-
-  // falcon — one static Go binary (statSync follows the brew symlink).
-  {
-    const cell = comp.falcon.available && existsSync(comp.falcon.path)
-      ? { v: statSync(comp.falcon.path).size, k: "bytes" }
-      : na(comp.falcon.reason ?? "not installed");
-    rows.push([{ v: "falcon", k: "text" }, cell, { v: "single static Go binary, no runtime deps (brew tap SocialGouv/repo-falcon)", k: "text" }]);
   }
 
   return {

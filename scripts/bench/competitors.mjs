@@ -67,54 +67,6 @@ function detectCtags() {
   return { name: "ctags", available: true, path, version: semver(r.stdout) };
 }
 
-function detectScipTs() {
-  const path = whichPath("scip-typescript");
-  if (!path) return { name: "scip-typescript", available: false, reason: "not installed" };
-  return { name: "scip-typescript", available: true, path, version: semver(runCmd(path, ["--version"]).stdout) };
-}
-
-function detectAstGrep() {
-  const path = whichPath("ast-grep") || whichPath("sg");
-  if (!path) return { name: "ast-grep", available: false, reason: "not installed" };
-  return { name: "ast-grep", available: true, path, version: semver(runCmd(path, ["--version"]).stdout) };
-}
-
-// True only for the Go/cobra 01x binary — guards against the name collision with
-// our own `codeindex` bin (which prints a bare semver and knows `engine.mjs`).
-function looksLike01x(bin) {
-  const help = runCmd(bin, ["--help"]).stdout;
-  if (/engine\.mjs/.test(help)) return false; // that's ours
-  return /Available Commands:/.test(help) && /ast-grep/.test(help);
-}
-
-// 01x-in/codeindex: env BENCH_01X_BIN wins (explicit path); else probe a PATH
-// `codeindex` and accept only if it is the cobra binary. Their tool shells out
-// to ast-grep per file, so it is unusable without it (their exit code 3) — we
-// gate on ast-grep and report the reason.
-function detect01x(env, astGrep) {
-  const explicit = env.BENCH_01X_BIN;
-  let path;
-  if (explicit) {
-    if (!existsSync(explicit)) return { name: "01x", available: false, reason: "BENCH_01X_BIN path missing" };
-    if (!looksLike01x(explicit)) return { name: "01x", available: false, path: explicit, reason: "BENCH_01X_BIN is not the 01x binary" };
-    path = explicit;
-  } else {
-    const cand = whichPath("codeindex");
-    if (!cand) return { name: "01x", available: false, reason: "not installed (set BENCH_01X_BIN)" };
-    if (!looksLike01x(cand)) return { name: "01x", available: false, path: cand, reason: "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)" };
-    path = cand;
-  }
-  const version = semver(runCmd(path, ["version"]).stdout);
-  if (!astGrep.available) return { name: "01x", available: false, path, version, reason: "ast-grep missing" };
-  return { name: "01x", available: true, path, version };
-}
-
-function detectScip(env) {
-  const path = env.BENCH_SCIP_BIN && existsSync(env.BENCH_SCIP_BIN) ? env.BENCH_SCIP_BIN : whichPath("scip");
-  if (!path) return { name: "scip", available: false, reason: "not installed (optional)" };
-  return { name: "scip", available: true, path, version: semver(runCmd(path, ["--version"]).stdout) };
-}
-
 // One-line JSON-RPC handshake (initialize + initialized) fed to a stdio MCP
 // server through runCmd's input; the server answers `initialize` before the
 // stdin EOF ends the session [probed]. Enough to prove a venv can actually
@@ -128,8 +80,8 @@ const MCP_HANDSHAKE_INPUT = [
   "",
 ].join("\n");
 
-// Known-good versions for the three MCP competitors (recorded in the report,
-// not enforced): serena 1.6.1, graphifyy 0.9.25, falcon 0.6.4.
+// Known-good versions for the two MCP competitors (recorded in the report,
+// not enforced): serena 1.6.1, graphifyy 0.9.25.
 
 // serena (oraios/serena, uv tool serena-agent). Language servers are
 // provisioned per language on first use into ~/.serena/language_servers, so
@@ -212,53 +164,22 @@ function detectGraphify(env) {
   return { name: "graphify", available: true, path, version, extra: { mcpPath } };
 }
 
-// falcon (SocialGouv/repo-falcon, Homebrew tap). Single static Go binary; the
-// homebrew prefix is probed as a last resort since ~/.local/bin only covers
-// the uv tools. NOTE: `falcon version` (subcommand) does not exist — only
-// `falcon --version` works.
-function detectFalcon(env) {
-  const explicit = env.BENCH_FALCON_BIN;
-  let path;
-  if (explicit) {
-    if (!existsSync(explicit)) return { name: "falcon", available: false, reason: "BENCH_FALCON_BIN path missing" };
-    path = explicit;
-  } else {
-    path = whichOrLocal("falcon") ?? (existsSync("/opt/homebrew/bin/falcon") ? "/opt/homebrew/bin/falcon" : undefined);
-    if (!path) return { name: "falcon", available: false, reason: "not installed" };
-  }
-  const help = runCmd(path, ["--help"]).stdout;
-  if (!/Index a repository/.test(help) && !/^\s*mcp\b/m.test(help)) {
-    return { name: "falcon", available: false, path, reason: "not RepoFalcon (--help lacks index/mcp)" };
-  }
-  return { name: "falcon", available: true, path, version: semver(runCmd(path, ["--version"]).stdout) };
-}
-
 // Force every competitor to unavailable — used by the hermetic smoke path so the
-// result never depends on what happens to be installed on the machine.
+// result never depends on what happens to be installed on the machine. MUST stay
+// key-symmetric with detectCompetitors() or --no-competitors renders wrong shapes.
 export function noCompetitors() {
   const off = (name) => ({ name, available: false, reason: "--no-competitors" });
   return {
     ctags: off("ctags"),
-    "scip-typescript": off("scip-typescript"),
-    astGrep: off("ast-grep"),
-    "01x": off("01x"),
-    scip: off("scip"),
     serena: off("serena"),
     graphify: off("graphify"),
-    falcon: off("falcon"),
   };
 }
 
 export function detectCompetitors(env = process.env) {
-  const astGrep = detectAstGrep();
   return {
     ctags: detectCtags(),
-    "scip-typescript": detectScipTs(),
-    astGrep,
-    "01x": detect01x(env, astGrep),
-    scip: detectScip(env),
     serena: detectSerena(env),
     graphify: detectGraphify(env),
-    falcon: detectFalcon(env),
   };
 }

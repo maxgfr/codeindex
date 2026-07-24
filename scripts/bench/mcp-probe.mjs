@@ -6,7 +6,7 @@
 // orchestrator treats a non-zero exit or unparseable stdout as n/a.
 //
 //   node scripts/bench/mcp-probe.mjs \
-//     --server codeindex|serena|graphify|falcon --dir <abs-repo> \
+//     --server codeindex|serena|graphify --dir <abs-repo> \
 //     --symbol <S> --file <repo-relative-F0> \
 //     --runs N [--slow-runs 3] [--slow-threshold 60000] \
 //     [--bin <abs>] [--mcp-bin <abs>] [--engine <abs>]
@@ -28,15 +28,15 @@
 //               between iterations), median of warmup+N (N downgraded to
 //               --slow-runs when the warmup crosses --slow-threshold,
 //               mirroring bench runMedian). The probe never cleans artifacts:
-//               graphify-mcp / `falcon mcp serve` cannot start without them,
-//               and cold builds are timed by the bench cold scenario instead.
+//               graphify-mcp cannot start without them, and cold builds are
+//               timed by the bench cold scenario instead.
 // queries     = per-call medians on the LAST live session of the activation
 //               loop; runs = the smallest effective N across the three tasks.
 // bytes       = Buffer.byteLength of the last response text per task.
 //
 // ---- mcp-adapters.mjs import contract ------------------------------------
 // export function adapterFor(server, opts) -> adapter | undefined
-//   server: "codeindex" | "serena" | "graphify" | "falcon"
+//   server: "codeindex" | "serena" | "graphify"
 //   opts:   { dir, bin, mcpBin, engine } — absolute paths from the CLI flags
 //           (bin = competitor binary, mcpBin = graphify-mcp, engine = our cli.mjs).
 // adapter = {

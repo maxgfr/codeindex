@@ -6,21 +6,21 @@
 // prime(), never an exception.
 //
 // Known-good versions (recorded, not enforced): serena 1.6.1 (serena-agent),
-// graphifyy 0.9.25 with the [mcp] extra, falcon v0.6.4, codeindex 2.13.0.
+// graphifyy 0.9.25 with the [mcp] extra, codeindex 2.13.0.
 // Tool names and parameter schemas below were verified against the real
 // servers via live tools/list on 2026-07-24.
 //
 // Members beyond the probe contract (used by the bench orchestrator, ignored
 // by the probe):
 //   perRepoSupport(repoLang) -> null | reason-string
-//     Language gate; only falcon excludes anything (rust). Synthetic
-//     --repo-dir repos carry lang "auto" and MUST pass every gate, so gates
-//     are positive exclusions only — never equality checks on a lang list.
+//     Language gate; none of the remaining servers excludes a language.
+//     Synthetic --repo-dir repos carry lang "auto" and MUST pass every gate, so
+//     gates are positive exclusions only — never equality checks on a lang list.
 //   cleanCold(dir) -> void
 //     Removes on-disk artifacts so the next BUILD is cold. Used by the bench
 //     cold/determinism scenarios; the probe never calls it — MCP sessions run
-//     on primed artifacts (graphify-mcp and `falcon mcp serve` cannot even
-//     start without their artifact files).
+//     on primed artifacts (graphify-mcp cannot even start without its artifact
+//     files).
 
 import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -76,13 +76,14 @@ const primeReason = (r) =>
   r.missing ? "binary missing" : ((r.stderr || r.stdout || "").trim().replace(/\s+/g, " ").slice(0, 300) || `exit ${r.code}`);
 
 // ---------------------------------------------------------------------------
-// codeindex (self, over MCP). Symmetric with falcon/graphify: prime() writes a
+// codeindex (self, over MCP). Symmetric with graphify: prime() writes a
 // persisted .codeindex/ index (`codeindex index --out`) and the MCP server
 // PRELOADS it on the first tool call — a pure optimization, the served
 // responses stay byte-identical to a cold build (mcp.ts's preloadSession, guarded
 // by the same T4 stat/sha freshness oracle the CLI's index fastpath uses). So
-// activation loads-not-rebuilds, exactly the falcon pattern; the parse cost lives
-// in the Cold index column. `repo` is REQUIRED in every tool's arguments even
+// activation loads-not-rebuilds, the same load-prebuilt-artifacts pattern
+// graphify uses; the parse cost lives in the Cold index column. `repo` is
+// REQUIRED in every tool's arguments even
 // though the server could infer it from cwd [probed]; the preload keys off it.
 function codeindexAdapter(opts) {
   // engine.mjs is a pure module (no main guard); the runnable entry is cli.mjs.
@@ -92,8 +93,8 @@ function codeindexAdapter(opts) {
     perRepoSupport: () => null, // all 7 repos
     spawn(dir) { return { cmd: process.execPath, args: [cli, "mcp"], cwd: dir }; },
     // Prime a persisted index the MCP server preloads on activation — the same
-    // untimed one-time build the other servers do (falcon index / graphify
-    // update). --out <dir>/.codeindex is exactly where mcp.ts's preload looks.
+    // untimed one-time build the other servers do (graphify update). --out
+    // <dir>/.codeindex is exactly where mcp.ts's preload looks.
     prime(dir) {
       const r = runCmd(process.execPath, [cli, "index", "--repo", dir, "--out", join(dir, ".codeindex")],
         { cwd: dir, env: benchEnv(), timeoutMs: PRIME_TIMEOUT_MS });
@@ -258,62 +259,6 @@ function graphifyAdapter(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// falcon (SocialGouv/repo-falcon v0.6.4, single static Go binary). MCP serves
-// prebuilt parquet artifacts; prime() is `falcon index`.
-function falconAdapter(opts) {
-  const bin = opts.bin
-    ?? whichOrLocal("falcon")
-    ?? (existsSync("/opt/homebrew/bin/falcon") ? "/opt/homebrew/bin/falcon" : undefined);
-  const artifacts = (dir) => join(dir, ".falcon", "artifacts");
-  return {
-    key: "falcon",
-    // v0.6.4 indexes Go/JS-TS/Python/Java only — the ONLY positive exclusion
-    // in the harness. lang "auto" (synthetic --repo-dir repos) passes.
-    perRepoSupport: (repoLang) => (repoLang === "rust" ? "rust not supported" : null),
-    spawn(dir) {
-      // NDJSON JSON-RPC on stdout, logs on stderr [probed]. `mcp serve` loads
-      // index-only artifacts fine — no snapshot step needed.
-      return {
-        cmd: bin,
-        args: ["mcp", "serve", "--snapshot", artifacts(dir), "--repo", dir, "--log-level", "error"],
-        cwd: dir,
-        env: benchEnv(),
-      };
-    },
-    prime(dir) {
-      if (!bin) return { ok: false, reason: "falcon binary not found" };
-      const r = runCmd(bin, ["index", "--repo", dir, "--out", artifacts(dir), "--log-level", "error"],
-        { cwd: dir, env: benchEnv(), timeoutMs: PRIME_TIMEOUT_MS });
-      return r.ok ? { ok: true } : { ok: false, reason: primeReason(r) };
-    },
-    cleanCold(dir) { rmrf(join(dir, ".falcon")); }, // never creates ~/.falcon
-    tasks(tools) {
-      const m = toolMap(tools);
-      // Resolved at runtime from tools/list (v0.6.4 serves exactly 7 falcon_*
-      // tools); preference lists tolerate an upstream un-prefixing rename.
-      const lookup = pickTool(m, ["falcon_symbol_lookup", "symbol_lookup"]);
-      const fileCtx = pickTool(m, ["falcon_file_context", "file_context"]);
-      if (lookup || fileCtx) {
-        process.stderr.write(
-          `[falcon adapter] resolved tools: find/refs=${lookup?.name ?? "-"} overview=${fileCtx?.name ?? "-"}\n`,
-        );
-      }
-      const nameParam = pickParam(lookup, ["name", "query", "symbol"]);
-      const pathParam = pickParam(fileCtx, ["path", "file"]);
-      return {
-        find: lookup ? (ctx) => ({ name: lookup.name, arguments: { [nameParam]: ctx.symbol } }) : undefined,
-        // v0.6.4 has NO separate references tool: the symbol-lookup response
-        // embeds callers/callees/references, so refs times the SAME call as
-        // find — the report's section note must say so.
-        refs: lookup ? (ctx) => ({ name: lookup.name, arguments: { [nameParam]: ctx.symbol } }) : undefined,
-        overview: fileCtx ? (ctx) => ({ name: fileCtx.name, arguments: { [pathParam]: ctx.file } }) : undefined,
-      };
-    },
-    extractText: joinText,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // opts: { dir, bin, mcpBin, engine } — absolute paths from the probe's CLI
 // flags; every path is optional (adapters fall back to detection-style
 // resolution so the probe also works standalone). Unknown server -> undefined.
@@ -322,7 +267,6 @@ export function adapterFor(server, opts = {}) {
     case "codeindex": return codeindexAdapter(opts);
     case "serena": return serenaAdapter(opts);
     case "graphify": return graphifyAdapter(opts);
-    case "falcon": return falconAdapter(opts);
     default: return undefined;
   }
 }
