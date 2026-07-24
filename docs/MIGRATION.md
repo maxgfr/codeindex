@@ -220,6 +220,58 @@ surface is additive (semver-minor).
   `resolveGrammarsPullTarget`, `fetchGrammarsTarball`, `fetchExpectedSha256`,
   `extractGrammarsTarball`, `GrammarsPullTarget`.
 
+## v2.15.0 — MCP serves from a persisted index (additive, no re-pin required)
+
+Pure fastpath, MCP-only: on the **first** tool call for a repo the long-lived
+server seeds its session from a committed `.codeindex/` index (written by
+`codeindex index`) instead of doing every step cold. Served tool responses stay
+**byte-identical** to a cold-process build on the same repo state, so **no
+re-pin is required** and no consumer needs to act. `SCHEMA_VERSION` /
+`EMBED_VERSION` / `EXTRACTOR_VERSION` are untouched, the public API is unchanged
+(**no new exports** — the preload is entirely internal to `mcp.ts`), and a repo
+with no `.codeindex/` behaves exactly as before.
+
+- **Scan seed from `cache.json`.** `getScan`'s first touch reads
+  `.codeindex/cache.json` and re-expresses its per-file records as the session
+  `cache`, so scan.ts's stat fastpath / exact content-hash reuse rebuilds the
+  `RepoScan` value-identically to a cold scan (the T3/T4 determinism the CLI's
+  `index` fastpath already relies on) without a read + hash + extraction per
+  unchanged file. Records are only trusted when the cache's
+  `(schemaVersion, extractorVersion)` match this engine — the same gate the CLI
+  applies — otherwise the whole cache is discarded and the scan runs cold. A
+  file whose content drifted since `cache.json` is re-read/extracted here exactly
+  as a cold scan would, so the scan stays correct and only the derived freshness
+  flags differ (they never feed artifacts).
+- **Artifact preload from `graph.json` / `symbols.json` — gated by the T4
+  oracle.** Only when the **exact** T4 freshness guard holds does the session
+  deserialize the on-disk artifacts straight in, skipping the whole downstream
+  pipeline (`buildArtifactsFromScan`) for the first
+  `graph`/`symbols`/`mermaid`/`repo_map`/`check_rules` call. The guard is the one
+  the CLI `index` fastpath uses to prove the on-disk bytes equal a fresh build:
+  `scan.contentUnchanged` **and** `cache.json`'s `engineVersion === ENGINE_VERSION`
+  **and** its `commit === scan.commit` **and**
+  `sha1(graph.json) === meta.graphSha1` **and**
+  `sha1(symbols.json) === meta.symbolsSha1`. When it holds, the on-disk
+  `graph.json`/`symbols.json` are byte-equal to `buildArtifactsFromScan(scan)` run
+  here, so deserializing them equals rebuilding.
+- **Deserialize is `JSON.parse`, not a new codec — no new exports.** `Graph` and
+  `SymbolIndex` are pure JSON POJOs (no `Map`/`Set`/typed fields), so
+  `JSON.parse` is a lossless round-trip and a `schemaVersion` assert is the only
+  reconstruction needed. `renderGraphJson` re-sorts `graph.languages` anyway, so
+  render→parse→render reproduces the same bytes (numbers reproduce their
+  shortest-round-trip form, absent optionals stay absent, V8's integer-key
+  hoisting is identical). No (de)serializer was added to the barrel; the preload
+  helpers are private to `mcp.ts`.
+- **Fallback is today's build-on-demand path, EXACTLY — never a throw.** No
+  `.codeindex/`, a `(schemaVersion, extractorVersion)` mismatch, a stale scan, a
+  version/commit/sha mismatch, or a missing/corrupt/partial/tampered
+  `graph.json`/`symbols.json` each returns `undefined` and falls through to a
+  fresh `scanRepo` / `buildArtifactsFromScan`. So the preload self-heals on
+  corruption and a deleted or truncated artifact never crashes the session — the
+  worst case is the cold cost the server paid before this release. The embed
+  sidecar keeps its own memoization path (the graph/symbols shas are all the
+  guard checks).
+
 ## Typical mapping (what to replace with what)
 
 What a consumer usually deletes from its own codebase, and the engine export
