@@ -114,7 +114,7 @@ export {
   loadEmbedModel,
   resolveEmbedPullUrl,
 } from "./embed/model.js";
-export type { StaticEmbedModel } from "./embed/model.js";
+export type { StaticEmbedModel, EmbedPullTarget } from "./embed/model.js";
 export { encode, quantize, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
 export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits } from "./embed/index.js";
 export type { EmbeddingIndex, EmbeddingRecord, EmbeddingUnit } from "./embed/index.js";

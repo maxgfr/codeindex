@@ -18,6 +18,7 @@ import {
   resolveEmbedPullUrl,
   type StaticEmbedModel,
 } from "../src/embed/model.js";
+import type { EmbedPullTarget } from "../src/engine.js";
 import { basicTokenize, encode, intDot, roundHalfToEven, tokenize, wordpiece } from "../src/embed/encode.js";
 import { buildEmbeddingIndex, deserializeEmbeddings, serializeEmbeddings } from "../src/embed/index.js";
 import { searchSemantic } from "../src/embed/search.js";
@@ -367,6 +368,14 @@ describe("embed pull — default URL + sha256 verification", () => {
     else process.env.CODEINDEX_EMBED_URL = prevUrl;
     if (prevDir === undefined) delete process.env.CODEINDEX_EMBED_DIR;
     else process.env.CODEINDEX_EMBED_DIR = prevDir;
+  });
+
+  it("EmbedPullTarget is exported from the barrel and types resolveEmbedPullUrl()'s return", () => {
+    delete process.env.CODEINDEX_EMBED_URL;
+    // Type-level guard: this annotation stops compiling if the barrel drops the
+    // EmbedPullTarget export or resolveEmbedPullUrl()'s return shape drifts.
+    const target: EmbedPullTarget | undefined = resolveEmbedPullUrl();
+    expect(target?.url).toBe(DEFAULT_EMBED_URL);
   });
 
   it("resolveEmbedPullUrl falls back to the built-in default WITH the pinned sha256 when env is unset", () => {

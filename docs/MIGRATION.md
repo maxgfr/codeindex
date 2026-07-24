@@ -93,6 +93,30 @@ embeddings live in a separate `embeddings.bin` sidecar keyed by a dedicated
 `--semantic` without a model degrades to lexical results on **exit 0** (a stderr
 note only) — so wiring it on is safe before an asset exists.
 
+## v2.12.0 — two return-shape changes (check your call sites)
+
+Not additive: two public return shapes changed in this release without a
+compat flag, so a consumer re-pinning across v2.12.0 must check both call
+sites. Artifact schemas are untouched (`SCHEMA_VERSION` / `EMBED_VERSION`
+unchanged) — this is API shape only.
+
+- `resolveEmbedPullUrl()` now returns an `EmbedPullTarget`
+  (`{ url: string; sha256?: string }`) — it previously returned
+  `string | undefined`. It always resolves: `CODEINDEX_EMBED_URL` wins
+  outright and carries **no** `sha256` (a custom mirror keeps the
+  un-verified behavior); with no env it falls back to the built-in official
+  asset **with** its pinned `sha256` so `embed pull` verifies the default
+  download. Replace `const url = resolveEmbedPullUrl()` with
+  `const { url, sha256 } = resolveEmbedPullUrl()`. The `EmbedPullTarget`
+  type is exported from the barrel.
+- MCP `search` with `semantic: true` now returns
+  `{ results, tier, degradedReason? }` — it previously returned the bare
+  ranked array. `tier` is `"endpoint" | "static" | "lexical"` and
+  `degradedReason` is present only when the semantic tier degraded to
+  lexical, so a caller can tell "fusion happened" apart from "degraded".
+  Plain lexical `search` (no `semantic: true`) still returns the bare
+  array, byte-compatible with existing consumers.
+
 ## v2.13.0 — `.codeindex` excluded from the walk
 
 `.codeindex/` — the engine's own output directory (index artifacts, pulled
