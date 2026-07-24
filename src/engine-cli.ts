@@ -19,7 +19,7 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
+import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, parseEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import {
@@ -413,9 +413,14 @@ export async function runCli(argv: string[]): Promise<void> {
         return;
       }
       try {
-        JSON.parse(body);
-      } catch {
-        process.stderr.write("codeindex: pull failed — response is not a valid model.json (expected JSON)\n");
+        // Shape-validate BEFORE writing: a JSON-valid but shape-invalid asset
+        // would otherwise land on disk and turn every later semantic search
+        // into a hard loadEmbedModel error instead of the documented degrade.
+        parseEmbedModel(JSON.parse(body), url);
+      } catch (e) {
+        process.stderr.write(
+          `codeindex: pull failed — response is not a valid model.json (${e instanceof Error ? e.message : String(e)}) (nothing written)\n`,
+        );
         process.exitCode = 1;
         return;
       }

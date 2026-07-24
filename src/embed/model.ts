@@ -87,20 +87,17 @@ export function hasEmbedModel(repo?: string): boolean {
   return resolveEmbedModelDir(repo) !== undefined;
 }
 
-// Load and validate a static model from a directory containing model.json.
-// Throws on a malformed file (bad dim, ragged weights) so a corrupt asset fails
-// loudly at load rather than silently misranking. Returns undefined only when
-// the directory has no model.json (the not-present case).
-export function loadEmbedModel(dir?: string): StaticEmbedModel | undefined {
-  if (!dir) return undefined;
-  const path = join(dir, "model.json");
-  if (!existsSync(path)) return undefined;
-  const raw = JSON.parse(readFileSync(path, "utf8")) as ModelFile;
-  const { modelId, dim, vocab, weights } = raw;
-  if (typeof modelId !== "string" || !modelId) throw new Error(`embed model: missing modelId in ${path}`);
-  if (!Number.isInteger(dim) || dim <= 0) throw new Error(`embed model: bad dim ${dim} in ${path}`);
+// Validate a parsed model.json body and construct the loaded model. Throws on
+// a malformed shape (missing modelId, bad dim, vocab/weights mismatch, ragged
+// rows) with a message citing `source` (a file path, a URL, …) so a corrupt
+// asset fails loudly wherever it enters — at load, or at `embed pull` BEFORE
+// the shape-invalid file is ever written to disk.
+export function parseEmbedModel(raw: unknown, source: string): StaticEmbedModel {
+  const { modelId, dim, vocab, weights, unk: rawUnk } = (raw ?? {}) as ModelFile;
+  if (typeof modelId !== "string" || !modelId) throw new Error(`embed model: missing modelId in ${source}`);
+  if (!Number.isInteger(dim) || dim <= 0) throw new Error(`embed model: bad dim ${dim} in ${source}`);
   if (!Array.isArray(vocab) || !Array.isArray(weights) || vocab.length !== weights.length) {
-    throw new Error(`embed model: vocab/weights length mismatch in ${path}`);
+    throw new Error(`embed model: vocab/weights length mismatch in ${source}`);
   }
   const vocabSize = vocab.length;
   const flat = new Float64Array(vocabSize * dim);
@@ -115,9 +112,21 @@ export function loadEmbedModel(dir?: string): StaticEmbedModel | undefined {
     }
     for (let d = 0; d < dim; d++) flat[i * dim + d] = Number(row[d]);
   }
-  const unk = typeof raw.unk === "string" ? raw.unk : "[UNK]";
+  const unk = typeof rawUnk === "string" ? rawUnk : "[UNK]";
   const unkId = vmap.has(unk) ? vmap.get(unk)! : -1;
   return { modelId, dim, unk, unkId, vocabSize, vocab: vmap, weights: flat };
+}
+
+// Load and validate a static model from a directory containing model.json.
+// Throws on a malformed file (bad dim, ragged weights) so a corrupt asset fails
+// loudly at load rather than silently misranking. Returns undefined only when
+// the directory has no model.json (the not-present case).
+export function loadEmbedModel(dir?: string): StaticEmbedModel | undefined {
+  if (!dir) return undefined;
+  const path = join(dir, "model.json");
+  if (!existsSync(path)) return undefined;
+  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  return parseEmbedModel(raw, path);
 }
 
 // What `embed pull` fetches, and whether to verify it. CODEINDEX_EMBED_URL wins

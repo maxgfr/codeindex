@@ -13,6 +13,7 @@ import {
   EMBED_VERSION,
   fetchEmbedModel,
   loadEmbedModel,
+  parseEmbedModel,
   resolveEmbedModelDir,
   resolveEmbedPullUrl,
   type StaticEmbedModel,
@@ -85,6 +86,43 @@ describe("model loading (opt-in by asset)", () => {
       if (before === undefined) delete process.env.CODEINDEX_EMBED_DIR;
       else process.env.CODEINDEX_EMBED_DIR = before;
     }
+  });
+});
+
+describe("parseEmbedModel — shape validation (issue #12: guards the custom-URL pull)", () => {
+  // A minimal shape-valid body; each test breaks exactly one field.
+  const good = () => ({ modelId: "m", dim: 2, vocab: ["a", "b"], weights: [[1, 0], [0, 1]] });
+
+  it("accepts the fixture model used by the existing suites", () => {
+    const raw = JSON.parse(readFileSync(join(MODEL_DIR, "model.json"), "utf8")) as unknown;
+    const m = parseEmbedModel(raw, "fixture:model.json");
+    expect(m.modelId).toBe("codeindex-fixture-tiny-8d");
+    expect(m.dim).toBe(8);
+    expect(m.weights.length).toBe(m.vocabSize * m.dim);
+  });
+
+  it("rejects a missing modelId, citing the source", () => {
+    expect(() => parseEmbedModel({ ...good(), modelId: undefined }, "https://mirror.test/m.json")).toThrow(
+      /missing modelId in https:\/\/mirror\.test\/m\.json/,
+    );
+  });
+
+  it("rejects a non-positive or non-integer dim", () => {
+    expect(() => parseEmbedModel({ ...good(), dim: 0 }, "src")).toThrow(/bad dim 0 in src/);
+    expect(() => parseEmbedModel({ ...good(), dim: -3 }, "src")).toThrow(/bad dim -3/);
+    expect(() => parseEmbedModel({ ...good(), dim: 1.5 }, "src")).toThrow(/bad dim 1\.5/);
+  });
+
+  it("rejects a vocab/weights length mismatch", () => {
+    expect(() => parseEmbedModel({ ...good(), weights: [[1, 0]] }, "src")).toThrow(
+      /vocab\/weights length mismatch in src/,
+    );
+  });
+
+  it("rejects ragged weight rows", () => {
+    expect(() => parseEmbedModel({ ...good(), weights: [[1, 0], [1]] }, "src")).toThrow(
+      /row 1 has length 1, expected 2/,
+    );
   });
 });
 
