@@ -47,6 +47,21 @@ export type { MarkdownInfo } from "./extract/markdown.js";
 // AST tier (optional — a no-op without the grammar wasm sidecar).
 export { ensureGrammars, allGrammarKeys, grammarKeysForExts, grammarKeyForExt, grammarReady } from "./ast/loader.js";
 export { extractAst } from "./ast/extract.js";
+// Grammars resolution + the slim pull/cache tier (v2.14.0): resolve the wasm
+// dir across bundle-adjacent → env → shared cache → none, and fetch the
+// committed wasms into the shared cache when none ship next to the bundle
+// (`codeindex grammars pull|status`). Additive; opt-in; offline-safe.
+export { resolveGrammarsDir, resolveGrammarsTier, sharedGrammarsCacheDir } from "./ast/loader.js";
+export type { GrammarsTier, GrammarsTierName } from "./ast/loader.js";
+export {
+  DEFAULT_GRAMMARS_URL,
+  resolveGrammarsPullTarget,
+  fetchGrammarsTarball,
+  fetchExpectedSha256,
+  extractTarInto,
+  extractGrammarsTarball,
+} from "./ast/grammars-pull.js";
+export type { GrammarsPullTarget } from "./ast/grammars-pull.js";
 
 // Resolution + modules + graph tier.
 export { buildResolveContext, resolveImport, resolveDocLink } from "./resolve.js";

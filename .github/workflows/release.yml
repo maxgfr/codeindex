@@ -122,6 +122,27 @@ jobs:
             -t ghcr.io/maxgfr/codeindex:latest \
             .
 
+      # Package the committed tree-sitter wasm grammars (scripts/grammars/, ~22 MB)
+      # as a per-release asset so a consumer that vendors ONLY the zero-dependency
+      # engine.mjs can `codeindex grammars pull` them into its shared cache and get
+      # byte-identical AST extraction. Same conditional-on-release-cut gate as the
+      # image above, and built from the checked-out release tag so the wasms match
+      # the released bundle exactly. Reproducible tar (sorted, fixed owner/mtime,
+      # gzip -n) + a `.sha256` sidecar that `grammars pull` fetches and verifies.
+      - name: Package and upload grammars asset
+        if: steps.release.outputs.released == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          ASSET="grammars-${VERSION}.tar.gz"
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime='UTC 2020-01-01' \
+            -cf "grammars-${VERSION}.tar" -C scripts/grammars .
+          gzip -n "grammars-${VERSION}.tar"
+          sha256sum "$ASSET" | awk '{print $1}' > "${ASSET}.sha256"
+          gh release upload "v${VERSION}" "$ASSET" "${ASSET}.sha256" --clobber
+
       - name: Return to release commit
         if: always() && steps.release.outputs.released == 'true'
         run: git checkout ${{ github.sha }}

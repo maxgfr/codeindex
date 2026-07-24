@@ -42,6 +42,16 @@ const CONTRACT = [
   "grammarKeyForExt",
   "grammarReady",
   "extractAst",
+  // grammars resolution + pull/cache tier (v2.14.0)
+  "resolveGrammarsDir",
+  "resolveGrammarsTier",
+  "sharedGrammarsCacheDir",
+  "DEFAULT_GRAMMARS_URL",
+  "resolveGrammarsPullTarget",
+  "fetchGrammarsTarball",
+  "fetchExpectedSha256",
+  "extractTarInto",
+  "extractGrammarsTarball",
   // resolution + graph
   "buildResolveContext",
   "resolveImport",

@@ -1,8 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
-import { ensureGrammars, grammarKeysForExts } from "./ast/loader.js";
+import { ensureGrammars, grammarKeysForExts, resolveGrammarsTier, sharedGrammarsCacheDir } from "./ast/loader.js";
+import {
+  resolveGrammarsPullTarget,
+  fetchGrammarsTarball,
+  fetchExpectedSha256,
+  extractGrammarsTarball,
+} from "./ast/grammars-pull.js";
 import { buildIndexArtifacts, buildArtifactsFromScan, type BuildIndexOptions } from "./pipeline.js";
 import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
@@ -62,6 +68,14 @@ Commands:
                                the source with CODEINDEX_EMBED_URL
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
+  grammars    Tree-sitter wasm grammars (optional AST tier; regex without them).
+              Precedence: bundle-adjacent > CODEINDEX_GRAMMARS_DIR > shared cache:
+                grammars status  Active tier (adjacent/env/cache/none), resolved
+                                 dir, pinned ENGINE_VERSION, pull-needed (JSON)
+                grammars pull    Fetch the per-release grammars-<version>.tar.gz
+                                 asset into the shared cache (sha256-verified,
+                                 atomic). Override the source with
+                                 CODEINDEX_GRAMMARS_URL
   rules       Architecture rules (forbidden edges, cycles, orphans) validated
               against the link-graph: --config <codeindex.rules.json>; exits 1
               on any error-severity violation (a CI gate)
@@ -194,12 +208,14 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
   };
 }
 
-// Commands that never walk/scan the file tree — they read git or grep directly,
-// so they must warm NO tree-sitter grammar (the CLI previously warmed every one
-// unconditionally). `embed` is scan-only for its `build` subcommand; the other
-// embed subcommands (status/pull/serve) are excluded by the positional check at
-// the warm site. version/help/mcp return before we get there.
-const SCANLESS_COMMANDS = new Set(["grep", "churn", "coupling", "workspaces"]);
+// Commands that never walk/scan the file tree — they read git/grep directly or
+// only manage the grammar cache, so they must warm NO tree-sitter grammar (the
+// CLI previously warmed every one unconditionally). `embed` is scan-only for its
+// `build` subcommand; the other embed subcommands (status/pull/serve) are
+// excluded by the positional check at the warm site. `grammars` (status/pull)
+// resolves/downloads the wasms itself and must not warm them.
+// version/help/mcp return before we get there.
+const SCANLESS_COMMANDS = new Set(["grep", "churn", "coupling", "workspaces", "grammars"]);
 
 export async function runCli(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
@@ -555,6 +571,105 @@ export async function runCli(argv: string[]): Promise<void> {
       process.stderr.write(`codeindex: model written to ${join(destDir, "model.json")}\n`);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");
+    }
+  } else if (cmd === "grammars") {
+    const sub = flags.positional;
+    const cacheDir = sharedGrammarsCacheDir();
+    if (sub === "status") {
+      // Report which tier furnishes the wasms (adjacent/env/cache/none), the
+      // resolved dir, the pinned ENGINE_VERSION the cache is keyed on, and
+      // whether a pull is needed (no runtime wasm resolvable → AST off, regex).
+      const info = resolveGrammarsTier();
+      const runtimePresent = info.dir ? existsSync(join(info.dir, "web-tree-sitter.wasm")) : false;
+      const target = resolveGrammarsPullTarget();
+      const status: Record<string, unknown> = {
+        engineVersion: ENGINE_VERSION,
+        tier: info.tier,
+        dir: info.dir ?? null,
+        cacheDir,
+        runtimePresent,
+        pullNeeded: !runtimePresent,
+        url: target.url,
+      };
+      emit(JSON.stringify(status, null, 2) + "\n", flags.out);
+    } else if (sub === "pull") {
+      // Default: the official per-release asset + its `.sha256` sidecar. A
+      // user-set CODEINDEX_GRAMMARS_URL overrides both (mirror/custom, no
+      // verification). Fetch the expected digest from the sidecar first; a
+      // missing sidecar degrades to an unverified pull with a note (never fatal).
+      const target = resolveGrammarsPullTarget();
+      let expected: string | undefined;
+      if (target.sha256Url) {
+        try {
+          expected = await fetchExpectedSha256(target.sha256Url);
+        } catch (e) {
+          process.stderr.write(
+            `codeindex: could not fetch checksum (${e instanceof Error ? e.message : String(e)}) — proceeding unverified\n`,
+          );
+        }
+      }
+      // Idempotent: the marker sibling records the digest of the tarball that
+      // populated cacheDir. If the runtime wasm is present AND the marker matches
+      // the freshly-fetched digest, the cache is already up to date — skip the
+      // ~22 MB download entirely. (Keeps cacheDir itself byte-identical to the
+      // tarball; the marker lives next to it, never inside it.)
+      const runtime = join(cacheDir, "web-tree-sitter.wasm");
+      const markerPath = join(dirname(cacheDir), `${ENGINE_VERSION}.sha256`);
+      if (existsSync(runtime) && expected && existsSync(markerPath)) {
+        let marker = "";
+        try {
+          marker = readFileSync(markerPath, "utf8").trim();
+        } catch {
+          // unreadable marker → fall through and re-pull
+        }
+        if (marker === expected) {
+          process.stderr.write(`codeindex: grammars already present at ${cacheDir} (up to date)\n`);
+          return;
+        }
+      }
+      process.stderr.write(`codeindex: fetching grammars from ${target.url} → ${cacheDir}\n`);
+      let bytes: Uint8Array;
+      try {
+        // Follows redirects (GitHub → CDN) and verifies sha256 when known.
+        bytes = await fetchGrammarsTarball(target.url, expected);
+      } catch (e) {
+        process.stderr.write(`codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`);
+        process.exitCode = 1;
+        return;
+      }
+      // Atomic install: extract into a tmp dir SIBLING to cacheDir (same
+      // filesystem → rename is atomic), sanity-check the runtime wasm landed,
+      // then swap it into place. A failure at any step discards the tmp dir and
+      // leaves any existing cache untouched — a half-populated cache never shows.
+      let tmp: string | undefined;
+      try {
+        mkdirSync(dirname(cacheDir), { recursive: true });
+        tmp = mkdtempSync(join(dirname(cacheDir), ".grammars-tmp-"));
+        extractGrammarsTarball(bytes, tmp);
+        if (!existsSync(join(tmp, "web-tree-sitter.wasm"))) {
+          throw new Error("archive is missing web-tree-sitter.wasm");
+        }
+        if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
+        renameSync(tmp, cacheDir);
+        tmp = undefined;
+        if (expected) writeFileSync(markerPath, expected + "\n");
+      } catch (e) {
+        if (tmp) {
+          try {
+            rmSync(tmp, { recursive: true, force: true });
+          } catch {
+            // best-effort cleanup
+          }
+        }
+        process.stderr.write(
+          `codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      process.stderr.write(`codeindex: grammars extracted → ${cacheDir}\n`);
+    } else {
+      throw new Error("grammars needs a subcommand: status | pull");
     }
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
