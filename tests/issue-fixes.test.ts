@@ -1,10 +1,10 @@
 // Regression tests for GitHub issues #2 (detectWorkspaces gaps), #6
 // (reconstruct-migration gaps: categorize asset set, .astro, workspace
 // naming/nx/go.work/warnings, walk excluded-count), #10 (configurable
-// per-file call cap + replaceable ignore-dir set) and #11 (regex tier
-// capturing "extends" as an anonymous default class's name). Issue #3 (grep
-// negation globs) lives in review-fixes.test.ts next to the other grep-parity
-// suites.
+// per-file call cap + replaceable ignore-dir set), #11 (regex tier
+// capturing "extends" as an anonymous default class's name) and #12 (the
+// engine indexing its own .codeindex output dir). Issue #3 (grep negation
+// globs) lives in review-fixes.test.ts next to the other grep-parity suites.
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -301,5 +301,21 @@ describe("issue #11: export default class extends Base", () => {
       expect.objectContaining({ name: "Sub", kind: "class", exported: true }),
     );
     expect(syms.some((s) => s.kind === "default")).toBe(false);
+  });
+});
+
+describe("issue #12: .codeindex excluded from the index", () => {
+  it("walk and scanRepo skip the engine's own output dir — MCP memories never enter search", () => {
+    const root = scratchRepo({
+      "src/a.ts": "export const a = 1;\n",
+      ".codeindex/memories/note.md": "# project map\n\nremember this\n",
+    });
+    const walked = walk(root).files.map((f) => f.rel);
+    expect(walked).toContain("src/a.ts");
+    expect(walked).not.toContain(".codeindex/memories/note.md");
+
+    const scanned = scanRepo(root).files.map((f) => f.rel);
+    expect(scanned).toContain("src/a.ts");
+    expect(scanned).not.toContain(".codeindex/memories/note.md");
   });
 });

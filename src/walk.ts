@@ -4,12 +4,15 @@ import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
 
 // Directories that never carry signal for a documentation/code question and
 // would bloat the index (dependencies, build output, VCS internals, caches).
+// .codeindex is the engine's OWN output (index artifacts, pulled models, MCP
+// memories) — indexing it would feed memories into search and churn the scan
+// fingerprint on every write_memory (issue #12).
 // Exported so grep.ts can align ripgrep's universe with the walker's.
 export const IGNORE_DIRS = new Set([
   ".git", "node_modules", ".pnpm", "bower_components", "vendor", "dist", "build", "out",
   "target", ".next", ".nuxt", ".svelte-kit", ".turbo", "coverage", "__pycache__", ".venv",
   "venv", ".tox", ".mypy_cache", ".pytest_cache", ".gradle", ".idea", ".vscode", ".cache",
-  "tmp", ".ultraindex", "Pods", "DerivedData", ".terraform", "elm-stuff", ".dart_tool",
+  "tmp", ".ultraindex", ".codeindex", "Pods", "DerivedData", ".terraform", "elm-stuff", ".dart_tool",
 ]);
 
 // Lockfiles: huge, machine-generated, and pure noise for a code/docs question —

@@ -93,6 +93,19 @@ embeddings live in a separate `embeddings.bin` sidecar keyed by a dedicated
 `--semantic` without a model degrades to lexical results on **exit 0** (a stderr
 note only) — so wiring it on is safe before an asset exists.
 
+## v2.13.0 — `.codeindex` excluded from the walk
+
+`.codeindex/` — the engine's own output directory (index artifacts, pulled
+models, MCP memories) — joined `IGNORE_DIRS`, so `walk`/`scanRepo` no longer
+descend into it and memories stop entering BM25/embedding results (previously
+every `write_memory` also churned the scan fingerprint, busting the MCP
+server's memoized embedding index). Access memories through the MCP memory
+tools (`read_memory` / `list_memories` / `delete_memory`), never `search`.
+This is a file-set change only — extraction shape and `SCHEMA_VERSION` are
+untouched, so **no re-pin is required**; a consumer that deliberately wants
+`.codeindex` walked can pass `ignoreDirs` (replace semantics, also new in
+this release) with its own set.
+
 ## Per-skill mapping (what to replace with what)
 
 | Skill | Replace | With (engine export) |
