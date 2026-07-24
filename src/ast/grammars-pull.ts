@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { ENGINE_VERSION } from "../types.js";
@@ -175,4 +175,98 @@ export function extractGrammarsTarball(bytes: Uint8Array, destDir: string): stri
   const b = asBuffer(bytes);
   const raw = b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b ? gunzipSync(b) : b;
   return extractTarInto(raw, destDir);
+}
+
+// What a pull did. `status` distinguishes the three terminal states so a caller
+// can react without parsing prose: nothing to do, wasms installed, or failed
+// (and on failure NOTHING was written — the cache is exactly as it was).
+export interface GrammarsPullResult {
+  ok: boolean;
+  status: "up-to-date" | "pulled" | "failed";
+  cacheDir: string;
+  /** One human-readable line; the CLI writes it to stderr, a library caller may log or drop it. */
+  message: string;
+}
+
+// The whole `grammars pull` mechanic — resolve target, fetch the sha256 sidecar,
+// skip when the cache already holds that exact digest, download, then install
+// ATOMICALLY (extract into a tmp sibling, verify the runtime wasm landed, swap
+// by rename). Extracted from the CLI so `warmGrammars` and `codeindex grammars
+// pull` share ONE implementation: the CLI maps the result onto stderr +
+// process.exitCode, the warm path folds it into its own report.
+//
+// NEVER throws: every failure becomes `{ ok: false, status: "failed" }` with a
+// message, because both callers must survive an offline machine — the engine
+// simply stays on the regex tier. `onNote` receives progress lines (checksum
+// degradation, download start) that are not the terminal message.
+export async function pullGrammars(
+  cacheDir: string,
+  opts: { onNote?: (msg: string) => void } = {},
+): Promise<GrammarsPullResult> {
+  const note = opts.onNote ?? (() => {});
+  const target = resolveGrammarsPullTarget();
+  let expected: string | undefined;
+  if (target.sha256Url) {
+    try {
+      expected = await fetchExpectedSha256(target.sha256Url);
+    } catch (e) {
+      note(`codeindex: could not fetch checksum (${e instanceof Error ? e.message : String(e)}) — proceeding unverified\n`);
+    }
+  }
+  // Idempotent: the marker sibling records the digest of the tarball that
+  // populated cacheDir. Runtime wasm present AND marker === freshly-fetched
+  // digest ⇒ already up to date, skip the ~22 MB download.
+  const runtime = join(cacheDir, "web-tree-sitter.wasm");
+  const markerPath = join(dirname(cacheDir), `${ENGINE_VERSION}.sha256`);
+  if (existsSync(runtime) && expected && existsSync(markerPath)) {
+    let marker = "";
+    try {
+      marker = readFileSync(markerPath, "utf8").trim();
+    } catch {
+      // unreadable marker → fall through and re-pull
+    }
+    if (marker === expected) {
+      return { ok: true, status: "up-to-date", cacheDir, message: `codeindex: grammars already present at ${cacheDir} (up to date)\n` };
+    }
+  }
+  note(`codeindex: fetching grammars from ${target.url} → ${cacheDir}\n`);
+  let bytes: Uint8Array;
+  try {
+    bytes = await fetchGrammarsTarball(target.url, expected);
+  } catch (e) {
+    return {
+      ok: false,
+      status: "failed",
+      cacheDir,
+      message: `codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
+    };
+  }
+  let tmp: string | undefined;
+  try {
+    mkdirSync(dirname(cacheDir), { recursive: true });
+    tmp = mkdtempSync(join(dirname(cacheDir), ".grammars-tmp-"));
+    extractGrammarsTarball(bytes, tmp);
+    if (!existsSync(join(tmp, "web-tree-sitter.wasm"))) {
+      throw new Error("archive is missing web-tree-sitter.wasm");
+    }
+    if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
+    renameSync(tmp, cacheDir);
+    tmp = undefined;
+    if (expected) writeFileSync(markerPath, expected + "\n");
+  } catch (e) {
+    if (tmp) {
+      try {
+        rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    return {
+      ok: false,
+      status: "failed",
+      cacheDir,
+      message: `codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
+    };
+  }
+  return { ok: true, status: "pulled", cacheDir, message: `codeindex: grammars extracted → ${cacheDir}\n` };
 }

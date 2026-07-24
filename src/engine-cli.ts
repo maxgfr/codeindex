@@ -3,12 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, grammarKeysForExts, resolveGrammarsTier, sharedGrammarsCacheDir } from "./ast/loader.js";
-import {
-  resolveGrammarsPullTarget,
-  fetchGrammarsTarball,
-  fetchExpectedSha256,
-  extractGrammarsTarball,
-} from "./ast/grammars-pull.js";
+import { resolveGrammarsPullTarget, pullGrammars } from "./ast/grammars-pull.js";
 import { buildIndexArtifacts, buildArtifactsFromScan, type BuildIndexOptions } from "./pipeline.js";
 import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
@@ -593,81 +588,14 @@ export async function runCli(argv: string[]): Promise<void> {
       };
       emit(JSON.stringify(status, null, 2) + "\n", flags.out);
     } else if (sub === "pull") {
-      // Default: the official per-release asset + its `.sha256` sidecar. A
-      // user-set CODEINDEX_GRAMMARS_URL overrides both (mirror/custom, no
-      // verification). Fetch the expected digest from the sidecar first; a
-      // missing sidecar degrades to an unverified pull with a note (never fatal).
-      const target = resolveGrammarsPullTarget();
-      let expected: string | undefined;
-      if (target.sha256Url) {
-        try {
-          expected = await fetchExpectedSha256(target.sha256Url);
-        } catch (e) {
-          process.stderr.write(
-            `codeindex: could not fetch checksum (${e instanceof Error ? e.message : String(e)}) — proceeding unverified\n`,
-          );
-        }
-      }
-      // Idempotent: the marker sibling records the digest of the tarball that
-      // populated cacheDir. If the runtime wasm is present AND the marker matches
-      // the freshly-fetched digest, the cache is already up to date — skip the
-      // ~22 MB download entirely. (Keeps cacheDir itself byte-identical to the
-      // tarball; the marker lives next to it, never inside it.)
-      const runtime = join(cacheDir, "web-tree-sitter.wasm");
-      const markerPath = join(dirname(cacheDir), `${ENGINE_VERSION}.sha256`);
-      if (existsSync(runtime) && expected && existsSync(markerPath)) {
-        let marker = "";
-        try {
-          marker = readFileSync(markerPath, "utf8").trim();
-        } catch {
-          // unreadable marker → fall through and re-pull
-        }
-        if (marker === expected) {
-          process.stderr.write(`codeindex: grammars already present at ${cacheDir} (up to date)\n`);
-          return;
-        }
-      }
-      process.stderr.write(`codeindex: fetching grammars from ${target.url} → ${cacheDir}\n`);
-      let bytes: Uint8Array;
-      try {
-        // Follows redirects (GitHub → CDN) and verifies sha256 when known.
-        bytes = await fetchGrammarsTarball(target.url, expected);
-      } catch (e) {
-        process.stderr.write(`codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`);
-        process.exitCode = 1;
-        return;
-      }
-      // Atomic install: extract into a tmp dir SIBLING to cacheDir (same
-      // filesystem → rename is atomic), sanity-check the runtime wasm landed,
-      // then swap it into place. A failure at any step discards the tmp dir and
-      // leaves any existing cache untouched — a half-populated cache never shows.
-      let tmp: string | undefined;
-      try {
-        mkdirSync(dirname(cacheDir), { recursive: true });
-        tmp = mkdtempSync(join(dirname(cacheDir), ".grammars-tmp-"));
-        extractGrammarsTarball(bytes, tmp);
-        if (!existsSync(join(tmp, "web-tree-sitter.wasm"))) {
-          throw new Error("archive is missing web-tree-sitter.wasm");
-        }
-        if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
-        renameSync(tmp, cacheDir);
-        tmp = undefined;
-        if (expected) writeFileSync(markerPath, expected + "\n");
-      } catch (e) {
-        if (tmp) {
-          try {
-            rmSync(tmp, { recursive: true, force: true });
-          } catch {
-            // best-effort cleanup
-          }
-        }
-        process.stderr.write(
-          `codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
-        );
-        process.exitCode = 1;
-        return;
-      }
-      process.stderr.write(`codeindex: grammars extracted → ${cacheDir}\n`);
+      // The mechanic itself (sidecar checksum, idempotent skip, atomic install)
+      // lives in pullGrammars — shared verbatim with warmGrammars, so the CLI
+      // and the library warm-up can never drift apart. Here we only map its
+      // result onto the CLI contract: progress notes and the terminal message to
+      // stderr, non-zero exit on failure (which wrote nothing).
+      const res = await pullGrammars(cacheDir, { onNote: (m) => process.stderr.write(m) });
+      process.stderr.write(res.message);
+      if (!res.ok) process.exitCode = 1;
     } else {
       throw new Error("grammars needs a subcommand: status | pull");
     }

@@ -60,8 +60,14 @@ export {
   fetchExpectedSha256,
   extractTarInto,
   extractGrammarsTarball,
+  pullGrammars,
 } from "./ast/grammars-pull.js";
-export type { GrammarsPullTarget } from "./ast/grammars-pull.js";
+export type { GrammarsPullTarget, GrammarsPullResult } from "./ast/grammars-pull.js";
+// The one-call AST warm-up for consumers. `scanRepo` is synchronous and cannot
+// warm the grammars itself, so a consumer that never awaits this stays on the
+// regex tier forever — silently. Call it once at the CLI entry.
+export { warmGrammars } from "./ast/warm.js";
+export type { WarmGrammarsResult, WarmGrammarsOptions } from "./ast/warm.js";
 
 // Resolution + modules + graph tier.
 export { buildResolveContext, resolveImport, resolveDocLink } from "./resolve.js";
