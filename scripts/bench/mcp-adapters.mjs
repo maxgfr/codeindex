@@ -76,9 +76,14 @@ const primeReason = (r) =>
   r.missing ? "binary missing" : ((r.stderr || r.stdout || "").trim().replace(/\s+/g, " ").slice(0, 300) || `exit ${r.code}`);
 
 // ---------------------------------------------------------------------------
-// codeindex (self, over MCP). No prime/cleanCold: artifacts are built
-// in-process per call, nothing lands on disk. `repo` is REQUIRED in every
-// tool's arguments even though the server could infer it from cwd [probed].
+// codeindex (self, over MCP). Symmetric with falcon/graphify: prime() writes a
+// persisted .codeindex/ index (`codeindex index --out`) and the MCP server
+// PRELOADS it on the first tool call — a pure optimization, the served
+// responses stay byte-identical to a cold build (mcp.ts's preloadSession, guarded
+// by the same T4 stat/sha freshness oracle the CLI's index fastpath uses). So
+// activation loads-not-rebuilds, exactly the falcon pattern; the parse cost lives
+// in the Cold index column. `repo` is REQUIRED in every tool's arguments even
+// though the server could infer it from cwd [probed]; the preload keys off it.
 function codeindexAdapter(opts) {
   // engine.mjs is a pure module (no main guard); the runnable entry is cli.mjs.
   const cli = opts.engine ?? fileURLToPath(new URL("../cli.mjs", import.meta.url));
@@ -86,6 +91,15 @@ function codeindexAdapter(opts) {
     key: "codeindex",
     perRepoSupport: () => null, // all 7 repos
     spawn(dir) { return { cmd: process.execPath, args: [cli, "mcp"], cwd: dir }; },
+    // Prime a persisted index the MCP server preloads on activation — the same
+    // untimed one-time build the other servers do (falcon index / graphify
+    // update). --out <dir>/.codeindex is exactly where mcp.ts's preload looks.
+    prime(dir) {
+      const r = runCmd(process.execPath, [cli, "index", "--repo", dir, "--out", join(dir, ".codeindex")],
+        { cwd: dir, env: benchEnv(), timeoutMs: PRIME_TIMEOUT_MS });
+      return r.ok ? { ok: true } : { ok: false, reason: primeReason(r) };
+    },
+    cleanCold(dir) { rmrf(join(dir, ".codeindex")); }, // nothing global is written
     tasks(tools) {
       const m = toolMap(tools);
       return {

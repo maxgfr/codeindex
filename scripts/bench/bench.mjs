@@ -155,10 +155,12 @@ const probeCache = new Map(); // "slug:server" -> parsed probe JSON | {ok:false,
 const probeScratch = new Map(); // slug -> scratch source copy holding kept artifacts
 
 function probeWorkDir(ctx, server) {
-  if (server === "codeindex") return ctx.dir(); // writes nothing to disk
-  // One scratch copy per repo, shared by serena/graphify/falcon: their artifact
-  // dirs (.serena/, graphify-out/, .falcon/) are disjoint, and the shared clone
-  // cache must never grow artifacts (harness invariant).
+  // One scratch copy per repo, shared by all four servers: their artifact dirs
+  // (.codeindex/, .serena/, graphify-out/, .falcon/) are disjoint, and the shared
+  // clone cache must never grow artifacts (harness invariant). codeindex now
+  // primes a persisted .codeindex/ index the same way (its MCP server preloads it
+  // on activation), so it too works on the scratch copy rather than in place; it
+  // is probed FIRST (MCP_SERVERS order), so its cold prime scan sees only source.
   let w = probeScratch.get(ctx.repo.slug);
   if (!w) { w = copySource(ctx.dir()); probeScratch.set(ctx.repo.slug, w); }
   return w;
@@ -484,7 +486,7 @@ function scenarioMcpSessions(ctxs, comp, cfg) {
   }
   return {
     id: "mcp-sessions", title: "MCP sessions (activate + per-call queries)",
-    note: "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
+    note: "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify, falcon, and now codeindex load prebuilt artifacts rather than rebuilding — codeindex primes a persisted `.codeindex/` index and its MCP server preloads it on the first call (a pure optimization: served responses stay byte-identical to a cold build), the same pattern as `falcon mcp serve` / graphify-mcp, so its parse cost lives in the Cold index column (the `codeindex` cold cell, where it already sits) and `activate->ready` here reflects load-not-rebuild. The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
     headers: ["Repo", "Server", "Symbol", "activate->ready (ms)", "find-symbol (ms)", "references (ms)", "file-overview (ms)"],
     rows,
   };
