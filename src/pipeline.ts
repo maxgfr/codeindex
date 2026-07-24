@@ -1,13 +1,13 @@
 import type { Graph, SymbolIndex } from "./types.js";
 import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
-import { buildResolveContext } from "./resolve.js";
+import { resolveContextFor, symbolRefsFor } from "./derived.js";
 import { buildModules } from "./modules.js";
 import { buildGraph } from "./graph.js";
 import { detectCommunities } from "./community.js";
 import { applyCentrality } from "./centrality.js";
 import { computeTestMap } from "./tests-map.js";
 import { computeSurprises } from "./surprise.js";
-import { buildSymbolIndex, computeSymbolRefs } from "./render/symbols-json.js";
+import { buildSymbolIndex } from "./render/symbols-json.js";
 
 export interface BuildIndexOptions extends ScanOptions {
   // Stamped into the graph a consumer persists — lets it carry its own
@@ -38,7 +38,10 @@ export function buildIndexArtifacts(repo: string, opts: BuildIndexOptions = {}):
 // Lets a caller that already holds a RepoScan build the artifacts without
 // re-walking the repo.
 export function buildArtifactsFromScan(scan: RepoScan, opts: BuildIndexOptions = {}): IndexArtifacts {
-  const ctx = buildResolveContext(scan);
+  // Per-scan cache accessors (src/derived.ts): identical values to the direct
+  // builders, and building here PRE-WARMS the WeakMap so later queries on this
+  // same scan object (findReferences, findDeadCode, …) reuse the work.
+  const ctx = resolveContextFor(scan);
   const { modules, moduleOf } = buildModules(scan);
   const graph = buildGraph(scan, ctx, modules, moduleOf, opts.meta);
 
@@ -62,6 +65,6 @@ export function buildArtifactsFromScan(scan: RepoScan, opts: BuildIndexOptions =
   const surprises = computeSurprises(graph);
   if (surprises.length) graph.surprises = surprises;
 
-  const symbols = buildSymbolIndex(scan, computeSymbolRefs(scan));
+  const symbols = buildSymbolIndex(scan, symbolRefsFor(scan));
   return { scan, graph, symbols };
 }

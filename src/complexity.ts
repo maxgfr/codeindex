@@ -5,6 +5,7 @@
 // changed are where defects concentrate.
 import { join } from "node:path";
 import type { RepoScan } from "./scan.js";
+import { fileComplexityFor } from "./derived.js";
 import { readText } from "./walk.js";
 import { byStr } from "./sort.js";
 
@@ -57,10 +58,15 @@ export interface RiskHotspot {
 }
 
 export function riskHotspots(scan: RepoScan, churn: Map<string, number>, top = 20): RiskHotspot[] {
+  // Per-file branch counts memoized per scan (src/derived.ts): the first call
+  // still reads every code file from disk, repeat calls become map lookups.
+  // fileComplexityFor covers exactly the code files filtered below, so the
+  // lookup always hits.
+  const complexityByFile = fileComplexityFor(scan);
   const out: RiskHotspot[] = scan.files
     .filter((f) => f.kind === "code")
     .map((f) => {
-      const complexity = complexityOfSource(readText(join(scan.root, f.rel)));
+      const complexity = complexityByFile.get(f.rel)!;
       const commits = churn.get(f.rel) ?? 0;
       return { file: f.rel, complexity, commits, score: (commits + 1) * complexity };
     });

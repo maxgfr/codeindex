@@ -14,7 +14,7 @@
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { familyOf, pickCandidate, type Cand } from "./calls.js";
-import { buildResolveContext, resolveImport } from "./resolve.js";
+import { importPairsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
@@ -48,19 +48,12 @@ export interface CallerEntry {
 export type CallerIndex = Map<string, CallerEntry>;
 
 // `${from}|${to}` pairs of resolved imports — the same corroboration set the
-// graph builder feeds resolveCallEdges. Computed here for standalone use;
-// callers that already ran the graph can pass their own set instead.
+// graph builder feeds resolveCallEdges. Computed (and memoized) per scan in
+// src/derived.ts; callers that already ran the graph can pass their own set
+// instead. Returns a FRESH Set — the public contract is that the caller owns
+// the result, so a consumer mutation must never reach the cached set.
 export function computeImportPairs(scan: RepoScan): Set<string> {
-  const ctx = buildResolveContext(scan);
-  const pairs = new Set<string>();
-  for (const f of scan.files) {
-    for (const ref of f.refs) {
-      if (ref.kind !== "import") continue;
-      const r = resolveImport(f.rel, f.ext, ref.spec, ctx);
-      if (r.kind === "resolved" && r.target !== f.rel) pairs.add(`${f.rel}|${r.target}`);
-    }
-  }
-  return pairs;
+  return new Set(importPairsFor(scan));
 }
 
 export function buildCallerIndex(
@@ -68,7 +61,10 @@ export function buildCallerIndex(
   importPairs?: Set<string>,
   opts: CallerIndexOptions = {},
 ): CallerIndex {
-  const pairs = importPairs ?? computeImportPairs(scan);
+  // Read-only use of the memoized pair set (no copy needed: only .has below).
+  // The INDEX built here is always fresh — the public path never memoizes it;
+  // the default-opts cache lives in derived.ts's callerIndexFor.
+  const pairs = importPairs ?? importPairsFor(scan);
   const recall = opts.recall === true;
 
   // name → def sites (first symbol per (name, file) wins, like resolveCallEdges).

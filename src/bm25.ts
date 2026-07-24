@@ -17,6 +17,7 @@
 // query byte-identical: the expansion only ever engages on terms that would
 // otherwise contribute nothing.
 import type { RepoScan } from "./scan.js";
+import { bm25DocsFor, bm25TrigramsFor } from "./derived.js";
 import { foldText, keywords } from "./util.js";
 import { byStr } from "./sort.js";
 
@@ -72,7 +73,10 @@ export function subtokens(raw: string): string[] {
   return out;
 }
 
-interface Doc {
+// Exported for src/derived.ts's per-scan cache only — NOT part of the public
+// barrel (engine.ts). searchIndex reads docs strictly, never mutates them, so
+// the cached array/objects can be shared across calls on the same scan.
+export interface Doc {
   file: string;
   tf: Map<string, number>;
   len: number; // total token occurrences (the BM25 length normalizer)
@@ -86,7 +90,8 @@ function addTerms(doc: Doc, text: string): void {
   }
 }
 
-function buildDocs(scan: RepoScan): Doc[] {
+// Exported for src/derived.ts (bm25DocsFor) — not in the public barrel.
+export function buildDocs(scan: RepoScan): Doc[] {
   const docs: Doc[] = [];
   for (const f of scan.files) {
     const doc: Doc = { file: f.rel, tf: new Map(), len: 0, symbols: [] };
@@ -128,8 +133,9 @@ export function diceCoefficient(a: ReadonlySet<string>, b: ReadonlySet<string>):
 
 // Trigram index of the corpus vocabulary: every distinct doc token mapped to
 // its trigram set. Built LAZILY by searchIndex — only when >=1 query term has
-// df==0 — so a fully-matched query never pays this cost.
-function buildTrigramIndex(docs: Doc[]): Map<string, Set<string>> {
+// df==0 — so a fully-matched query never pays this cost. Exported for
+// src/derived.ts (bm25TrigramsFor) — not in the public barrel.
+export function buildTrigramIndex(docs: Doc[]): Map<string, Set<string>> {
   const index = new Map<string, Set<string>>();
   for (const d of docs) {
     for (const term of d.tf.keys()) {
@@ -155,7 +161,9 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
   }
   if (!terms.length) return [];
 
-  const docs = buildDocs(scan);
+  // Memoized per scan (src/derived.ts) — identical docs to a direct build;
+  // read-only from here on.
+  const docs = bm25DocsFor(scan);
   const n = docs.length;
   if (!n) return [];
   let totalLen = 0;
@@ -179,7 +187,9 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
   if (fuzzyEnabled) {
     const unmatched = terms.filter((t) => df.get(t) === 0);
     if (unmatched.length) {
-      const trigramIndex = buildTrigramIndex(docs);
+      // Still lazy (only reached on a zero-df term), now also cached per scan:
+      // the first fuzzy query builds the vocabulary trigrams, later ones reuse.
+      const trigramIndex = bm25TrigramsFor(scan);
       for (const t of unmatched) {
         const grams = charTrigrams(t);
         const candidates: { term: string; dice: number }[] = [];

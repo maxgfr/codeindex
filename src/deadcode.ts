@@ -7,8 +7,7 @@
 // consumed externally), not by substring matching.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { buildCallerIndex } from "./callers.js";
-import { computeSymbolRefs } from "./render/symbols-json.js";
+import { callerIndexFor, symbolRefsFor } from "./derived.js";
 import { isTestPath } from "./tests-map.js";
 import { byStr } from "./sort.js";
 
@@ -26,8 +25,10 @@ export interface DeadSymbol {
 }
 
 export function findDeadCode(scan: RepoScan): DeadSymbol[] {
-  const callers = buildCallerIndex(scan);
-  const refs = computeSymbolRefs(scan);
+  // Memoized per scan (src/derived.ts) and READ-ONLY here — this function
+  // only .get()s from both structures, so sharing the cached objects is safe.
+  const callers = callerIndexFor(scan);
+  const refs = symbolRefsFor(scan);
   const out: DeadSymbol[] = [];
   const consider = (s: CodeSymbol): boolean =>
     s.exported && !REFERENCE_KINDS.has(s.kind) && !isTestPath(s.file) && !ENTRYPOINT_RE.test(s.file);

@@ -7677,21 +7677,372 @@ var init_graph = __esm({
   }
 });
 
-// src/callers.ts
-function computeImportPairs(scan2) {
-  const ctx = buildResolveContext(scan2);
-  const pairs = /* @__PURE__ */ new Set();
+// src/render/symbols-json.ts
+function computeSymbolRefs(scan2) {
+  const unique = uniqueSymbolDefs(scan2);
+  const refs = /* @__PURE__ */ new Map();
+  if (!unique.size) return refs;
+  const add = (name2, file) => {
+    let set = refs.get(name2);
+    if (!set) refs.set(name2, set = /* @__PURE__ */ new Set());
+    set.add(file);
+  };
   for (const f of scan2.files) {
-    for (const ref of f.refs) {
-      if (ref.kind !== "import") continue;
-      const r = resolveImport(f.rel, f.ext, ref.spec, ctx);
-      if (r.kind === "resolved" && r.target !== f.rel) pairs.add(`${f.rel}|${r.target}`);
+    if (f.kind === "code" && f.idents) {
+      for (const id of f.idents) {
+        const target = unique.get(id);
+        if (target && target !== f.rel) add(id, f.rel);
+      }
+    } else if (f.kind === "doc") {
+      const content = scan2.docText.get(f.rel);
+      if (!content) continue;
+      for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
+        const target = unique.get(tok);
+        if (target && target !== f.rel) add(tok, f.rel);
+      }
     }
   }
-  return pairs;
+  return refs;
+}
+function buildSymbolIndex(scan2, refs = /* @__PURE__ */ new Map()) {
+  const defsByName = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) {
+    for (const s of f.symbols) {
+      let arr = defsByName.get(s.name);
+      if (!arr) defsByName.set(s.name, arr = []);
+      arr.push({
+        file: s.file,
+        line: s.line,
+        ...s.endLine !== void 0 ? { endLine: s.endLine } : {},
+        kind: s.kind,
+        exported: s.exported,
+        lang: s.lang,
+        ...s.parent ? { parent: s.parent } : {}
+      });
+    }
+  }
+  const defs = {};
+  for (const name2 of [...defsByName.keys()].sort(byStr)) {
+    defs[name2] = defsByName.get(name2).slice().sort((a, b) => byStr(a.file, b.file) || a.line - b.line || byStr(a.kind, b.kind));
+  }
+  const refsOut = {};
+  for (const name2 of [...refs.keys()].sort(byStr)) {
+    const files = [...refs.get(name2)].sort(byStr);
+    if (files.length) refsOut[name2] = files;
+  }
+  return { schemaVersion: SCHEMA_VERSION, defs, refs: refsOut };
+}
+function renderSymbolsJson(index) {
+  return JSON.stringify(index, null, 2) + "\n";
+}
+var init_symbols_json = __esm({
+  "src/render/symbols-json.ts"() {
+    "use strict";
+    init_types();
+    init_sort();
+    init_graph();
+  }
+});
+
+// src/bm25.ts
+function subtokens(raw) {
+  const folded = foldText(raw).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (t) => {
+    if (t.length < 2 || seen.has(t)) return;
+    seen.add(t);
+    out2.push(t);
+  };
+  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
+  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
+  return out2;
+}
+function addTerms(doc, text) {
+  for (const t of subtokens(text)) {
+    doc.tf.set(t, (doc.tf.get(t) ?? 0) + 1);
+    doc.len++;
+  }
+}
+function buildDocs(scan2) {
+  const docs = [];
+  for (const f of scan2.files) {
+    const doc = { file: f.rel, tf: /* @__PURE__ */ new Map(), len: 0, symbols: [] };
+    const seenSym = /* @__PURE__ */ new Set();
+    for (const s of f.symbols) {
+      addTerms(doc, s.name);
+      if (!seenSym.has(s.name)) {
+        seenSym.add(s.name);
+        doc.symbols.push(s.name);
+      }
+    }
+    for (const seg of f.rel.split("/")) addTerms(doc, seg);
+    for (const h of f.headings) addTerms(doc, h);
+    if (f.summary) addTerms(doc, f.summary);
+    docs.push(doc);
+  }
+  return docs;
+}
+function charTrigrams(term) {
+  const padded = `^^${term}$$`;
+  const grams = /* @__PURE__ */ new Set();
+  for (let i2 = 0; i2 + 3 <= padded.length; i2++) grams.add(padded.slice(i2, i2 + 3));
+  return grams;
+}
+function diceCoefficient(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const g of a) if (b.has(g)) inter++;
+  return 2 * inter / (a.size + b.size);
+}
+function buildTrigramIndex(docs) {
+  const index = /* @__PURE__ */ new Map();
+  for (const d of docs) {
+    for (const term of d.tf.keys()) {
+      if (!index.has(term)) index.set(term, charTrigrams(term));
+    }
+  }
+  return index;
+}
+function searchIndex(scan2, query, opts = {}) {
+  const terms = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const kw of keywords(query)) {
+    for (const t of subtokens(kw)) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      terms.push(t);
+    }
+  }
+  if (!terms.length) return [];
+  const docs = bm25DocsFor(scan2);
+  const n = docs.length;
+  if (!n) return [];
+  let totalLen = 0;
+  for (const d of docs) totalLen += d.len;
+  const avgLen = totalLen / n || 1;
+  const df = /* @__PURE__ */ new Map();
+  for (const t of terms) {
+    let count = 0;
+    for (const d of docs) if (d.tf.has(t)) count++;
+    df.set(t, count);
+  }
+  const fuzzyEnabled = opts.fuzzy ?? true;
+  const fuzzyCandidates = /* @__PURE__ */ new Map();
+  if (fuzzyEnabled) {
+    const unmatched = terms.filter((t) => df.get(t) === 0);
+    if (unmatched.length) {
+      const trigramIndex = bm25TrigramsFor(scan2);
+      for (const t of unmatched) {
+        const grams = charTrigrams(t);
+        const candidates = [];
+        for (const [vocabTerm, vocabGrams] of trigramIndex) {
+          const dice = diceCoefficient(grams, vocabGrams);
+          if (dice >= FUZZY_DICE_THRESHOLD) candidates.push({ term: vocabTerm, dice });
+        }
+        candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
+        fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
+      }
+    }
+  }
+  const vocabDf = /* @__PURE__ */ new Map();
+  const dfOfVocabTerm = (term) => {
+    const known = df.get(term) ?? vocabDf.get(term);
+    if (known !== void 0) return known;
+    let count = 0;
+    for (const d of docs) if (d.tf.has(term)) count++;
+    vocabDf.set(term, count);
+    return count;
+  };
+  const results = [];
+  for (const d of docs) {
+    let score = 0;
+    const matched = [];
+    const symbolTerms = /* @__PURE__ */ new Set();
+    const fuzzyHit = /* @__PURE__ */ new Set();
+    for (const t of terms) {
+      const tf = d.tf.get(t);
+      if (tf) {
+        matched.push(t);
+        symbolTerms.add(t);
+        const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
+        score += idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * d.len / avgLen));
+        continue;
+      }
+      const candidates = fuzzyCandidates.get(t);
+      if (!candidates) continue;
+      for (const cand of candidates) {
+        const ctf = d.tf.get(cand.term);
+        if (!ctf) continue;
+        const cdf = dfOfVocabTerm(cand.term);
+        const idf = Math.log(1 + (n - cdf + 0.5) / (cdf + 0.5));
+        const contribution = idf * (ctf * (K1 + 1)) / (ctf + K1 * (1 - B + B * d.len / avgLen));
+        score += contribution * cand.dice;
+        symbolTerms.add(cand.term);
+        fuzzyHit.add(t);
+      }
+    }
+    if (!matched.length && !fuzzyHit.size) continue;
+    const scored = d.symbols.map((name2) => {
+      const toks = new Set(subtokens(name2));
+      let hits = 0;
+      for (const t of symbolTerms) if (toks.has(t)) hits++;
+      return { name: name2, hits };
+    }).filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits || byStr(a.name, b.name));
+    const result = {
+      file: d.file,
+      score: Number(score.toFixed(4)),
+      matchedTerms: matched.sort(byStr),
+      topSymbols: scored.slice(0, TOP_SYMBOLS).map((s) => s.name)
+    };
+    if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
+    results.push(result);
+  }
+  results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
+  return results.slice(0, opts.limit ?? DEFAULT_LIMIT);
+}
+var K1, B, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP;
+var init_bm25 = __esm({
+  "src/bm25.ts"() {
+    "use strict";
+    init_derived();
+    init_util();
+    init_sort();
+    K1 = 1.2;
+    B = 0.75;
+    DEFAULT_LIMIT = 20;
+    TOP_SYMBOLS = 5;
+    FUZZY_DICE_THRESHOLD = 0.6;
+    FUZZY_CAP = 3;
+  }
+});
+
+// src/complexity.ts
+import { join as join5 } from "path";
+function complexityOfSource(source) {
+  return 1 + (source.match(BRANCH_RE) ?? []).length;
+}
+function symbolComplexity(scan2, rel, top = 50) {
+  const out2 = [];
+  for (const f of scan2.files) {
+    if (f.kind !== "code") continue;
+    if (rel && f.rel !== rel) continue;
+    if (!f.symbols.length) continue;
+    const lines = readText(join5(scan2.root, f.rel)).split("\n");
+    for (const s of f.symbols) {
+      if (s.kind === "reexport" || s.kind === "reexport-all") continue;
+      const end = s.endLine ?? s.line;
+      const body2 = lines.slice(s.line - 1, end).join("\n");
+      const entry = { file: f.rel, name: s.name, line: s.line, complexity: complexityOfSource(body2) };
+      if (s.endLine !== void 0) entry.endLine = s.endLine;
+      out2.push(entry);
+    }
+  }
+  out2.sort((a, b) => b.complexity - a.complexity || byStr(a.file, b.file) || a.line - b.line);
+  return out2.slice(0, top);
+}
+function riskHotspots(scan2, churn, top = 20) {
+  const complexityByFile = fileComplexityFor(scan2);
+  const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
+    const complexity = complexityByFile.get(f.rel);
+    const commits = churn.get(f.rel) ?? 0;
+    return { file: f.rel, complexity, commits, score: (commits + 1) * complexity };
+  });
+  out2.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
+  return out2.slice(0, top);
+}
+var BRANCH_RE;
+var init_complexity = __esm({
+  "src/complexity.ts"() {
+    "use strict";
+    init_derived();
+    init_walk();
+    init_sort();
+    BRANCH_RE = /\b(if|elif|elsif|else\s+if|for|foreach|while|until|unless|case|when|match|catch|rescue|except)\b|&&|\|\||(?<![?:])\?(?![?.:])/g;
+  }
+});
+
+// src/derived.ts
+import { join as join6 } from "path";
+function cacheFor(scan2) {
+  let c2 = caches.get(scan2);
+  if (!c2) caches.set(scan2, c2 = {});
+  return c2;
+}
+function resolveContextFor(scan2) {
+  const c2 = cacheFor(scan2);
+  return c2.resolveCtx ??= buildResolveContext(scan2);
+}
+function importPairsFor(scan2) {
+  const c2 = cacheFor(scan2);
+  if (!c2.importPairs) {
+    const ctx = resolveContextFor(scan2);
+    const pairs = /* @__PURE__ */ new Set();
+    for (const f of scan2.files) {
+      for (const ref of f.refs) {
+        if (ref.kind !== "import") continue;
+        const r = resolveImport(f.rel, f.ext, ref.spec, ctx);
+        if (r.kind === "resolved" && r.target !== f.rel) pairs.add(`${f.rel}|${r.target}`);
+      }
+    }
+    c2.importPairs = pairs;
+  }
+  return c2.importPairs;
+}
+function uniqueDefsFor(scan2) {
+  const c2 = cacheFor(scan2);
+  return c2.uniqueDefs ??= uniqueSymbolDefs(scan2);
+}
+function symbolRefsFor(scan2) {
+  const c2 = cacheFor(scan2);
+  return c2.symbolRefs ??= computeSymbolRefs(scan2);
+}
+function callerIndexFor(scan2) {
+  const c2 = cacheFor(scan2);
+  return c2.callerIndex ??= buildCallerIndex(scan2, importPairsFor(scan2));
+}
+function bm25DocsFor(scan2) {
+  const c2 = cacheFor(scan2);
+  return (c2.bm25 ??= { docs: buildDocs(scan2) }).docs;
+}
+function bm25TrigramsFor(scan2) {
+  const c2 = cacheFor(scan2);
+  const bm25 = c2.bm25 ??= { docs: buildDocs(scan2) };
+  return bm25.trigrams ??= buildTrigramIndex(bm25.docs);
+}
+function fileComplexityFor(scan2) {
+  const c2 = cacheFor(scan2);
+  if (!c2.fileComplexity) {
+    const m = /* @__PURE__ */ new Map();
+    for (const f of scan2.files) {
+      if (f.kind !== "code") continue;
+      m.set(f.rel, complexityOfSource(readText(join6(scan2.root, f.rel))));
+    }
+    c2.fileComplexity = m;
+  }
+  return c2.fileComplexity;
+}
+var caches;
+var init_derived = __esm({
+  "src/derived.ts"() {
+    "use strict";
+    init_resolve();
+    init_graph();
+    init_symbols_json();
+    init_callers();
+    init_bm25();
+    init_complexity();
+    init_walk();
+    caches = /* @__PURE__ */ new WeakMap();
+  }
+});
+
+// src/callers.ts
+function computeImportPairs(scan2) {
+  return new Set(importPairsFor(scan2));
 }
 function buildCallerIndex(scan2, importPairs, opts = {}) {
-  const pairs = importPairs ?? computeImportPairs(scan2);
+  const pairs = importPairs ?? importPairsFor(scan2);
   const recall = opts.recall === true;
   const defs = /* @__PURE__ */ new Map();
   for (const f of scan2.files) {
@@ -7801,14 +8152,14 @@ var init_callers = __esm({
   "src/callers.ts"() {
     "use strict";
     init_calls();
-    init_resolve();
+    init_derived();
     init_sort();
     REFERENCE_KINDS3 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
   }
 });
 
 // src/query.ts
-import { join as join5 } from "path";
+import { join as join7 } from "path";
 function symbolsOverview(scan2, rel) {
   const f = scan2.files.find((x) => x.rel === rel);
   if (!f) return [];
@@ -7839,7 +8190,7 @@ function findSymbol(scan2, namePath, opts = {}) {
   if (opts.includeBody) {
     for (const m of capped) {
       const end = m.endLine ?? m.line;
-      const content = readText(join5(scan2.root, m.file));
+      const content = readText(join7(scan2.root, m.file));
       if (!content) continue;
       m.body = content.split("\n").slice(m.line - 1, end).join("\n");
     }
@@ -7854,11 +8205,11 @@ function findReferences(scan2, name2) {
     }
   }
   defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
-  const index = buildCallerIndex(scan2);
+  const index = callerIndexFor(scan2);
   const entry = index.get(name2);
-  const callSites = entry ? entry.callers : [];
+  const callSites = entry ? [...entry.callers] : [];
   const referencingFiles = /* @__PURE__ */ new Set();
-  const unique = uniqueSymbolDefs(scan2);
+  const unique = uniqueDefsFor(scan2);
   const defFile = unique.get(name2);
   for (const f of scan2.files) {
     if (f.rel === defFile) continue;
@@ -7878,8 +8229,7 @@ var init_query = __esm({
   "src/query.ts"() {
     "use strict";
     init_walk();
-    init_callers();
-    init_graph();
+    init_derived();
     init_sort();
     REFERENCE_KINDS4 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
   }
@@ -7887,7 +8237,7 @@ var init_query = __esm({
 
 // src/edit.ts
 import { readFileSync as readFileSync3, writeFileSync } from "fs";
-import { join as join6 } from "path";
+import { join as join8 } from "path";
 function resolveUniqueSymbol(scan2, namePath, file) {
   let matches = findSymbol(scan2, namePath);
   if (file) matches = matches.filter((m) => m.file === file);
@@ -7905,7 +8255,7 @@ function readLines(abs) {
 function replaceSymbolBody(scan2, namePath, body2, file) {
   const sym = resolveUniqueSymbol(scan2, namePath, file);
   const end = sym.endLine ?? sym.line;
-  const abs = join6(scan2.root, sym.file);
+  const abs = join8(scan2.root, sym.file);
   const lines = readLines(abs);
   const newLines = body2.replace(/^\n+|\n+$/g, "").split("\n");
   lines.splice(sym.line - 1, end - sym.line + 1, ...newLines);
@@ -7913,7 +8263,7 @@ function replaceSymbolBody(scan2, namePath, body2, file) {
   return { file: sym.file, startLine: sym.line, endLine: sym.line + newLines.length - 1, lines: newLines.length };
 }
 function insertAt(scan2, sym, body2, index, blankBefore, blankAfter) {
-  const abs = join6(scan2.root, sym.file);
+  const abs = join8(scan2.root, sym.file);
   const lines = readLines(abs);
   const minGap = SEPARATED_KINDS.has(sym.kind) ? 1 : 0;
   const newLines = body2.replace(/^\n+|\n+$/g, "").split("\n");
@@ -7945,7 +8295,7 @@ var init_edit = __esm({
 
 // src/memory.ts
 import { mkdirSync, readdirSync as readdirSync2, readFileSync as readFileSync4, rmSync, statSync as statSync2, writeFileSync as writeFileSync2 } from "fs";
-import { dirname as dirname2, join as join7 } from "path";
+import { dirname as dirname2, join as join9 } from "path";
 function sanitize(name2) {
   const clean = name2.replace(/^mem:/, "").replace(/\.md$/, "");
   if (!clean) throw new Error("memory name is empty");
@@ -7959,7 +8309,7 @@ function sanitize(name2) {
   return clean;
 }
 function memoryPath(repo, name2) {
-  return join7(repo, ...MEMORY_DIR, `${sanitize(name2)}.md`);
+  return join9(repo, ...MEMORY_DIR, `${sanitize(name2)}.md`);
 }
 function writeMemory(repo, name2, content) {
   const path = memoryPath(repo, name2);
@@ -7985,7 +8335,7 @@ function deleteMemory(repo, name2) {
   return true;
 }
 function listMemories(repo) {
-  const root = join7(repo, ...MEMORY_DIR);
+  const root = join9(repo, ...MEMORY_DIR);
   const out2 = [];
   const walk2 = (dir, prefix) => {
     let entries;
@@ -7995,7 +8345,7 @@ function listMemories(repo) {
       return;
     }
     for (const e of entries) {
-      if (e.isDirectory()) walk2(join7(dir, e.name), prefix ? `${prefix}/${e.name}` : e.name);
+      if (e.isDirectory()) walk2(join9(dir, e.name), prefix ? `${prefix}/${e.name}` : e.name);
       else if (e.name.endsWith(".md")) out2.push(prefix ? `${prefix}/${e.name.slice(0, -3)}` : e.name.slice(0, -3));
     }
   };
@@ -8012,7 +8362,7 @@ var init_memory = __esm({
 
 // src/workspaces.ts
 import { existsSync as existsSync2, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
-import { join as join8 } from "path";
+import { join as join10 } from "path";
 function readJson(path, label, warnings) {
   const raw = readText(path);
   if (!raw) return void 0;
@@ -8063,7 +8413,7 @@ function wsGlobToRegExp(pat) {
   return new RegExp(`^${re}($|/)`);
 }
 function probeNodePkg(root, dir, kind, warnings) {
-  const path = join8(root, dir, "package.json");
+  const path = join10(root, dir, "package.json");
   if (!existsSync2(path)) return void 0;
   const manifest = `${dir}/package.json`;
   const pkg = readJson(path, manifest, warnings);
@@ -8077,7 +8427,7 @@ function probeNodePkg(root, dir, kind, warnings) {
   return out2;
 }
 function probeCargo(root, dir) {
-  const path = join8(root, dir, "Cargo.toml");
+  const path = join10(root, dir, "Cargo.toml");
   if (!existsSync2(path)) return void 0;
   const body2 = tomlSectionBody(readText(path), "package");
   const out2 = {
@@ -8091,18 +8441,18 @@ function probeCargo(root, dir) {
   return out2;
 }
 function probeGoMod(root, dir) {
-  const path = join8(root, dir, "go.mod");
+  const path = join10(root, dir, "go.mod");
   if (!existsSync2(path)) return void 0;
   const name2 = readText(path).match(/^module\s+(\S+)/m)?.[1] ?? dir;
   return { name: name2, dir, kind: "go", manifest: `${dir}/go.mod` };
 }
 function probeMaven(root, dir) {
-  const path = join8(root, dir, "pom.xml");
+  const path = join10(root, dir, "pom.xml");
   if (!existsSync2(path)) return void 0;
   return { name: ownArtifactId(readText(path)) ?? dir, dir, kind: "maven", manifest: `${dir}/pom.xml` };
 }
 function probePyproject(root, dir) {
-  const path = join8(root, dir, "pyproject.toml");
+  const path = join10(root, dir, "pyproject.toml");
   if (!existsSync2(path)) return void 0;
   const toml = readText(path);
   const project = tomlSectionBody(toml, "project");
@@ -8118,7 +8468,7 @@ function probePyproject(root, dir) {
   return out2;
 }
 function probeComposer(root, dir, warnings) {
-  const path = join8(root, dir, "composer.json");
+  const path = join10(root, dir, "composer.json");
   if (!existsSync2(path)) return void 0;
   const manifest = `${dir}/composer.json`;
   const pkg = readJson(path, manifest, warnings);
@@ -8132,7 +8482,7 @@ function probeComposer(root, dir, warnings) {
   return out2;
 }
 function probeNxProject(root, dir, warnings) {
-  const path = join8(root, dir, "project.json");
+  const path = join10(root, dir, "project.json");
   if (!existsSync2(path)) return void 0;
   const manifest = `${dir}/project.json`;
   const proj = readJson(path, manifest, warnings);
@@ -8145,7 +8495,7 @@ function probeNxProject(root, dir, warnings) {
 }
 function probeGradle(root, dir) {
   for (const f of ["build.gradle", "build.gradle.kts"]) {
-    if (existsSync2(join8(root, dir, f))) {
+    if (existsSync2(join10(root, dir, f))) {
       return { name: dir, dir, kind: "gradle", manifest: `${dir}/${f}` };
     }
   }
@@ -8180,7 +8530,7 @@ function addPackage(root, dir, found, kind, warnings) {
 }
 function isDirAt(root, rel) {
   try {
-    return statSync3(join8(root, rel)).isDirectory();
+    return statSync3(join10(root, rel)).isDirectory();
   } catch {
     return false;
   }
@@ -8188,7 +8538,7 @@ function isDirAt(root, rel) {
 function subdirsOf(root, base) {
   let entries;
   try {
-    entries = readdirSync3(base ? join8(root, base) : root, { withFileTypes: true });
+    entries = readdirSync3(base ? join10(root, base) : root, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -8250,14 +8600,14 @@ function npmFamilyPatterns(root, warnings) {
     if (t.startsWith("!")) negations.push(t.slice(1));
     else positives.push({ pattern: t, kind });
   };
-  const pkg = readJson(join8(root, "package.json"), "package.json", warnings);
+  const pkg = readJson(join10(root, "package.json"), "package.json", warnings);
   const ws = pkg?.workspaces;
   if (Array.isArray(ws)) {
     for (const x of ws) if (typeof x === "string") push(x, "npm");
   } else if (ws && typeof ws === "object" && Array.isArray(ws.packages)) {
     for (const x of ws.packages) if (typeof x === "string") push(x, "npm");
   }
-  const pnpm = readText(join8(root, "pnpm-workspace.yaml"));
+  const pnpm = readText(join10(root, "pnpm-workspace.yaml"));
   let inPackages = false;
   for (const line of pnpm.split(/\r?\n/)) {
     if (/^\S/.test(line)) {
@@ -8271,11 +8621,11 @@ function npmFamilyPatterns(root, warnings) {
   return { positives, negations };
 }
 function fallbackNpmPatterns(root, warnings) {
-  const lerna = readJson(join8(root, "lerna.json"), "lerna.json", warnings);
+  const lerna = readJson(join10(root, "lerna.json"), "lerna.json", warnings);
   if (lerna && Array.isArray(lerna.packages)) {
     return lerna.packages.filter((x) => typeof x === "string").map((pattern) => ({ pattern, kind: "lerna" }));
   }
-  const nx = readJson(join8(root, "nx.json"), "nx.json", warnings);
+  const nx = readJson(join10(root, "nx.json"), "nx.json", warnings);
   if (nx) {
     const layout = nx.workspaceLayout ?? {};
     const appsDir = typeof layout.appsDir === "string" ? layout.appsDir : "apps";
@@ -8285,7 +8635,7 @@ function fallbackNpmPatterns(root, warnings) {
   return [];
 }
 function detectCargoMembers(root, found, warnings) {
-  const toml = readText(join8(root, "Cargo.toml"));
+  const toml = readText(join10(root, "Cargo.toml"));
   if (!toml) return;
   const body2 = tomlSectionBody(toml, "workspace");
   if (!body2) return;
@@ -8300,7 +8650,7 @@ function detectCargoMembers(root, found, warnings) {
   }
 }
 function detectGoWork(root, found, warnings) {
-  const gowork = readText(join8(root, "go.work"));
+  const gowork = readText(join10(root, "go.work"));
   if (!gowork) return;
   const dirs = [];
   for (const block of gowork.matchAll(/^use\s*\(([\s\S]*?)\)/gm)) {
@@ -8316,7 +8666,7 @@ function detectGoWork(root, found, warnings) {
   }
 }
 function detectMavenModules(root, found, warnings) {
-  const pom = readText(join8(root, "pom.xml"));
+  const pom = readText(join10(root, "pom.xml"));
   if (!pom) return;
   const modules = pom.match(/<modules>([\s\S]*?)<\/modules>/)?.[1];
   if (!modules) return;
@@ -8325,7 +8675,7 @@ function detectMavenModules(root, found, warnings) {
   }
 }
 function detectUvMembers(root, found, warnings) {
-  const toml = readText(join8(root, "pyproject.toml"));
+  const toml = readText(join10(root, "pyproject.toml"));
   if (!toml) return;
   const body2 = tomlSectionBody(toml, "tool.uv.workspace");
   if (!body2) return;
@@ -8340,7 +8690,7 @@ function detectUvMembers(root, found, warnings) {
   }
 }
 function detectComposerPathRepos(root, found, warnings) {
-  const composer = readJson(join8(root, "composer.json"), "composer.json", warnings);
+  const composer = readJson(join10(root, "composer.json"), "composer.json", warnings);
   const repos = composer?.repositories;
   if (!Array.isArray(repos)) return;
   for (const r of repos) {
@@ -8351,7 +8701,7 @@ function detectComposerPathRepos(root, found, warnings) {
 }
 function detectGradleIncludes(root, found, warnings) {
   for (const f of ["settings.gradle", "settings.gradle.kts"]) {
-    const text = readText(join8(root, f));
+    const text = readText(join10(root, f));
     if (!text) continue;
     for (const line of text.split(/\r?\n/)) {
       if (!/^\s*include[\s(]/.test(line)) continue;
@@ -8363,7 +8713,7 @@ function detectGradleIncludes(root, found, warnings) {
   }
 }
 function npmEdges(root, pkg, byName, warnings) {
-  const manifest = readJson(join8(root, pkg.dir, "package.json"), `${pkg.dir}/package.json`, warnings);
+  const manifest = readJson(join10(root, pkg.dir, "package.json"), `${pkg.dir}/package.json`, warnings);
   if (!manifest) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
@@ -8386,7 +8736,7 @@ function normalizeDepPath(fromDir, rel) {
   return out2.join("/");
 }
 function cargoEdges(root, pkg, byName, byDir) {
-  const toml = readText(join8(root, pkg.dir, "Cargo.toml"));
+  const toml = readText(join10(root, pkg.dir, "Cargo.toml"));
   if (!toml) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const section of ["dependencies", "dev-dependencies", "build-dependencies"]) {
@@ -8410,7 +8760,7 @@ function cargoEdges(root, pkg, byName, byDir) {
   return [...edges];
 }
 function goPkgEdges(root, pkg, byName, byDir) {
-  const gomod = readText(join8(root, pkg.dir, "go.mod"));
+  const gomod = readText(join10(root, pkg.dir, "go.mod"));
   if (!gomod) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const m of gomod.matchAll(/^\s*(?:require\s+)?([^\s/(][^\s]*)\s+v[^\s]+/gm)) {
@@ -8424,7 +8774,7 @@ function goPkgEdges(root, pkg, byName, byDir) {
   return [...edges];
 }
 function mavenEdges(root, pkg, byName) {
-  const pom = readText(join8(root, pkg.dir, "pom.xml"));
+  const pom = readText(join10(root, pkg.dir, "pom.xml"));
   if (!pom) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const m of pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
@@ -8434,7 +8784,7 @@ function mavenEdges(root, pkg, byName) {
   return [...edges];
 }
 function uvEdges(root, pkg, byName) {
-  const toml = readText(join8(root, pkg.dir, "pyproject.toml"));
+  const toml = readText(join10(root, pkg.dir, "pyproject.toml"));
   if (!toml) return [];
   const edges = /* @__PURE__ */ new Set();
   const project = tomlSectionBody(toml, "project");
@@ -8454,7 +8804,7 @@ function uvEdges(root, pkg, byName) {
   return [...edges];
 }
 function composerEdges(root, pkg, byName, warnings) {
-  const manifest = readJson(join8(root, pkg.dir, "composer.json"), `${pkg.dir}/composer.json`, warnings);
+  const manifest = readJson(join10(root, pkg.dir, "composer.json"), `${pkg.dir}/composer.json`, warnings);
   if (!manifest) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const field of ["require", "require-dev"]) {
@@ -8468,7 +8818,7 @@ function composerEdges(root, pkg, byName, warnings) {
 }
 function gradleEdges(root, pkg, byName, byDir) {
   for (const f of ["build.gradle", "build.gradle.kts"]) {
-    const text = readText(join8(root, pkg.dir, f));
+    const text = readText(join10(root, pkg.dir, f));
     if (!text) continue;
     const edges = /* @__PURE__ */ new Set();
     for (const m of text.matchAll(/project\s*\(\s*["']:?([^"']+)["']\s*\)/g)) {
@@ -9051,73 +9401,6 @@ var init_surprise = __esm({
   }
 });
 
-// src/render/symbols-json.ts
-function computeSymbolRefs(scan2) {
-  const unique = uniqueSymbolDefs(scan2);
-  const refs = /* @__PURE__ */ new Map();
-  if (!unique.size) return refs;
-  const add = (name2, file) => {
-    let set = refs.get(name2);
-    if (!set) refs.set(name2, set = /* @__PURE__ */ new Set());
-    set.add(file);
-  };
-  for (const f of scan2.files) {
-    if (f.kind === "code" && f.idents) {
-      for (const id of f.idents) {
-        const target = unique.get(id);
-        if (target && target !== f.rel) add(id, f.rel);
-      }
-    } else if (f.kind === "doc") {
-      const content = scan2.docText.get(f.rel);
-      if (!content) continue;
-      for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
-        const target = unique.get(tok);
-        if (target && target !== f.rel) add(tok, f.rel);
-      }
-    }
-  }
-  return refs;
-}
-function buildSymbolIndex(scan2, refs = /* @__PURE__ */ new Map()) {
-  const defsByName = /* @__PURE__ */ new Map();
-  for (const f of scan2.files) {
-    for (const s of f.symbols) {
-      let arr = defsByName.get(s.name);
-      if (!arr) defsByName.set(s.name, arr = []);
-      arr.push({
-        file: s.file,
-        line: s.line,
-        ...s.endLine !== void 0 ? { endLine: s.endLine } : {},
-        kind: s.kind,
-        exported: s.exported,
-        lang: s.lang,
-        ...s.parent ? { parent: s.parent } : {}
-      });
-    }
-  }
-  const defs = {};
-  for (const name2 of [...defsByName.keys()].sort(byStr)) {
-    defs[name2] = defsByName.get(name2).slice().sort((a, b) => byStr(a.file, b.file) || a.line - b.line || byStr(a.kind, b.kind));
-  }
-  const refsOut = {};
-  for (const name2 of [...refs.keys()].sort(byStr)) {
-    const files = [...refs.get(name2)].sort(byStr);
-    if (files.length) refsOut[name2] = files;
-  }
-  return { schemaVersion: SCHEMA_VERSION, defs, refs: refsOut };
-}
-function renderSymbolsJson(index) {
-  return JSON.stringify(index, null, 2) + "\n";
-}
-var init_symbols_json = __esm({
-  "src/render/symbols-json.ts"() {
-    "use strict";
-    init_types();
-    init_sort();
-    init_graph();
-  }
-});
-
 // src/render/graph-json.ts
 function sortObject(obj) {
   const out2 = {};
@@ -9140,7 +9423,7 @@ function buildIndexArtifacts(repo, opts = {}) {
   return buildArtifactsFromScan(scanRepo(repo, opts), opts);
 }
 function buildArtifactsFromScan(scan2, opts = {}) {
-  const ctx = buildResolveContext(scan2);
+  const ctx = resolveContextFor(scan2);
   const { modules, moduleOf } = buildModules(scan2);
   const graph = buildGraph(scan2, ctx, modules, moduleOf, opts.meta);
   const communities = detectCommunities(graph.modules, graph.moduleEdges, opts.previousCommunities);
@@ -9159,14 +9442,14 @@ function buildArtifactsFromScan(scan2, opts = {}) {
   }
   const surprises = computeSurprises(graph);
   if (surprises.length) graph.surprises = surprises;
-  const symbols = buildSymbolIndex(scan2, computeSymbolRefs(scan2));
+  const symbols = buildSymbolIndex(scan2, symbolRefsFor(scan2));
   return { scan: scan2, graph, symbols };
 }
 var init_pipeline = __esm({
   "src/pipeline.ts"() {
     "use strict";
     init_scan();
-    init_resolve();
+    init_derived();
     init_modules();
     init_graph();
     init_community();
@@ -9257,190 +9540,18 @@ var init_grep = __esm({
   }
 });
 
-// src/bm25.ts
-function subtokens(raw) {
-  const folded = foldText(raw).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
-  const out2 = [];
-  const seen = /* @__PURE__ */ new Set();
-  const push = (t) => {
-    if (t.length < 2 || seen.has(t)) return;
-    seen.add(t);
-    out2.push(t);
-  };
-  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
-  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
-  return out2;
-}
-function addTerms(doc, text) {
-  for (const t of subtokens(text)) {
-    doc.tf.set(t, (doc.tf.get(t) ?? 0) + 1);
-    doc.len++;
-  }
-}
-function buildDocs(scan2) {
-  const docs = [];
-  for (const f of scan2.files) {
-    const doc = { file: f.rel, tf: /* @__PURE__ */ new Map(), len: 0, symbols: [] };
-    const seenSym = /* @__PURE__ */ new Set();
-    for (const s of f.symbols) {
-      addTerms(doc, s.name);
-      if (!seenSym.has(s.name)) {
-        seenSym.add(s.name);
-        doc.symbols.push(s.name);
-      }
-    }
-    for (const seg of f.rel.split("/")) addTerms(doc, seg);
-    for (const h of f.headings) addTerms(doc, h);
-    if (f.summary) addTerms(doc, f.summary);
-    docs.push(doc);
-  }
-  return docs;
-}
-function charTrigrams(term) {
-  const padded = `^^${term}$$`;
-  const grams = /* @__PURE__ */ new Set();
-  for (let i2 = 0; i2 + 3 <= padded.length; i2++) grams.add(padded.slice(i2, i2 + 3));
-  return grams;
-}
-function diceCoefficient(a, b) {
-  if (!a.size || !b.size) return 0;
-  let inter = 0;
-  for (const g of a) if (b.has(g)) inter++;
-  return 2 * inter / (a.size + b.size);
-}
-function buildTrigramIndex(docs) {
-  const index = /* @__PURE__ */ new Map();
-  for (const d of docs) {
-    for (const term of d.tf.keys()) {
-      if (!index.has(term)) index.set(term, charTrigrams(term));
-    }
-  }
-  return index;
-}
-function searchIndex(scan2, query, opts = {}) {
-  const terms = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const kw of keywords(query)) {
-    for (const t of subtokens(kw)) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      terms.push(t);
-    }
-  }
-  if (!terms.length) return [];
-  const docs = buildDocs(scan2);
-  const n = docs.length;
-  if (!n) return [];
-  let totalLen = 0;
-  for (const d of docs) totalLen += d.len;
-  const avgLen = totalLen / n || 1;
-  const df = /* @__PURE__ */ new Map();
-  for (const t of terms) {
-    let count = 0;
-    for (const d of docs) if (d.tf.has(t)) count++;
-    df.set(t, count);
-  }
-  const fuzzyEnabled = opts.fuzzy ?? true;
-  const fuzzyCandidates = /* @__PURE__ */ new Map();
-  if (fuzzyEnabled) {
-    const unmatched = terms.filter((t) => df.get(t) === 0);
-    if (unmatched.length) {
-      const trigramIndex = buildTrigramIndex(docs);
-      for (const t of unmatched) {
-        const grams = charTrigrams(t);
-        const candidates = [];
-        for (const [vocabTerm, vocabGrams] of trigramIndex) {
-          const dice = diceCoefficient(grams, vocabGrams);
-          if (dice >= FUZZY_DICE_THRESHOLD) candidates.push({ term: vocabTerm, dice });
-        }
-        candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
-        fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
-      }
-    }
-  }
-  const vocabDf = /* @__PURE__ */ new Map();
-  const dfOfVocabTerm = (term) => {
-    const known = df.get(term) ?? vocabDf.get(term);
-    if (known !== void 0) return known;
-    let count = 0;
-    for (const d of docs) if (d.tf.has(term)) count++;
-    vocabDf.set(term, count);
-    return count;
-  };
-  const results = [];
-  for (const d of docs) {
-    let score = 0;
-    const matched = [];
-    const symbolTerms = /* @__PURE__ */ new Set();
-    const fuzzyHit = /* @__PURE__ */ new Set();
-    for (const t of terms) {
-      const tf = d.tf.get(t);
-      if (tf) {
-        matched.push(t);
-        symbolTerms.add(t);
-        const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
-        score += idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * d.len / avgLen));
-        continue;
-      }
-      const candidates = fuzzyCandidates.get(t);
-      if (!candidates) continue;
-      for (const cand of candidates) {
-        const ctf = d.tf.get(cand.term);
-        if (!ctf) continue;
-        const cdf = dfOfVocabTerm(cand.term);
-        const idf = Math.log(1 + (n - cdf + 0.5) / (cdf + 0.5));
-        const contribution = idf * (ctf * (K1 + 1)) / (ctf + K1 * (1 - B + B * d.len / avgLen));
-        score += contribution * cand.dice;
-        symbolTerms.add(cand.term);
-        fuzzyHit.add(t);
-      }
-    }
-    if (!matched.length && !fuzzyHit.size) continue;
-    const scored = d.symbols.map((name2) => {
-      const toks = new Set(subtokens(name2));
-      let hits = 0;
-      for (const t of symbolTerms) if (toks.has(t)) hits++;
-      return { name: name2, hits };
-    }).filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits || byStr(a.name, b.name));
-    const result = {
-      file: d.file,
-      score: Number(score.toFixed(4)),
-      matchedTerms: matched.sort(byStr),
-      topSymbols: scored.slice(0, TOP_SYMBOLS).map((s) => s.name)
-    };
-    if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
-    results.push(result);
-  }
-  results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
-  return results.slice(0, opts.limit ?? DEFAULT_LIMIT);
-}
-var K1, B, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP;
-var init_bm25 = __esm({
-  "src/bm25.ts"() {
-    "use strict";
-    init_util();
-    init_sort();
-    K1 = 1.2;
-    B = 0.75;
-    DEFAULT_LIMIT = 20;
-    TOP_SYMBOLS = 5;
-    FUZZY_DICE_THRESHOLD = 0.6;
-    FUZZY_CAP = 3;
-  }
-});
-
 // src/embed/model.ts
 import { createHash as createHash2 } from "crypto";
 import { existsSync as existsSync3, readFileSync as readFileSync5 } from "fs";
-import { join as join10 } from "path";
+import { join as join12 } from "path";
 function resolveEmbedModelDir(repo) {
   const env = process.env.CODEINDEX_EMBED_DIR;
   const candidates = [];
   if (env) candidates.push(env);
-  if (repo) candidates.push(join10(repo, ".codeindex", DEFAULT_EMBED_DIRNAME));
-  candidates.push(join10(process.cwd(), ".codeindex", DEFAULT_EMBED_DIRNAME));
+  if (repo) candidates.push(join12(repo, ".codeindex", DEFAULT_EMBED_DIRNAME));
+  candidates.push(join12(process.cwd(), ".codeindex", DEFAULT_EMBED_DIRNAME));
   for (const c2 of candidates) {
-    if (existsSync3(join10(c2, "model.json"))) return c2;
+    if (existsSync3(join12(c2, "model.json"))) return c2;
   }
   return void 0;
 }
@@ -9473,7 +9584,7 @@ function parseEmbedModel(raw, source) {
 }
 function loadEmbedModel(dir) {
   if (!dir) return void 0;
-  const path = join10(dir, "model.json");
+  const path = join12(dir, "model.json");
   if (!existsSync3(path)) return void 0;
   const raw = JSON.parse(readFileSync5(path, "utf8"));
   return parseEmbedModel(raw, path);
@@ -10092,8 +10203,8 @@ var init_repomap = __esm({
 
 // src/deadcode.ts
 function findDeadCode(scan2) {
-  const callers = buildCallerIndex(scan2);
-  const refs = computeSymbolRefs(scan2);
+  const callers = callerIndexFor(scan2);
+  const refs = symbolRefsFor(scan2);
   const out2 = [];
   const consider = (s) => s.exported && !REFERENCE_KINDS6.has(s.kind) && !isTestPath(s.file) && !ENTRYPOINT_RE.test(s.file);
   for (const f of scan2.files) {
@@ -10112,55 +10223,11 @@ var REFERENCE_KINDS6, ENTRYPOINT_RE;
 var init_deadcode = __esm({
   "src/deadcode.ts"() {
     "use strict";
-    init_callers();
-    init_symbols_json();
+    init_derived();
     init_tests_map();
     init_sort();
     REFERENCE_KINDS6 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
     ENTRYPOINT_RE = /(^|\/)(index|main|cli|app|server|engine)\.[a-z]+$/;
-  }
-});
-
-// src/complexity.ts
-import { join as join11 } from "path";
-function complexityOfSource(source) {
-  return 1 + (source.match(BRANCH_RE) ?? []).length;
-}
-function symbolComplexity(scan2, rel, top = 50) {
-  const out2 = [];
-  for (const f of scan2.files) {
-    if (f.kind !== "code") continue;
-    if (rel && f.rel !== rel) continue;
-    if (!f.symbols.length) continue;
-    const lines = readText(join11(scan2.root, f.rel)).split("\n");
-    for (const s of f.symbols) {
-      if (s.kind === "reexport" || s.kind === "reexport-all") continue;
-      const end = s.endLine ?? s.line;
-      const body2 = lines.slice(s.line - 1, end).join("\n");
-      const entry = { file: f.rel, name: s.name, line: s.line, complexity: complexityOfSource(body2) };
-      if (s.endLine !== void 0) entry.endLine = s.endLine;
-      out2.push(entry);
-    }
-  }
-  out2.sort((a, b) => b.complexity - a.complexity || byStr(a.file, b.file) || a.line - b.line);
-  return out2.slice(0, top);
-}
-function riskHotspots(scan2, churn, top = 20) {
-  const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
-    const complexity = complexityOfSource(readText(join11(scan2.root, f.rel)));
-    const commits = churn.get(f.rel) ?? 0;
-    return { file: f.rel, complexity, commits, score: (commits + 1) * complexity };
-  });
-  out2.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
-  return out2.slice(0, top);
-}
-var BRANCH_RE;
-var init_complexity = __esm({
-  "src/complexity.ts"() {
-    "use strict";
-    init_walk();
-    init_sort();
-    BRANCH_RE = /\b(if|elif|elsif|else\s+if|for|foreach|while|until|unless|case|when|match|catch|rescue|except)\b|&&|\|\||(?<![?:])\?(?![?.:])/g;
   }
 });
 
@@ -10210,7 +10277,7 @@ __export(mcp_exports, {
   scanFingerprint: () => scanFingerprint
 });
 import { statSync as statSync4 } from "fs";
-import { join as join12 } from "path";
+import { join as join13 } from "path";
 import { createInterface } from "readline";
 function str(v) {
   return typeof v === "string" && v ? v : void 0;
@@ -10234,7 +10301,7 @@ async function memoizedEmbeddingIndex(key, build) {
 function memoizedEmbedModel(modelDir) {
   let stat;
   try {
-    stat = statSync4(join12(modelDir, "model.json"));
+    stat = statSync4(join13(modelDir, "model.json"));
   } catch {
     return void 0;
   }
@@ -10931,7 +10998,7 @@ init_graph_json();
 init_types();
 init_walk();
 init_sort();
-import { join as join9 } from "path";
+import { join as join11 } from "path";
 var utf8 = new TextEncoder();
 function pushVarint(out2, n) {
   if (n < 0) throw new Error(`pushVarint: negative input ${n} is not a valid unsigned varint`);
@@ -11101,7 +11168,7 @@ function renderScip(scan2, opts = {}) {
   };
   const documents = [];
   for (const f of docs) {
-    const text = readText(join9(scan2.root, f.rel));
+    const text = readText(join11(scan2.root, f.rel));
     const lines = text.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
     const locate = (lineNo, name2) => {
       const line = lines[lineNo - 1];
@@ -11197,7 +11264,7 @@ init_hash();
 init_graph_json();
 init_symbols_json();
 import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "fs";
-import { join as join13, resolve } from "path";
+import { join as join14, resolve } from "path";
 init_scan();
 init_callers();
 init_workspaces();
@@ -11365,7 +11432,7 @@ async function runCli(argv) {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync2(outDir, { recursive: true });
-    const cachePath = join13(outDir, "cache.json");
+    const cachePath = join14(outDir, "cache.json");
     let cache;
     let meta = {};
     try {
@@ -11385,9 +11452,9 @@ async function runCli(argv) {
     const scan2 = scanRepo(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
-    const graphPath = join13(outDir, "graph.json");
-    const symbolsPath = join13(outDir, "symbols.json");
-    const embedPath = join13(outDir, "embeddings.bin");
+    const graphPath = join14(outDir, "graph.json");
+    const symbolsPath = join14(outDir, "symbols.json");
+    const embedPath = join14(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
         return sha1(readFileSync6(path));
@@ -11571,14 +11638,14 @@ async function runCli(argv) {
       mkdirSync2(flags2.out, { recursive: true });
       const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
       const index = buildEmbeddingIndex(scan2, model);
-      writeFileSync3(join13(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      writeFileSync3(join14(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
       const { url, sha256 } = resolveEmbedPullUrl();
-      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join13(flags2.repo, ".codeindex", "models");
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join14(flags2.repo, ".codeindex", "models");
       mkdirSync2(destDir, { recursive: true });
-      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join13(destDir, "model.json")}
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join14(destDir, "model.json")}
 `);
       let body2;
       try {
@@ -11599,8 +11666,8 @@ async function runCli(argv) {
         process.exitCode = 1;
         return;
       }
-      writeFileSync3(join13(destDir, "model.json"), body2);
-      process.stderr.write(`codeindex: model written to ${join13(destDir, "model.json")}
+      writeFileSync3(join14(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join14(destDir, "model.json")}
 `);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");

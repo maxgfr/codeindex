@@ -8,8 +8,8 @@ import { join } from "node:path";
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { readText } from "./walk.js";
-import { buildCallerIndex, type CallerSite } from "./callers.js";
-import { uniqueSymbolDefs } from "./graph.js";
+import type { CallerSite } from "./callers.js";
+import { callerIndexFor, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
@@ -95,12 +95,15 @@ export function findReferences(scan: RepoScan, name: string): SymbolReferences {
   }
   defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
 
-  const index = buildCallerIndex(scan);
+  const index = callerIndexFor(scan);
   const entry = index.get(name);
-  const callSites = entry ? entry.callers : [];
+  // COPY, not alias: the caller index is memoized per scan (src/derived.ts),
+  // so handing out the cached array would let a consumer mutation poison
+  // every later findReferences on this scan.
+  const callSites = entry ? [...entry.callers] : [];
 
   const referencingFiles = new Set<string>();
-  const unique = uniqueSymbolDefs(scan);
+  const unique = uniqueDefsFor(scan);
   const defFile = unique.get(name);
   for (const f of scan.files) {
     if (f.rel === defFile) continue;
