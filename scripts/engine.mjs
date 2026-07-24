@@ -348,23 +348,26 @@ function walk(root, opts = {}) {
     if (!contained(real)) continue;
     let entries;
     try {
-      entries = readdirSync(frame.dir).sort();
+      entries = readdirSync(frame.dir, { withFileTypes: true }).sort(
+        (a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
     } catch {
       continue;
     }
     let rules = frame.rules;
-    if (useGitignore && entries.includes(".gitignore")) {
+    if (useGitignore && entries.some((e) => e.name === ".gitignore")) {
       const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel);
       if (parsed.length) rules = [...rules, ...parsed];
     }
-    for (const name2 of entries) {
+    for (const entry of entries) {
+      const name2 = entry.name;
       const abs = join(frame.dir, name2);
       const rel = frame.rel ? `${frame.rel}/${name2}` : name2;
+      const isLink = entry.isSymbolicLink();
+      if (entry.isDirectory() && ignoreDirs.has(name2)) continue;
       let st;
-      let isLink;
       try {
-        st = statSync(abs);
-        isLink = lstatSync(abs).isSymbolicLink();
+        st = isLink ? statSync(abs) : lstatSync(abs);
       } catch {
         continue;
       }

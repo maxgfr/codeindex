@@ -1,4 +1,4 @@
-import { readdirSync, statSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, type Dirent } from "node:fs";
 import { join, relative, sep, extname } from "node:path";
 import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
 
@@ -113,27 +113,44 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     if (seenDirs.has(real)) continue;
     seenDirs.add(real);
     if (!contained(real)) continue; // dir symlink escaping the repo
-    let entries: string[];
+    let entries: Dirent[];
     try {
       // Sorted so the walk order — and therefore WHICH files survive a
-      // maxFiles cap — is identical across filesystems and machines.
-      entries = readdirSync(frame.dir).sort();
+      // maxFiles cap — is identical across filesystems and machines. Dirents
+      // sort by .name under the same code-unit comparison the bare-string
+      // sort used, so the order is byte-identical to the previous readdir.
+      entries = readdirSync(frame.dir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+      );
     } catch {
       continue;
     }
     let rules = frame.rules;
-    if (useGitignore && entries.includes(".gitignore")) {
+    if (useGitignore && entries.some((e) => e.name === ".gitignore")) {
       const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel);
       if (parsed.length) rules = [...rules, ...parsed];
     }
-    for (const name of entries) {
+    for (const entry of entries) {
+      const name = entry.name;
       const abs = join(frame.dir, name);
       const rel = frame.rel ? `${frame.rel}/${name}` : name;
+      // The dirent type IS the lstat type (Node lstats internally when the
+      // filesystem can't supply it), so no lstat is needed to detect links.
+      const isLink = entry.isSymbolicLink();
+      // Ignored-directory boundary (node_modules, .git…): skip on the dirent
+      // type alone — ZERO stat syscalls. A symlink reports isDirectory()
+      // false on its dirent and falls through to the stat-based
+      // classification below, so a link named node_modules still classifies
+      // by its target exactly as before.
+      if (entry.isDirectory() && ignoreDirs.has(name)) continue;
       let st;
-      let isLink: boolean;
       try {
-        st = statSync(abs);
-        isLink = lstatSync(abs).isSymbolicLink();
+        // Non-links: a single lstatSync supplies isDirectory/isFile/size/
+        // mtimeMs — field-for-field what the previous statSync returned,
+        // since with no link to follow the two calls are identical. Links:
+        // keep the following statSync so the entry classifies by its TARGET;
+        // a broken link throws here and is skipped, same as before.
+        st = isLink ? statSync(abs) : lstatSync(abs);
       } catch {
         continue;
       }

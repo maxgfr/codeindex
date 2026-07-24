@@ -155,4 +155,28 @@ describe("symlink-escape guard", () => {
       .sort();
     expect(rels).toEqual(["alias.ts", "real.ts"]);
   });
+
+  // Dirent-based walk regression: one walk containing a symlinked FILE (kept,
+  // classified/sized by its TARGET), a symlinked DIR (skipped — canonical path
+  // only), a symlink NAMED like an ignored dir (still skipped via its target's
+  // type, since the dirent itself is a link, not a directory), and a broken
+  // symlink (skipped without aborting the walk).
+  it("classifies file, directory, ignored-name and broken symlinks by their targets", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-symlink-mix-"));
+    const body = "export const a = 1;\n";
+    mkdirSync(join(root, "lib"));
+    writeFileSync(join(root, "lib", "mod.ts"), body);
+    writeFileSync(join(root, "real.ts"), body);
+    symlinkSync(join(root, "real.ts"), join(root, "file-link.ts")); // in-repo file link
+    symlinkSync(join(root, "lib"), join(root, "lib-link")); // in-repo dir link
+    symlinkSync(join(root, "lib"), join(root, "node_modules")); // link named like an ignored dir
+    symlinkSync(join(root, "gone.ts"), join(root, "dangling.ts")); // broken link
+
+    const { files } = walk(root);
+    const rels = files.map((f) => f.rel).sort();
+    expect(rels).toEqual(["file-link.ts", "lib/mod.ts", "real.ts"]);
+    // The kept file link carries its TARGET's size (stat follows), not the
+    // link's own lstat size.
+    expect(files.find((f) => f.rel === "file-link.ts")!.size).toBe(Buffer.byteLength(body));
+  });
 });
