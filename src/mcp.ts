@@ -8,11 +8,11 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { ENGINE_VERSION } from "./types.js";
+import { ENGINE_VERSION, type FileRecord } from "./types.js";
 import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
-import { buildIndexArtifacts } from "./pipeline.js";
+import { buildArtifactsFromScan, type IndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { scanRepo, type RepoScan } from "./scan.js";
+import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
@@ -393,13 +393,109 @@ export function memoizedEmbedModel(modelDir: string): StaticEmbedModel | undefin
   return model;
 }
 
+// --- session-level scan + artifacts memoization ------------------------------
+// Same single-entry discipline as the embedding caches above: the MCP server
+// process is long-lived, but every tool call used to redo a FULL scanRepo walk
+// + read + hash + extraction pass (and, for graph-shaped tools, the whole
+// pipeline) even when nothing in the repo changed between requests. Cache the
+// last (repo, scan-opts) scan and feed its records back to scanRepo as `cache`
+// on the next call — scan.ts's EXISTING stat-fastpath + exact-hash machinery
+// is the freshness oracle, so a cache hit costs one walk + per-file stats, not
+// reads. When the oracle proves the content unchanged the SAME RepoScan object
+// is returned, which keeps the per-scan WeakMap of derived structures
+// (src/derived.ts) warm across requests. Artifacts are memoized on scan object
+// identity. Rendered strings are NEVER memoized — a big repo's graph.json runs
+// tens of MB, so renders stay per-call while the expensive structures behind
+// them are reused.
+//
+// Determinism: reused records come from scan.ts's own reuse paths (stat
+// fastpath / exact content-hash match), which produce records value-identical
+// to a from-scratch scan — artifacts stay byte-identical; only repeated work
+// disappears.
+
+// The scan options a session entry is keyed on. `cache`/`precomputedWalk` are
+// excluded from the contract: the session cache OWNS the cache it feeds back,
+// and a caller-supplied stale walk would desynchronize the freshness oracle.
+export type SessionScanOptions = Omit<ScanOptions, "cache" | "precomputedWalk">;
+
+type SessionCacheMap = Map<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }>;
+
+// A SINGLE entry — never an unbounded map — holding the most recent scan.
+let sessionCache:
+  | { key: string; scan: RepoScan; cacheMap: SessionCacheMap; arts?: IndexArtifacts }
+  | undefined;
+
+// Fixed property order (and JSON.stringify dropping undefined) keeps the key
+// deterministic regardless of how the caller assembled the options object.
+function sessionKey(repo: string, opts: SessionScanOptions): string {
+  return (
+    repo +
+    "\0" +
+    JSON.stringify({
+      scope: opts.scope,
+      include: opts.include,
+      exclude: opts.exclude,
+      gitignore: opts.gitignore,
+      ignoreDirs: opts.ignoreDirs,
+      maxBytes: opts.maxBytes,
+      maxFiles: opts.maxFiles,
+      maxCallsPerFile: opts.maxCallsPerFile,
+      out: opts.out,
+      fullHash: opts.fullHash,
+    })
+  );
+}
+
+// A scan re-expressed as the `ScanOptions.cache` shape (the exact map the CLI
+// persists as cache.json): rel → (hash, record, size, mtimeMs), so the next
+// scanRepo can take the stat fastpath / hash-match reuse paths against it.
+// Exported for tests.
+export function toCacheMap(scan: RepoScan): SessionCacheMap {
+  const m: SessionCacheMap = new Map();
+  for (const f of scan.files) m.set(f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: scan.mtimes.get(f.rel) });
+  return m;
+}
+
+// The memoizing replacement for scanRepo inside callTool. Exported for tests.
+export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
+  const key = sessionKey(repo, opts);
+  if (sessionCache && sessionCache.key === key) {
+    const fresh = scanRepo(repo, { ...opts, cache: sessionCache.cacheMap });
+    if (fresh.contentUnchanged) {
+      // Content proven identical → return the SAME object (object identity is
+      // what keeps derived.ts's WeakMap and the memoized artifacts warm). A
+      // stat-only drift (e.g. a bare touch) still refreshes the cache map so
+      // the next call's stat fastpath keys on the new (size, mtimeMs).
+      if (fresh.cacheDirty) sessionCache.cacheMap = toCacheMap(fresh);
+      return sessionCache.scan;
+    }
+    sessionCache = { key, scan: fresh, cacheMap: toCacheMap(fresh) };
+    return fresh;
+  }
+  const scan = scanRepo(repo, opts);
+  sessionCache = { key, scan, cacheMap: toCacheMap(scan) };
+  return scan;
+}
+
+// Lazy pipeline memoized on scan OBJECT IDENTITY: graph-shaped tools reuse the
+// artifacts exactly as long as getScan keeps returning the same scan object.
+// Exported for tests.
+export function getArtifacts(repo: string, opts: SessionScanOptions = {}): IndexArtifacts {
+  const scan = getScan(repo, opts);
+  if (sessionCache && sessionCache.scan === scan) {
+    return (sessionCache.arts ??= buildArtifactsFromScan(scan, opts));
+  }
+  // Defensive fallback (getScan always leaves sessionCache holding `scan`).
+  return buildArtifactsFromScan(scan, opts);
+}
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const repo = str(args.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
 
   if (name === "scan_summary") {
-    const scan = scanRepo(repo, scanOpts);
+    const scan = getScan(repo, scanOpts);
     return JSON.stringify(
       { engineVersion: ENGINE_VERSION, commit: scan.commit, fileCount: scan.files.length, languages: scan.languages, capped: scan.capped },
       null,
@@ -407,10 +503,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     );
   }
   if (name === "graph") {
-    return renderGraphJson(buildIndexArtifacts(repo, scanOpts).graph);
+    return renderGraphJson(getArtifacts(repo, scanOpts).graph);
   }
   if (name === "symbols") {
-    const { symbols } = buildIndexArtifacts(repo, scanOpts);
+    const { symbols } = getArtifacts(repo, scanOpts);
     const lookup = str(args.name);
     if (lookup) {
       return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
@@ -418,7 +514,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     return JSON.stringify(symbols, null, 2);
   }
   if (name === "callers") {
-    const index = buildCallerIndex(scanRepo(repo, scanOpts));
+    const index = buildCallerIndex(getScan(repo, scanOpts));
     const lookup = str(args.name);
     if (lookup) {
       const entry = index.get(lookup);
@@ -441,12 +537,12 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   if (name === "symbols_overview") {
     const file = str(args.file);
     if (!file) throw new Error("`file` is required");
-    return JSON.stringify(symbolsOverview(scanRepo(repo, scanOpts), file), null, 2);
+    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts), file), null, 2);
   }
   if (name === "find_symbol") {
     const namePath = str(args.namePath);
     if (!namePath) throw new Error("`namePath` is required");
-    const matches = findSymbol(scanRepo(repo, scanOpts), namePath, {
+    const matches = findSymbol(getScan(repo, scanOpts), namePath, {
       substring: args.substring === true,
       includeBody: args.includeBody === true,
     });
@@ -455,15 +551,23 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   if (name === "find_references") {
     const symName = str(args.name);
     if (!symName) throw new Error("`name` is required");
-    return JSON.stringify(findReferences(scanRepo(repo, scanOpts), symName), null, 2);
+    return JSON.stringify(findReferences(getScan(repo, scanOpts), symName), null, 2);
   }
   if (name === "replace_symbol_body" || name === "insert_after_symbol" || name === "insert_before_symbol") {
     const namePath = str(args.namePath);
     const body = typeof args.body === "string" ? args.body : undefined;
     if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
-    const scan = scanRepo(repo, scanOpts);
+    const scan = getScan(repo, scanOpts);
     const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
-    return JSON.stringify(fn(scan, namePath, body, str(args.file)), null, 2);
+    const result = fn(scan, namePath, body, str(args.file));
+    // A write WE just performed must not be trusted to the stat oracle: an
+    // edit landing in the same mtime tick with the same byte count would pass
+    // the (size, mtimeMs) fastpath and serve a stale scan. Drop the whole
+    // session entry unconditionally — the next call rescans from scratch.
+    // (write_memory needs no invalidation: .codeindex/ is excluded from the
+    // walk, so memories never enter a scan.)
+    sessionCache = undefined;
+    return JSON.stringify(result, null, 2);
   }
   if (name === "write_memory") {
     const memName = str(args.name);
@@ -487,10 +591,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name === "dead_code") {
-    return JSON.stringify(findDeadCode(scanRepo(repo, scanOpts)), null, 2);
+    return JSON.stringify(findDeadCode(getScan(repo, scanOpts)), null, 2);
   }
   if (name === "complexity") {
-    const scan = scanRepo(repo, scanOpts);
+    const scan = getScan(repo, scanOpts);
     if (args.risk === true) {
       const { churn, ok } = gitChurn(repo);
       return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2);
@@ -498,15 +602,15 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     return JSON.stringify(symbolComplexity(scan, str(args.file)), null, 2);
   }
   if (name === "mermaid") {
-    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts);
     return renderMermaid(graph, { module: str(args.module) });
   }
   if (name === "repo_map") {
-    const { scan, graph } = buildIndexArtifacts(repo, scanOpts);
+    const { scan, graph } = getArtifacts(repo, scanOpts);
     return renderRepoMap(scan, graph, { budgetTokens: typeof args.budgetTokens === "number" ? args.budgetTokens : undefined });
   }
   if (name === "hotspots") {
-    const scan = scanRepo(repo, scanOpts);
+    const scan = getScan(repo, scanOpts);
     const { churn, ok } = gitChurn(repo, { since: str(args.since) });
     return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2);
   }
@@ -527,7 +631,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   if (name === "search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
-    const scan = scanRepo(repo, scanOpts);
+    const scan = getScan(repo, scanOpts);
     const limit = typeof args.limit === "number" ? args.limit : undefined;
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     if (args.semantic === true) {
@@ -595,7 +699,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   }
   if (name === "check_rules") {
     const rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
-    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts);
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
   throw new Error(`unknown tool: ${name}`);

@@ -10271,10 +10271,13 @@ var init_viz = __esm({
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
+  getArtifacts: () => getArtifacts,
+  getScan: () => getScan,
   memoizedEmbedModel: () => memoizedEmbedModel,
   memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
   runMcpServer: () => runMcpServer,
-  scanFingerprint: () => scanFingerprint
+  scanFingerprint: () => scanFingerprint,
+  toCacheMap: () => toCacheMap
 });
 import { statSync as statSync4 } from "fs";
 import { join as join13 } from "path";
@@ -10311,12 +10314,53 @@ function memoizedEmbedModel(modelDir) {
   if (model) embedModelCache = { key, model };
   return model;
 }
+function sessionKey(repo, opts) {
+  return repo + "\0" + JSON.stringify({
+    scope: opts.scope,
+    include: opts.include,
+    exclude: opts.exclude,
+    gitignore: opts.gitignore,
+    ignoreDirs: opts.ignoreDirs,
+    maxBytes: opts.maxBytes,
+    maxFiles: opts.maxFiles,
+    maxCallsPerFile: opts.maxCallsPerFile,
+    out: opts.out,
+    fullHash: opts.fullHash
+  });
+}
+function toCacheMap(scan2) {
+  const m = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) m.set(f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: scan2.mtimes.get(f.rel) });
+  return m;
+}
+function getScan(repo, opts = {}) {
+  const key = sessionKey(repo, opts);
+  if (sessionCache && sessionCache.key === key) {
+    const fresh = scanRepo(repo, { ...opts, cache: sessionCache.cacheMap });
+    if (fresh.contentUnchanged) {
+      if (fresh.cacheDirty) sessionCache.cacheMap = toCacheMap(fresh);
+      return sessionCache.scan;
+    }
+    sessionCache = { key, scan: fresh, cacheMap: toCacheMap(fresh) };
+    return fresh;
+  }
+  const scan2 = scanRepo(repo, opts);
+  sessionCache = { key, scan: scan2, cacheMap: toCacheMap(scan2) };
+  return scan2;
+}
+function getArtifacts(repo, opts = {}) {
+  const scan2 = getScan(repo, opts);
+  if (sessionCache && sessionCache.scan === scan2) {
+    return sessionCache.arts ??= buildArtifactsFromScan(scan2, opts);
+  }
+  return buildArtifactsFromScan(scan2, opts);
+}
 async function callTool(name2, args2) {
   const repo = str(args2.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
   if (name2 === "scan_summary") {
-    const scan2 = scanRepo(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts);
     return JSON.stringify(
       { engineVersion: ENGINE_VERSION, commit: scan2.commit, fileCount: scan2.files.length, languages: scan2.languages, capped: scan2.capped },
       null,
@@ -10324,10 +10368,10 @@ async function callTool(name2, args2) {
     );
   }
   if (name2 === "graph") {
-    return renderGraphJson(buildIndexArtifacts(repo, scanOpts).graph);
+    return renderGraphJson(getArtifacts(repo, scanOpts).graph);
   }
   if (name2 === "symbols") {
-    const { symbols } = buildIndexArtifacts(repo, scanOpts);
+    const { symbols } = getArtifacts(repo, scanOpts);
     const lookup = str(args2.name);
     if (lookup) {
       return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
@@ -10335,7 +10379,7 @@ async function callTool(name2, args2) {
     return JSON.stringify(symbols, null, 2);
   }
   if (name2 === "callers") {
-    const index = buildCallerIndex(scanRepo(repo, scanOpts));
+    const index = buildCallerIndex(getScan(repo, scanOpts));
     const lookup = str(args2.name);
     if (lookup) {
       const entry = index.get(lookup);
@@ -10358,12 +10402,12 @@ async function callTool(name2, args2) {
   if (name2 === "symbols_overview") {
     const file = str(args2.file);
     if (!file) throw new Error("`file` is required");
-    return JSON.stringify(symbolsOverview(scanRepo(repo, scanOpts), file), null, 2);
+    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts), file), null, 2);
   }
   if (name2 === "find_symbol") {
     const namePath = str(args2.namePath);
     if (!namePath) throw new Error("`namePath` is required");
-    const matches = findSymbol(scanRepo(repo, scanOpts), namePath, {
+    const matches = findSymbol(getScan(repo, scanOpts), namePath, {
       substring: args2.substring === true,
       includeBody: args2.includeBody === true
     });
@@ -10372,15 +10416,17 @@ async function callTool(name2, args2) {
   if (name2 === "find_references") {
     const symName = str(args2.name);
     if (!symName) throw new Error("`name` is required");
-    return JSON.stringify(findReferences(scanRepo(repo, scanOpts), symName), null, 2);
+    return JSON.stringify(findReferences(getScan(repo, scanOpts), symName), null, 2);
   }
   if (name2 === "replace_symbol_body" || name2 === "insert_after_symbol" || name2 === "insert_before_symbol") {
     const namePath = str(args2.namePath);
     const body2 = typeof args2.body === "string" ? args2.body : void 0;
     if (!namePath || body2 === void 0) throw new Error("`namePath` and `body` are required");
-    const scan2 = scanRepo(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts);
     const fn = name2 === "replace_symbol_body" ? replaceSymbolBody : name2 === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
-    return JSON.stringify(fn(scan2, namePath, body2, str(args2.file)), null, 2);
+    const result = fn(scan2, namePath, body2, str(args2.file));
+    sessionCache = void 0;
+    return JSON.stringify(result, null, 2);
   }
   if (name2 === "write_memory") {
     const memName = str(args2.name);
@@ -10404,10 +10450,10 @@ async function callTool(name2, args2) {
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name2 === "dead_code") {
-    return JSON.stringify(findDeadCode(scanRepo(repo, scanOpts)), null, 2);
+    return JSON.stringify(findDeadCode(getScan(repo, scanOpts)), null, 2);
   }
   if (name2 === "complexity") {
-    const scan2 = scanRepo(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts);
     if (args2.risk === true) {
       const { churn, ok } = gitChurn(repo);
       return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2);
@@ -10415,15 +10461,15 @@ async function callTool(name2, args2) {
     return JSON.stringify(symbolComplexity(scan2, str(args2.file)), null, 2);
   }
   if (name2 === "mermaid") {
-    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts);
     return renderMermaid(graph, { module: str(args2.module) });
   }
   if (name2 === "repo_map") {
-    const { scan: scan2, graph } = buildIndexArtifacts(repo, scanOpts);
+    const { scan: scan2, graph } = getArtifacts(repo, scanOpts);
     return renderRepoMap(scan2, graph, { budgetTokens: typeof args2.budgetTokens === "number" ? args2.budgetTokens : void 0 });
   }
   if (name2 === "hotspots") {
-    const scan2 = scanRepo(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts);
     const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
     return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2);
   }
@@ -10444,7 +10490,7 @@ async function callTool(name2, args2) {
   if (name2 === "search") {
     const query = str(args2.query);
     if (!query) throw new Error("`query` is required");
-    const scan2 = scanRepo(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts);
     const limit = typeof args2.limit === "number" ? args2.limit : void 0;
     const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
     if (args2.semantic === true) {
@@ -10499,7 +10545,7 @@ async function callTool(name2, args2) {
   }
   if (name2 === "check_rules") {
     const rules = parseRules(args2.rules);
-    const { graph } = buildIndexArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts);
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
   throw new Error(`unknown tool: ${name2}`);
@@ -10560,7 +10606,7 @@ async function runMcpServer() {
     }
   }
 }
-var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, sessionCache;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";

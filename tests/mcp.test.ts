@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint } from "../src/mcp.js";
+import { getArtifacts, getScan, memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint, toCacheMap } from "../src/mcp.js";
+import { buildIndexArtifacts } from "../src/pipeline.js";
+import { renderGraphJson } from "../src/render/graph-json.js";
 import type { RepoScan } from "../src/scan.js";
 import type { FileRecord } from "../src/types.js";
 
@@ -512,6 +514,139 @@ describe("MCP search — embedding index memoization (endpoint tier)", () => {
       // A rebuild happened: a fresh corpus-build POST AND a fresh query POST,
       // not just the one query POST a cache hit would cost.
       expect(mock.calls).toBe(callsAfterFirst + 2);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+});
+
+// --- T6: session-level scan + artifacts memoization --------------------------
+
+// A private copy of the fixture per test: the session cache is a single entry
+// keyed by (repo, opts), so a fresh tmp path guarantees a fresh entry.
+function tmpFixtureCopy(prefix: string): string {
+  const repo = join(mkdtempSync(join(tmpdir(), prefix)), "mini-repo");
+  cpSync(REPO, repo, { recursive: true });
+  return repo;
+}
+
+describe("getScan (session-level single-entry scan cache)", () => {
+  it("returns the SAME RepoScan object across two calls on an unchanged repo", () => {
+    const repo = tmpFixtureCopy("ci-scan-memo-");
+    const s1 = getScan(repo, {});
+    const s2 = getScan(repo, {});
+    expect(s2).toBe(s1); // object identity — keeps the derived-structure WeakMap warm
+  });
+
+  it("a content edit between calls yields a NEW scan object reflecting the edit", () => {
+    const repo = tmpFixtureCopy("ci-scan-memo-");
+    const s1 = getScan(repo, {});
+    const target = join(repo, "src", "client.ts");
+    writeFileSync(target, readFileSync(target, "utf8") + "\n// touched\n");
+    const s2 = getScan(repo, {});
+    expect(s2).not.toBe(s1);
+    const before = s1.files.find((f) => f.rel === "src/client.ts")!;
+    const after = s2.files.find((f) => f.rel === "src/client.ts")!;
+    expect(after.hash).not.toBe(before.hash);
+  });
+
+  it("an mtime-only touch (content unchanged) still returns the OLD scan object", () => {
+    const repo = tmpFixtureCopy("ci-scan-memo-");
+    const s1 = getScan(repo, {});
+    // Bump mtime without changing a byte: the stat fastpath misses, the exact
+    // content hash then PROVES the content unchanged — same object comes back.
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(repo, "src", "client.ts"), past, past);
+    const s2 = getScan(repo, {});
+    expect(s2).toBe(s1);
+  });
+
+  it("different scan options on the same repo are a different session key", () => {
+    const repo = tmpFixtureCopy("ci-scan-memo-");
+    const all = getScan(repo, {});
+    const scoped = getScan(repo, { scope: "src" });
+    expect(scoped).not.toBe(all);
+    expect(scoped.files.every((f) => f.rel.startsWith("src/"))).toBe(true);
+  });
+});
+
+describe("toCacheMap", () => {
+  it("re-expresses a scan as the ScanOptions.cache shape (rel → hash/record/size/mtimeMs)", () => {
+    const repo = tmpFixtureCopy("ci-cachemap-");
+    const scan = getScan(repo, {});
+    const map = toCacheMap(scan);
+    expect(map.size).toBe(scan.files.length);
+    for (const f of scan.files) {
+      const entry = map.get(f.rel)!;
+      expect(entry.record).toBe(f); // the record itself, not a copy
+      expect(entry.hash).toBe(f.hash);
+      expect(entry.size).toBe(f.size);
+      expect(entry.mtimeMs).toBe(scan.mtimes.get(f.rel));
+    }
+  });
+});
+
+describe("getArtifacts (lazy pipeline memoized on scan identity)", () => {
+  it("reuses the artifacts across calls and renders byte-identically to a fresh build on a pristine copy", () => {
+    const repo = tmpFixtureCopy("ci-arts-memo-");
+    const pristine = tmpFixtureCopy("ci-arts-fresh-");
+    const a1 = getArtifacts(repo, {});
+    const a2 = getArtifacts(repo, {});
+    expect(a2).toBe(a1); // same IndexArtifacts object — pipeline ran once
+    expect(a2.graph).toBe(a1.graph);
+    // The memoized graph renders byte-equal to a from-scratch buildIndexArtifacts
+    // on a pristine copy of the same tree (neither copy is a git repo, so the
+    // graphs carry no commit) — the cache changes cost, never bytes.
+    expect(renderGraphJson(a2.graph)).toBe(renderGraphJson(buildIndexArtifacts(pristine).graph));
+  });
+
+  it("a content edit drops the memoized artifacts along with the scan", () => {
+    const repo = tmpFixtureCopy("ci-arts-memo-");
+    const a1 = getArtifacts(repo, {});
+    const target = join(repo, "src", "util.ts");
+    writeFileSync(target, readFileSync(target, "utf8") + "\nexport function extraHelper(): number {\n  return 7;\n}\n");
+    const a2 = getArtifacts(repo, {});
+    expect(a2).not.toBe(a1);
+    expect(JSON.stringify(a2.symbols.defs)).toContain("extraHelper");
+  });
+});
+
+describe("MCP session cache — e2e over one long-lived server", () => {
+  it("a successful edit tool call invalidates the cache: symbols_overview reflects the edit", async () => {
+    const repo = tmpFixtureCopy("ci-mcp-sess-");
+    const session = mcpStagedSession({});
+    try {
+      const before = await session.call(1, "symbols_overview", { repo, file: "src/util.ts" });
+      expect(before.result!.isError).toBeUndefined();
+      expect(before.result!.content![0]!.text).toContain("backoff");
+
+      const edit = await session.call(2, "replace_symbol_body", {
+        repo,
+        namePath: "backoff",
+        file: "src/util.ts",
+        body: "export function backoffTweaked(attempt: number): number {\n  return Math.min(2000, 3 ** attempt);\n}",
+      });
+      expect(edit.result!.isError).toBeUndefined();
+
+      // The pre-edit call primed the session cache against this exact repo —
+      // a stale cache would still show the old symbol here.
+      const after = await session.call(3, "symbols_overview", { repo, file: "src/util.ts" });
+      expect(after.result!.isError).toBeUndefined();
+      expect(after.result!.content![0]!.text).toContain("backoffTweaked");
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
+  it("two graph calls on an unchanged repo return byte-identical text", async () => {
+    const session = mcpStagedSession({});
+    try {
+      const g1 = await session.call(1, "graph", { repo: REPO });
+      const g2 = await session.call(2, "graph", { repo: REPO });
+      expect(g1.result!.isError).toBeUndefined();
+      const text1 = g1.result!.content![0]!.text;
+      expect(text1).toContain('"schemaVersion"');
+      expect(g2.result!.content![0]!.text).toBe(text1); // second render from memoized artifacts
     } finally {
       session.close();
     }
