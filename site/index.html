@@ -21,7 +21,7 @@
   STORY: a developer evaluating a repo-indexing tool sees the headline
   speed/token claims, then immediately gets the receipts — a real chart, real
   tables sourced from one embedded JSON blob, and the honest caveats (ctags
-  is faster, 01x wins warm reindex) placed next to the wins, not hidden.
+  is faster) placed next to the wins, not hidden.
   FIRST VIEWPORT: titleblock eyebrow + h1 "codeindex" + one-line pitch +
   license/version/tool-count pills, install one-liners in a bordered spec
   box to the side, on the ruled-paper ground.
@@ -1137,10 +1137,12 @@
           <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md"
             >BENCHMARKS.md</a
           >): cold index on <code>vercel/next.js</code> (20,000 files) —
-          codeindex 7,957 ms; warm reindex 867 ms; 32.9× fewer tokens
-          than raw grep for a single-symbol lookup; 15 languages; 0 runtime
-          dependencies; byte-identical rebuilds on 7/7 measured repos; 26 MCP
-          tools.
+          codeindex builds the full typed cross-file graph in seconds (ctags
+          is faster but flat); the warm reindex is codeindex's uncontested
+          number — a sub-second rerun, one touched file in about a second and a
+          half; far fewer tokens than a raw grep dump for a single-symbol
+          lookup; 15 languages; 0 runtime dependencies; byte-identical rebuilds
+          on 7/7 measured repos; 26 MCP tools.
         </p>
       </noscript>
     </div>
@@ -1177,8 +1179,9 @@
         </li>
         <li>
           <strong>warm reindex is codeindex's strongest, uncontested number</strong>
-          A warm rerun of <code>vercel/next.js</code> re-indexes in 867 ms and
-          a single touched file in 1,612 ms, via the incremental cache
+          A warm rerun of <code>vercel/next.js</code> re-indexes in
+          <span id="honesty-warm-rerun">—</span> and a single touched file in
+          <span id="honesty-warm-plus1">—</span>, via the incremental cache
           fastpath. No other tool here exposes a comparable user-visible
           single-file reindex, so this is a column with no competitor to beat.
         </li>
@@ -1203,8 +1206,8 @@
           <strong>graphify is quick per call but not reproducible</strong>
           <code>Graphify</code> answers a single lookup in ~1 ms, but its
           <code>graph.json</code> is <em>not</em> byte-identical across rebuilds
-          on 6 of 7 repos, its file nodes are basename-keyed (no file-overview
-          tool), and it needs a 140 MB Python venv.
+          on 5 of the 6 measurable repos, its file nodes are basename-keyed (no
+          file-overview tool), and it needs a 140 MB Python venv.
         </li>
         <li>
           <strong>serena and graphify skip next.js — measured, not hidden</strong>
@@ -1367,8 +1370,8 @@
             Two cold builds of an unchanged repo produce identical
             <code>graph.json</code>/<code>symbols.json</code> — confirmed on
             7 of 7 measured repos this session. Graphify's <code>graph.json</code>
-            differed on 6 of 7; determinism is a value we hold across every
-            repo, not just where it's easy.
+            differed on 5 of the 6 measurable repos; determinism is a value we
+            hold across every repo, not just where it's easy.
           </p>
         </article>
       </div>
@@ -1553,7 +1556,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
                 each run with an incremental cache
               </td>
               <td>
-                15 (regex, always on) / 10 (tree-sitter AST, opt-in
+                15 (regex, always on) / 13 (tree-sitter AST, opt-in
                 grammars)
               </td>
               <td>npm i -g, brew, or docker — zero runtime deps</td>
@@ -1594,8 +1597,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
               <td>140 MB Python venv (uv tool)</td>
               <td>
                 ~1 ms per lookup, but <code>graph.json</code> is not
-                byte-identical across rebuilds on 6 of 7 repos, and file nodes
-                are basename-keyed (no file-overview)
+                byte-identical across rebuilds on 5 of the 6 measurable repos,
+                and file nodes are basename-keyed (no file-overview)
               </td>
             </tr>
           </tbody>
@@ -1626,29 +1629,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
 </footer>
 
 <script id="benchmarks-data" type="application/json">{
-  "generatedAt": "2026-07-24T18:23:29.632Z",
+  "generatedAt": "2026-07-24T20:25:23.491Z",
   "environment": {
     "node": "v24.10.0",
     "cpu": "Apple M5",
     "ram": "16.0 GB",
-    "date": "2026-07-24T18:23:29.632Z"
+    "date": "2026-07-24T20:25:23.491Z"
   },
   "nominalRuns": 5,
   "sections": [
     {
       "id": "cold",
       "title": "Cold index",
-      "note": "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally); `falcon index` writes its parquet artifact set. All three are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags, scip-typescript, falcon) are kept and measured there.",
+      "note": "Full process spawn per run into a fresh output dir. ctags emits a flat `tags` file with `-R` and, on small cold builds, is faster than codeindex's richer graph+symbol artifacts — an honest win for the simpler data model. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally). Both are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags) are kept and measured there.",
       "headers": [
         "Repo",
         "Files",
         "codeindex (ms)",
         "ctags -R (ms)",
-        "scip-typescript (ms)",
-        "01x init (ms)",
         "serena project index (ms)",
-        "graphify update (ms)",
-        "falcon index (ms)"
+        "graphify update (ms)"
       ],
       "rows": [
         [
@@ -1663,40 +1663,28 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "468",
-            "value": 467.8135,
+            "display": "432",
+            "value": 432.01870899999994,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "30",
-            "value": 29.903957999999875,
+            "display": "29",
+            "value": 28.6127919999999,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (no tsconfig)",
-            "na": "no tsconfig"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
-            "display": "2406",
-            "value": 2405.793207999999,
+            "display": "2057",
+            "value": 2056.716292000001,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1863",
-            "value": 1863.3060000000005,
+            "display": "1712",
+            "value": 1712.4600830000018,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
           }
         ],
         [
@@ -1711,40 +1699,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "262",
-            "value": 261.7357919999995,
+            "display": "252",
+            "value": 251.59412499999962,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "17",
-            "value": 17.283667000003334,
+            "value": 16.847333000001527,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (no tsconfig)",
-            "na": "no tsconfig"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
-            "display": "2516",
-            "value": 2515.8115410000028,
+            "display": "2360",
+            "value": 2359.9102920000005,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "884",
-            "value": 884.4407080000019,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "77",
-            "value": 77.23145900000236,
+            "display": "850",
+            "value": 849.5198749999981,
             "kind": "ms",
             "runs": 5
           }
@@ -1761,40 +1735,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "92",
-            "value": 91.95045799999934,
+            "display": "86",
+            "value": 85.69362499999988,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "19",
-            "value": 18.683167000002868,
+            "display": "18",
+            "value": 18.198167000002286,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (npm install failed)",
-            "na": "npm install failed"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
-            "display": "935",
-            "value": 935.065499999997,
+            "display": "826",
+            "value": 826.4434170000022,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "996",
-            "value": 995.7294170000096,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "79",
-            "value": 78.64087499999732,
+            "display": "774",
+            "value": 774.2350839999999,
             "kind": "ms",
             "runs": 5
           }
@@ -1811,40 +1771,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "327",
-            "value": 326.60770800001046,
+            "display": "282",
+            "value": 282.2427089999983,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "25",
-            "value": 24.605540999997174,
+            "display": "23",
+            "value": 23.409249999996973,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (no tsconfig)",
-            "na": "no tsconfig"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
-            "display": "1263",
-            "value": 1262.8913330000069,
+            "display": "1161",
+            "value": 1160.894042,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1043",
-            "value": 1043.3317499999976,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "141",
-            "value": 140.6889999999985,
+            "display": "973",
+            "value": 972.9781669999938,
             "kind": "ms",
             "runs": 5
           }
@@ -1861,40 +1807,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "1848",
-            "value": 1848.0559170000051,
+            "display": "1686",
+            "value": 1686.405792000005,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "338",
-            "value": 338.0035410000128,
+            "display": "319",
+            "value": 318.7879580000008,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (no tsconfig)",
-            "na": "no tsconfig"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
-            "display": "7405",
-            "value": 7404.807874999999,
+            "display": "7031",
+            "value": 7031.463416999992,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10233",
-            "value": 10233.254583000002,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "916",
-            "value": 915.541292000009,
+            "display": "10060",
+            "value": 10060.054541999998,
             "kind": "ms",
             "runs": 5
           }
@@ -1911,40 +1843,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "96",
-            "value": 96.17612499999814,
+            "display": "92",
+            "value": 91.65787500000442,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "24",
-            "value": 23.681666999997105,
+            "display": "23",
+            "value": 22.920249999995576,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (no tsconfig)",
-            "na": "no tsconfig"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
-            "display": "998",
-            "value": 998.0101250000007,
+            "display": "927",
+            "value": 927.2957500000193,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "592",
-            "value": 591.5022080000199,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "65",
-            "value": 64.77225000000908,
+            "display": "587",
+            "value": 586.5921660000167,
             "kind": "ms",
             "runs": 5
           }
@@ -1961,24 +1879,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "8322",
-            "value": 8321.795416000008,
+            "display": "7993",
+            "value": 7993.155958999996,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "3158",
-            "value": 3158.068333000003,
+            "display": "3116",
+            "value": 3115.6487079999933,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (npm install failed)",
-            "na": "npm install failed"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "n/a (repo too large for a bench-time full index (~30k files))",
@@ -1987,12 +1897,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           {
             "display": "n/a (repo too large for a bench-time full index (~30k files))",
             "na": "repo too large for a bench-time full index (~30k files)"
-          },
-          {
-            "display": "11169",
-            "value": 11168.776125000033,
-            "kind": "ms",
-            "runs": 5
           }
         ]
       ]
@@ -2000,12 +1904,11 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     {
       "id": "warm",
       "title": "Warm / incremental",
-      "note": "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). 01x re-indexes the single touched file. Deliberately no serena/graphify/falcon column: none of them exposes a comparable user-visible single-file reindex command (serena re-indexes lazily inside a live LSP session; graphify and falcon rebuild via the cold commands timed above).",
+      "note": "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). Deliberately no serena/graphify column: neither exposes a comparable user-visible single-file reindex command (serena re-indexes lazily inside a live LSP session; graphify rebuilds via the cold command timed above).",
       "headers": [
         "Repo",
         "codeindex warm rerun (ms)",
-        "codeindex +1 file (ms)",
-        "01x reindex file (ms)"
+        "codeindex +1 file (ms)"
       ],
       "rows": [
         [
@@ -2015,20 +1918,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "49",
-            "value": 49.45716699998593,
+            "display": "48",
+            "value": 47.68545799999265,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "79",
-            "value": 78.92516700003762,
+            "display": "78",
+            "value": 77.72375000000466,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -2039,19 +1938,15 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "42",
-            "value": 42.049333000031766,
+            "value": 41.52470800001174,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "67",
-            "value": 66.556333000015,
+            "display": "64",
+            "value": 64.12208300002385,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -2061,20 +1956,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "48",
-            "value": 47.611290999979246,
+            "display": "45",
+            "value": 44.95145799999591,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "63",
-            "value": 62.91758299997309,
+            "display": "60",
+            "value": 59.61591699998826,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -2084,20 +1975,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "48",
-            "value": 47.68937499995809,
+            "display": "46",
+            "value": 45.71804200002225,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "88",
-            "value": 87.57495899999049,
+            "display": "86",
+            "value": 86.23770800000057,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -2107,20 +1994,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "134",
-            "value": 134.23908299999312,
+            "display": "132",
+            "value": 131.8720420000027,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "340",
-            "value": 339.5745839999872,
+            "display": "327",
+            "value": 326.9007500000298,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -2130,20 +2013,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "44",
-            "value": 43.7711249999702,
+            "display": "43",
+            "value": 42.9490409999853,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "60",
-            "value": 59.976625000010245,
+            "display": "59",
+            "value": 59.429457999998704,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -2153,20 +2032,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "887",
-            "value": 886.9694579999777,
+            "display": "877",
+            "value": 876.8855000000331,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1668",
-            "value": 1668.3239999999641,
+            "display": "1624",
+            "value": 1624.1327920000185,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ]
       ]
@@ -2174,7 +2049,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     {
       "id": "queries",
       "title": "Queries (find-symbol / references / callers)",
-      "note": "`find-symbol in-proc` / `references in-proc`: a single API call on an already-loaded warm scan (call timed alone). `caller-index in-proc`: builds the whole-scan caller index (not just callers-of-symbol). `full-index spawn`: a full `codeindex symbols` CLI process — Node startup PLUS a cold buildIndexArtifacts and serialization of the entire symbol table, i.e. NOT a single-symbol lookup. `01x find-symbol`: one query against its primed SQLite DB. `ctags lookup`: scans the tags file for the symbol.",
+      "note": "`find-symbol in-proc` / `references in-proc`: a single API call on an already-loaded warm scan (call timed alone). `caller-index in-proc`: builds the whole-scan caller index (not just callers-of-symbol). `full-index spawn`: a full `codeindex symbols` CLI process — Node startup PLUS a cold buildIndexArtifacts and serialization of the entire symbol table, i.e. NOT a single-symbol lookup. `ctags lookup`: scans the tags file for the symbol.",
       "headers": [
         "Repo",
         "Symbol",
@@ -2182,7 +2057,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         "full-index spawn (ms)",
         "references in-proc (ms)",
         "caller-index in-proc (ms)",
-        "01x find-symbol (ms)",
         "ctags lookup (ms)"
       ],
       "rows": [
@@ -2199,35 +2073,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.086291000014171,
+            "value": 0.0775419999845326,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "444",
-            "value": 443.6915409999783,
+            "display": "440",
+            "value": 439.82716600003187,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.08141699997941032,
+            "value": 0.08433400001376867,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "5",
-            "value": 4.975667000049725,
+            "value": 4.938040999986697,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "0",
-            "value": 0.25424999999813735,
+            "value": 0.24424999998882413,
             "kind": "ms",
             "runs": 5
           }
@@ -2245,35 +2115,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.049583999963942915,
+            "value": 0.06004200002644211,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "252",
-            "value": 252.46054200001527,
+            "display": "250",
+            "value": 250.4860420000041,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04766599996946752,
+            "value": 0.04554099997039884,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 2.0299579999991693,
+            "value": 2.041333000001032,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "0",
-            "value": 0.380416999978479,
+            "value": 0.3701250000158325,
             "kind": "ms",
             "runs": 5
           }
@@ -2291,35 +2157,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.0040419999859295785,
+            "value": 0.004207999969366938,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "87",
-            "value": 87.44900000002235,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.019749999977648258,
+            "display": "84",
+            "value": 83.85270899999887,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.08541699999477714,
+            "value": 0.020665999967604876,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+            "display": "0",
+            "value": 0.07941599999321625,
+            "kind": "ms",
+            "runs": 5
           },
           {
             "display": "0",
-            "value": 0.2997079999768175,
+            "value": 0.28700000001117587,
             "kind": "ms",
             "runs": 5
           }
@@ -2337,35 +2199,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.024291999987326562,
+            "value": 0.01999999996041879,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "300",
-            "value": 299.79845800000476,
+            "display": "282",
+            "value": 282.4708329999703,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.0735829999903217,
+            "value": 0.06724999996367842,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 1.4482919999863952,
+            "value": 1.4695840000058524,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "0",
-            "value": 0.1213749999878928,
+            "value": 0.12450000003445894,
             "kind": "ms",
             "runs": 5
           }
@@ -2383,35 +2241,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.09487500000977889,
+            "value": 0.09154100000159815,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1662",
-            "value": 1662.1787499999627,
+            "display": "1652",
+            "value": 1652.2270409999765,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.14191700000083074,
+            "value": 0.13979200000176206,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "5",
-            "value": 5.080917000013869,
+            "value": 4.752374999981839,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "6",
-            "value": 5.897874999966007,
+            "value": 5.8080420000478625,
             "kind": "ms",
             "runs": 5
           }
@@ -2429,35 +2283,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.0038330000243149698,
+            "value": 0.0032500000088475645,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "92",
-            "value": 91.65441700001247,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.005999999993946403,
+            "display": "91",
+            "value": 90.84679199999664,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.1122909999685362,
+            "value": 0.005707999982405454,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+            "display": "0",
+            "value": 0.04112499998882413,
+            "kind": "ms",
+            "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04158299998380244,
+            "value": 0.03854199999477714,
             "kind": "ms",
             "runs": 5
           }
@@ -2475,35 +2325,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "1",
-            "value": 0.7446670000208542,
+            "value": 0.6604170000064187,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "9292",
-            "value": 9292.273667000001,
+            "display": "7796",
+            "value": 7796.256416000018,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 1.676000000035856,
+            "value": 1.6744170000310987,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "320",
-            "value": 319.9830420000362,
+            "display": "318",
+            "value": 317.9462920000078,
             "kind": "ms",
             "runs": 5
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "107",
-            "value": 107.07595800003037,
+            "value": 106.67645899998024,
             "kind": "ms",
             "runs": 5
           }
@@ -2513,7 +2359,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     {
       "id": "mcp-sessions",
       "title": "MCP sessions (activate + per-call queries)",
-      "note": "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify, falcon, and now codeindex load prebuilt artifacts rather than rebuilding — codeindex primes a persisted `.codeindex/` index and its MCP server preloads it on the first call (a pure optimization: served responses stay byte-identical to a cold build), the same pattern as `falcon mcp serve` / graphify-mcp, so its parse cost lives in the Cold index column (the `codeindex` cold cell, where it already sits) and `activate->ready` here reflects load-not-rebuild. The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
+      "note": "All three servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and now codeindex load prebuilt artifacts rather than rebuilding — codeindex primes a persisted `.codeindex/` index and its MCP server preloads it on the first call (a pure optimization: served responses stay byte-identical to a cold build), the same pattern as graphify-mcp, so its parse cost lives in the Cold index column (the `codeindex` cold cell, where it already sits) and `activate->ready` here reflects load-not-rebuild. The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex, which streams, is still measured.",
       "headers": [
         "Repo",
         "Server",
@@ -2541,20 +2387,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "53",
-            "value": 53.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "13",
-            "value": 12.5,
+            "display": "52",
+            "value": 52.4,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "12",
-            "value": 12.3,
+            "value": 12.2,
             "kind": "ms",
             "runs": 5
           },
@@ -2563,6 +2403,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "value": 11.6,
             "kind": "ms",
             "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 11.7,
+            "kind": "ms",
+            "runs": 5
           }
         ],
         [
@@ -2582,26 +2428,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "2167",
-            "value": 2166.9,
+            "display": "2131",
+            "value": 2131,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "145",
-            "value": 144.5,
+            "display": "144",
+            "value": 144.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "251",
-            "value": 251.1,
+            "display": "257",
+            "value": 256.9,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "107",
-            "value": 107.3,
+            "display": "108",
+            "value": 108,
             "kind": "ms",
             "runs": 5
           }
@@ -2621,656 +2467,16 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "display": "WalkBuilder",
             "value": "WalkBuilder",
             "kind": "text"
-          },
-          {
-            "display": "258",
-            "value": 258,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "BurntSushi/ripgrep",
-            "value": "BurntSushi/ripgrep",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "WalkBuilder",
-            "value": "WalkBuilder",
-            "kind": "text"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "46",
-            "value": 45.5,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "9",
-            "value": 9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 8.4,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 8.2,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "618",
-            "value": 617.5,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "130",
-            "value": 130.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "374",
-            "value": 373.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "105",
-            "value": 104.7,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "217",
-            "value": 216.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "15",
-            "value": 14.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "56",
-            "value": 55.5,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "15",
-            "value": 15.4,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "16",
-            "value": 16,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "16",
-            "value": 15.6,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "636",
-            "value": 635.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "143",
-            "value": 143,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "131",
-            "value": 131.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "106",
-            "value": 106.1,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "219",
-            "value": 219.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "8",
-            "value": 8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "55",
-            "value": 54.9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "26",
-            "value": 26.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "15",
-            "value": 15.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "15",
-            "value": 15,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "775",
-            "value": 775.4,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "147",
-            "value": 146.9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "153",
-            "value": 152.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "109",
-            "value": 108.6,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "210",
-            "value": 210.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "5",
-            "value": 4.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "9",
-            "value": 8.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "socialgouv/code-du-travail-numerique",
-            "value": "socialgouv/code-du-travail-numerique",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "ElementBuilder",
-            "value": "ElementBuilder",
-            "kind": "text"
-          },
-          {
-            "display": "207",
-            "value": 207.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "125",
-            "value": 125,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "126",
-            "value": 126.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "125",
-            "value": 124.6,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "socialgouv/code-du-travail-numerique",
-            "value": "socialgouv/code-du-travail-numerique",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "ElementBuilder",
-            "value": "ElementBuilder",
-            "kind": "text"
-          },
-          {
-            "display": "1788",
-            "value": 1787.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "631",
-            "value": 631.2,
-            "kind": "ms",
-            "runs": 5
           },
           {
             "display": "252",
-            "value": 251.5,
+            "value": 251.6,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "105",
-            "value": 105.3,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "socialgouv/code-du-travail-numerique",
-            "value": "socialgouv/code-du-travail-numerique",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "ElementBuilder",
-            "value": "ElementBuilder",
-            "kind": "text"
-          },
-          {
-            "display": "474",
-            "value": 474,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "2",
-            "value": 1.6,
+            "display": "1",
+            "value": 1,
             "kind": "ms",
             "runs": 5
           },
@@ -3287,13 +2493,376 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         ],
         [
           {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "43",
+            "value": 43.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "9",
+            "value": 8.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 7.8,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "600",
+            "value": 600,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "137",
+            "value": 136.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "366",
+            "value": 365.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "106",
+            "value": 106.1,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "209",
+            "value": 208.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "50",
+            "value": 50.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "13",
+            "value": 13.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "13",
+            "value": 13,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "13",
+            "value": 12.8,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "599",
+            "value": 598.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "142",
+            "value": 141.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "130",
+            "value": 130.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "107",
+            "value": 107.2,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "209",
+            "value": 209,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "50",
+            "value": 49.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 11.5,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "717",
+            "value": 716.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "141",
+            "value": 141.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "148",
+            "value": 147.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "108",
+            "value": 107.8,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "206",
+            "value": 206,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 4.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
             "display": "socialgouv/code-du-travail-numerique",
             "value": "socialgouv/code-du-travail-numerique",
             "kind": "text"
           },
           {
-            "display": "falcon",
-            "value": "falcon",
+            "display": "codeindex",
+            "value": "codeindex",
             "kind": "text"
           },
           {
@@ -3302,28 +2871,108 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "25",
-            "value": 24.5,
+            "display": "205",
+            "value": 204.7,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "0",
-            "value": 0,
+            "display": "122",
+            "value": 122.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "0",
-            "value": 0,
+            "display": "122",
+            "value": 122.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "0",
-            "value": 0,
+            "display": "121",
+            "value": 120.8,
             "kind": "ms",
             "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "1550",
+            "value": 1549.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "616",
+            "value": 615.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "251",
+            "value": 251,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "107",
+            "value": 107.3,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "463",
+            "value": 462.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
           }
         ],
         [
@@ -3343,26 +2992,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "48",
-            "value": 47.6,
+            "display": "46",
+            "value": 45.7,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 12.4,
+            "display": "11",
+            "value": 11,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "14",
-            "value": 13.6,
+            "display": "11",
+            "value": 10.7,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "13",
-            "value": 12.6,
+            "display": "10",
+            "value": 10.2,
             "kind": "ms",
             "runs": 5
           }
@@ -3384,20 +3033,20 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "634",
-            "value": 634,
+            "display": "598",
+            "value": 598.3,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "146",
-            "value": 146.2,
+            "display": "139",
+            "value": 139,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "120",
-            "value": 119.6,
+            "value": 119.5,
             "kind": "ms",
             "runs": 5
           },
@@ -3425,8 +3074,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "232",
-            "value": 231.5,
+            "display": "198",
+            "value": 198.1,
             "kind": "ms",
             "runs": 5
           },
@@ -3449,47 +3098,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         ],
         [
           {
-            "display": "t3-oss/create-t3-turbo",
-            "value": "t3-oss/create-t3-turbo",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "Route",
-            "value": "Route",
-            "kind": "text"
-          },
-          {
-            "display": "8",
-            "value": 7.5,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
             "display": "vercel/next.js",
             "value": "vercel/next.js",
             "kind": "text"
@@ -3505,26 +3113,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "1617",
-            "value": 1616.8,
+            "display": "1601",
+            "value": 1601,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1359",
-            "value": 1359.2,
+            "display": "1340",
+            "value": 1340.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1370",
-            "value": 1370.1,
+            "display": "1350",
+            "value": 1349.7,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1368",
-            "value": 1368.3,
+            "display": "1345",
+            "value": 1344.8,
             "kind": "ms",
             "runs": 5
           }
@@ -3594,59 +3202,17 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "display": "n/a (repo too large for a bench-time full index (~30k files))",
             "na": "repo too large for a bench-time full index (~30k files)"
           }
-        ],
-        [
-          {
-            "display": "vercel/next.js",
-            "value": "vercel/next.js",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "NextResponse",
-            "value": "NextResponse",
-            "kind": "text"
-          },
-          {
-            "display": "164",
-            "value": 164.4,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0,
-            "kind": "ms",
-            "runs": 5
-          }
         ]
       ]
     },
     {
       "id": "tokens",
       "title": "Token economy (single-symbol lookup)",
-      "note": "Two methods side by side: 01x's published formula (grep_lines×30 vs len×5+200) and an honest bytes/4 measurement of a raw grep vs our structured JSON. Ratio > 1 means the index returns less context to the model.",
+      "note": "An honest bytes/4 measurement of a raw grep vs our structured JSON. Ratio > 1 means the index returns less context to the model.",
       "headers": [
         "Repo",
         "Symbol",
         "grep lines",
-        "01x formula ratio",
         "grep tokens (measured)",
         "index tokens (measured)",
         "measured ratio"
@@ -3667,11 +3233,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "display": "103",
             "value": 103,
             "kind": "int"
-          },
-          {
-            "display": "12.1",
-            "value": 12.117647058823529,
-            "kind": "ratio"
           },
           {
             "display": "2280",
@@ -3706,11 +3267,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "113.9",
-            "value": 113.86046511627907,
-            "kind": "ratio"
-          },
-          {
             "display": "13400",
             "value": 13400,
             "kind": "int"
@@ -3741,11 +3297,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "display": "11",
             "value": 11,
             "kind": "int"
-          },
-          {
-            "display": "1.3",
-            "value": 1.2941176470588236,
-            "kind": "ratio"
           },
           {
             "display": "242",
@@ -3780,11 +3331,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "153.2",
-            "value": 153.2,
-            "kind": "ratio"
-          },
-          {
             "display": "23865",
             "value": 23865,
             "kind": "int"
@@ -3815,11 +3361,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "display": "48",
             "value": 48,
             "kind": "int"
-          },
-          {
-            "display": "5.3",
-            "value": 5.333333333333333,
-            "kind": "ratio"
           },
           {
             "display": "2047",
@@ -3854,11 +3395,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "15.3",
-            "value": 15.333333333333334,
-            "kind": "ratio"
-          },
-          {
             "display": "2423",
             "value": 2423,
             "kind": "int"
@@ -3891,11 +3427,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "160.3",
-            "value": 160.26923076923077,
-            "kind": "ratio"
-          },
-          {
             "display": "39811",
             "value": 39811,
             "kind": "int"
@@ -3916,7 +3447,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     {
       "id": "mcp-tokens",
       "title": "MCP token economy (per-call response size)",
-      "note": "Context cost of each MCP answer: tokens ~= bytes/4 of the tool-call response text (same convention as the Token economy table). The codeindex rows are the baseline the other servers compare against. falcon's references figure reuses the find-symbol response (same call, see MCP sessions); graphify's file-overview has no equivalent tool. Bigger is not automatically worse: serena's LSP answers carry semantically precise, type-aware references the static tools do not claim — this table measures context cost only, not answer quality.",
+      "note": "Context cost of each MCP answer: tokens ~= bytes/4 of the tool-call response text (same convention as the Token economy table). The codeindex rows are the baseline the other servers compare against. graphify's file-overview has no equivalent tool. Bigger is not automatically worse: serena's LSP answers carry semantically precise, type-aware references the static tools do not claim — this table measures context cost only, not answer quality.",
       "headers": [
         "Repo",
         "Server",
@@ -4007,30 +3538,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         ],
         [
           {
-            "display": "BurntSushi/ripgrep",
-            "value": "BurntSushi/ripgrep",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
-          }
-        ],
-        [
-          {
             "display": "gin-gonic/gin",
             "value": "gin-gonic/gin",
             "kind": "text"
@@ -4111,33 +3618,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         ],
         [
           {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "22",
-            "value": 22,
-            "kind": "int"
-          },
-          {
-            "display": "22",
-            "value": 22,
-            "kind": "int"
-          },
-          {
-            "display": "678",
-            "value": 678,
-            "kind": "int"
-          }
-        ],
-        [
-          {
             "display": "nrwl/nx-examples",
             "value": "nrwl/nx-examples",
             "kind": "text"
@@ -4175,8 +3655,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "277",
-            "value": 277,
+            "display": "276",
+            "value": 276,
             "kind": "int"
           },
           {
@@ -4214,33 +3694,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           {
             "display": "n/a (basename-keyed file nodes — n/a by design)",
             "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "109",
-            "value": 109,
-            "kind": "int"
-          },
-          {
-            "display": "109",
-            "value": 109,
-            "kind": "int"
-          },
-          {
-            "display": "35",
-            "value": 35,
-            "kind": "int"
           }
         ],
         [
@@ -4325,33 +3778,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         ],
         [
           {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "27",
-            "value": 27,
-            "kind": "int"
-          },
-          {
-            "display": "27",
-            "value": 27,
-            "kind": "int"
-          },
-          {
-            "display": "144",
-            "value": 144,
-            "kind": "int"
-          }
-        ],
-        [
-          {
             "display": "socialgouv/code-du-travail-numerique",
             "value": "socialgouv/code-du-travail-numerique",
             "kind": "text"
@@ -4428,33 +3854,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           {
             "display": "n/a (basename-keyed file nodes — n/a by design)",
             "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "socialgouv/code-du-travail-numerique",
-            "value": "socialgouv/code-du-travail-numerique",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "52",
-            "value": 52,
-            "kind": "int"
-          },
-          {
-            "display": "52",
-            "value": 52,
-            "kind": "int"
-          },
-          {
-            "display": "118",
-            "value": 118,
-            "kind": "int"
           }
         ],
         [
@@ -4539,33 +3938,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         ],
         [
           {
-            "display": "t3-oss/create-t3-turbo",
-            "value": "t3-oss/create-t3-turbo",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "99",
-            "value": 99,
-            "kind": "int"
-          },
-          {
-            "display": "99",
-            "value": 99,
-            "kind": "int"
-          },
-          {
-            "display": "101",
-            "value": 101,
-            "kind": "int"
-          }
-        ],
-        [
-          {
             "display": "vercel/next.js",
             "value": "vercel/next.js",
             "kind": "text"
@@ -4638,47 +4010,18 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "display": "n/a (repo too large for a bench-time full index (~30k files))",
             "na": "repo too large for a bench-time full index (~30k files)"
           }
-        ],
-        [
-          {
-            "display": "vercel/next.js",
-            "value": "vercel/next.js",
-            "kind": "text"
-          },
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "74",
-            "value": 74,
-            "kind": "int"
-          },
-          {
-            "display": "74",
-            "value": 74,
-            "kind": "int"
-          },
-          {
-            "display": "110",
-            "value": 110,
-            "kind": "int"
-          }
         ]
       ]
     },
     {
       "id": "determinism",
       "title": "Determinism (byte-identical rebuild)",
-      "note": "Two cold builds byte-compared (graph.json + symbols.json). 01x keeps a SQLite DB (embedded ids/timestamps) that is not byte-comparable, so determinism is not claimed for it here. graphify: two cold `graphify update` runs, `graph.json` bytes only (its HTML/report artifacts embed dates and are excluded). falcon: two cold `falcon index` runs, all parquet artifacts byte-compared for the cell. falcon's metadata.json is compared separately after dropping its embedded absolute paths (artifacts.path, repo.root); no field differed — falcon carries no timestamps (it reports determinism.timestamps: \"omitted\").",
+      "note": "Two cold builds byte-compared (graph.json + symbols.json). serena keeps its symbols in a live LSP session, so there is no on-disk artifact to compare. graphify: two cold `graphify update` runs, `graph.json` bytes only (its HTML/report artifacts embed dates and are excluded).",
       "headers": [
         "Repo",
         "codeindex (byte-identical)",
-        "01x",
         "serena",
-        "graphify graph.json",
-        "falcon artifacts"
+        "graphify graph.json"
       ],
       "rows": [
         [
@@ -4693,10 +4036,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bool"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "n/a (live LSP session — no artifact)",
             "na": "live LSP session — no artifact"
           },
@@ -4704,10 +4043,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "display": "no",
             "value": false,
             "kind": "bool"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
           }
         ],
         [
@@ -4722,17 +4057,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bool"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "n/a (live LSP session — no artifact)",
             "na": "live LSP session — no artifact"
-          },
-          {
-            "display": "no",
-            "value": false,
-            "kind": "bool"
           },
           {
             "display": "yes",
@@ -4752,21 +4078,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bool"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "n/a (live LSP session — no artifact)",
             "na": "live LSP session — no artifact"
           },
           {
             "display": "no",
             "value": false,
-            "kind": "bool"
-          },
-          {
-            "display": "yes",
-            "value": true,
             "kind": "bool"
           }
         ],
@@ -4782,21 +4099,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bool"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "n/a (live LSP session — no artifact)",
             "na": "live LSP session — no artifact"
           },
           {
-            "display": "yes",
-            "value": true,
-            "kind": "bool"
-          },
-          {
-            "display": "yes",
-            "value": true,
+            "display": "no",
+            "value": false,
             "kind": "bool"
           }
         ],
@@ -4812,21 +4120,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bool"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "n/a (live LSP session — no artifact)",
             "na": "live LSP session — no artifact"
           },
           {
             "display": "no",
             "value": false,
-            "kind": "bool"
-          },
-          {
-            "display": "yes",
-            "value": true,
             "kind": "bool"
           }
         ],
@@ -4842,21 +4141,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bool"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "n/a (live LSP session — no artifact)",
             "na": "live LSP session — no artifact"
           },
           {
             "display": "no",
             "value": false,
-            "kind": "bool"
-          },
-          {
-            "display": "yes",
-            "value": true,
             "kind": "bool"
           }
         ],
@@ -4872,21 +4162,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bool"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "n/a (live LSP session — no artifact)",
             "na": "live LSP session — no artifact"
           },
           {
             "display": "n/a (repo too large for a bench-time full index (~30k files))",
             "na": "repo too large for a bench-time full index (~30k files)"
-          },
-          {
-            "display": "no",
-            "value": false,
-            "kind": "bool"
           }
         ]
       ]
@@ -4894,15 +4175,13 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     {
       "id": "size",
       "title": "Index size on disk",
-      "note": "Our artifacts (graph.json + symbols.json + cache.json) vs 01x's `.codeindex/` SQLite DB vs the ctags `tags` file vs serena's `.serena/` project cache (document-symbol pickles) vs graphify's MCP-servable `graph.json` alone (its `graphify-out/` also holds an AST cache and report files that never leave the build machine) vs falcon's `.falcon/artifacts` parquet set.",
+      "note": "Our artifacts (graph.json + symbols.json + cache.json) vs the ctags `tags` file vs serena's `.serena/` project cache (document-symbol pickles) vs graphify's MCP-servable `graph.json` alone (its `graphify-out/` also holds an AST cache and report files that never leave the build machine).",
       "headers": [
         "Repo",
         "codeindex artifacts",
-        "01x .codeindex",
         "ctags tags",
         "serena .serena",
-        "graphify graph.json",
-        "falcon .falcon/artifacts"
+        "graphify graph.json"
       ],
       "rows": [
         [
@@ -4917,27 +4196,19 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "524.4 KB",
             "value": 536948,
             "kind": "bytes"
           },
           {
             "display": "5.1 MB",
-            "value": 5364651,
+            "value": 5344168,
             "kind": "bytes"
           },
           {
             "display": "5.0 MB",
-            "value": 5273742,
+            "value": 5274008,
             "kind": "bytes"
-          },
-          {
-            "display": "n/a (rust not supported)",
-            "na": "rust not supported"
           }
         ],
         [
@@ -4952,27 +4223,18 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "267.2 KB",
             "value": 273617,
             "kind": "bytes"
           },
           {
             "display": "2.0 MB",
-            "value": 2101626,
+            "value": 2093316,
             "kind": "bytes"
           },
           {
             "display": "2.0 MB",
-            "value": 2110468,
-            "kind": "bytes"
-          },
-          {
-            "display": "448.2 KB",
-            "value": 458926,
+            "value": 2107208,
             "kind": "bytes"
           }
         ],
@@ -4988,27 +4250,18 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "238.2 KB",
             "value": 243957,
             "kind": "bytes"
           },
           {
-            "display": "384.4 KB",
-            "value": 393613,
+            "display": "382.5 KB",
+            "value": 391675,
             "kind": "bytes"
           },
           {
             "display": "1.2 MB",
-            "value": 1257193,
-            "kind": "bytes"
-          },
-          {
-            "display": "79.0 KB",
-            "value": 80910,
+            "value": 1257221,
             "kind": "bytes"
           }
         ],
@@ -5024,27 +4277,18 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "282.3 KB",
             "value": 289058,
             "kind": "bytes"
           },
           {
             "display": "3.1 MB",
-            "value": 3269760,
+            "value": 3251913,
             "kind": "bytes"
           },
           {
             "display": "1.3 MB",
-            "value": 1403300,
-            "kind": "bytes"
-          },
-          {
-            "display": "210.8 KB",
-            "value": 215819,
+            "value": 1403226,
             "kind": "bytes"
           }
         ],
@@ -5060,27 +4304,18 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "4.4 MB",
             "value": 4633149,
             "kind": "bytes"
           },
           {
-            "display": "57.3 MB",
-            "value": 60111839,
+            "display": "57.1 MB",
+            "value": 59855384,
             "kind": "bytes"
           },
           {
             "display": "13.7 MB",
-            "value": 14330911,
-            "kind": "bytes"
-          },
-          {
-            "display": "1.6 MB",
-            "value": 1692628,
+            "value": 14333553,
             "kind": "bytes"
           }
         ],
@@ -5096,27 +4331,18 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "87.9 KB",
             "value": 90016,
             "kind": "bytes"
           },
           {
-            "display": "633.4 KB",
-            "value": 648639,
+            "display": "630.1 KB",
+            "value": 645257,
             "kind": "bytes"
           },
           {
             "display": "823.1 KB",
             "value": 842904,
-            "kind": "bytes"
-          },
-          {
-            "display": "100.2 KB",
-            "value": 102650,
             "kind": "bytes"
           }
         ],
@@ -5132,12 +4358,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
             "display": "80.8 MB",
-            "value": 84698636,
+            "value": 84698441,
             "kind": "bytes"
           },
           {
@@ -5147,11 +4369,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           {
             "display": "n/a (repo too large for a bench-time full index (~30k files))",
             "na": "repo too large for a bench-time full index (~30k files)"
-          },
-          {
-            "display": "18.8 MB",
-            "value": 19702540,
-            "kind": "bytes"
           }
         ]
       ]
@@ -5180,39 +4397,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           {
             "display": "zero runtime dependencies; single engine.mjs",
             "value": "zero runtime dependencies; single engine.mjs",
-            "kind": "text"
-          }
-        ],
-        [
-          {
-            "display": "01x",
-            "value": "01x",
-            "kind": "text"
-          },
-          {
-            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
-            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
-          },
-          {
-            "display": "requires ast-grep in PATH",
-            "value": "requires ast-grep in PATH",
-            "kind": "text"
-          }
-        ],
-        [
-          {
-            "display": "scip-typescript",
-            "value": "scip-typescript",
-            "kind": "text"
-          },
-          {
-            "display": "binary + target-repo node_modules",
-            "value": "binary + target-repo node_modules",
-            "kind": "text"
-          },
-          {
-            "display": "requires a full npm install of each indexed repo (see cold column)",
-            "value": "requires a full npm install of each indexed repo (see cold column)",
             "kind": "text"
           }
         ],
@@ -5247,23 +4431,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           {
             "display": "uv tool venv (graphifyy); tree-sitter grammar wheels bundled; [mcp] extra required for the MCP server",
             "value": "uv tool venv (graphifyy); tree-sitter grammar wheels bundled; [mcp] extra required for the MCP server",
-            "kind": "text"
-          }
-        ],
-        [
-          {
-            "display": "falcon",
-            "value": "falcon",
-            "kind": "text"
-          },
-          {
-            "display": "32.9 MB",
-            "value": 34497106,
-            "kind": "bytes"
-          },
-          {
-            "display": "single static Go binary, no runtime deps (brew tap SocialGouv/repo-falcon)",
-            "value": "single static Go binary, no runtime deps (brew tap SocialGouv/repo-falcon)",
             "kind": "text"
           }
         ]
@@ -5417,13 +4584,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     }
 
     /* ----- render one section as a table ----- */
-    // Public site: hide repo-falcon (a sister SocialGouv tool) and 01x-in
-    // (its binary name-collides with codeindex on PATH, so it has no results
-    // this session). Display-only — the full data stays in BENCHMARKS.md and
-    // in the embedded JSON, and the stat tiles/chart still read the raw
-    // section data by index, so this never shifts what they compute.
-    var HIDE_COL = /\bfalcon\b|\b01x\b|scip-typescript/i;
-    var HIDE_ROW = /^(repo-)?falcon$|^01x(-in)?$|^scip-typescript$/i;
+    // Column lookups by header name: the embedded data drives which columns
+    // exist and where they sit, so nothing here hard-codes a competitor
+    // position or filters a column out. Returns -1 when no header matches.
+    function colIndex(section, re) {
+      return section.headers.findIndex(function (h) { return re.test(h); });
+    }
     function renderTable(section) {
       var wrap = document.createElement("div");
       wrap.className = "table-wrap";
@@ -5432,25 +4598,13 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       caption.textContent = section.title;
       var noteSpan = document.createElement("span");
       noteSpan.className = "cap-note";
-      // Drop methodology sentences that reference the hidden competitors.
-      noteSpan.textContent = (section.note || "")
-        .split(/(?<=\.)\s+/)
-        .filter(function (s) { return !HIDE_COL.test(s); })
-        .join(" ");
+      noteSpan.textContent = section.note || "";
       caption.appendChild(noteSpan);
       table.appendChild(caption);
 
-      var dropCol = section.headers.map(function (h) { return HIDE_COL.test(h); });
-      var dropRow = function (row) {
-        return row.some(function (c) {
-          return typeof c.display === "string" && HIDE_ROW.test(c.display.trim());
-        });
-      };
-
       var thead = document.createElement("thead");
       var htr = document.createElement("tr");
-      section.headers.forEach(function (h, i) {
-        if (dropCol[i]) return;
+      section.headers.forEach(function (h) {
         var th = document.createElement("th");
         th.scope = "col";
         th.textContent = h;
@@ -5461,10 +4615,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
 
       var tbody = document.createElement("tbody");
       section.rows.forEach(function (row) {
-        if (dropRow(row)) return;
         var tr = document.createElement("tr");
-        row.forEach(function (cell, i) {
-          if (dropCol[i]) return;
+        row.forEach(function (cell) {
           var td = document.createElement("td");
           td.textContent = cell.display;
           if (cell.na) {
@@ -5530,23 +4682,44 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     var tokens = bySectionId("tokens");
     var determinism = bySectionId("determinism");
 
+    var coldCiCol = colIndex(cold, /codeindex/i);
+    var coldCtCol = colIndex(cold, /ctags/i);
     var nextRow = rowByFirstCell(cold, "vercel/next.js");
-    var codeindexMs = nextRow[2].value;
-    var ctagsMs = nextRow[3].value;
-    var ctagsFasterBy = (codeindexMs / ctagsMs).toFixed(1);
+    var codeindexMs = coldCiCol >= 0 ? nextRow[coldCiCol].value : NaN;
+    var ctagsMs = coldCtCol >= 0 ? nextRow[coldCtCol].value : NaN;
+    var codeindexColdDisp = coldCiCol >= 0 ? nextRow[coldCiCol].display : "—";
+    var ctagsColdDisp = coldCtCol >= 0 ? nextRow[coldCtCol].display : "—";
 
+    var tokenRatioCol = colIndex(tokens, /measured ratio/i);
+    if (tokenRatioCol < 0) tokenRatioCol = colIndex(tokens, /ratio/i);
     var tokenRow = rowByFirstCell(tokens, "socialgouv/code-du-travail-numerique");
-    var measuredRatioDisplay = tokenRow[6].display;
+    var measuredRatioDisplay = tokenRatioCol >= 0 ? tokenRow[tokenRatioCol].display : "—";
 
-    var detTrue = determinism.rows.filter(function (r) {
-      return r[1].value === true;
+    var detCiCol = colIndex(determinism, /codeindex/i);
+    var detTrue = detCiCol < 0 ? 0 : determinism.rows.filter(function (r) {
+      return r[detCiCol].value === true;
     }).length;
     var detTotal = determinism.rows.length;
+
+    // next.js warm figures, derived so the prose can never go stale.
+    var warmRerunCol = colIndex(warmSection, /rerun/i);
+    var warmPlus1Col = colIndex(warmSection, /\+1|1 file/i);
+    var warmNextRow = rowByFirstCell(warmSection, "vercel/next.js");
+    function fmtMs(cell) {
+      if (!cell || typeof cell.value !== "number") return "—";
+      return Math.round(cell.value).toLocaleString("en-US") + " ms";
+    }
+    var warmRerunMs = warmRerunCol >= 0 ? fmtMs(warmNextRow[warmRerunCol]) : "—";
+    var warmPlus1Ms = warmPlus1Col >= 0 ? fmtMs(warmNextRow[warmPlus1Col]) : "—";
+    var wrSpan = document.getElementById("honesty-warm-rerun");
+    if (wrSpan) wrSpan.textContent = warmRerunMs;
+    var wpSpan = document.getElementById("honesty-warm-plus1");
+    if (wpSpan) wpSpan.textContent = warmPlus1Ms;
 
     var stats = [
       {
         label: "Cold index — vercel/next.js",
-        value: nextRow[2].display,
+        value: codeindexColdDisp,
         unit: "ms",
         context:
           "a 20,000-file monorepo indexed into a full cross-file graph plus " +
@@ -5566,7 +4739,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         value: "15",
         unit: "",
         context:
-          "always-on regex extraction; 10 of them also get tree-sitter AST precision when the grammar sidecar is present.",
+          "always-on regex extraction; 13 of them also get tree-sitter AST precision when the grammar sidecar is present.",
       },
       {
         label: "Runtime dependencies",
@@ -5610,8 +4783,10 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     if (coldCaption) {
       coldCaption.innerHTML =
         "ctags -R is faster (" +
-        nextRow[3].display +
-        " ms) but extracts flat definitions only — no call graph, no cross-file links, no incremental reindex. codeindex builds the full typed graph and byte-identical artifacts, and reindexes one touched file in 1,612 ms.";
+        ctagsColdDisp +
+        " ms) but extracts flat definitions only — no call graph, no cross-file links, no incremental reindex. codeindex builds the full typed graph and byte-identical artifacts, and reindexes one touched file in " +
+        warmPlus1Ms +
+        ".";
     }
 
     /* ----- flagship chart: cold index, vercel/next.js ----- */
@@ -5619,8 +4794,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       var wrap = document.getElementById("cold-chart-wrap");
       if (!wrap) return;
       var rowsSpec = [
-        { label: "codeindex", ms: codeindexMs, display: nextRow[2].display, emphasis: true },
-        { label: "ctags -R", ms: ctagsMs, display: nextRow[3].display, emphasis: false },
+        { label: "codeindex", ms: codeindexMs, display: codeindexColdDisp, emphasis: true },
+        { label: "ctags -R", ms: ctagsMs, display: ctagsColdDisp, emphasis: false },
       ];
       var maxMs = Math.max.apply(
         null,
@@ -5766,23 +4941,32 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           track.appendChild(bar); track.appendChild(val); row.appendChild(track); el.appendChild(row);
         });
       }
+      function cell(row, col) {
+        return col >= 0 && row[col] ? row[col] : { value: NaN, display: "—" };
+      }
       var cold = bySectionId("cold");
       var cdt = cold && rowByFirstCell(cold, "socialgouv/code-du-travail-numerique");
       if (cdt) {
+        var cCi = colIndex(cold, /codeindex/i);
+        var cCt = colIndex(cold, /ctags/i);
+        var cSe = colIndex(cold, /serena/i);
+        var cGr = colIndex(cold, /graphify/i);
         bars(document.getElementById("cold-mid-bars"), [
-          { label: "codeindex", ms: cdt[2].value, disp: cdt[2].display, me: true },
-          { label: "ctags -R", ms: cdt[3].value, disp: cdt[3].display },
-          { label: "Serena", ms: cdt[6].value, disp: cdt[6].display },
-          { label: "Graphify", ms: cdt[7].value, disp: cdt[7].display },
+          { label: "codeindex", ms: cell(cdt, cCi).value, disp: cell(cdt, cCi).display, me: true },
+          { label: "ctags -R", ms: cell(cdt, cCt).value, disp: cell(cdt, cCt).display },
+          { label: "Serena", ms: cell(cdt, cSe).value, disp: cell(cdt, cSe).display },
+          { label: "Graphify", ms: cell(cdt, cGr).value, disp: cell(cdt, cGr).display },
         ]);
       }
       var warm = bySectionId("warm");
       if (warm) {
+        var wRerun = colIndex(warm, /rerun/i);
+        var wPlus1 = colIndex(warm, /\+1|1 file/i);
         var items = [];
         warm.rows.forEach(function (r) {
           var name = String(r[0].value).split("/").pop();
-          items.push({ label: name, ms: r[1].value, disp: r[1].display, me: true });
-          items.push({ label: "↳ +1 file", ms: r[2].value, disp: r[2].display, sub: true });
+          items.push({ label: name, ms: cell(r, wRerun).value, disp: cell(r, wRerun).display, me: true });
+          items.push({ label: "↳ +1 file", ms: cell(r, wPlus1).value, disp: cell(r, wPlus1).display, sub: true });
         });
         bars(document.getElementById("warm-bars"), items);
       }
@@ -5796,29 +4980,29 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       var TOOLS = ["codeindex", "Serena", "Graphify", "ctags"];
       var M = [
         { a: "Cold index — small repos", s: "few-hundred files", c: [
-          ["tie", "2nd", "84–435 ms — fast, and builds a full graph the tools beside it don't"],
-          ["tie", "slow", "935–2516 ms — LSP index startup"],
-          ["tie", "slow", "592–1863 ms — Python graph + clustering"],
-          ["lead", "1st", "92–468 ms — fastest, but a flat tags file, no graph"]] },
+          ["tie", "2nd", "86–432 ms — fast, and builds a full graph the tools beside it don't"],
+          ["tie", "slow", "826–2360 ms — LSP index startup"],
+          ["tie", "slow", "587–1712 ms — Python graph + clustering"],
+          ["lead", "1st", "17–29 ms — fastest, but a flat tags file, no graph"]] },
         { a: "Cold index — largest repo", s: "next.js · 20k files", c: [
-          ["win", "8.3s", "8,322 ms — the only full-graph indexer that scales to 20k files"],
+          ["win", "8.0s", "7,993 ms — the only full-graph indexer that scales to 20k files"],
           ["na", "—", "n/a — 30k files intractable for a bench-time LSP index"],
           ["na", "—", "n/a — 30k files intractable for a bench-time graph build"],
-          ["tie", "3.2s", "3,158 ms — tags only, no graph"]] },
+          ["tie", "3.1s", "3,116 ms — tags only, no graph"]] },
         { a: "Warm / incremental reindex", s: "one file touched", c: [
-          ["win", "887ms", "next.js warm rerun 887 ms — incremental fastpath, uncontested"],
+          ["win", "877ms", "next.js warm rerun 877 ms — incremental fastpath, uncontested"],
           ["na", "—", "re-indexes lazily inside a live LSP session"],
           ["na", "—", "rebuilds via the cold command"],
           ["na", "—", "no incremental mode"]] },
         { a: "Warm query latency", s: "in-proc, warm host", c: [
           ["win", "~0ms", "find-symbol / references 0–2 ms on a loaded scan"],
-          ["tie", "120ms", "121–648 ms per call — LSP round trip"],
+          ["tie", "120ms", "106–616 ms per call — LSP round trip"],
           ["tie", "~1ms", "1 ms per call — prebuilt graph"],
           ["tie", "~0ms", "tags file scan"]] },
         { a: "MCP activation", s: "cold session → ready · new in v2.15.0", c: [
-          ["win", "46ms+", "46 ms (small) to 1,617 ms (next.js) — v2.15.0 loads the persisted index instead of rebuilding (was 76–7,655 ms)"],
-          ["tie", "slow", "594–2516 ms — language-server startup"],
-          ["tie", "~200ms", "197–461 ms — loads graph.json"],
+          ["win", "43ms+", "43 ms (small) to 1,601 ms (next.js) — v2.15.0 loads the persisted index instead of rebuilding (was 76–7,655 ms)"],
+          ["tie", "slow", "598–2131 ms — language-server startup"],
+          ["tie", "~200ms", "198–463 ms — loads graph.json"],
           ["na", "—", "not an MCP server"]] },
         { a: "Token vs raw grep", s: "one symbol lookup", c: [
           ["win", "390×", "up to 390× fewer tokens than a raw grep dump"],
@@ -5828,7 +5012,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         { a: "Determinism", s: "byte-identical rebuild", c: [
           ["win", "7/7", "byte-identical on every measured repo"],
           ["na", "—", "live LSP session — no artifact to diff"],
-          ["tie", "1/7", "graph.json differed on 6 of 7 repos"],
+          ["tie", "1/6", "graph.json differed on 5 of the 6 measurable repos"],
           ["tie", "yes", "tags file is stable"]] },
         { a: "Install footprint", s: "unpacked", c: [
           ["win", "23MB", "23.3 MB, zero runtime deps, one engine.mjs"],
@@ -5841,7 +5025,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           ["tie", "n/a", "n/a on next.js"],
           ["tie", "81MB", "80.8 MB tags file"]] },
         { a: "Language coverage", s: "for retrieval", c: [
-          ["tie", "15", "15 (regex) / 10 (AST) — covers all 7 bench repos incl. Rust"],
+          ["tie", "15", "15 (regex) / 13 (AST) — covers all 7 bench repos incl. Rust"],
           ["lead", "40+", "40+ via LSP — the broadest here"],
           ["tie", "36", "36 via tree-sitter"],
           ["tie", "many", "broad generic parser rules"]] },
