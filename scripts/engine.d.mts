@@ -121,6 +121,7 @@ interface WalkOptions {
     maxFileBytes?: number;
     maxFiles?: number;
     gitignore?: boolean;
+    ignoreDirs?: string[];
 }
 interface WalkedFile {
     rel: string;
@@ -153,6 +154,7 @@ interface ScanOptions {
     exclude?: string[];
     scope?: string;
     gitignore?: boolean;
+    ignoreDirs?: string[];
     maxBytes?: number;
     maxFiles?: number;
     maxCallsPerFile?: number;

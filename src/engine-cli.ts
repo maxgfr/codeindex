@@ -80,6 +80,8 @@ Flags:
   --exclude <glob>    Exclude matching paths (repeatable)
   --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
   --no-gitignore      Do not honor .gitignore files (default: honored)
+  --ignore-dir <name> Directory names to skip (repeatable) — REPLACES the
+                      default ignored-directory set, never merges with it
   --max-files <n>     Cap walked files (default 20000)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --max-calls <n>     Per-file call-site cap for extraction (default 512)
@@ -104,6 +106,7 @@ interface CliFlags {
   exclude: string[];
   scope?: string;
   gitignore: boolean;
+  ignoreDirs: string[];
   maxFiles?: number;
   maxBytes?: number;
   maxCalls?: number;
@@ -123,7 +126,7 @@ interface CliFlags {
 }
 
 function parseFlags(args: string[]): CliFlags {
-  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true, semantic: false };
+  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const next = (): string => {
@@ -146,6 +149,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--exclude") flags.exclude.push(next());
     else if (a === "--scope") flags.scope = next();
     else if (a === "--no-gitignore") flags.gitignore = false;
+    else if (a === "--ignore-dir") flags.ignoreDirs.push(next());
     else if (a === "--max-files") flags.maxFiles = num();
     else if (a === "--max-bytes") flags.maxBytes = num();
     else if (a === "--max-calls") flags.maxCalls = num();
@@ -177,6 +181,7 @@ function scanOptions(flags: CliFlags): BuildIndexOptions {
     exclude: flags.exclude.length ? flags.exclude : undefined,
     scope: flags.scope,
     gitignore: flags.gitignore,
+    ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
     maxFiles: flags.maxFiles,
     maxBytes: flags.maxBytes,
     maxCallsPerFile: flags.maxCalls,

@@ -258,6 +258,34 @@ describe("issue #10: maxCallsPerFile", () => {
   });
 });
 
+describe("issue #10: ignoreDirs replace semantics", () => {
+  const files = {
+    "src/main.ts": "export const main = 1;\n",
+    "generated/a.ts": "export const gen = 1;\n",
+    "node_modules/b.ts": "export const dep = 1;\n",
+  };
+
+  it("default walk skips node_modules and keeps generated", () => {
+    const rels = walk(scratchRepo(files)).files.map((f) => f.rel);
+    expect(rels).toContain("generated/a.ts");
+    expect(rels).toContain("src/main.ts");
+    expect(rels).not.toContain("node_modules/b.ts");
+  });
+
+  it("ignoreDirs REPLACES the default set — generated skipped, node_modules back in", () => {
+    const root = scratchRepo(files);
+    const rels = walk(root, { ignoreDirs: ["generated"] }).files.map((f) => f.rel);
+    expect(rels).not.toContain("generated/a.ts");
+    expect(rels).toContain("node_modules/b.ts"); // replace, not merge
+    expect(rels).toContain("src/main.ts");
+
+    // scanRepo threads it through to the same walk.
+    const scanned = scanRepo(root, { ignoreDirs: ["generated"] }).files.map((f) => f.rel);
+    expect(scanned).not.toContain("generated/a.ts");
+    expect(scanned).toContain("node_modules/b.ts");
+  });
+});
+
 describe("issue #11: export default class extends Base", () => {
   it("emits only the file-stem default symbol, never a class named `extends`", () => {
     const syms = jsTs.extract("base.ts", "export default class extends Base {}\n");

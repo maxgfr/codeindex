@@ -36,6 +36,13 @@ export interface WalkOptions {
   // semantics — see ignore.ts). Default TRUE: an ignored file is noise for
   // every consumer; pass false to index generated/ignored trees deliberately.
   gitignore?: boolean;
+  // Directory names to skip, REPLACING the default set entirely (not merging
+  // with it). IGNORE_DIRS is a public export, so consumers compose
+  // `[...IGNORE_DIRS, "extra"]` — or filter it — themselves; replace is the
+  // simplest contract. Deliberate scope boundary: grep.ts (the ripgrep
+  // universe) and the MCP server keep the DEFAULT set — recall consumers
+  // (e.g. ultrasec) consume scan/extract, not grep.
+  ignoreDirs?: string[];
 }
 
 export interface WalkedFile {
@@ -65,6 +72,9 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
   const useGitignore = opts.gitignore !== false;
+  // Effective ignored-directory set, built once: the caller's replacement when
+  // given (see WalkOptions.ignoreDirs — replace, never merge), else the default.
+  const ignoreDirs = opts.ignoreDirs ? new Set(opts.ignoreDirs) : IGNORE_DIRS;
   const out: WalkedFile[] = [];
   let capped = false;
   let excluded = 0;
@@ -125,7 +135,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         continue;
       }
       if (st.isDirectory()) {
-        if (IGNORE_DIRS.has(name)) continue;
+        if (ignoreDirs.has(name)) continue;
         // An in-repo DIRECTORY symlink is skipped entirely: its target is (or
         // will be) walked under its canonical name, and letting both paths race
         // through the cycle guard would keep whichever readdir served first —

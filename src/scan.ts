@@ -36,6 +36,9 @@ export interface ScanOptions {
   scope?: string;
   // Honor .gitignore files (default true — see WalkOptions.gitignore).
   gitignore?: boolean;
+  // Directory names to skip — REPLACES the default set (see
+  // WalkOptions.ignoreDirs; compose with the IGNORE_DIRS export to extend it).
+  ignoreDirs?: string[];
   maxBytes?: number;
   maxFiles?: number;
   // Per-file call-site cap for extraction (default 512, both AST and regex
@@ -69,6 +72,7 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     maxFileBytes: opts.maxBytes,
     maxFiles: opts.maxFiles,
     gitignore: opts.gitignore,
+    ignoreDirs: opts.ignoreDirs,
   });
   // Never index our own output (e.g. a committed `docs/ultraindex/`), or builds
   // would describe the encyclopedia instead of the code.

@@ -320,6 +320,7 @@ function walk(root, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
   const useGitignore = opts.gitignore !== false;
+  const ignoreDirs = opts.ignoreDirs ? new Set(opts.ignoreDirs) : IGNORE_DIRS;
   const out2 = [];
   let capped = false;
   let excluded = 0;
@@ -368,7 +369,7 @@ function walk(root, opts = {}) {
         continue;
       }
       if (st.isDirectory()) {
-        if (IGNORE_DIRS.has(name2)) continue;
+        if (ignoreDirs.has(name2)) continue;
         if (isLink) continue;
         if (useGitignore && rules.length && isIgnored(rules, rel, true)) continue;
         stack.push({ dir: abs, rel, rules });
@@ -6524,7 +6525,8 @@ function scanRepo(root, opts = {}) {
   const { files: walked, capped, excluded } = walk(root, {
     maxFileBytes: opts.maxBytes,
     maxFiles: opts.maxFiles,
-    gitignore: opts.gitignore
+    gitignore: opts.gitignore,
+    ignoreDirs: opts.ignoreDirs
   });
   const outPrefix = opts.out ? opts.out.replace(/\/+$/, "") + "/" : null;
   const files = [];
@@ -11216,6 +11218,8 @@ Flags:
   --exclude <glob>    Exclude matching paths (repeatable)
   --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
   --no-gitignore      Do not honor .gitignore files (default: honored)
+  --ignore-dir <name> Directory names to skip (repeatable) \u2014 REPLACES the
+                      default ignored-directory set, never merges with it
   --max-files <n>     Cap walked files (default 20000)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --max-calls <n>     Per-file call-site cap for extraction (default 512)
@@ -11233,7 +11237,7 @@ Flags:
                       each site corroborated|unique-name
 `;
 function parseFlags(args2) {
-  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, noAst: false, fuzzy: true, semantic: false };
+  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false };
   for (let i2 = 0; i2 < args2.length; i2++) {
     const a = args2[i2];
     const next = () => {
@@ -11256,6 +11260,7 @@ function parseFlags(args2) {
     else if (a === "--exclude") flags2.exclude.push(next());
     else if (a === "--scope") flags2.scope = next();
     else if (a === "--no-gitignore") flags2.gitignore = false;
+    else if (a === "--ignore-dir") flags2.ignoreDirs.push(next());
     else if (a === "--max-files") flags2.maxFiles = num();
     else if (a === "--max-bytes") flags2.maxBytes = num();
     else if (a === "--max-calls") flags2.maxCalls = num();
@@ -11285,6 +11290,7 @@ function scanOptions(flags2) {
     exclude: flags2.exclude.length ? flags2.exclude : void 0,
     scope: flags2.scope,
     gitignore: flags2.gitignore,
+    ignoreDirs: flags2.ignoreDirs.length ? flags2.ignoreDirs : void 0,
     maxFiles: flags2.maxFiles,
     maxBytes: flags2.maxBytes,
     maxCallsPerFile: flags2.maxCalls
