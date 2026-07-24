@@ -9,10 +9,11 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION, type FileRecord } from "./types.js";
-import { ensureGrammars, allGrammarKeys } from "./ast/loader.js";
+import { ensureGrammars, grammarKeysForExts } from "./ast/loader.js";
 import { buildArtifactsFromScan, type IndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
+import { walk } from "./walk.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
@@ -502,10 +503,40 @@ export function getArtifacts(repo: string, opts: SessionScanOptions = {}): Index
   return buildArtifactsFromScan(scan, opts);
 }
 
+// Warm ONLY the grammars for languages present in `repo`, memoized per repo
+// path. The server no longer warms every committed grammar at startup — most
+// sessions touch one repo and a handful of languages — so each scan-needing
+// tool warms the walk-derived set on first touch instead. ensureGrammars is
+// idempotent and near-free once loaded, so the memo's real job is skipping the
+// repeat WALK, not the load. Determinism: the walk's extension set is a superset
+// of what scanRepo keeps (scope/include/exclude only filter further), so every
+// extracted file has its grammar loaded; Language.load calls are independent, so
+// warming fewer grammars cannot alter the parse of a loaded one.
+const warmedRepos = new Set<string>();
+export async function warmGrammarsForRepo(repo: string): Promise<void> {
+  if (warmedRepos.has(repo)) return;
+  const { files } = walk(repo, {});
+  await ensureGrammars(grammarKeysForExts(files.map((f) => f.ext)));
+  warmedRepos.add(repo);
+}
+
+// Tools that never scan the file tree (git/grep/memory/embed-status only) — they
+// must not trigger a grammar warm. Every other tool is scan-needing and warms
+// the repo's grammars first; defaulting to "warm" keeps a newly added scan tool
+// correct without having to be listed here.
+const SCANLESS_TOOLS = new Set([
+  "workspaces", "churn", "coupling", "grep",
+  "write_memory", "read_memory", "list_memories", "delete_memory",
+  "embed_status",
+]);
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const repo = str(args.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
+  // Scan-needing tools warm the present-language grammars (memoized per repo)
+  // before any scan so extraction takes the AST tier; scan-less tools skip it.
+  if (!SCANLESS_TOOLS.has(name)) await warmGrammarsForRepo(repo);
 
   if (name === "scan_summary") {
     const scan = getScan(repo, scanOpts);
@@ -730,7 +761,9 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     name: opts.serverInfo?.name ?? "codeindex",
     version: opts.serverInfo?.version ?? ENGINE_VERSION,
   };
-  await ensureGrammars(allGrammarKeys()); // AST tier when the sidecar is present
+  // No startup warm: each scan-needing tool warms the present-language grammars
+  // for its repo on first touch (warmGrammarsForRepo), so a session that never
+  // scans — or only touches one language — loads no unused wasm.
 
   const send = (msg: Record<string, unknown>): void => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");

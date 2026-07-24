@@ -5587,6 +5587,14 @@ async function ensureGrammars(keys) {
 function allGrammarKeys() {
   return [...new Set(Object.values(EXT_GRAMMAR))];
 }
+function grammarKeysForExts(exts) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const ext of exts) {
+    const key = EXT_GRAMMAR[ext];
+    if (key !== void 0) keys.add(key);
+  }
+  return [...keys].sort();
+}
 function grammarReady(key) {
   return loaded.has(key);
 }
@@ -10277,7 +10285,8 @@ __export(mcp_exports, {
   memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
   runMcpServer: () => runMcpServer,
   scanFingerprint: () => scanFingerprint,
-  toCacheMap: () => toCacheMap
+  toCacheMap: () => toCacheMap,
+  warmGrammarsForRepo: () => warmGrammarsForRepo
 });
 import { statSync as statSync4 } from "fs";
 import { join as join13 } from "path";
@@ -10356,10 +10365,17 @@ function getArtifacts(repo, opts = {}) {
   }
   return buildArtifactsFromScan(scan2, opts);
 }
+async function warmGrammarsForRepo(repo) {
+  if (warmedRepos.has(repo)) return;
+  const { files } = walk(repo, {});
+  await ensureGrammars(grammarKeysForExts(files.map((f) => f.ext)));
+  warmedRepos.add(repo);
+}
 async function callTool(name2, args2) {
   const repo = str(args2.repo);
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
+  if (!SCANLESS_TOOLS.has(name2)) await warmGrammarsForRepo(repo);
   if (name2 === "scan_summary") {
     const scan2 = getScan(repo, scanOpts);
     return JSON.stringify(
@@ -10556,7 +10572,6 @@ async function runMcpServer(opts = {}) {
     name: opts.serverInfo?.name ?? "codeindex",
     version: opts.serverInfo?.version ?? ENGINE_VERSION
   };
-  await ensureGrammars(allGrammarKeys());
   const send = (msg) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
   };
@@ -10611,7 +10626,7 @@ async function runMcpServer(opts = {}) {
     }
   }
 }
-var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, sessionCache;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, sessionCache, warmedRepos, SCANLESS_TOOLS;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -10620,6 +10635,7 @@ var init_mcp = __esm({
     init_pipeline();
     init_graph_json();
     init_scan();
+    init_walk();
     init_callers();
     init_workspaces();
     init_git();
@@ -10890,6 +10906,18 @@ var init_mcp = __esm({
         }
       }
     ];
+    warmedRepos = /* @__PURE__ */ new Set();
+    SCANLESS_TOOLS = /* @__PURE__ */ new Set([
+      "workspaces",
+      "churn",
+      "coupling",
+      "grep",
+      "write_memory",
+      "read_memory",
+      "list_memories",
+      "delete_memory",
+      "embed_status"
+    ]);
   }
 });
 
@@ -11317,6 +11345,7 @@ init_symbols_json();
 import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "fs";
 import { join as join14, resolve } from "path";
 init_scan();
+init_walk();
 init_callers();
 init_workspaces();
 init_git();
@@ -11449,7 +11478,7 @@ function emit(content, out2) {
   if (out2) writeFileSync3(out2, content);
   else process.stdout.write(content);
 }
-function scanOptions(flags2) {
+function scanOptions(flags2, precomputedWalk) {
   return {
     include: flags2.include.length ? flags2.include : void 0,
     exclude: flags2.exclude.length ? flags2.exclude : void 0,
@@ -11458,9 +11487,14 @@ function scanOptions(flags2) {
     ignoreDirs: flags2.ignoreDirs.length ? flags2.ignoreDirs : void 0,
     maxFiles: flags2.maxFiles,
     maxBytes: flags2.maxBytes,
-    maxCallsPerFile: flags2.maxCalls
+    maxCallsPerFile: flags2.maxCalls,
+    // The walk performed once in runCli to warm the present-language grammars,
+    // reused here so scanRepo does not traverse the tree a second time. Absent
+    // for --no-ast / scan-less commands: scanRepo walks itself, unchanged.
+    precomputedWalk
   };
 }
+var SCANLESS_COMMANDS = /* @__PURE__ */ new Set(["grep", "churn", "coupling", "workspaces"]);
 async function runCli(argv) {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
@@ -11478,7 +11512,17 @@ async function runCli(argv) {
   }
   const flags2 = parseFlags(rest);
   if (!existsSync4(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
-  if (!flags2.noAst) await ensureGrammars(allGrammarKeys());
+  const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags2.positional !== "build");
+  let precomputedWalk;
+  if (scans && !flags2.noAst) {
+    precomputedWalk = walk(flags2.repo, {
+      maxFileBytes: flags2.maxBytes,
+      maxFiles: flags2.maxFiles,
+      gitignore: flags2.gitignore,
+      ignoreDirs: flags2.ignoreDirs.length ? flags2.ignoreDirs : void 0
+    });
+    await ensureGrammars(grammarKeysForExts(precomputedWalk.files.map((f) => f.ext)));
+  }
   if (cmd === "index") {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
@@ -11500,7 +11544,7 @@ async function runCli(argv) {
       }
     } catch {
     }
-    const scan2 = scanRepo(flags2.repo, { ...scanOptions(flags2), cache, out: outDir });
+    const scan2 = scanRepo(flags2.repo, { ...scanOptions(flags2, precomputedWalk), cache, out: outDir });
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
     const graphPath = join14(outDir, "graph.json");
@@ -11563,7 +11607,7 @@ async function runCli(argv) {
 `);
     }
   } else if (cmd === "scan") {
-    const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
     const summary = {
       engineVersion: ENGINE_VERSION,
       commit: scan2.commit,
@@ -11573,13 +11617,13 @@ async function runCli(argv) {
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags2.out);
   } else if (cmd === "graph") {
-    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
     emit(renderGraphJson(graph), flags2.out);
   } else if (cmd === "symbols") {
-    const { symbols } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const { symbols } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
     emit(renderSymbolsJson(symbols), flags2.out);
   } else if (cmd === "scip") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
     const bytes = renderScip(scan2, { projectRoot: flags2.projectRoot });
     const out2 = flags2.out ?? resolve("index.scip");
     if (out2 === "-") process.stdout.write(Buffer.from(bytes));
@@ -11589,14 +11633,14 @@ async function runCli(argv) {
 `);
     }
   } else if (cmd === "callers") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
     const index = buildCallerIndex(scan2, void 0, { recall: flags2.recall });
     const obj = {};
     for (const [name2, entry] of index) obj[name2] = entry;
     emit(JSON.stringify(obj, null, 2) + "\n", flags2.out);
   } else if (cmd === "search") {
     if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
     if (flags2.semantic) {
       const endpoint = resolveEmbedEndpoint();
       const lexical = () => {
@@ -11687,7 +11731,7 @@ async function runCli(argv) {
       }
       const model = loadEmbedModel(modelDir);
       mkdirSync2(flags2.out, { recursive: true });
-      const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+      const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
       const index = buildEmbeddingIndex(scan2, model);
       writeFileSync3(join14(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
@@ -11726,7 +11770,7 @@ async function runCli(argv) {
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const rules = parseRules(JSON.parse(readFileSync6(flags2.config, "utf8")));
-    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags2.out);
@@ -11747,26 +11791,26 @@ async function runCli(argv) {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags2.out);
   } else if (cmd === "repomap") {
-    const { scan: scan2, graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const { scan: scan2, graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
     emit(renderRepoMap(scan2, graph, { budgetTokens: flags2.budgetTokens }), flags2.out);
   } else if (cmd === "hotspots") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
     const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2) + "\n", flags2.out);
   } else if (cmd === "coupling") {
     const { ok, couplings } = changeCoupling(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags2.out);
   } else if (cmd === "deadcode") {
-    emit(JSON.stringify(findDeadCode(scanRepo(flags2.repo, scanOptions(flags2))), null, 2) + "\n", flags2.out);
+    emit(JSON.stringify(findDeadCode(scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk))), null, 2) + "\n", flags2.out);
   } else if (cmd === "complexity") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
     emit(JSON.stringify(symbolComplexity(scan2, flags2.positional), null, 2) + "\n", flags2.out);
   } else if (cmd === "risk") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2));
+    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
     const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2) + "\n", flags2.out);
   } else if (cmd === "mermaid") {
-    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2));
+    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
     emit(renderMermaid(graph, { module: flags2.positional }), flags2.out);
   } else if (cmd === "grep") {
     if (!flags2.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
@@ -11846,6 +11890,7 @@ export {
   foldText,
   gitChurn,
   grammarKeyForExt,
+  grammarKeysForExts,
   grammarReady,
   grepRepo,
   hasEmbedModel,

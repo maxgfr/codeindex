@@ -90,6 +90,23 @@ export function allGrammarKeys(): string[] {
   return [...new Set(Object.values(EXT_GRAMMAR))];
 }
 
+// The grammar keys needed for a set of file extensions: each mapped through
+// EXT_GRAMMAR, unknown extensions dropped, then deduped and sorted. Warming
+// exactly this set (instead of every committed grammar) skips the wasm load for
+// languages the repo doesn't contain, while keeping output byte-identical:
+// extractAst falls back to regex only when grammarReady(key) is false, and the
+// walk's extension set (which feeds this) is a superset of what scanRepo keeps,
+// so every extracted file has its grammar loaded. Language.load calls are
+// independent, so loading fewer grammars cannot change parses of loaded ones.
+export function grammarKeysForExts(exts: Iterable<string>): string[] {
+  const keys = new Set<string>();
+  for (const ext of exts) {
+    const key = EXT_GRAMMAR[ext];
+    if (key !== undefined) keys.add(key);
+  }
+  return [...keys].sort();
+}
+
 export function grammarReady(key: string): boolean {
   return loaded.has(key);
 }

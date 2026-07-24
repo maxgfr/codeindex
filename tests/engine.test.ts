@@ -38,6 +38,7 @@ const CONTRACT = [
   "extractMarkdown",
   "ensureGrammars",
   "allGrammarKeys",
+  "grammarKeysForExts",
   "grammarKeyForExt",
   "grammarReady",
   "extractAst",
@@ -398,5 +399,46 @@ describe("no-wasm mode (vendored consumer layout)", () => {
     const graph = JSON.parse(graphOut) as { fileEdges: { kind: string }[] };
     // Imports are regex-extracted in both tiers, so import edges must survive.
     expect(graph.fileEdges.some((e) => e.kind === "import")).toBe(true);
+  });
+});
+
+// Capture everything runCli writes to stdout while it runs (it emits via
+// process.stdout.write), restoring the real writer afterwards.
+async function captureStdout(fn: () => Promise<void>): Promise<string> {
+  const chunks: string[] = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  (process.stdout as unknown as { write: (c: unknown) => boolean }).write = (chunk: unknown): boolean => {
+    chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString());
+    return true;
+  };
+  try {
+    await fn();
+  } finally {
+    (process.stdout as unknown as { write: typeof orig }).write = orig;
+  }
+  return chunks.join("");
+}
+
+describe("selective grammar warming (T7)", () => {
+  it("grammarKeysForExts maps through EXT_GRAMMAR, dedupes and sorts", () => {
+    // Mixed set → one key per language, sorted by grammar key.
+    expect(engine.grammarKeysForExts([".ts", ".tsx", ".py", ".go"])).toEqual(["go", "python", "tsx", "typescript"]);
+    // Every TS-family extension collapses onto the single `typescript` key.
+    expect(engine.grammarKeysForExts([".ts", ".mts", ".cts"])).toEqual(["typescript"]);
+    // Extensions with no committed grammar (docs, json, unsupported langs) drop out.
+    expect(engine.grammarKeysForExts([".ts", ".md", ".json", ".swift"])).toEqual(["typescript"]);
+    // Empty in → empty out; the mapping is a pure function of the extension set.
+    expect(engine.grammarKeysForExts([])).toEqual([]);
+  });
+
+  it("`graph` via runCli — warming only the .ts/.py/.go present — is byte-identical to an all-grammars in-proc build", async () => {
+    // The CLI now walks once, warms only the languages the walk saw, and reuses
+    // that walk for the scan (precomputedWalk). The rendered graph must match a
+    // direct build (this process has every grammar warmed via tests/setup.ts, so
+    // any divergence would be the precomputed-walk threading, not a missing tier).
+    const viaCli = await captureStdout(() => engine.runCli(["graph", "--repo", REPO]));
+    const inProc = engine.renderGraphJson(engine.buildIndexArtifacts(REPO).graph);
+    expect(viaCli.length).toBeGreaterThan(0);
+    expect(viaCli).toBe(inProc);
   });
 });

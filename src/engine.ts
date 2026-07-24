@@ -45,7 +45,7 @@ export { extractMarkdown } from "./extract/markdown.js";
 export type { MarkdownInfo } from "./extract/markdown.js";
 
 // AST tier (optional — a no-op without the grammar wasm sidecar).
-export { ensureGrammars, allGrammarKeys, grammarKeyForExt, grammarReady } from "./ast/loader.js";
+export { ensureGrammars, allGrammarKeys, grammarKeysForExts, grammarKeyForExt, grammarReady } from "./ast/loader.js";
 export { extractAst } from "./ast/extract.js";
 
 // Resolution + modules + graph tier.
