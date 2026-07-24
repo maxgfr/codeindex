@@ -1,4 +1,4 @@
-declare const ENGINE_VERSION = "2.12.0";
+declare const ENGINE_VERSION = "2.13.0";
 declare const SCHEMA_VERSION = 4;
 declare const EXTRACTOR_VERSION = 10;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";

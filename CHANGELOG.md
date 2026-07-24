@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.13.0](https://github.com/maxgfr/codeindex/compare/v2.12.0...v2.13.0) (2026-07-24)
+
+
+### Bug Fixes
+
+* **embed:** validate a custom-URL model.json before writing it ([4fd8e35](https://github.com/maxgfr/codeindex/commit/4fd8e35839d9c8cbbc266f6a901f7887082bfd9f))
+* **extract:** stop capturing 'extends' as the class name of an anonymous default class export ([5c9d05b](https://github.com/maxgfr/codeindex/commit/5c9d05bc1db5404ab06bf7cb812e01ae087f94e4)), closes [#11](https://github.com/maxgfr/codeindex/issues/11)
+* **walk:** exclude .codeindex from the index ([c62940f](https://github.com/maxgfr/codeindex/commit/c62940f908ac5f60be88db5dfbea88bcb489b1a6))
+
+
+### Features
+
+* **engine:** export the EmbedPullTarget type ([f088a29](https://github.com/maxgfr/codeindex/commit/f088a29220f63bb97d4006eb8648992a2aab2773))
+* **scan:** configurable per-file call cap (maxCallsPerFile) ([73f864d](https://github.com/maxgfr/codeindex/commit/73f864da696d5cdc6f6a983877a37657d749f98d)), closes [#10](https://github.com/maxgfr/codeindex/issues/10)
+* **walk:** replaceable ignore-directory set (ignoreDirs) ([8b4c052](https://github.com/maxgfr/codeindex/commit/8b4c052596d1d722b349ae21d60e023306b9bde3)), closes [#10](https://github.com/maxgfr/codeindex/issues/10) [#10](https://github.com/maxgfr/codeindex/issues/10)
+
+
+### Performance Improvements
+
+* **mcp:** memoize the static embed model across requests ([7ac4ce9](https://github.com/maxgfr/codeindex/commit/7ac4ce92d328f7ab7d422ff56bc1d8d0eb2fe16c))
+
 # [2.12.0](https://github.com/maxgfr/codeindex/compare/v2.11.1...v2.12.0) (2026-07-23)
 
 
