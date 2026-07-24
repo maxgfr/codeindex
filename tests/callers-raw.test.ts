@@ -179,6 +179,28 @@ describe("buildRawCallerIndex (issue #8)", () => {
   });
 });
 
+describe("enclosingSymbol tie-break (issue #12)", () => {
+  // CHARACTERIZATION of the innermost-search tie-break, not a spec: when two
+  // symbols share the same line AND endLine, the `<=` in enclosingAmong's
+  // comparison (src/callers.ts) lets every later candidate displace the
+  // earlier one, so the later-iterated symbol wins. Extraction order is
+  // deterministic, so the output is reproducible as-is; flipping the
+  // tie-break (e.g. to `<`, first-wins) would churn consumer-visible output
+  // for no gain. This test pins the current behavior so any such change is a
+  // deliberate one.
+  it("when two symbols share line and endLine, the later-iterated one wins", () => {
+    const scan = scanOf([
+      file("src/twin.ts", {
+        symbols: [
+          sym("firstTwin", "src/twin.ts", { line: 3, endLine: 9 }),
+          sym("secondTwin", "src/twin.ts", { line: 3, endLine: 9 }),
+        ],
+      }),
+    ]);
+    expect(enclosingSymbol(scan, "src/twin.ts", 5)!.name).toBe("secondTwin");
+  });
+});
+
 describe("buildCallerIndex stays byte-unchanged (additive-only guard)", () => {
   it("returns exactly the pre-existing def-resolved structure on the mixed scan", () => {
     const index = buildCallerIndex(mixedScan(), new Set());

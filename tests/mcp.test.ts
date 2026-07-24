@@ -408,6 +408,9 @@ async function startEmbedMock(): Promise<EmbedMock> {
 // shot), this awaits each response before sending the next — so a test can
 // mutate the repo on disk BETWEEN two tool calls against the SAME long-lived
 // server process, which is exactly the scenario memoization must invalidate.
+// It performs the MCP handshake on spawn (issue #12), mirroring what
+// mcpSession callers send: initialize + notifications/initialized, with every
+// call() gated on the initialize response.
 function mcpStagedSession(env: Record<string, string | undefined>): {
   call: (id: number, name: string, args: Record<string, unknown>) => Promise<RpcMsg>;
   close: () => void;
@@ -436,12 +439,22 @@ function mcpStagedSession(env: Record<string, string | undefined>): {
     }
   });
   const send = (msg: Record<string, unknown>) => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
+  // Handshake up front. id 0 is collision-free: staged-suite call ids start
+  // at 1. call() awaits the id-0 response, so the first tool call can only
+  // resolve against an initialized server.
+  const ready = new Promise<void>((resolve) => {
+    waiters.set(0, () => resolve());
+  });
+  send({ id: 0, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } });
+  send({ method: "notifications/initialized" });
   return {
-    call: (id, name, args) =>
-      new Promise<RpcMsg>((resolve) => {
+    call: async (id, name, args) => {
+      await ready;
+      return new Promise<RpcMsg>((resolve) => {
         waiters.set(id, resolve);
         send({ id, method: "tools/call", params: { name, arguments: args } });
-      }),
+      });
+    },
     close: () => {
       child.stdin.end();
       child.kill();
