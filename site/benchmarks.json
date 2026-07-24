@@ -1,24 +1,27 @@
 {
-  "generatedAt": "2026-07-23T09:03:13.384Z",
+  "generatedAt": "2026-07-24T14:06:12.944Z",
   "environment": {
     "node": "v24.10.0",
     "cpu": "Apple M5",
     "ram": "16.0 GB",
-    "date": "2026-07-23T09:03:13.384Z"
+    "date": "2026-07-24T14:06:12.944Z"
   },
   "nominalRuns": 5,
   "sections": [
     {
       "id": "cold",
       "title": "Cold index",
-      "note": "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs.",
+      "note": "Full process spawn per run into a fresh output dir. scip-typescript excludes its npm install (timed separately, shown inline). 01x `init` shells out to ast-grep per file and is cleaned between runs. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally); `falcon index` writes its parquet artifact set. All three are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags, scip-typescript, falcon) are kept and measured there.",
       "headers": [
         "Repo",
         "Files",
         "codeindex (ms)",
         "ctags -R (ms)",
         "scip-typescript (ms)",
-        "01x init (ms)"
+        "01x init (ms)",
+        "serena project index (ms)",
+        "graphify update (ms)",
+        "falcon index (ms)"
       ],
       "rows": [
         [
@@ -33,14 +36,14 @@
             "kind": "int"
           },
           {
-            "display": "500",
-            "value": 500.06787499999973,
+            "display": "458",
+            "value": 457.76441699999987,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "45",
-            "value": 44.932124999999814,
+            "display": "32",
+            "value": 31.5122080000001,
             "kind": "ms",
             "runs": 5
           },
@@ -49,10 +52,24 @@
             "na": "no tsconfig"
           },
           {
-            "display": "1506",
-            "value": 1506.0056669999994,
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "2314",
+            "value": 2314.253625000001,
             "kind": "ms",
             "runs": 5
+          },
+          {
+            "display": "2150",
+            "value": 2150.2724579999995,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
           }
         ],
         [
@@ -67,14 +84,14 @@
             "kind": "int"
           },
           {
-            "display": "277",
-            "value": 277.2011250000014,
+            "display": "303",
+            "value": 303.21187499999724,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "20",
-            "value": 20.479167000001326,
+            "display": "19",
+            "value": 18.56500000000233,
             "kind": "ms",
             "runs": 5
           },
@@ -83,8 +100,24 @@
             "na": "no tsconfig"
           },
           {
-            "display": "1661",
-            "value": 1661.3131250000006,
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "2433",
+            "value": 2433.3981249999997,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "949",
+            "value": 949.1684580000001,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "82",
+            "value": 81.91787499999919,
             "kind": "ms",
             "runs": 5
           }
@@ -101,14 +134,14 @@
             "kind": "int"
           },
           {
-            "display": "101",
-            "value": 100.64829200000167,
+            "display": "95",
+            "value": 95.11325000000215,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "21",
-            "value": 20.709209000000556,
+            "display": "20",
+            "value": 20.403167000004032,
             "kind": "ms",
             "runs": 5
           },
@@ -117,8 +150,24 @@
             "na": "npm install failed"
           },
           {
-            "display": "994",
-            "value": 993.7054169999974,
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "915",
+            "value": 915.21875,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "836",
+            "value": 836.322874999998,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "69",
+            "value": 68.67762499999662,
             "kind": "ms",
             "runs": 5
           }
@@ -135,14 +184,14 @@
             "kind": "int"
           },
           {
-            "display": "307",
-            "value": 306.80633300000045,
+            "display": "305",
+            "value": 305.1812090000021,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "26",
-            "value": 26.08679200000188,
+            "value": 25.684416999996756,
             "kind": "ms",
             "runs": 5
           },
@@ -151,8 +200,24 @@
             "na": "no tsconfig"
           },
           {
-            "display": "1265",
-            "value": 1265.3727080000026,
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "1225",
+            "value": 1225.0494999999937,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1048",
+            "value": 1048.1946250000037,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "96",
+            "value": 95.5066669999942,
             "kind": "ms",
             "runs": 5
           }
@@ -169,14 +234,14 @@
             "kind": "int"
           },
           {
-            "display": "1746",
-            "value": 1745.7529589999976,
+            "display": "1849",
+            "value": 1849.1738749999931,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "371",
-            "value": 370.6429999999964,
+            "display": "332",
+            "value": 331.90558299999975,
             "kind": "ms",
             "runs": 5
           },
@@ -185,8 +250,24 @@
             "na": "no tsconfig"
           },
           {
-            "display": "13409",
-            "value": 13409.103833000001,
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "7845",
+            "value": 7845.453708999994,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11539",
+            "value": 11538.595792000007,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "967",
+            "value": 966.8751659999834,
             "kind": "ms",
             "runs": 5
           }
@@ -203,14 +284,14 @@
             "kind": "int"
           },
           {
-            "display": "103",
-            "value": 102.81020799998078,
+            "display": "100",
+            "value": 99.84212499999558,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "24",
-            "value": 23.66250000000582,
+            "display": "25",
+            "value": 24.869040999998106,
             "kind": "ms",
             "runs": 5
           },
@@ -219,8 +300,24 @@
             "na": "no tsconfig"
           },
           {
-            "display": "449",
-            "value": 448.6750409999804,
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "1038",
+            "value": 1037.685375000001,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "634",
+            "value": 633.618833000015,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "72",
+            "value": 71.55066700000316,
             "kind": "ms",
             "runs": 5
           }
@@ -237,14 +334,14 @@
             "kind": "int"
           },
           {
-            "display": "9398",
-            "value": 9397.78575000001,
+            "display": "10076",
+            "value": 10075.75562500002,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "3431",
-            "value": 3430.5689589999965,
+            "display": "3362",
+            "value": 3361.519166999962,
             "kind": "ms",
             "runs": 5
           },
@@ -253,10 +350,22 @@
             "na": "npm install failed"
           },
           {
-            "display": "86062 (3×)",
-            "value": 86062.197583,
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "14162",
+            "value": 14162.041624999954,
             "kind": "ms",
-            "runs": 3
+            "runs": 5
           }
         ]
       ]
@@ -264,7 +373,7 @@
     {
       "id": "warm",
       "title": "Warm / incremental",
-      "note": "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). 01x re-indexes the single touched file.",
+      "note": "Re-index with a warm cache present, then with exactly one file touched (comment appended, restored after). 01x re-indexes the single touched file. Deliberately no serena/graphify/falcon column: none of them exposes a comparable user-visible single-file reindex command (serena re-indexes lazily inside a live LSP session; graphify and falcon rebuild via the cold commands timed above).",
       "headers": [
         "Repo",
         "codeindex warm rerun (ms)",
@@ -279,22 +388,20 @@
             "kind": "text"
           },
           {
-            "display": "85",
-            "value": 84.8174580000341,
+            "display": "51",
+            "value": 50.71704200003296,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "100",
-            "value": 99.57120799995027,
+            "display": "84",
+            "value": 83.5337920000311,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 11.840208999929018,
-            "kind": "ms",
-            "runs": 5
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -304,22 +411,20 @@
             "kind": "text"
           },
           {
-            "display": "72",
-            "value": 71.96170799992979,
+            "display": "45",
+            "value": 44.725000000034925,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "79",
-            "value": 79.00895799999125,
+            "display": "69",
+            "value": 69.18791700003203,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "29",
-            "value": 29.09854199993424,
-            "kind": "ms",
-            "runs": 5
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -329,22 +434,20 @@
             "kind": "text"
           },
           {
-            "display": "77",
-            "value": 76.65287499991246,
+            "display": "48",
+            "value": 47.88783299998613,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "82",
-            "value": 81.74166699999478,
+            "display": "67",
+            "value": 67.09583399997791,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "14",
-            "value": 13.790917000034824,
-            "kind": "ms",
-            "runs": 5
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -354,22 +457,20 @@
             "kind": "text"
           },
           {
-            "display": "95",
-            "value": 94.83487499994226,
+            "display": "52",
+            "value": 51.862458000017796,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "120",
-            "value": 120.27654199989047,
+            "display": "99",
+            "value": 99.33820800000103,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 12.23208300000988,
-            "kind": "ms",
-            "runs": 5
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -379,20 +480,20 @@
             "kind": "text"
           },
           {
-            "display": "339",
-            "value": 339.11254200001713,
+            "display": "142",
+            "value": 142.157125000027,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "344",
-            "value": 344.07499999995343,
+            "display": "359",
+            "value": 358.61470800003735,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "n/a (reindex exit 1)",
-            "na": "reindex exit 1"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -402,22 +503,20 @@
             "kind": "text"
           },
           {
-            "display": "66",
-            "value": 66.46991700003855,
+            "display": "45",
+            "value": 45.006082999985665,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "73",
-            "value": 73.05125000001863,
+            "display": "63",
+            "value": 62.66737500001909,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "11",
-            "value": 11.012832999927923,
-            "kind": "ms",
-            "runs": 5
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ],
         [
@@ -427,22 +526,20 @@
             "kind": "text"
           },
           {
-            "display": "1775",
-            "value": 1774.7403749999357,
+            "display": "951",
+            "value": 950.6487500000512,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1828",
-            "value": 1827.6198330000043,
+            "display": "1783",
+            "value": 1782.5399580000085,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "11",
-            "value": 11.223957999958657,
-            "kind": "ms",
-            "runs": 5
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           }
         ]
       ]
@@ -475,37 +572,35 @@
           },
           {
             "display": "0",
-            "value": 0.0816249999916181,
+            "value": 0.08566699997754768,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "466",
-            "value": 466.46804199996404,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 8.315874999971129,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "5",
-            "value": 5.18445800000336,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "5",
-            "value": 5.466790999984369,
+            "display": "463",
+            "value": 462.76962500001537,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.2710829999996349,
+            "value": 0.0897920000134036,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 5.357250000000931,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "0",
+            "value": 0.2854170000064187,
             "kind": "ms",
             "runs": 5
           }
@@ -523,37 +618,35 @@
           },
           {
             "display": "0",
-            "value": 0.05604200006928295,
+            "value": 0.055709000036586076,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "275",
-            "value": 275.0899999999674,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "3",
-            "value": 2.7519169999286532,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "2",
-            "value": 2.128917000023648,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "5",
-            "value": 5.073165999958292,
+            "display": "263",
+            "value": 263.04904199996963,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.37262500007636845,
+            "value": 0.04633300000568852,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 2.127916000026744,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "0",
+            "value": 0.3738749999902211,
             "kind": "ms",
             "runs": 5
           }
@@ -571,37 +664,35 @@
           },
           {
             "display": "0",
-            "value": 0.004916999954730272,
+            "value": 0.004790999984834343,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "116",
-            "value": 115.86512499989476,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "2",
-            "value": 1.9022500000428408,
+            "display": "90",
+            "value": 90.20470800000476,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04079200001433492,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "7",
-            "value": 7.079458000021987,
+            "value": 0.020625000004656613,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.3734999999869615,
+            "value": 0.07912499998928979,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "0",
+            "value": 0.2898329999879934,
             "kind": "ms",
             "runs": 5
           }
@@ -619,37 +710,35 @@
           },
           {
             "display": "0",
-            "value": 0.02266699995379895,
+            "value": 0.027165999985300004,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "321",
-            "value": 320.9722499999916,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "15",
-            "value": 15.017083000042476,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "2",
-            "value": 1.5757500000763685,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "6",
-            "value": 6.265124999918044,
+            "display": "342",
+            "value": 342.10237500001676,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.15508300007786602,
+            "value": 0.07104200002504513,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.8751669999910519,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "0",
+            "value": 0.1348329999600537,
             "kind": "ms",
             "runs": 5
           }
@@ -667,37 +756,35 @@
           },
           {
             "display": "0",
-            "value": 0.09729100007098168,
+            "value": 0.10987500002374873,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1860",
-            "value": 1860.327707999968,
+            "display": "1767",
+            "value": 1766.8987079999642,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "49",
-            "value": 48.66375000006519,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "4",
-            "value": 3.6094159999629483,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "5",
-            "value": 5.40708400006406,
+            "display": "0",
+            "value": 0.15954099997179583,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "7",
-            "value": 6.594459000043571,
+            "value": 7.051875000004657,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "6",
+            "value": 6.316667000006419,
             "kind": "ms",
             "runs": 5
           }
@@ -715,37 +802,35 @@
           },
           {
             "display": "0",
-            "value": 0.003333000000566244,
+            "value": 0.0032500000088475645,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "108",
-            "value": 107.57041599997319,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.9912089999997988,
+            "display": "96",
+            "value": 96.16291600000113,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.03775000001769513,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "5",
-            "value": 4.967875000089407,
+            "value": 0.006500000017695129,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04383300000336021,
+            "value": 0.04237500001909211,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "0",
+            "value": 0.042833999963477254,
             "kind": "ms",
             "runs": 5
           }
@@ -763,37 +848,1163 @@
           },
           {
             "display": "1",
-            "value": 0.9722090000286698,
+            "value": 0.9785830000182614,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "9600",
-            "value": 9600.275417000055,
+            "display": "8504",
+            "value": 8504.357625000062,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "579",
-            "value": 579.3360419999808,
+            "display": "2",
+            "value": 1.5130829999689013,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "323",
-            "value": 323.13791699998546,
+            "display": "326",
+            "value": 325.51250000006985,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "110",
+            "value": 110.17466699995566,
+            "kind": "ms",
+            "runs": 5
+          }
+        ]
+      ]
+    },
+    {
+      "id": "mcp-sessions",
+      "title": "MCP sessions (activate + per-call queries)",
+      "note": "All four servers speak the same stdio JSON-RPC transport to the same client, on primed artifacts. `activate->ready` times a WHOLE session — process spawn, initialize handshake, tools/list, first find-symbol answer — and its semantics differ per server, read it accordingly: serena starts a language server and lazily indexes against a cold `.serena` cache (LS binaries already on disk); graphify and falcon merely load prebuilt artifacts, their parse cost lives in the Cold index column; codeindex's MCP server re-scans the repo per call by design (nothing to preload). The three task cells are per-call medians on a live session after activation; file-overview targets the file DEFINING the representative symbol (the same file for every server, in the repo's main language by construction). falcon's references cell times the SAME `falcon_symbol_lookup` call as find-symbol — v0.6.4 has no separate references tool, its lookup response embeds callers/references. serena and graphify are n/a on repos above ~8k files (vercel/next.js): priming a full LSP / Python-graph index there is intractable at bench time (see the Cold index note); codeindex and falcon, which stream, are still measured.",
+      "headers": [
+        "Repo",
+        "Server",
+        "Symbol",
+        "activate->ready (ms)",
+        "find-symbol (ms)",
+        "references (ms)",
+        "file-overview (ms)"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "383",
+            "value": 383,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "14",
+            "value": 14,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "13",
+            "value": 13.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "2287",
+            "value": 2286.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "133",
+            "value": 133,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "246",
+            "value": 246.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "106",
+            "value": 105.6,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "254",
+            "value": 254,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "WalkBuilder",
+            "value": "WalkBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "249",
+            "value": 248.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 8.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "9",
+            "value": 8.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "8",
+            "value": 7.8,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "616",
+            "value": 616,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "122",
+            "value": 122.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "386",
+            "value": 385.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "106",
+            "value": 105.9,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "217",
+            "value": 216.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "11",
+            "value": 11.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "81",
+            "value": 81.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "13",
+            "value": 13.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "13",
+            "value": 13.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12.2,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "605",
+            "value": 604.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "129",
+            "value": 128.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "114",
+            "value": 114.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "105",
+            "value": 104.6,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "216",
+            "value": 215.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "7",
+            "value": 7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "199",
+            "value": 199,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "14",
+            "value": 14.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 11.6,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "734",
+            "value": 734.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "127",
+            "value": 127.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "137",
+            "value": 136.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "106",
+            "value": 105.7,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "214",
+            "value": 213.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "5",
-            "value": 5.037040999974124,
+            "value": 4.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "9",
+            "value": 9.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "1597",
+            "value": 1597.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "118",
+            "value": 117.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "118",
+            "value": 117.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "115",
+            "value": 114.7,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "1631",
+            "value": 1630.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "648",
+            "value": 648.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "253",
+            "value": 252.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "102",
+            "value": 102,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "481",
+            "value": 481,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
+            "kind": "text"
+          },
+          {
+            "display": "23",
+            "value": 23.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "91",
+            "value": 90.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 11.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11",
+            "value": 11.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "10",
+            "value": 10.2,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "619",
+            "value": 619.2,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "121",
-            "value": 120.59866599994712,
+            "value": 120.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "113",
+            "value": 113.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "105",
+            "value": 105.4,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "204",
+            "value": 203.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "7",
+            "value": 7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "7925",
+            "value": 7924.7,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1181",
+            "value": 1181.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1226",
+            "value": 1226,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1228",
+            "value": 1228.1,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "NextResponse",
+            "value": "NextResponse",
+            "kind": "text"
+          },
+          {
+            "display": "167",
+            "value": 166.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0,
             "kind": "ms",
             "runs": 5
           }
@@ -1076,13 +2287,771 @@
       ]
     },
     {
+      "id": "mcp-tokens",
+      "title": "MCP token economy (per-call response size)",
+      "note": "Context cost of each MCP answer: tokens ~= bytes/4 of the tool-call response text (same convention as the Token economy table). The codeindex rows are the baseline the other servers compare against. falcon's references figure reuses the find-symbol response (same call, see MCP sessions); graphify's file-overview has no equivalent tool. Bigger is not automatically worse: serena's LSP answers carry semantically precise, type-aware references the static tools do not claim — this table measures context cost only, not answer quality.",
+      "headers": [
+        "Repo",
+        "Server",
+        "find-symbol tokens",
+        "references tokens",
+        "file-overview tokens"
+      ],
+      "rows": [
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "56",
+            "value": 56,
+            "kind": "int"
+          },
+          {
+            "display": "121",
+            "value": 121,
+            "kind": "int"
+          },
+          {
+            "display": "10709",
+            "value": 10709,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "37",
+            "value": 37,
+            "kind": "int"
+          },
+          {
+            "display": "5306",
+            "value": 5306,
+            "kind": "int"
+          },
+          {
+            "display": "285",
+            "value": 285,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "38",
+            "value": 38,
+            "kind": "int"
+          },
+          {
+            "display": "1108",
+            "value": 1108,
+            "kind": "int"
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "BurntSushi/ripgrep",
+            "value": "BurntSushi/ripgrep",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "53",
+            "value": 53,
+            "kind": "int"
+          },
+          {
+            "display": "3671",
+            "value": 3671,
+            "kind": "int"
+          },
+          {
+            "display": "3449",
+            "value": 3449,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "31",
+            "value": 31,
+            "kind": "int"
+          },
+          {
+            "display": "8740",
+            "value": 8740,
+            "kind": "int"
+          },
+          {
+            "display": "264",
+            "value": 264,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "35",
+            "value": 35,
+            "kind": "int"
+          },
+          {
+            "display": "1557",
+            "value": 1557,
+            "kind": "int"
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "22",
+            "value": 22,
+            "kind": "int"
+          },
+          {
+            "display": "22",
+            "value": 22,
+            "kind": "int"
+          },
+          {
+            "display": "678",
+            "value": 678,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "235",
+            "value": 235,
+            "kind": "int"
+          },
+          {
+            "display": "279",
+            "value": 279,
+            "kind": "int"
+          },
+          {
+            "display": "59",
+            "value": 59,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "277",
+            "value": 277,
+            "kind": "int"
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "int"
+          },
+          {
+            "display": "7",
+            "value": 7,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "59",
+            "value": 59,
+            "kind": "int"
+          },
+          {
+            "display": "37",
+            "value": 37,
+            "kind": "int"
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "109",
+            "value": 109,
+            "kind": "int"
+          },
+          {
+            "display": "109",
+            "value": 109,
+            "kind": "int"
+          },
+          {
+            "display": "35",
+            "value": 35,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "115",
+            "value": 115,
+            "kind": "int"
+          },
+          {
+            "display": "2778",
+            "value": 2778,
+            "kind": "int"
+          },
+          {
+            "display": "2705",
+            "value": 2705,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "74",
+            "value": 74,
+            "kind": "int"
+          },
+          {
+            "display": "67",
+            "value": 67,
+            "kind": "int"
+          },
+          {
+            "display": "54",
+            "value": 54,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "36",
+            "value": 36,
+            "kind": "int"
+          },
+          {
+            "display": "77",
+            "value": 77,
+            "kind": "int"
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "27",
+            "value": 27,
+            "kind": "int"
+          },
+          {
+            "display": "27",
+            "value": 27,
+            "kind": "int"
+          },
+          {
+            "display": "144",
+            "value": 144,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "76",
+            "value": 76,
+            "kind": "int"
+          },
+          {
+            "display": "472",
+            "value": 472,
+            "kind": "int"
+          },
+          {
+            "display": "76",
+            "value": 76,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "143",
+            "value": 143,
+            "kind": "int"
+          },
+          {
+            "display": "3515",
+            "value": 3515,
+            "kind": "int"
+          },
+          {
+            "display": "8",
+            "value": 8,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "76",
+            "value": 76,
+            "kind": "int"
+          },
+          {
+            "display": "781",
+            "value": 781,
+            "kind": "int"
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "52",
+            "value": 52,
+            "kind": "int"
+          },
+          {
+            "display": "52",
+            "value": 52,
+            "kind": "int"
+          },
+          {
+            "display": "118",
+            "value": 118,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "251",
+            "value": 251,
+            "kind": "int"
+          },
+          {
+            "display": "298",
+            "value": 298,
+            "kind": "int"
+          },
+          {
+            "display": "197",
+            "value": 197,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "160",
+            "value": 160,
+            "kind": "int"
+          },
+          {
+            "display": "292",
+            "value": 292,
+            "kind": "int"
+          },
+          {
+            "display": "18",
+            "value": 18,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "38",
+            "value": 38,
+            "kind": "int"
+          },
+          {
+            "display": "98",
+            "value": 98,
+            "kind": "int"
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "99",
+            "value": 99,
+            "kind": "int"
+          },
+          {
+            "display": "99",
+            "value": 99,
+            "kind": "int"
+          },
+          {
+            "display": "101",
+            "value": 101,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "210",
+            "value": 210,
+            "kind": "int"
+          },
+          {
+            "display": "5595",
+            "value": 5595,
+            "kind": "int"
+          },
+          {
+            "display": "548",
+            "value": 548,
+            "kind": "int"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          }
+        ],
+        [
+          {
+            "display": "vercel/next.js",
+            "value": "vercel/next.js",
+            "kind": "text"
+          },
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "74",
+            "value": 74,
+            "kind": "int"
+          },
+          {
+            "display": "74",
+            "value": 74,
+            "kind": "int"
+          },
+          {
+            "display": "110",
+            "value": 110,
+            "kind": "int"
+          }
+        ]
+      ]
+    },
+    {
       "id": "determinism",
       "title": "Determinism (byte-identical rebuild)",
-      "note": "Two cold builds byte-compared (graph.json + symbols.json). 01x keeps a SQLite DB (embedded ids/timestamps) that is not byte-comparable, so determinism is not claimed for it here.",
+      "note": "Two cold builds byte-compared (graph.json + symbols.json). 01x keeps a SQLite DB (embedded ids/timestamps) that is not byte-comparable, so determinism is not claimed for it here. graphify: two cold `graphify update` runs, `graph.json` bytes only (its HTML/report artifacts embed dates and are excluded). falcon: two cold `falcon index` runs, all parquet artifacts byte-compared for the cell. falcon's metadata.json is compared separately after dropping its embedded absolute paths (artifacts.path, repo.root); no field differed — falcon carries no timestamps (it reports determinism.timestamps: \"omitted\").",
       "headers": [
         "Repo",
         "codeindex (byte-identical)",
-        "01x"
+        "01x",
+        "serena",
+        "graphify graph.json",
+        "falcon artifacts"
       ],
       "rows": [
         [
@@ -1097,8 +3066,21 @@
             "kind": "bool"
           },
           {
-            "display": "n/a (SQLite)",
-            "na": "SQLite"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (live LSP session — no artifact)",
+            "na": "live LSP session — no artifact"
+          },
+          {
+            "display": "no",
+            "value": false,
+            "kind": "bool"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
           }
         ],
         [
@@ -1113,8 +3095,22 @@
             "kind": "bool"
           },
           {
-            "display": "n/a (SQLite)",
-            "na": "SQLite"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (live LSP session — no artifact)",
+            "na": "live LSP session — no artifact"
+          },
+          {
+            "display": "no",
+            "value": false,
+            "kind": "bool"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
           }
         ],
         [
@@ -1129,8 +3125,22 @@
             "kind": "bool"
           },
           {
-            "display": "n/a (SQLite)",
-            "na": "SQLite"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (live LSP session — no artifact)",
+            "na": "live LSP session — no artifact"
+          },
+          {
+            "display": "no",
+            "value": false,
+            "kind": "bool"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
           }
         ],
         [
@@ -1145,8 +3155,22 @@
             "kind": "bool"
           },
           {
-            "display": "n/a (SQLite)",
-            "na": "SQLite"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (live LSP session — no artifact)",
+            "na": "live LSP session — no artifact"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
           }
         ],
         [
@@ -1161,8 +3185,22 @@
             "kind": "bool"
           },
           {
-            "display": "n/a (SQLite)",
-            "na": "SQLite"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (live LSP session — no artifact)",
+            "na": "live LSP session — no artifact"
+          },
+          {
+            "display": "no",
+            "value": false,
+            "kind": "bool"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
           }
         ],
         [
@@ -1177,8 +3215,22 @@
             "kind": "bool"
           },
           {
-            "display": "n/a (SQLite)",
-            "na": "SQLite"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (live LSP session — no artifact)",
+            "na": "live LSP session — no artifact"
+          },
+          {
+            "display": "no",
+            "value": false,
+            "kind": "bool"
+          },
+          {
+            "display": "yes",
+            "value": true,
+            "kind": "bool"
           }
         ],
         [
@@ -1193,8 +3245,21 @@
             "kind": "bool"
           },
           {
-            "display": "n/a (SQLite)",
-            "na": "SQLite"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
+          },
+          {
+            "display": "n/a (live LSP session — no artifact)",
+            "na": "live LSP session — no artifact"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "no",
+            "value": false,
+            "kind": "bool"
           }
         ]
       ]
@@ -1202,12 +3267,15 @@
     {
       "id": "size",
       "title": "Index size on disk",
-      "note": "Our artifacts (graph.json + symbols.json + cache.json) vs 01x's `.codeindex/` SQLite DB vs the ctags `tags` file.",
+      "note": "Our artifacts (graph.json + symbols.json + cache.json) vs 01x's `.codeindex/` SQLite DB vs the ctags `tags` file vs serena's `.serena/` project cache (document-symbol pickles) vs graphify's MCP-servable `graph.json` alone (its `graphify-out/` also holds an AST cache and report files that never leave the build machine) vs falcon's `.falcon/artifacts` parquet set.",
       "headers": [
         "Repo",
         "codeindex artifacts",
         "01x .codeindex",
-        "ctags tags"
+        "ctags tags",
+        "serena .serena",
+        "graphify graph.json",
+        "falcon .falcon/artifacts"
       ],
       "rows": [
         [
@@ -1218,18 +3286,31 @@
           },
           {
             "display": "2.0 MB",
-            "value": 2104890,
+            "value": 2104734,
             "kind": "bytes"
           },
           {
-            "display": "1.0 MB",
-            "value": 1089536,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "524.4 KB",
             "value": 536948,
             "kind": "bytes"
+          },
+          {
+            "display": "5.1 MB",
+            "value": 5364651,
+            "kind": "bytes"
+          },
+          {
+            "display": "5.0 MB",
+            "value": 5274131,
+            "kind": "bytes"
+          },
+          {
+            "display": "n/a (rust not supported)",
+            "na": "rust not supported"
           }
         ],
         [
@@ -1240,17 +3321,31 @@
           },
           {
             "display": "1.2 MB",
-            "value": 1210398,
+            "value": 1210556,
             "kind": "bytes"
           },
           {
-            "display": "1.1 MB",
-            "value": 1134592,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "267.2 KB",
             "value": 273617,
+            "kind": "bytes"
+          },
+          {
+            "display": "2.0 MB",
+            "value": 2101626,
+            "kind": "bytes"
+          },
+          {
+            "display": "2.0 MB",
+            "value": 2110518,
+            "kind": "bytes"
+          },
+          {
+            "display": "448.2 KB",
+            "value": 458926,
             "kind": "bytes"
           }
         ],
@@ -1261,18 +3356,32 @@
             "kind": "text"
           },
           {
-            "display": "332.3 KB",
-            "value": 340319,
+            "display": "332.5 KB",
+            "value": 340477,
             "kind": "bytes"
           },
           {
-            "display": "104.0 KB",
-            "value": 106496,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "238.2 KB",
             "value": 243957,
+            "kind": "bytes"
+          },
+          {
+            "display": "384.4 KB",
+            "value": 393613,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.2 MB",
+            "value": 1257173,
+            "kind": "bytes"
+          },
+          {
+            "display": "79.0 KB",
+            "value": 80910,
             "kind": "bytes"
           }
         ],
@@ -1284,17 +3393,31 @@
           },
           {
             "display": "1.2 MB",
-            "value": 1246731,
+            "value": 1246889,
             "kind": "bytes"
           },
           {
-            "display": "908.0 KB",
-            "value": 929792,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "282.3 KB",
             "value": 289058,
+            "kind": "bytes"
+          },
+          {
+            "display": "3.1 MB",
+            "value": 3269760,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.3 MB",
+            "value": 1403394,
+            "kind": "bytes"
+          },
+          {
+            "display": "210.8 KB",
+            "value": 215819,
             "kind": "bytes"
           }
         ],
@@ -1306,17 +3429,31 @@
           },
           {
             "display": "12.6 MB",
-            "value": 13240864,
+            "value": 13243927,
             "kind": "bytes"
           },
           {
-            "display": "1.3 MB",
-            "value": 1359872,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "4.4 MB",
             "value": 4633149,
+            "kind": "bytes"
+          },
+          {
+            "display": "57.3 MB",
+            "value": 60111839,
+            "kind": "bytes"
+          },
+          {
+            "display": "13.7 MB",
+            "value": 14332466,
+            "kind": "bytes"
+          },
+          {
+            "display": "1.6 MB",
+            "value": 1692628,
             "kind": "bytes"
           }
         ],
@@ -1327,18 +3464,32 @@
             "kind": "text"
           },
           {
-            "display": "277.1 KB",
-            "value": 283737,
+            "display": "277.3 KB",
+            "value": 283955,
             "kind": "bytes"
           },
           {
-            "display": "84.0 KB",
-            "value": 86016,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "87.9 KB",
             "value": 90016,
+            "kind": "bytes"
+          },
+          {
+            "display": "633.4 KB",
+            "value": 648639,
+            "kind": "bytes"
+          },
+          {
+            "display": "823.1 KB",
+            "value": 842904,
+            "kind": "bytes"
+          },
+          {
+            "display": "100.2 KB",
+            "value": 102650,
             "kind": "bytes"
           }
         ],
@@ -1350,17 +3501,29 @@
           },
           {
             "display": "69.8 MB",
-            "value": 73195786,
+            "value": 73197823,
             "kind": "bytes"
           },
           {
-            "display": "17.2 MB",
-            "value": 17985536,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
             "display": "80.8 MB",
-            "value": 84698993,
+            "value": 84698441,
+            "kind": "bytes"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "n/a (repo too large for a bench-time full index (~30k files))",
+            "na": "repo too large for a bench-time full index (~30k files)"
+          },
+          {
+            "display": "18.8 MB",
+            "value": 19702540,
             "kind": "bytes"
           }
         ]
@@ -1383,8 +3546,8 @@
             "kind": "text"
           },
           {
-            "display": "23.1 MB",
-            "value": 24254336,
+            "display": "23.3 MB",
+            "value": 24456239,
             "kind": "bytes"
           },
           {
@@ -1400,13 +3563,12 @@
             "kind": "text"
           },
           {
-            "display": "8.1 MB",
-            "value": 8470946,
-            "kind": "bytes"
+            "display": "n/a (PATH codeindex is not 01x (name collision; set BENCH_01X_BIN))",
+            "na": "PATH codeindex is not 01x (name collision; set BENCH_01X_BIN)"
           },
           {
-            "display": "binary only; + ast-grep 49.1 MB required",
-            "value": "binary only; + ast-grep 49.1 MB required",
+            "display": "requires ast-grep in PATH",
+            "value": "requires ast-grep in PATH",
             "kind": "text"
           }
         ],
@@ -1424,6 +3586,57 @@
           {
             "display": "requires a full npm install of each indexed repo (see cold column)",
             "value": "requires a full npm install of each indexed repo (see cold column)",
+            "kind": "text"
+          }
+        ],
+        [
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "114.3 MB",
+            "value": 119866162,
+            "kind": "bytes"
+          },
+          {
+            "display": "uv tool venv; + 25.6 MB language servers in ~/.serena/language_servers (measured); requires node/npm (TS), gopls (Go), rust-analyzer (Rust)",
+            "value": "uv tool venv; + 25.6 MB language servers in ~/.serena/language_servers (measured); requires node/npm (TS), gopls (Go), rust-analyzer (Rust)",
+            "kind": "text"
+          }
+        ],
+        [
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "140.1 MB",
+            "value": 146912402,
+            "kind": "bytes"
+          },
+          {
+            "display": "uv tool venv (graphifyy); tree-sitter grammar wheels bundled; [mcp] extra required for the MCP server",
+            "value": "uv tool venv (graphifyy); tree-sitter grammar wheels bundled; [mcp] extra required for the MCP server",
+            "kind": "text"
+          }
+        ],
+        [
+          {
+            "display": "falcon",
+            "value": "falcon",
+            "kind": "text"
+          },
+          {
+            "display": "32.9 MB",
+            "value": 34497106,
+            "kind": "bytes"
+          },
+          {
+            "display": "single static Go binary, no runtime deps (brew tap SocialGouv/repo-falcon)",
+            "value": "single static Go binary, no runtime deps (brew tap SocialGouv/repo-falcon)",
             "kind": "text"
           }
         ]
