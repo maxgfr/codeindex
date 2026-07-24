@@ -10550,7 +10550,11 @@ async function callTool(name2, args2) {
   }
   throw new Error(`unknown tool: ${name2}`);
 }
-async function runMcpServer() {
+async function runMcpServer(opts = {}) {
+  const serverInfo = {
+    name: opts.serverInfo?.name ?? "codeindex",
+    version: opts.serverInfo?.version ?? ENGINE_VERSION
+  };
   await ensureGrammars(allGrammarKeys());
   const send = (msg) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
@@ -10578,7 +10582,7 @@ async function runMcpServer() {
           result: {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "codeindex", version: ENGINE_VERSION }
+            serverInfo
           }
         });
       } else if (req.method === "ping") {

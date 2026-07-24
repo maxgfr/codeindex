@@ -705,7 +705,18 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   throw new Error(`unknown tool: ${name}`);
 }
 
-export async function runMcpServer(): Promise<void> {
+export interface McpServerOptions {
+  // Override the serverInfo announced in the initialize response — for
+  // downstream consumers embedding this server under their own identity.
+  // Omitted fields keep the defaults (name "codeindex", ENGINE_VERSION).
+  serverInfo?: { name?: string; version?: string };
+}
+
+export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
+  const serverInfo = {
+    name: opts.serverInfo?.name ?? "codeindex",
+    version: opts.serverInfo?.version ?? ENGINE_VERSION,
+  };
   await ensureGrammars(allGrammarKeys()); // AST tier when the sidecar is present
 
   const send = (msg: Record<string, unknown>): void => {
@@ -739,7 +750,7 @@ export async function runMcpServer(): Promise<void> {
           result: {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "codeindex", version: ENGINE_VERSION },
+            serverInfo,
           },
         });
       } else if (req.method === "ping") {

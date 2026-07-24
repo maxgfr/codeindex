@@ -162,6 +162,7 @@ export type { RepoMapOptions } from "./repomap.js";
 
 // MCP server over stdio (also reachable as `engine.mjs mcp`).
 export { runMcpServer } from "./mcp.js";
+export type { McpServerOptions } from "./mcp.js";
 
 // General-purpose helpers shared by consumers (deterministic, dependency-free).
 export { sha1, shortHash } from "./hash.js";

@@ -4,7 +4,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { getArtifacts, getScan, memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint, toCacheMap } from "../src/mcp.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
@@ -13,6 +13,7 @@ import type { RepoScan } from "../src/scan.js";
 import type { FileRecord } from "../src/types.js";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
+const ENGINE = fileURLToPath(new URL("../scripts/engine.mjs", import.meta.url));
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const MODEL_DIR = fileURLToPath(new URL("./fixtures/embed-model", import.meta.url));
 
@@ -20,7 +21,7 @@ interface RpcMsg {
   id?: number;
   result?: {
     protocolVersion?: string;
-    serverInfo?: { name: string };
+    serverInfo?: { name: string; version?: string };
     tools?: { name: string }[];
     content?: { type: string; text: string }[];
     isError?: boolean;
@@ -32,12 +33,15 @@ interface RpcMsg {
 // collect one JSON response per line, resolve when every id has answered.
 // `env` overrides/extends the child's environment (e.g. CODEINDEX_EMBED_DIR
 // to exercise the static embedding tier) on top of the parent's process.env.
+// `argv` swaps the spawned entry point (default: the CLI's `mcp` command) —
+// lets a test drive runMcpServer through a custom embedding launcher.
 function mcpSession(
   requests: Record<string, unknown>[],
   env?: Record<string, string | undefined>,
+  argv: string[] = [CLI, "mcp"],
 ): Promise<Map<number, RpcMsg>> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [CLI, "mcp"], {
+    const child = spawn(process.execPath, argv, {
       stdio: ["pipe", "pipe", "inherit"],
       env: env ? { ...process.env, ...env } : process.env,
     });
@@ -650,5 +654,35 @@ describe("MCP session cache — e2e over one long-lived server", () => {
     } finally {
       session.close();
     }
+  }, 20_000);
+});
+
+describe("runMcpServer serverInfo override", () => {
+  // Spawn the BUNDLE through a tiny launcher that passes opts — the same way a
+  // downstream consumer embeds the server under its own identity.
+  function writeLauncher(opts: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "ci-mcp-serverinfo-"));
+    const launcher = join(dir, "launch.mjs");
+    writeFileSync(
+      launcher,
+      `import { runMcpServer } from ${JSON.stringify(pathToFileURL(ENGINE).href)};\nawait runMcpServer(${opts});\n`,
+    );
+    return launcher;
+  }
+  const initialize = { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } };
+
+  it("announces the overridden name and version in the initialize response", async () => {
+    const launcher = writeLauncher(`{ serverInfo: { name: "embedded-index", version: "9.9.9" } }`);
+    const res = await mcpSession([initialize], undefined, [launcher]);
+    expect(res.get(1)!.result!.serverInfo).toEqual({ name: "embedded-index", version: "9.9.9" });
+  }, 20_000);
+
+  it("a partial override keeps the defaults for omitted fields", async () => {
+    const launcher = writeLauncher(`{ serverInfo: { name: "only-name" } }`);
+    const res = await mcpSession([initialize], undefined, [launcher]);
+    expect(res.get(1)!.result!.serverInfo!.name).toBe("only-name");
+    // Version falls back to the engine's own — mirror what the bundle reports.
+    const { ENGINE_VERSION } = (await import("../src/types.js")) as { ENGINE_VERSION: string };
+    expect(res.get(1)!.result!.serverInfo!.version).toBe(ENGINE_VERSION);
   }, 20_000);
 });
