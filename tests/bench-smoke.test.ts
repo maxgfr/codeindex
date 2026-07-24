@@ -50,7 +50,7 @@ describe("bench harness smoke", () => {
 
     // Hermetic self-server: the codeindex rows carry real numbers (the bench
     // spawns our own `codeindex mcp` over stdio — no competitor involved).
-    const sessions = md.split("## MCP sessions")[1]!.split("\n## ")[0];
+    const sessions = md.split("## MCP sessions")[1]!.split("\n## ")[0]!;
     const selfRow = sessions.split("\n").find((l) => l.startsWith("| mini-repo | codeindex |"));
     expect(selfRow, "codeindex mcp-sessions row").toBeTruthy();
     const cells = selfRow!.split("|").map((c) => c.trim());
@@ -64,7 +64,7 @@ describe("bench harness smoke", () => {
       expect(row).toContain("n/a (--no-competitors)");
     }
 
-    const tokens = md.split("## MCP token economy")[1]!.split("\n## ")[0];
+    const tokens = md.split("## MCP token economy")[1]!.split("\n## ")[0]!;
     const tokRow = tokens.split("\n").find((l) => l.startsWith("| mini-repo | codeindex |"));
     expect(tokRow, "codeindex mcp-tokens row").toBeTruthy();
     const tokCells = tokRow!.split("|").map((c) => c.trim());
@@ -84,7 +84,7 @@ describe("bench harness smoke", () => {
       "--no-competitors",
     ]);
     const NA = "n/a (--no-competitors)";
-    const section = (title: string) => md.split(`## ${title}`)[1]!.split("\n## ")[0];
+    const section = (title: string) => md.split(`## ${title}`)[1]!.split("\n## ")[0]!;
 
     // Cold index: the three new columns are APPENDED at the end (frozen earlier
     // indices untouched) — headers then Repo|Files|codeindex|ctags|scip|01x|serena|graphify|falcon.
