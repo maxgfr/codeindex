@@ -40,7 +40,7 @@
 <title>codeindex — zero-install repo indexing engine</title>
 <meta
   name="description"
-  content="codeindex: a zero-install, deterministic repo-indexing engine. One vendorable file, a TypeScript/JS library, a CLI, and 26 MCP tools. Byte-identical outputs, keyless BM25 + trigram fuzzy + deterministic semantic search, SCIP export, and measured benchmarks against universal-ctags, scip-typescript, Serena and Graphify."
+  content="codeindex: a zero-install, deterministic repo-indexing engine. One vendorable file, a TypeScript/JS library, a CLI, and 26 MCP tools. Byte-identical outputs, keyless BM25 + trigram fuzzy + deterministic semantic search, SCIP export, and measured benchmarks against universal-ctags, Serena and Graphify."
 />
 <link
   rel="icon"
@@ -671,6 +671,17 @@
   .chart-svg-wrap {
     overflow-x: auto;
   }
+  .chart-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; margin-bottom: 2rem; }
+  @media (max-width: 720px) { .chart-duo { grid-template-columns: 1fr; } }
+  .bars { display: flex; flex-direction: column; gap: 0.7rem; }
+  .barrow { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 0.7rem; }
+  .barrow .rl { font-family: var(--mono); font-size: 0.74rem; color: var(--ink-2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .barrow .rl.sub { color: var(--muted); }
+  .bartrack { position: relative; display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+  .bar { height: 18px; border-radius: 0 4px 4px 0; background: var(--context); min-width: 2px; }
+  .bar.me { background: linear-gradient(90deg, var(--accent-strong), var(--accent)); }
+  .bar.sub { background: var(--accent-wash); }
+  .bar-val { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .chart-legend {
     display: flex;
     gap: 1.4rem;
@@ -1142,7 +1153,7 @@
         <p class="eyebrow">Fig. 01 — measured, reproducible</p>
         <h2 id="benchmarks-heading">Benchmarks</h2>
         <p>
-          Measured against universal-ctags, scip-typescript,
+          Measured against universal-ctags,
           Serena (LSP over MCP) and Graphify
           with a reproducible harness
           (<code>scripts/bench/</code>) — median of 5 runs, one warmup
@@ -1196,18 +1207,11 @@
           tool), and it needs a 140 MB Python venv.
         </li>
         <li>
-          <strong>n/a means measured-and-failed, never zero</strong>
-          scip-typescript failed to cold-index 2 of 7 repos this session
-          (<code>npm install failed</code> / <code>no tsconfig</code>) — shown
-          as <code>n/a (reason)</code>, exactly as the harness recorded it.
-        </li>
-        <li>
           <strong>serena and graphify skip next.js — measured, not hidden</strong>
           A full LSP or Python-graph index of a 30k-file monorepo is a
           multi-minute, multi-GB job that measures indexer memory limits, not
           retrieval, so both read <code>n/a (repo too large…)</code> there. The
-          streaming indexers — codeindex, ctags, scip-typescript — are
-          measured on it.
+          streaming indexers — codeindex and ctags — are measured on it.
         </li>
       </ul>
 
@@ -1221,6 +1225,19 @@
         </p>
         <div class="chart-svg-wrap" id="cold-chart-wrap"></div>
         <p class="chart-caption" id="cold-chart-caption"></p>
+      </div>
+
+      <div class="chart-duo">
+        <div class="card chart-card" style="margin-bottom:0">
+          <h3>Cold index — <code>code-du-travail</code></h3>
+          <p class="chart-note">2,823 files. codeindex builds the full graph in a fraction of Serena/Graphify's time; ctags does far less. Lower is faster.</p>
+          <div class="bars" id="cold-mid-bars"></div>
+        </div>
+        <div class="card chart-card" style="margin-bottom:0">
+          <h3>Warm reindex — codeindex, uncontested</h3>
+          <p class="chart-note">Warm rerun, then one file touched — the incremental fastpath. No competitor exposes a comparable single-file reindex. Lower is faster.</p>
+          <div class="bars" id="warm-bars"></div>
+        </div>
       </div>
 
       <div id="benchmark-tables">
@@ -1515,8 +1532,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           <caption>
             Tool comparison
             <span class="cap-note"
-              >codeindex vs. universal-ctags, scip-typescript, Serena
-              and Graphify.</span
+              >codeindex vs. universal-ctags, Serena and Graphify.</span
             >
           </caption>
           <thead>
@@ -1554,16 +1570,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
               <td>
                 Fastest cold index in this report — definitions only, no
                 call graph, no import resolution, no cross-file links
-              </td>
-            </tr>
-            <tr>
-              <td>scip-typescript</td>
-              <td>SCIP index via the TypeScript compiler API</td>
-              <td>TypeScript only</td>
-              <td>Requires a full npm install of the target repo first</td>
-              <td>
-                That npm install isn't counted in its own timing; failed to
-                cold-index 2 of 7 repos this session
               </td>
             </tr>
             <tr>
@@ -5416,8 +5422,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
     // this session). Display-only — the full data stays in BENCHMARKS.md and
     // in the embedded JSON, and the stat tiles/chart still read the raw
     // section data by index, so this never shifts what they compute.
-    var HIDE_COL = /\bfalcon\b|\b01x\b/i;
-    var HIDE_ROW = /^(repo-)?falcon$|^01x(-in)?$/i;
+    var HIDE_COL = /\bfalcon\b|\b01x\b|scip-typescript/i;
+    var HIDE_ROW = /^(repo-)?falcon$|^01x(-in)?$|^scip-typescript$/i;
     function renderTable(section) {
       var wrap = document.createElement("div");
       wrap.className = "table-wrap";
@@ -5736,8 +5742,50 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       legend.className = "chart-legend";
       legend.innerHTML =
         '<span class="lg-swatch" style="--sw:var(--accent)">codeindex</span>' +
-        '<span class="lg-swatch" style="--sw:var(--context)">ctags -R / 01x init — context</span>';
+        '<span class="lg-swatch" style="--sw:var(--context)">ctags -R — context</span>';
       wrap.after(legend);
+    })();
+
+    /* ----- cold code-du-travail + warm reindex bar charts ----- */
+    (function renderBarCharts() {
+      function bars(el, items) {
+        if (!el) return;
+        var max = 0;
+        items.forEach(function (it) { if (typeof it.ms === "number" && it.ms > max) max = it.ms; });
+        if (!max) max = 1;
+        items.forEach(function (it) {
+          var row = document.createElement("div"); row.className = "barrow";
+          var rl = document.createElement("div"); rl.className = "rl" + (it.sub ? " sub" : "");
+          rl.textContent = it.label; row.appendChild(rl);
+          var track = document.createElement("div"); track.className = "bartrack";
+          var bar = document.createElement("div");
+          bar.className = "bar" + (it.me ? " me" : "") + (it.sub ? " sub" : "");
+          bar.style.width = Math.max(2, (it.ms / max) * 100) + "%";
+          var val = document.createElement("div"); val.className = "bar-val";
+          val.textContent = it.disp + " ms";
+          track.appendChild(bar); track.appendChild(val); row.appendChild(track); el.appendChild(row);
+        });
+      }
+      var cold = bySectionId("cold");
+      var cdt = cold && rowByFirstCell(cold, "socialgouv/code-du-travail-numerique");
+      if (cdt) {
+        bars(document.getElementById("cold-mid-bars"), [
+          { label: "codeindex", ms: cdt[2].value, disp: cdt[2].display, me: true },
+          { label: "ctags -R", ms: cdt[3].value, disp: cdt[3].display },
+          { label: "Serena", ms: cdt[6].value, disp: cdt[6].display },
+          { label: "Graphify", ms: cdt[7].value, disp: cdt[7].display },
+        ]);
+      }
+      var warm = bySectionId("warm");
+      if (warm) {
+        var items = [];
+        warm.rows.forEach(function (r) {
+          var name = String(r[0].value).split("/").pop();
+          items.push({ label: name, ms: r[1].value, disp: r[1].display, me: true });
+          items.push({ label: "↳ +1 file", ms: r[2].value, disp: r[2].display, sub: true });
+        });
+        bars(document.getElementById("warm-bars"), items);
+      }
     })();
 
     /* ----- verdict matrix (axis by axis) ----- */
