@@ -16,15 +16,18 @@
 //     overviewMs, runs}, bytes: {find, refs, overview},
 //     toolUsed: {find, refs, overview}, defFile, overviewFile }
 //
-// activation  = spawn -> first successful find response, cold artifacts
-//               (cleanCold before every iteration, child killed between),
-//               median of warmup+N (N downgraded to --slow-runs when the
-//               warmup crosses --slow-threshold, mirroring bench runMedian).
+// activation  = spawn -> first successful find response on PRIMED artifacts
+//               (prime() once before the loop, artifacts kept; child killed
+//               between iterations), median of warmup+N (N downgraded to
+//               --slow-runs when the warmup crosses --slow-threshold,
+//               mirroring bench runMedian). The probe never cleans artifacts:
+//               graphify-mcp / `falcon mcp serve` cannot start without them,
+//               and cold builds are timed by the bench cold scenario instead.
 // queries     = per-call medians on the LAST live session of the activation
 //               loop; runs = the smallest effective N across the three tasks.
 // bytes       = Buffer.byteLength of the last response text per task.
 //
-// ---- mcp-adapters.mjs import contract (module lands in the next phase) ----
+// ---- mcp-adapters.mjs import contract ------------------------------------
 // export function adapterFor(server, opts) -> adapter | undefined
 //   server: "codeindex" | "serena" | "graphify" | "falcon"
 //   opts:   { dir, bin, mcpBin, engine } — absolute paths from the CLI flags
@@ -35,21 +38,24 @@
 //   prime(dir)? -> { ok, reason? } | undefined,   // untimed one-time artifact
 //                                                 // build; artifacts KEPT
 //   cleanCold(dir)? -> void,                      // remove on-disk artifacts so
-//                                                 // the next activation is cold
-//   tasks(toolNames) -> { find, refs, overview }, // builders introspected from
-//     // the tools/list names; each entry is (ctx) => {name, arguments} or
-//     // undefined when the server lacks the tool. ctx = {dir, symbol, file,
-//     // defFile} (defFile only set for refs/overview, parsed from find).
+//     // the next BUILD is cold — bench cold-scenario hook; the probe itself
+//     // never calls it (MCP sessions run on primed artifacts)
+//   tasks(tools) -> { find, refs, overview },     // builders introspected from
+//     // the tools/list entries ({name, inputSchema}; bare name strings are
+//     // tolerated); each entry is (ctx) => {name, arguments} or undefined
+//     // when the server lacks the tool (renders n/a). ctx = {dir, symbol,
+//     // file, defFile} (defFile only set for refs/overview, parsed from find).
 //   extractText(result) -> string,                // tools/call result -> text
 //   defFileFrom(text, ctx)? -> string | undefined // repo-relative def file of
 //     // the symbol, parsed from the find response (serena's refs need it as
 //     // relative_path; also reported as defFile).
 // }
-// Open point for the adapters phase: graphify's file-overview miss fallback
-// (spec §2.2, degrade to query_graph) needs a response-dependent retry — the
-// adapter will have to extend `tasks` builders (e.g. candidate lists) then.
+// Adapters may also carry perRepoSupport(repoLang) for the bench orchestrator;
+// the probe ignores it. graphify's file-overview is undefined by design: file
+// nodes are labeled by basename (collision-prone) and the query_graph miss-
+// fallback would need a response-dependent retry this one-call contract
+// cannot express — the cell renders n/a.
 
-import { fileURLToPath } from "node:url";
 import { startMcpClient } from "./mcp-client.mjs";
 
 const byteLen = (s) => Buffer.byteLength(s ?? "", "utf8");
@@ -92,48 +98,14 @@ function parseArgs(argv) {
   return a;
 }
 
-// TEMPORARY inline adapter for self-testing the probe before mcp-adapters.mjs
-// exists. Mirrors spec §2.4 exactly (tool names/params verified against the
-// real server: find_symbol{repo,namePath}, find_references{repo,name},
-// symbols_overview{repo,file} — `repo` REQUIRED in every call). DELETE once
-// mcp-adapters.mjs lands: loadAdapter prefers the real module.
-function inlineCodeindexAdapter(opts) {
-  // engine.mjs is a pure module (no main guard); the runnable entry is cli.mjs.
-  const cli = opts.engine ?? fileURLToPath(new URL("../cli.mjs", import.meta.url));
-  return {
-    key: "codeindex",
-    spawn(dir) { return { cmd: process.execPath, args: [cli, "mcp"], cwd: dir }; },
-    // no prime/cleanCold: artifacts are built in-process per call, nothing on disk.
-    tasks(toolNames) {
-      const has = (n) => toolNames.includes(n);
-      return {
-        find: has("find_symbol")
-          ? (ctx) => ({ name: "find_symbol", arguments: { repo: ctx.dir, namePath: ctx.symbol } })
-          : undefined,
-        refs: has("find_references")
-          ? (ctx) => ({ name: "find_references", arguments: { repo: ctx.dir, name: ctx.symbol } })
-          : undefined,
-        overview: has("symbols_overview")
-          ? (ctx) => ({ name: "symbols_overview", arguments: { repo: ctx.dir, file: ctx.file } })
-          : undefined,
-      };
-    },
-    extractText(result) {
-      return (result?.content ?? []).map((c) => c?.text ?? "").join("");
-    },
-    defFileFrom(text) {
-      try { return JSON.parse(text)?.[0]?.file; } catch { return undefined; }
-    },
-  };
-}
-
+// The adapter registry stays a dynamic import so an adapter-module defect
+// degrades to {ok:false, reason} instead of crashing the probe before it can
+// print its one JSON line.
 async function loadAdapter(server, opts) {
   try {
     const m = await import("./mcp-adapters.mjs");
-    const a = m.adapterFor?.(server, opts);
-    if (a) return a;
-  } catch { /* module lands next phase — fall through to the inline adapter */ }
-  return server === "codeindex" ? inlineCodeindexAdapter(opts) : undefined;
+    return m.adapterFor?.(server, opts);
+  } catch { return undefined; }
 }
 
 // One tools/call, timed. isError content counts as failure (its text is the reason).
@@ -146,11 +118,11 @@ async function timedCall(client, adapter, call) {
   return { ok: true, ms, result: r.result };
 }
 
-// One activation iteration: cleanCold -> spawn -> handshake -> tools/list ->
-// find. The timed region is spawn -> find response OK (readiness-to-first-
-// answer). On failure the session is closed and {ok:false, reason} returned.
+// One activation iteration: spawn -> handshake -> tools/list -> find, on
+// primed artifacts. The timed region is spawn -> find response OK (readiness-
+// to-first-answer). On failure the session is closed and {ok:false, reason}
+// returned.
 async function activateOnce(adapter, a) {
-  try { adapter.cleanCold?.(a.dir); } catch (e) { return { ok: false, reason: `cleanCold: ${e?.message ?? e}` }; }
   const spec = adapter.spawn(a.dir);
   const t0 = performance.now();
   const client = startMcpClient(spec.cmd, spec.args, { cwd: spec.cwd ?? a.dir, env: spec.env });
@@ -159,8 +131,9 @@ async function activateOnce(adapter, a) {
   if (!hs.ok) return bail(`handshake: ${hs.reason}`);
   const tl = await client.request("tools/list");
   if (!tl.ok) return bail(`tools/list: ${tl.reason}`);
-  const toolNames = (tl.result?.tools ?? []).map((t) => t?.name).filter(Boolean);
-  const tasks = adapter.tasks(toolNames);
+  const tools = tl.result?.tools ?? [];
+  const toolNames = tools.map((t) => t?.name).filter(Boolean);
+  const tasks = adapter.tasks(tools);
   const buildFind = tasks?.find;
   if (!buildFind) return bail(`find tool missing (tools: ${toolNames.slice(0, 8).join(", ")}…)`);
   const call = buildFind({ dir: a.dir, symbol: a.symbol, file: a.file, defFile: undefined });
