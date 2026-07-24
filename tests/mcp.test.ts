@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,8 +10,9 @@ import { getArtifacts, getScan, memoizedEmbeddingIndex, memoizedEmbedModel, scan
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
+import { renderSymbolsJson } from "../src/render/symbols-json.js";
 import type { RepoScan } from "../src/scan.js";
-import type { FileRecord } from "../src/types.js";
+import type { FileRecord, Graph, SymbolIndex } from "../src/types.js";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 const ENGINE = fileURLToPath(new URL("../scripts/engine.mjs", import.meta.url));
@@ -798,4 +799,117 @@ describe("runMcpServer serverInfo override", () => {
     const { ENGINE_VERSION } = (await import("../src/types.js")) as { ENGINE_VERSION: string };
     expect(res.get(1)!.result!.serverInfo!.version).toBe(ENGINE_VERSION);
   }, 20_000);
+});
+
+// --- T7: MCP persisted-index preload -----------------------------------------
+
+// Write a real .codeindex/ index into `repo` exactly as `codeindex index` does,
+// so the MCP server finds cache.json + graph.json + symbols.json on first touch.
+// The spawned engine resolves the same bundle-adjacent grammars the MCP server
+// and the in-process buildIndexArtifacts use, so extraction tiers match.
+function primeIndex(repo: string): void {
+  execFileSync(process.execPath, [CLI, "index", "--out", join(repo, ".codeindex"), "--repo", repo], { stdio: "pipe" });
+}
+
+describe("MCP persisted-index preload (session seeding from .codeindex)", () => {
+  it("seeds the session scan + artifacts from a primed .codeindex — byte-equal to a fresh build", () => {
+    const repo = tmpFixtureCopy("ci-preload-");
+    const pristine = tmpFixtureCopy("ci-preload-fresh-");
+    primeIndex(repo);
+    // The scan seeded from cache.json proves content-unchanged (a cold scan with
+    // no cache is contentUnchanged:false) — i.e. the persisted cache was loaded.
+    const scan = getScan(repo, {});
+    expect(scan.contentUnchanged).toBe(true);
+    // The artifacts come from graph.json/symbols.json, yet render byte-identically
+    // to a from-scratch buildIndexArtifacts on a pristine copy (neither tmp copy
+    // is a git repo, so both carry no commit) — the preload changes cost, never bytes.
+    const arts = getArtifacts(repo, {});
+    const fresh = buildIndexArtifacts(pristine);
+    expect(renderGraphJson(arts.graph)).toBe(renderGraphJson(fresh.graph));
+    expect(renderSymbolsJson(arts.symbols)).toBe(renderSymbolsJson(fresh.symbols));
+  });
+
+  it("a content edit after priming invalidates the preload — the response reflects the edit", () => {
+    const repo = tmpFixtureCopy("ci-preload-edit-");
+    primeIndex(repo);
+    // Append a new export AFTER priming: the file grows (stat fastpath misses on
+    // size), the hash then differs, so the scan is no longer content-unchanged and
+    // the persisted artifacts are NOT preloaded — a fresh build reflects the edit.
+    const target = join(repo, "src", "util.ts");
+    writeFileSync(target, readFileSync(target, "utf8") + "\nexport function extraHelperXYZ(): number {\n  return 7;\n}\n");
+    const scan = getScan(repo, {});
+    expect(scan.contentUnchanged).toBe(false);
+    const arts = getArtifacts(repo, {});
+    expect(JSON.stringify(arts.symbols.defs)).toContain("extraHelperXYZ");
+  });
+
+  it("a corrupt/partial .codeindex/graph.json falls back to a fresh build without throwing", () => {
+    const repo = tmpFixtureCopy("ci-preload-corrupt-");
+    const pristine = tmpFixtureCopy("ci-preload-corrupt-fresh-");
+    primeIndex(repo);
+    // Garble graph.json so its sha no longer matches cache.json's meta. The guard
+    // rejects the artifact preload; the scan is still seeded (content-unchanged),
+    // and the artifacts rebuild fresh — byte-identical, no throw.
+    writeFileSync(join(repo, ".codeindex", "graph.json"), "{ not valid json");
+    const arts = getArtifacts(repo, {}); // must not throw
+    expect(renderGraphJson(arts.graph)).toBe(renderGraphJson(buildIndexArtifacts(pristine).graph));
+  });
+
+  it("a symbols.json deleted since cache.json was written falls back without throwing", () => {
+    const repo = tmpFixtureCopy("ci-preload-missing-");
+    const pristine = tmpFixtureCopy("ci-preload-missing-fresh-");
+    primeIndex(repo);
+    rmSync(join(repo, ".codeindex", "symbols.json"));
+    const arts = getArtifacts(repo, {}); // readFileSync throws internally → caught → rebuild
+    expect(renderSymbolsJson(arts.symbols)).toBe(renderSymbolsJson(buildIndexArtifacts(pristine).symbols));
+  });
+
+  it("graph/symbols deserialization round-trips byte-for-byte (render → parse → render)", () => {
+    const { graph, symbols } = buildIndexArtifacts(REPO);
+    const graphJson = renderGraphJson(graph);
+    expect(renderGraphJson(JSON.parse(graphJson) as Graph)).toBe(graphJson);
+    const symbolsJson = renderSymbolsJson(symbols);
+    const parsedSymbols = JSON.parse(symbolsJson) as SymbolIndex;
+    expect(renderSymbolsJson(parsedSymbols)).toBe(symbolsJson);
+    // The `symbols` tool renders WITHOUT the trailing newline; that render must
+    // round-trip too, since a preloaded (parsed) index feeds this exact call.
+    expect(JSON.stringify(parsedSymbols, null, 2)).toBe(JSON.stringify(symbols, null, 2));
+
+    // Adversarial POJO covering the losslessness edge cases the blueprint calls
+    // out: an integer-like symbol name (V8 hoists numeric keys — must hoist
+    // identically after a parse), and every optional field present vs absent.
+    const synthetic: SymbolIndex = {
+      schemaVersion: symbols.schemaVersion,
+      defs: {
+        "123": [{ file: "a.ts", line: 1, kind: "const", exported: true, lang: "typescript" }],
+        Zeta: [{ file: "z.ts", line: 9, endLine: 12, kind: "method", exported: false, lang: "typescript", parent: "Z" }],
+        alpha: [{ file: "b.ts", line: 3, kind: "function", exported: true, lang: "typescript" }],
+      },
+      refs: { "123": ["b.ts"], alpha: ["a.ts", "z.ts"] },
+    };
+    const synthJson = renderSymbolsJson(synthetic);
+    expect(renderSymbolsJson(JSON.parse(synthJson) as SymbolIndex)).toBe(synthJson);
+  });
+});
+
+describe("MCP persisted-index preload — e2e byte-identity across servers", () => {
+  it("graph/symbols/find_symbol from a primed server are byte-equal to a cold server", async () => {
+    const primed = tmpFixtureCopy("ci-preload-e2e-primed-");
+    const cold = tmpFixtureCopy("ci-preload-e2e-cold-");
+    primeIndex(primed); // cold gets no .codeindex/ → build-on-demand path
+    const drive = (repo: string) =>
+      mcpSession([
+        { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+        { method: "notifications/initialized" },
+        { id: 2, method: "tools/call", params: { name: "graph", arguments: { repo } } },
+        { id: 3, method: "tools/call", params: { name: "symbols", arguments: { repo } } },
+        { id: 4, method: "tools/call", params: { name: "find_symbol", arguments: { repo, namePath: "backoff" } } },
+        { id: 5, method: "tools/call", params: { name: "mermaid", arguments: { repo } } },
+      ]);
+    const [p, c] = await Promise.all([drive(primed), drive(cold)]);
+    for (const id of [2, 3, 4, 5]) {
+      expect(p.get(id)!.result!.isError).toBeUndefined();
+      expect(p.get(id)!.result!.content![0]!.text).toBe(c.get(id)!.result!.content![0]!.text);
+    }
+  }, 30_000);
 });

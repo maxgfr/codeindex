@@ -5,10 +5,10 @@
 // `repo` path and returns JSON text content.
 //
 // Register in an MCP client as:  node scripts/engine.mjs mcp
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { ENGINE_VERSION, type FileRecord } from "./types.js";
+import { ENGINE_VERSION, SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord, type Graph, type SymbolIndex } from "./types.js";
 import { ensureGrammars, grammarKeysForExts } from "./ast/loader.js";
 import { buildArtifactsFromScan, type IndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
@@ -419,7 +419,8 @@ export function memoizedEmbedModel(modelDir: string): StaticEmbedModel | undefin
 // and a caller-supplied stale walk would desynchronize the freshness oracle.
 export type SessionScanOptions = Omit<ScanOptions, "cache" | "precomputedWalk">;
 
-type SessionCacheMap = Map<string, { hash: string; record: FileRecord; size?: number; mtimeMs?: number }>;
+type SessionCacheEntry = { hash: string; record: FileRecord; size?: number; mtimeMs?: number };
+type SessionCacheMap = Map<string, SessionCacheEntry>;
 
 // A SINGLE entry — never an unbounded map — holding the most recent scan.
 let sessionCache:
@@ -457,6 +458,128 @@ export function toCacheMap(scan: RepoScan): SessionCacheMap {
   return m;
 }
 
+// --- persisted-index preload -------------------------------------------------
+// On the FIRST tool call for a repo, a committed .codeindex/ index (written by
+// `codeindex index`) lets the session skip work TWO ways. cache.json seeds the
+// session scan, so every unchanged file takes scan.ts's stat fastpath instead
+// of a read + hash + extraction; and — only when the T4 freshness guard holds —
+// the persisted graph.json/symbols.json are deserialized straight into the
+// session, so the first graph/symbols/mermaid/repo_map/check_rules call skips
+// the whole downstream pipeline (buildArtifactsFromScan). Both are pure
+// optimizations: the seeded scan's reused records are value-identical to a cold
+// scan's (T3/T4 determinism), and the guard is the SAME oracle the CLI's index
+// fastpath uses to prove the on-disk artifacts equal a fresh build here. Absent,
+// stale, corrupt, or any version/commit/sha mismatch → every step falls back to
+// today's cold path EXACTLY (a fresh scanRepo / buildArtifactsFromScan), never a
+// throw.
+
+// ADDITIVE cache.json meta describing the artifacts a prior `index` run wrote
+// (see engine-cli.ts's CacheMeta). Old caches lacking these keys simply never
+// pass the guard below — their per-file records are still reused to seed the
+// scan. Only the graph/symbols shas matter here; the embed sidecar has its own
+// memoization path.
+interface PersistedMeta {
+  engineVersion?: string;
+  commit?: string;
+  graphSha1?: string;
+  symbolsSha1?: string;
+}
+
+// Read <repo>/.codeindex/cache.json into the (cacheMap, meta) the preload needs.
+// Per-file records are reusable ONLY when (schemaVersion, extractorVersion)
+// match this engine — the exact gate the CLI applies before trusting a cache —
+// otherwise the whole cache is discarded (cold scan). Any read/parse failure (no
+// index yet, unreadable, malformed) returns undefined: the cold path.
+function readPersistedIndex(repo: string): { cacheMap: SessionCacheMap; meta: PersistedMeta } | undefined {
+  let parsed:
+    | ({ schemaVersion?: number; extractorVersion?: number; files?: Record<string, SessionCacheEntry> } & PersistedMeta)
+    | undefined;
+  try {
+    parsed = JSON.parse(readFileSync(join(repo, ".codeindex", "cache.json"), "utf8")) as typeof parsed;
+  } catch {
+    return undefined;
+  }
+  if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION || parsed.extractorVersion !== EXTRACTOR_VERSION || !parsed.files) {
+    return undefined;
+  }
+  const cacheMap: SessionCacheMap = new Map(Object.entries(parsed.files));
+  const meta: PersistedMeta = {
+    engineVersion: parsed.engineVersion,
+    commit: parsed.commit,
+    graphSha1: parsed.graphSha1,
+    symbolsSha1: parsed.symbolsSha1,
+  };
+  return { cacheMap, meta };
+}
+
+// The T4 freshness guard, applied to a session scan seeded from cache.json:
+// contentUnchanged proves this scan's records are the ones that built the
+// on-disk artifacts; engineVersion pins the version stamp graph.json embeds and
+// commit the HEAD it embeds; the sha checks prove the on-disk bytes ARE that
+// build's output. All true ⇒ graph.json/symbols.json are byte-equal to
+// buildArtifactsFromScan(scan) run here, so deserialize them instead of
+// rebuilding. Graph/SymbolIndex are pure JSON POJOs (no Map/Set/typed fields),
+// so JSON.parse is a lossless round-trip — a schemaVersion assert is the only
+// reconstruction needed (see the round-trip test). ANY failure — a stale scan,
+// a version/commit/sha mismatch, a missing/corrupt/partial artifact, an
+// unexpected schemaVersion — returns undefined so the caller rebuilds. NEVER
+// throws (a corrupt artifact must degrade, not crash the session).
+function preloadArtifacts(repo: string, scan: RepoScan, meta: PersistedMeta): IndexArtifacts | undefined {
+  if (
+    !scan.contentUnchanged ||
+    meta.engineVersion !== ENGINE_VERSION ||
+    meta.commit !== scan.commit ||
+    meta.graphSha1 === undefined ||
+    meta.symbolsSha1 === undefined
+  ) {
+    return undefined;
+  }
+  const dir = join(repo, ".codeindex");
+  let graphBytes: Buffer;
+  let symbolsBytes: Buffer;
+  try {
+    graphBytes = readFileSync(join(dir, "graph.json"));
+    symbolsBytes = readFileSync(join(dir, "symbols.json"));
+  } catch {
+    return undefined; // a sha'd artifact went missing since cache.json — rebuild
+  }
+  // sha over the raw bytes; sha1(string) hashes the same UTF-8 bytes writeFileSync
+  // put on disk, so this equals the meta sha the CLI computed over the render.
+  if (sha1(graphBytes) !== meta.graphSha1 || sha1(symbolsBytes) !== meta.symbolsSha1) {
+    return undefined; // tampered / partial / corrupt on-disk bytes — rebuild
+  }
+  try {
+    const graph = JSON.parse(graphBytes.toString("utf8")) as Graph;
+    const symbols = JSON.parse(symbolsBytes.toString("utf8")) as SymbolIndex;
+    if (graph.schemaVersion !== SCHEMA_VERSION || symbols.schemaVersion !== SCHEMA_VERSION) return undefined;
+    return { scan, graph, symbols };
+  } catch {
+    // Unreachable once the shas matched (the bytes are valid JSON this engine
+    // wrote), but the contract is "never throw" — degrade to a rebuild.
+    return undefined;
+  }
+}
+
+// First-touch preload: seed the session scan from cache.json and, when the guard
+// holds, the artifacts from graph.json/symbols.json. undefined ⇒ no persisted
+// index ⇒ the caller takes the cold scanRepo path unchanged.
+function preloadSession(
+  repo: string,
+  opts: SessionScanOptions,
+): { scan: RepoScan; cacheMap: SessionCacheMap; arts?: IndexArtifacts } | undefined {
+  const persisted = readPersistedIndex(repo);
+  if (!persisted) return undefined;
+  // Seed the scan from the persisted records — scan.ts's stat fastpath + exact
+  // content-hash reuse make this value-identical to a cold scan (T3/T4), only
+  // cheaper, and it computes the contentUnchanged the artifact guard reads. When
+  // the on-disk content drifted from cache.json, changed files are re-read/
+  // extracted here exactly as a cold scan would, so the scan stays correct and
+  // the guard simply fails (arts undefined → rebuild on demand).
+  const scan = scanRepo(repo, { ...opts, cache: persisted.cacheMap });
+  const arts = preloadArtifacts(repo, scan, persisted.meta);
+  return { scan, cacheMap: toCacheMap(scan), arts };
+}
+
 // The memoizing replacement for scanRepo inside callTool. Exported for tests.
 export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
   const key = sessionKey(repo, opts);
@@ -485,6 +608,15 @@ export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
     }
     sessionCache = { key, scan: fresh, cacheMap: toCacheMap(fresh) };
     return fresh;
+  }
+  // First touch of this (repo, opts): try the persisted-index preload before a
+  // cold scan. A present, version-compatible .codeindex/cache.json seeds the
+  // scan (and, when the guard holds, the artifacts); absent it, fall through to
+  // the cold path EXACTLY as before.
+  const preloaded = preloadSession(repo, opts);
+  if (preloaded) {
+    sessionCache = { key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts };
+    return preloaded.scan;
   }
   const scan = scanRepo(repo, opts);
   sessionCache = { key, scan, cacheMap: toCacheMap(scan) };
