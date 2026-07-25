@@ -10351,6 +10351,76 @@ var init_viz = __esm({
   }
 });
 
+// src/preload.ts
+import { readFileSync as readFileSync7 } from "fs";
+import { join as join15 } from "path";
+function toCacheMap(scan2) {
+  const m = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) m.set(f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: scan2.mtimes.get(f.rel) });
+  return m;
+}
+function readPersistedIndex(repo, indexDir = INDEX_DIR) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync7(join15(repo, indexDir, "cache.json"), "utf8"));
+  } catch {
+    return void 0;
+  }
+  if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION || parsed.extractorVersion !== EXTRACTOR_VERSION || !parsed.files) {
+    return void 0;
+  }
+  return {
+    cacheMap: new Map(Object.entries(parsed.files)),
+    meta: {
+      engineVersion: parsed.engineVersion,
+      commit: parsed.commit,
+      graphSha1: parsed.graphSha1,
+      symbolsSha1: parsed.symbolsSha1
+    }
+  };
+}
+function preloadArtifacts(repo, scan2, meta, indexDir = INDEX_DIR) {
+  if (!scan2.contentUnchanged || meta.engineVersion !== ENGINE_VERSION || meta.commit !== scan2.commit || meta.graphSha1 === void 0 || meta.symbolsSha1 === void 0) {
+    return void 0;
+  }
+  const dir = join15(repo, indexDir);
+  let graphBytes;
+  let symbolsBytes;
+  try {
+    graphBytes = readFileSync7(join15(dir, "graph.json"));
+    symbolsBytes = readFileSync7(join15(dir, "symbols.json"));
+  } catch {
+    return void 0;
+  }
+  if (sha1(graphBytes) !== meta.graphSha1 || sha1(symbolsBytes) !== meta.symbolsSha1) {
+    return void 0;
+  }
+  try {
+    const graph = JSON.parse(graphBytes.toString("utf8"));
+    const symbols = JSON.parse(symbolsBytes.toString("utf8"));
+    if (graph.schemaVersion !== SCHEMA_VERSION || symbols.schemaVersion !== SCHEMA_VERSION) return void 0;
+    return { scan: scan2, graph, symbols };
+  } catch {
+    return void 0;
+  }
+}
+function preloadSession(repo, opts, indexDir = INDEX_DIR) {
+  const persisted = readPersistedIndex(repo, indexDir);
+  if (!persisted) return void 0;
+  const scan2 = scanRepo(repo, { ...opts, cache: persisted.cacheMap });
+  return { scan: scan2, cacheMap: toCacheMap(scan2), arts: preloadArtifacts(repo, scan2, persisted.meta, indexDir) };
+}
+var INDEX_DIR;
+var init_preload = __esm({
+  "src/preload.ts"() {
+    "use strict";
+    init_types();
+    init_scan();
+    init_hash();
+    INDEX_DIR = ".codeindex";
+  }
+});
+
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
@@ -10364,8 +10434,8 @@ __export(mcp_exports, {
   toCacheMap: () => toCacheMap,
   warmGrammarsForRepo: () => warmGrammarsForRepo
 });
-import { readFileSync as readFileSync7, statSync as statSync5 } from "fs";
-import { join as join15 } from "path";
+import { statSync as statSync5 } from "fs";
+import { join as join16 } from "path";
 import { createInterface } from "readline";
 function str(v) {
   return typeof v === "string" && v ? v : void 0;
@@ -10389,7 +10459,7 @@ async function memoizedEmbeddingIndex(key, build) {
 function memoizedEmbedModel(modelDir) {
   let stat;
   try {
-    stat = statSync5(join15(modelDir, "model.json"));
+    stat = statSync5(join16(modelDir, "model.json"));
   } catch {
     return void 0;
   }
@@ -10412,62 +10482,6 @@ function sessionKey(repo, opts) {
     out: opts.out,
     fullHash: opts.fullHash
   });
-}
-function toCacheMap(scan2) {
-  const m = /* @__PURE__ */ new Map();
-  for (const f of scan2.files) m.set(f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: scan2.mtimes.get(f.rel) });
-  return m;
-}
-function readPersistedIndex(repo) {
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync7(join15(repo, ".codeindex", "cache.json"), "utf8"));
-  } catch {
-    return void 0;
-  }
-  if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION || parsed.extractorVersion !== EXTRACTOR_VERSION || !parsed.files) {
-    return void 0;
-  }
-  const cacheMap = new Map(Object.entries(parsed.files));
-  const meta = {
-    engineVersion: parsed.engineVersion,
-    commit: parsed.commit,
-    graphSha1: parsed.graphSha1,
-    symbolsSha1: parsed.symbolsSha1
-  };
-  return { cacheMap, meta };
-}
-function preloadArtifacts(repo, scan2, meta) {
-  if (!scan2.contentUnchanged || meta.engineVersion !== ENGINE_VERSION || meta.commit !== scan2.commit || meta.graphSha1 === void 0 || meta.symbolsSha1 === void 0) {
-    return void 0;
-  }
-  const dir = join15(repo, ".codeindex");
-  let graphBytes;
-  let symbolsBytes;
-  try {
-    graphBytes = readFileSync7(join15(dir, "graph.json"));
-    symbolsBytes = readFileSync7(join15(dir, "symbols.json"));
-  } catch {
-    return void 0;
-  }
-  if (sha1(graphBytes) !== meta.graphSha1 || sha1(symbolsBytes) !== meta.symbolsSha1) {
-    return void 0;
-  }
-  try {
-    const graph = JSON.parse(graphBytes.toString("utf8"));
-    const symbols = JSON.parse(symbolsBytes.toString("utf8"));
-    if (graph.schemaVersion !== SCHEMA_VERSION || symbols.schemaVersion !== SCHEMA_VERSION) return void 0;
-    return { scan: scan2, graph, symbols };
-  } catch {
-    return void 0;
-  }
-}
-function preloadSession(repo, opts) {
-  const persisted = readPersistedIndex(repo);
-  if (!persisted) return void 0;
-  const scan2 = scanRepo(repo, { ...opts, cache: persisted.cacheMap });
-  const arts = preloadArtifacts(repo, scan2, persisted.meta);
-  return { scan: scan2, cacheMap: toCacheMap(scan2), arts };
 }
 function getScan(repo, opts = {}) {
   const key = sessionKey(repo, opts);
@@ -10794,6 +10808,7 @@ var init_mcp = __esm({
     init_pipeline();
     init_graph_json();
     init_scan();
+    init_preload();
     init_walk();
     init_callers();
     init_workspaces();
@@ -11992,12 +12007,13 @@ init_types();
 init_types();
 init_loader();
 import { existsSync as existsSync6, mkdirSync as mkdirSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "fs";
-import { join as join16, resolve as resolve2 } from "path";
+import { join as join17, resolve as resolve2 } from "path";
 init_pipeline();
 init_hash();
 init_graph_json();
 init_symbols_json();
 init_scan();
+init_preload();
 init_walk();
 init_callers();
 init_workspaces();
@@ -12103,6 +12119,12 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       capped at 8; 0 or 1 forces the single-threaded path).
                       Also settable with CODEINDEX_WORKERS. Artifacts are
                       byte-identical either way
+  --index <dir>       Persisted index the READ commands reuse, relative to the
+                      repo (default .codeindex \u2014 i.e. what \`index --out\` wrote
+                      there). A fresh index turns the scan into a stat pass and,
+                      when it still matches the worktree, skips the pipeline
+                      entirely. Stale/absent/corrupt \u2192 a normal cold build
+  --no-index-cache    Never reuse a persisted index; always build from scratch
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, \u2026}])
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
@@ -12149,6 +12171,8 @@ function parseFlags(args2) {
     else if (a === "--max-hits") flags2.maxHits = num();
     else if (a === "--budget-tokens") flags2.budgetTokens = num();
     else if (a === "--no-ast") flags2.noAst = true;
+    else if (a === "--index") flags2.indexDir = next();
+    else if (a === "--no-index-cache") flags2.noIndexCache = true;
     else if (a === "--workers") {
       const raw = next();
       const n = Number(raw);
@@ -12280,11 +12304,29 @@ async function runCli(rawArgv) {
     });
     await ensureGrammars(grammarKeysForExts(precomputedWalk.files.map((f) => f.ext)));
   }
+  const indexDir = flags2.indexDir ?? INDEX_DIR;
+  let preloadTried = false;
+  let preloaded;
+  const tryPreload = () => {
+    if (preloadTried) return preloaded;
+    preloadTried = true;
+    if (flags2.noIndexCache) return void 0;
+    const p = preloadSession(flags2.repo, scanOptions(flags2, precomputedWalk), indexDir);
+    if (p) preloaded = { scan: p.scan, arts: p.arts };
+    return preloaded;
+  };
+  const readScan = () => tryPreload()?.scan ?? scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+  const readArtifacts = () => {
+    const p = tryPreload();
+    if (p?.arts) return p.arts;
+    if (p) return buildArtifactsFromScan(p.scan, scanOptions(flags2, precomputedWalk));
+    return buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
+  };
   if (cmd === "index") {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync3(outDir, { recursive: true });
-    const cachePath = join16(outDir, "cache.json");
+    const cachePath = join17(outDir, "cache.json");
     let cache;
     let meta = {};
     try {
@@ -12309,9 +12351,9 @@ async function runCli(rawArgv) {
     });
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
-    const graphPath = join16(outDir, "graph.json");
-    const symbolsPath = join16(outDir, "symbols.json");
-    const embedPath = join16(outDir, "embeddings.bin");
+    const graphPath = join17(outDir, "graph.json");
+    const symbolsPath = join17(outDir, "symbols.json");
+    const embedPath = join17(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
         return sha1(readFileSync8(path));
@@ -12379,13 +12421,13 @@ async function runCli(rawArgv) {
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags2.out);
   } else if (cmd === "graph") {
-    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const { graph } = readArtifacts();
     emit(renderGraphJson(graph), flags2.out);
   } else if (cmd === "symbols") {
-    const { symbols } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const { symbols } = readArtifacts();
     emit(renderSymbolsJson(symbols), flags2.out);
   } else if (cmd === "scip") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const scan2 = readScan();
     const bytes = renderScip(scan2, { projectRoot: flags2.projectRoot });
     const out2 = flags2.out ?? resolve2("index.scip");
     if (out2 === "-") process.stdout.write(Buffer.from(bytes));
@@ -12395,14 +12437,14 @@ async function runCli(rawArgv) {
 `);
     }
   } else if (cmd === "callers") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const scan2 = readScan();
     const index = buildCallerIndex(scan2, void 0, { recall: flags2.recall });
     const obj = {};
     for (const [name2, entry] of index) obj[name2] = entry;
     emit(JSON.stringify(obj, null, 2) + "\n", flags2.out);
   } else if (cmd === "search") {
     if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const scan2 = readScan();
     if (flags2.semantic) {
       const endpoint = resolveEmbedEndpoint();
       const lexical = () => {
@@ -12493,16 +12535,16 @@ async function runCli(rawArgv) {
       }
       const model = loadEmbedModel(modelDir);
       mkdirSync3(flags2.out, { recursive: true });
-      const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+      const scan2 = readScan();
       const index = buildEmbeddingIndex(scan2, model);
-      writeFileSync4(join16(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      writeFileSync4(join17(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
       const { url, sha256 } = resolveEmbedPullUrl();
-      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join16(flags2.repo, ".codeindex", "models");
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join17(flags2.repo, ".codeindex", "models");
       mkdirSync3(destDir, { recursive: true });
-      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join16(destDir, "model.json")}
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join17(destDir, "model.json")}
 `);
       let body2;
       try {
@@ -12523,8 +12565,8 @@ async function runCli(rawArgv) {
         process.exitCode = 1;
         return;
       }
-      writeFileSync4(join16(destDir, "model.json"), body2);
-      process.stderr.write(`codeindex: model written to ${join16(destDir, "model.json")}
+      writeFileSync4(join17(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join17(destDir, "model.json")}
 `);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");
@@ -12534,7 +12576,7 @@ async function runCli(rawArgv) {
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const runtimePresent = info2.dir ? existsSync6(join16(info2.dir, "web-tree-sitter.wasm")) : false;
+      const runtimePresent = info2.dir ? existsSync6(join17(info2.dir, "web-tree-sitter.wasm")) : false;
       const target = resolveGrammarsPullTarget();
       const status = {
         engineVersion: ENGINE_VERSION,
@@ -12556,7 +12598,7 @@ async function runCli(rawArgv) {
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const rules = parseRules(JSON.parse(readFileSync8(flags2.config, "utf8")));
-    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const { graph } = readArtifacts();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags2.out);
@@ -12577,26 +12619,26 @@ async function runCli(rawArgv) {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags2.out);
   } else if (cmd === "repomap") {
-    const { scan: scan2, graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const { scan: scan2, graph } = readArtifacts();
     emit(renderRepoMap(scan2, graph, { budgetTokens: flags2.budgetTokens }), flags2.out);
   } else if (cmd === "hotspots") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const scan2 = readScan();
     const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2) + "\n", flags2.out);
   } else if (cmd === "coupling") {
     const { ok, couplings } = changeCoupling(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags2.out);
   } else if (cmd === "deadcode") {
-    emit(JSON.stringify(findDeadCode(scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk))), null, 2) + "\n", flags2.out);
+    emit(JSON.stringify(findDeadCode(readScan()), null, 2) + "\n", flags2.out);
   } else if (cmd === "complexity") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const scan2 = readScan();
     emit(JSON.stringify(symbolComplexity(scan2, flags2.positional), null, 2) + "\n", flags2.out);
   } else if (cmd === "risk") {
-    const scan2 = scanRepo(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const scan2 = readScan();
     const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2) + "\n", flags2.out);
   } else if (cmd === "mermaid") {
-    const { graph } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const { graph } = readArtifacts();
     emit(renderMermaid(graph, { module: flags2.positional }), flags2.out);
   } else if (cmd === "grep") {
     if (!flags2.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");

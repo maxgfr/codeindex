@@ -4,13 +4,14 @@ import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, grammarKeysForExts, resolveGrammarsTier, sharedGrammarsCacheDir } from "./ast/loader.js";
 import { resolveGrammarsPullTarget, pullGrammars } from "./ast/grammars-pull.js";
-import { buildIndexArtifacts, buildArtifactsFromScan, type BuildIndexOptions } from "./pipeline.js";
+import { buildIndexArtifacts, buildArtifactsFromScan, type BuildIndexOptions, type IndexArtifacts } from "./pipeline.js";
 import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
-import { scanRepo, scanSummary } from "./scan.js";
+import { scanRepo, scanSummary, type RepoScan } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
+import { preloadSession, INDEX_DIR } from "./preload.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -122,6 +123,12 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       capped at 8; 0 or 1 forces the single-threaded path).
                       Also settable with CODEINDEX_WORKERS. Artifacts are
                       byte-identical either way
+  --index <dir>       Persisted index the READ commands reuse, relative to the
+                      repo (default .codeindex — i.e. what \`index --out\` wrote
+                      there). A fresh index turns the scan into a stat pass and,
+                      when it still matches the worktree, skips the pipeline
+                      entirely. Stale/absent/corrupt → a normal cold build
+  --no-index-cache    Never reuse a persisted index; always build from scratch
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
@@ -150,6 +157,8 @@ interface CliFlags {
   maxCalls?: number;
   noAst: boolean;
   workers?: number; // extraction worker threads (0/1 = sequential)
+  indexDir?: string; // persisted index to read (default .codeindex)
+  noIndexCache?: boolean; // never reuse a persisted index
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
@@ -196,6 +205,8 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--max-hits") flags.maxHits = num();
     else if (a === "--budget-tokens") flags.budgetTokens = num();
     else if (a === "--no-ast") flags.noAst = true;
+    else if (a === "--index") flags.indexDir = next();
+    else if (a === "--no-index-cache") flags.noIndexCache = true;
     else if (a === "--workers") {
       // 0 is meaningful here (force sequential), so this cannot use num().
       const raw = next();
@@ -382,6 +393,38 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     await ensureGrammars(grammarKeysForExts(precomputedWalk.files.map((f) => f.ext)));
   }
 
+  // Read commands reuse a persisted index instead of rebuilding from scratch.
+  //
+  // Only `index` ever consulted .codeindex/; every read command (graph, symbols,
+  // scip, callers, search, repomap, hotspots, deadcode, complexity, risk,
+  // mermaid, rules) re-walked, re-read, re-hashed and re-EXTRACTED the whole
+  // repo on each invocation — `codeindex search` cost a full tree-sitter pass
+  // every time, with a fresh index sitting right next to it.
+  //
+  // cache.json turns the scan into a stat pass; when the freshness guard holds,
+  // graph.json/symbols.json come back without running the pipeline at all. Both
+  // degrade to today's cold path when the index is absent, stale or corrupt, so
+  // output is unchanged either way. Resolved lazily and at most once: a command
+  // uses either the scan or the artifacts, never both.
+  const indexDir = flags.indexDir ?? INDEX_DIR;
+  let preloadTried = false;
+  let preloaded: { scan: RepoScan; arts?: IndexArtifacts } | undefined;
+  const tryPreload = (): { scan: RepoScan; arts?: IndexArtifacts } | undefined => {
+    if (preloadTried) return preloaded;
+    preloadTried = true;
+    if (flags.noIndexCache) return undefined;
+    const p = preloadSession(flags.repo, scanOptions(flags, precomputedWalk), indexDir);
+    if (p) preloaded = { scan: p.scan, arts: p.arts };
+    return preloaded;
+  };
+  const readScan = (): RepoScan => tryPreload()?.scan ?? scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+  const readArtifacts = (): IndexArtifacts => {
+    const p = tryPreload();
+    if (p?.arts) return p.arts;
+    if (p) return buildArtifactsFromScan(p.scan, scanOptions(flags, precomputedWalk));
+    return buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+  };
+
   if (cmd === "index") {
     if (!flags.out) throw new Error("index needs --out <dir>");
     const outDir = flags.out;
@@ -543,13 +586,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
   } else if (cmd === "graph") {
-    const { graph } = buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+    const { graph } = readArtifacts();
     emit(renderGraphJson(graph), flags.out);
   } else if (cmd === "symbols") {
-    const { symbols } = buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+    const { symbols } = readArtifacts();
     emit(renderSymbolsJson(symbols), flags.out);
   } else if (cmd === "scip") {
-    const scan = scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+    const scan = readScan();
     const bytes = renderScip(scan, { projectRoot: flags.projectRoot });
     const out = flags.out ?? resolve("index.scip");
     if (out === "-") process.stdout.write(Buffer.from(bytes));
@@ -558,14 +601,14 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       process.stderr.write(`codeindex: SCIP index → ${out} (${bytes.length} bytes)\n`);
     }
   } else if (cmd === "callers") {
-    const scan = scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+    const scan = readScan();
     const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
     const obj: Record<string, unknown> = {};
     for (const [name, entry] of index) obj[name] = entry;
     emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
-    const scan = scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+    const scan = readScan();
     if (flags.semantic) {
       const endpoint = resolveEmbedEndpoint();
       const lexical = (): void => {
@@ -670,7 +713,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       }
       const model = loadEmbedModel(modelDir)!;
       mkdirSync(flags.out, { recursive: true });
-      const scan = scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+      const scan = readScan();
       const index = buildEmbeddingIndex(scan, model);
       writeFileSync(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
@@ -742,7 +785,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));
-    const { graph } = buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+    const { graph } = readArtifacts();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
@@ -763,26 +806,26 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
   } else if (cmd === "repomap") {
-    const { scan, graph } = buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+    const { scan, graph } = readArtifacts();
     emit(renderRepoMap(scan, graph, { budgetTokens: flags.budgetTokens }), flags.out);
   } else if (cmd === "hotspots") {
-    const scan = scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+    const scan = readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
     emit(JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2) + "\n", flags.out);
   } else if (cmd === "coupling") {
     const { ok, couplings } = changeCoupling(flags.repo, { since: flags.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
   } else if (cmd === "deadcode") {
-    emit(JSON.stringify(findDeadCode(scanRepo(flags.repo, scanOptions(flags, precomputedWalk))), null, 2) + "\n", flags.out);
+    emit(JSON.stringify(findDeadCode(readScan()), null, 2) + "\n", flags.out);
   } else if (cmd === "complexity") {
-    const scan = scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+    const scan = readScan();
     emit(JSON.stringify(symbolComplexity(scan, flags.positional), null, 2) + "\n", flags.out);
   } else if (cmd === "risk") {
-    const scan = scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
+    const scan = readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
     emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2) + "\n", flags.out);
   } else if (cmd === "mermaid") {
-    const { graph } = buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+    const { graph } = readArtifacts();
     emit(renderMermaid(graph, { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
