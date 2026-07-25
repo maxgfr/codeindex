@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.19.1](https://github.com/maxgfr/codeindex/compare/v2.19.0...v2.19.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **delta:** stop charging dangling risk for an import into an ignored tree ([1413198](https://github.com/maxgfr/codeindex/commit/14131980fa0bebd3f668c96f879e5bc571d27634))
+
 # [2.19.0](https://github.com/maxgfr/codeindex/compare/v2.18.0...v2.19.0) (2026-07-25)
 
 
