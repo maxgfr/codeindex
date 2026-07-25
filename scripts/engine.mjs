@@ -11516,6 +11516,47 @@ init_types();
 init_walk();
 init_sort();
 import { join as join12 } from "path";
+var Bytes = class {
+  buf;
+  len = 0;
+  constructor(capacity = 64) {
+    this.buf = new Uint8Array(capacity);
+  }
+  get length() {
+    return this.len;
+  }
+  grow(need) {
+    if (this.len + need <= this.buf.length) return;
+    let cap = this.buf.length * 2 || 64;
+    while (cap < this.len + need) cap *= 2;
+    const next = new Uint8Array(cap);
+    next.set(this.buf.subarray(0, this.len));
+    this.buf = next;
+  }
+  // Rewind without releasing the buffer, so a per-item scratch sink is
+  // allocated once per document instead of once per occurrence/symbol.
+  reset() {
+    this.len = 0;
+  }
+  push(byte) {
+    this.grow(1);
+    this.buf[this.len++] = byte;
+  }
+  pushAll(src) {
+    this.grow(src.length);
+    if (src instanceof Uint8Array) this.buf.set(src, this.len);
+    else for (let i2 = 0; i2 < src.length; i2++) this.buf[this.len + i2] = src[i2];
+    this.len += src.length;
+  }
+  // A view over exactly the bytes written — no copy. Callers must not retain it
+  // across further writes to this sink.
+  view() {
+    return this.buf.subarray(0, this.len);
+  }
+  toUint8Array() {
+    return this.buf.slice(0, this.len);
+  }
+};
 var utf8 = new TextEncoder();
 function pushVarint(out2, n) {
   if (n < 0) throw new Error(`pushVarint: negative input ${n} is not a valid unsigned varint`);
@@ -11535,15 +11576,18 @@ function pushVarintField(out2, field, n) {
 function pushLenDelim(out2, field, payload) {
   pushTag(out2, field, 2);
   pushVarint(out2, payload.length);
-  for (let i2 = 0; i2 < payload.length; i2++) out2.push(payload[i2]);
+  out2.pushAll(payload);
+}
+function pushMessage(out2, field, payload) {
+  pushLenDelim(out2, field, payload.view());
 }
 function pushString(out2, field, s) {
   pushLenDelim(out2, field, utf8.encode(s));
 }
 function pushPackedInt32(out2, field, values) {
-  const payload = [];
+  const payload = new Bytes(values.length * 2);
   for (const v of values) pushVarint(payload, v);
-  pushLenDelim(out2, field, payload);
+  pushMessage(out2, field, payload);
 }
 var F_INDEX_METADATA = 1;
 var F_INDEX_DOCUMENTS = 2;
@@ -11714,41 +11758,45 @@ function renderScip(scan2, opts = {}) {
       kind: KIND[sym.kind],
       enclosing: sym.parent ? enclosingSymbolOf(f.rel, sym.parent) : void 0
     })).sort((a, b) => byStr(a.symbol, b.symbol));
-    const doc = [];
+    const doc = new Bytes(1024);
     pushString(doc, F_DOC_RELPATH, f.rel);
+    const ob = new Bytes(64);
     for (const o of occs) {
       const key = `${o.range.join(",")} ${o.roles} ${o.symbol}`;
       if (seenOcc.has(key)) continue;
       seenOcc.add(key);
-      const ob = [];
+      ob.reset();
       pushPackedInt32(ob, F_OCC_RANGE, o.range);
       pushString(ob, F_OCC_SYMBOL, o.symbol);
       if (o.roles !== 0) pushVarintField(ob, F_OCC_ROLES, o.roles);
-      pushLenDelim(doc, F_DOC_OCCURRENCES, ob);
+      pushMessage(doc, F_DOC_OCCURRENCES, ob);
     }
+    const sb = new Bytes(64);
     for (const si of infos) {
-      const sb = [];
+      sb.reset();
       pushString(sb, F_SI_SYMBOL, si.symbol);
       if (si.kind !== void 0) pushVarintField(sb, F_SI_KIND, si.kind);
       pushString(sb, F_SI_DISPLAY_NAME, si.displayName);
       if (si.enclosing) pushString(sb, F_SI_ENCLOSING, si.enclosing);
-      pushLenDelim(doc, F_DOC_SYMBOLS, sb);
+      pushMessage(doc, F_DOC_SYMBOLS, sb);
     }
     pushString(doc, F_DOC_LANGUAGE, f.lang);
     pushVarintField(doc, F_DOC_POSITION_ENCODING, POSITION_ENCODING_UTF16);
     documents.push(doc);
   }
-  const toolInfo = [];
+  const toolInfo = new Bytes();
   pushString(toolInfo, F_TOOL_NAME, "codeindex");
   pushString(toolInfo, F_TOOL_VERSION, toolVersion);
-  const metadata2 = [];
-  pushLenDelim(metadata2, F_META_TOOL_INFO, toolInfo);
+  const metadata2 = new Bytes();
+  pushMessage(metadata2, F_META_TOOL_INFO, toolInfo);
   pushString(metadata2, F_META_PROJECT_ROOT, projectRoot);
   pushVarintField(metadata2, F_META_TEXT_ENCODING, TEXT_ENCODING_UTF8);
-  const index = [];
-  pushLenDelim(index, F_INDEX_METADATA, metadata2);
-  for (const d of documents) pushLenDelim(index, F_INDEX_DOCUMENTS, d);
-  return Uint8Array.from(index);
+  let total = 0;
+  for (const d of documents) total += d.length;
+  const index = new Bytes(total + metadata2.length + 16);
+  pushMessage(index, F_INDEX_METADATA, metadata2);
+  for (const d of documents) pushMessage(index, F_INDEX_DOCUMENTS, d);
+  return index.toUint8Array();
 }
 
 // src/engine.ts

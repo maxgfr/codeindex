@@ -31,12 +31,64 @@ export interface RenderScipOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Protobuf wire-format primitives (proto3). Messages are assembled as plain
-// number[] byte buffers and embedded into their parent as length-delimited
-// (wire type 2). Only the two wire types we use are implemented: varint (0)
-// and length-delimited (2).
+// Protobuf wire-format primitives (proto3). Messages are assembled into byte
+// sinks and embedded into their parent as length-delimited (wire type 2). Only
+// the two wire types we use are implemented: varint (0) and length-delimited (2).
 // ---------------------------------------------------------------------------
-type Bytes = number[];
+
+// A growable byte buffer. This used to be a plain `number[]` — one boxed JS
+// number per OUTPUT BYTE, which on a 7k-file repo cost ~176 MB of RSS to emit
+// an 8 MB index. A doubling Uint8Array holds the same bytes at 1 byte each.
+class Bytes {
+  private buf: Uint8Array;
+  private len = 0;
+
+  constructor(capacity = 64) {
+    this.buf = new Uint8Array(capacity);
+  }
+
+  get length(): number {
+    return this.len;
+  }
+
+  private grow(need: number): void {
+    if (this.len + need <= this.buf.length) return;
+    let cap = this.buf.length * 2 || 64;
+    while (cap < this.len + need) cap *= 2;
+    const next = new Uint8Array(cap);
+    next.set(this.buf.subarray(0, this.len));
+    this.buf = next;
+  }
+
+  // Rewind without releasing the buffer, so a per-item scratch sink is
+  // allocated once per document instead of once per occurrence/symbol.
+  reset(): void {
+    this.len = 0;
+  }
+
+  push(byte: number): void {
+    this.grow(1);
+    this.buf[this.len++] = byte;
+  }
+
+  pushAll(src: ArrayLike<number>): void {
+    this.grow(src.length);
+    if (src instanceof Uint8Array) this.buf.set(src, this.len);
+    else for (let i = 0; i < src.length; i++) this.buf[this.len + i] = src[i]!;
+    this.len += src.length;
+  }
+
+  // A view over exactly the bytes written — no copy. Callers must not retain it
+  // across further writes to this sink.
+  view(): Uint8Array {
+    return this.buf.subarray(0, this.len);
+  }
+
+  toUint8Array(): Uint8Array {
+    return this.buf.slice(0, this.len);
+  }
+}
+
 const utf8 = new TextEncoder();
 
 // Unsigned LEB128. Every value we encode (field tags, enum values, ranges,
@@ -62,7 +114,11 @@ function pushVarintField(out: Bytes, field: number, n: number): void {
 function pushLenDelim(out: Bytes, field: number, payload: ArrayLike<number>): void {
   pushTag(out, field, 2);
   pushVarint(out, payload.length);
-  for (let i = 0; i < payload.length; i++) out.push(payload[i]!);
+  out.pushAll(payload);
+}
+
+function pushMessage(out: Bytes, field: number, payload: Bytes): void {
+  pushLenDelim(out, field, payload.view());
 }
 
 function pushString(out: Bytes, field: number, s: string): void {
@@ -73,9 +129,9 @@ function pushString(out: Bytes, field: number, s: string): void {
 // the concatenated varints of every element (this is the piece the plain
 // per-element encoding would get wrong).
 function pushPackedInt32(out: Bytes, field: number, values: number[]): void {
-  const payload: Bytes = [];
+  const payload = new Bytes(values.length * 2);
   for (const v of values) pushVarint(payload, v);
-  pushLenDelim(out, field, payload);
+  pushMessage(out, field, payload);
 }
 
 // ---------------------------------------------------------------------------
@@ -330,25 +386,27 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
       }))
       .sort((a, b) => byStr(a.symbol, b.symbol));
 
-    const doc: Bytes = [];
+    const doc = new Bytes(1024);
     pushString(doc, F_DOC_RELPATH, f.rel);
+    const ob = new Bytes(64);
     for (const o of occs) {
       const key = `${o.range.join(",")} ${o.roles} ${o.symbol}`;
       if (seenOcc.has(key)) continue;
       seenOcc.add(key);
-      const ob: Bytes = [];
+      ob.reset();
       pushPackedInt32(ob, F_OCC_RANGE, o.range);
       pushString(ob, F_OCC_SYMBOL, o.symbol);
       if (o.roles !== 0) pushVarintField(ob, F_OCC_ROLES, o.roles);
-      pushLenDelim(doc, F_DOC_OCCURRENCES, ob);
+      pushMessage(doc, F_DOC_OCCURRENCES, ob);
     }
+    const sb = new Bytes(64);
     for (const si of infos) {
-      const sb: Bytes = [];
+      sb.reset();
       pushString(sb, F_SI_SYMBOL, si.symbol);
       if (si.kind !== undefined) pushVarintField(sb, F_SI_KIND, si.kind);
       pushString(sb, F_SI_DISPLAY_NAME, si.displayName);
       if (si.enclosing) pushString(sb, F_SI_ENCLOSING, si.enclosing);
-      pushLenDelim(doc, F_DOC_SYMBOLS, sb);
+      pushMessage(doc, F_DOC_SYMBOLS, sb);
     }
     pushString(doc, F_DOC_LANGUAGE, f.lang);
     pushVarintField(doc, F_DOC_POSITION_ENCODING, POSITION_ENCODING_UTF16);
@@ -356,19 +414,21 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
   }
 
   // Metadata { tool_info, project_root, text_document_encoding }.
-  const toolInfo: Bytes = [];
+  const toolInfo = new Bytes();
   pushString(toolInfo, F_TOOL_NAME, "codeindex");
   pushString(toolInfo, F_TOOL_VERSION, toolVersion);
 
-  const metadata: Bytes = [];
-  pushLenDelim(metadata, F_META_TOOL_INFO, toolInfo);
+  const metadata = new Bytes();
+  pushMessage(metadata, F_META_TOOL_INFO, toolInfo);
   pushString(metadata, F_META_PROJECT_ROOT, projectRoot);
   pushVarintField(metadata, F_META_TEXT_ENCODING, TEXT_ENCODING_UTF8);
 
   // Index { metadata, documents }.
-  const index: Bytes = [];
-  pushLenDelim(index, F_INDEX_METADATA, metadata);
-  for (const d of documents) pushLenDelim(index, F_INDEX_DOCUMENTS, d);
+  let total = 0;
+  for (const d of documents) total += d.length;
+  const index = new Bytes(total + metadata.length + 16);
+  pushMessage(index, F_INDEX_METADATA, metadata);
+  for (const d of documents) pushMessage(index, F_INDEX_DOCUMENTS, d);
 
-  return Uint8Array.from(index);
+  return index.toUint8Array();
 }
