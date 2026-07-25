@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.20.1](https://github.com/maxgfr/codeindex/compare/v2.20.0...v2.20.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **bench:** correct harness comments that outlived what they described ([03c1eb4](https://github.com/maxgfr/codeindex/commit/03c1eb4bbcf1f9edee6aff1e5ee3264bfa84f599))
+
 # [2.20.0](https://github.com/maxgfr/codeindex/compare/v2.19.1...v2.20.0) (2026-07-25)
 
 
