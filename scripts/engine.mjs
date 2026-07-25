@@ -12901,7 +12901,10 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--since",
   "--config",
   "--limit",
-  "--server-name"
+  "--server-name",
+  "--workers",
+  "--index",
+  "--max-response-bytes"
 ]);
 function hoistLeadingFlags(argv) {
   const lead = [];

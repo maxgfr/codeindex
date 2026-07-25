@@ -335,6 +335,9 @@ const VALUE_FLAGS = new Set([
   "--config",
   "--limit",
   "--server-name",
+  "--workers",
+  "--index",
+  "--max-response-bytes",
 ]);
 
 // Accept global flags BEFORE the subcommand as well as after, so
