@@ -10,6 +10,7 @@ import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
 import { scanRepo, scanSummary } from "./scan.js";
+import { scanRepoParallel } from "./pool.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -117,6 +118,10 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --max-calls <n>     Per-file call-site cap for extraction (default 512)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
+  --workers <n>       \`index\`: extraction worker threads (default: cores-1,
+                      capped at 8; 0 or 1 forces the single-threaded path).
+                      Also settable with CODEINDEX_WORKERS. Artifacts are
+                      byte-identical either way
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
@@ -144,6 +149,7 @@ interface CliFlags {
   maxBytes?: number;
   maxCalls?: number;
   noAst: boolean;
+  workers?: number; // extraction worker threads (0/1 = sequential)
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
@@ -190,6 +196,13 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--max-hits") flags.maxHits = num();
     else if (a === "--budget-tokens") flags.budgetTokens = num();
     else if (a === "--no-ast") flags.noAst = true;
+    else if (a === "--workers") {
+      // 0 is meaningful here (force sequential), so this cannot use num().
+      const raw = next();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0) throw new Error(`--workers expects a non-negative integer, got "${raw}"`);
+      flags.workers = n;
+    }
     else if (a === "--since") flags.since = next();
     else if (a === "--config") flags.config = resolve(next());
     else if (a === "--limit") flags.limit = num();
@@ -410,7 +423,12 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     } catch {
       // no cache yet (or unreadable) — cold build
     }
-    const scan = scanRepo(flags.repo, { ...scanOptions(flags, precomputedWalk), cache, out: outDir });
+    const scan = await scanRepoParallel(flags.repo, {
+      ...scanOptions(flags, precomputedWalk),
+      cache,
+      out: outDir,
+      workers: flags.workers,
+    });
     const modelDir = resolveEmbedModelDir(flags.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : undefined;
 

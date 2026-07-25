@@ -29,7 +29,16 @@ export type {
 export { walk, readText, DEFAULT_MAX_FILES } from "./walk.js";
 export type { WalkOptions, WalkedFile, WalkResult } from "./walk.js";
 export { scanRepo, scanSummary } from "./scan.js";
-export type { RepoScan, ScanOptions, ScanSummary } from "./scan.js";
+export type { RepoScan, ScanOptions, ScanSummary, ExtractedRecord } from "./scan.js";
+export { keptCodeFiles } from "./scan.js";
+// Parallel extraction. scanRepoParallel is scanRepo with the code files
+// extracted across worker_threads; it returns the same RepoScan, byte-for-byte,
+// and degrades to the sequential path whenever workers are unavailable.
+//
+// `runExtractWorker` MUST stay exported: the worker bootstrap imports it BY NAME
+// off this barrel, and a missing export is indistinguishable from "this is not
+// the engine" — the pool would silently run sequential forever.
+export { scanRepoParallel, extractInParallel, runExtractWorker, workerCount } from "./pool.js";
 export { compileGlobs } from "./glob.js";
 export { parseGitignore, isIgnored } from "./ignore.js";
 export type { IgnoreRule } from "./ignore.js";

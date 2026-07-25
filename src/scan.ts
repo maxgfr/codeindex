@@ -73,6 +73,18 @@ export interface ScanOptions {
   // from the tree. Exists for callers that already walked (e.g. a freshness
   // probe) so scanRepo does not pay a second full directory traversal.
   precomputedWalk?: WalkResult;
+  // Records a worker pool already extracted (rel → record + the stat the worker
+  // itself observed). Consulted after the cache fastpaths and before the read,
+  // and only when the worker's stat matches the walk's. Records are built by the
+  // shared buildCodeRecord, so a hit is byte-identical to extracting here.
+  // Populated by scanRepoParallel — never set this by hand.
+  extracted?: Map<string, ExtractedRecord>;
+}
+
+export interface ExtractedRecord {
+  size: number;
+  mtimeMs: number;
+  record: FileRecord;
 }
 
 function countLines(s: string): number {
@@ -80,6 +92,47 @@ function countLines(s: string): number {
   let n = 1;
   for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
   return n;
+}
+
+// The FileRecord for ONE code file. Factored out because the worker pool builds
+// records off the main thread and they must be identical to the sequential
+// ones, byte for byte — sharing this function is what guarantees that rather
+// than two copies of the same logic drifting apart.
+export function buildCodeRecord(
+  rel: string,
+  ext: string,
+  size: number,
+  content: string,
+  hash: string,
+  lang: string,
+  opts: { maxCallsPerFile?: number } = {},
+): FileRecord {
+  const record: FileRecord = {
+    rel,
+    ext,
+    size,
+    lines: countLines(content),
+    hash,
+    kind: "code",
+    lang,
+    headings: [],
+    symbols: [],
+    refs: [],
+  };
+  if (content) {
+    const code = extractCode(rel, ext, content, { maxCallsPerFile: opts.maxCallsPerFile });
+    record.title = basename(rel);
+    record.summary = code.summary;
+    record.symbols = code.symbols;
+    record.refs = code.refs;
+    record.pkg = code.pkg;
+    record.idents = code.idents;
+    record.calls = code.calls;
+    record.importedNames = code.importedNames;
+  } else {
+    record.title = basename(rel);
+  }
+  return record;
 }
 
 // Which walked files this scan keeps, and how each is labelled. Shared by
@@ -116,6 +169,19 @@ function* keptFiles(
 interface WalkTotals {
   capped: boolean;
   excluded: number;
+}
+
+// The code files this scan would extract, in the same order scanRepo sees them.
+// The worker pool builds its job list from here so the set it extracts is
+// exactly the set scanRepo would have extracted — no file gets a worker record
+// that the sequential loop would have skipped, and vice versa.
+export function keptCodeFiles(root: string, opts: ScanOptions = {}): { f: WalkedFile; lang: string }[] {
+  const out: { f: WalkedFile; lang: string }[] = [];
+  const it = keptFiles(root, opts);
+  for (let step = it.next(); !step.done; step = it.next()) {
+    if (step.value.kind === "code") out.push({ f: step.value.f, lang: step.value.lang });
+  }
+  return out;
 }
 
 // File count + language histogram WITHOUT reading or parsing a single file.
@@ -190,12 +256,23 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
       continue;
     }
 
+    // A record a worker already read, hashed and extracted for this exact file
+    // (see pool.ts). Accepted only when the worker's own stat agrees with the
+    // walk's, so a file rewritten between the two is re-read here instead.
+    //
+    // It supplies the HASH as well as the record, which is what lets the cache
+    // comparison below stay in its original position. Consulting it any earlier
+    // would skip the hash-hit branch, and a bare `touch` — same content, new
+    // mtime — would then report the scan as changed and rewrite every artifact.
+    const pre = opts.extracted?.get(f.rel);
+    const preUsable = pre && pre.size === f.size && pre.mtimeMs === f.mtimeMs ? pre : undefined;
+
     // Read + hash (the staleness oracle stays exact); only EXTRACTION is cached. A
     // hash hit reuses the previous record — content is byte-identical, so every
     // derived field is too. classify()/extToLang() depend only on the path, so
     // kind/lang are stable across the hit.
-    const content = readText(f.abs);
-    const hash = sha1(content);
+    const content = preUsable ? undefined : readText(f.abs);
+    const hash = preUsable ? preUsable.record.hash : sha1(content!);
     if (cached && cached.hash === hash) {
       files.push(cached.record);
       if (kind === "doc" && content) docText.set(f.rel, content);
@@ -210,11 +287,16 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     allReused = false;
     cacheDirty = true;
 
+    if (preUsable) {
+      files.push(preUsable.record);
+      continue;
+    }
+
     const record: FileRecord = {
       rel: f.rel,
       ext: f.ext,
       size: f.size,
-      lines: countLines(content),
+      lines: countLines(content!),
       hash,
       kind,
       lang,
