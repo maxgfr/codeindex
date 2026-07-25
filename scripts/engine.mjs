@@ -10431,14 +10431,18 @@ __export(mcp_exports, {
   getScanSummary: () => getScanSummary,
   memoizedEmbedModel: () => memoizedEmbedModel,
   memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
+  negotiateProtocol: () => negotiateProtocol,
+  resourceLinkFor: () => resourceLinkFor,
   runMcpServer: () => runMcpServer,
   scanFingerprint: () => scanFingerprint,
   toCacheMap: () => toCacheMap,
+  validateArgs: () => validateArgs,
   warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
 import { existsSync as existsSync6, readFileSync as readFileSync8, statSync as statSync5 } from "fs";
 import { isAbsolute, join as join16 } from "path";
+import { pathToFileURL as pathToFileURL2 } from "url";
 import { createInterface } from "readline";
 function str(v) {
   return typeof v === "string" && v ? v : void 0;
@@ -10773,15 +10777,57 @@ async function callTool(name2, args2, defaultRepo) {
   }
   throw new Error(`unknown tool: ${name2}`);
 }
-function toolsFor(defaultRepo) {
-  if (!defaultRepo) return TOOLS;
+function validateArgs(schema, args2) {
+  const props = schema.properties ?? {};
+  for (const [key, value] of Object.entries(args2)) {
+    if (value === void 0 || value === null) continue;
+    const spec = props[key];
+    if (!spec?.type) continue;
+    const actual = Array.isArray(value) ? "array" : typeof value;
+    if (spec.type === "number") {
+      if (actual === "number") continue;
+      if (actual === "string" && Number.isFinite(Number(value)) && value.trim() !== "") continue;
+      return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
+    }
+    if (spec.type === "array") {
+      if (actual !== "array") return `\`${key}\` must be an array of strings, got ${actual}`;
+      if (spec.items?.type === "string" && !value.every((x) => typeof x === "string")) {
+        return `\`${key}\` must be an array of strings`;
+      }
+      continue;
+    }
+    if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
+  }
+  return void 0;
+}
+function negotiateProtocol(requested) {
+  return typeof requested === "string" && PROTOCOL_VERSIONS.includes(requested) ? requested : LATEST_PROTOCOL;
+}
+function annotationsFor(name2) {
+  const meta = TOOL_META[name2];
+  if (!meta) return void 0;
+  return {
+    readOnlyHint: !meta.write,
+    ...meta.write ? { destructiveHint: meta.destructive === true, idempotentHint: meta.idempotent === true } : {},
+    openWorldHint: meta.openWorld === true
+  };
+}
+function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0]) {
+  const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
+  const withTitle = protocolVersion >= RICH_TOOLS_SINCE;
+  if (!defaultRepo && !withAnnotations && !withTitle) return TOOLS;
   return TOOLS.map((t) => ({
     ...t,
-    inputSchema: {
+    ...withTitle && TOOL_META[t.name] ? { title: TOOL_META[t.name].title } : {},
+    ...withAnnotations ? { annotations: annotationsFor(t.name) } : {},
+    inputSchema: !defaultRepo ? t.inputSchema : {
       ...t.inputSchema,
       properties: {
         ...t.inputSchema.properties,
-        repo: { type: "string", description: `Absolute path to the repository root (optional \u2014 defaults to ${defaultRepo})` }
+        repo: {
+          type: "string",
+          description: `Absolute path to the repository root (optional \u2014 defaults to ${defaultRepo})`
+        }
       },
       required: t.inputSchema.required.filter((r) => r !== "repo")
     }
@@ -10805,12 +10851,31 @@ function capResponse(text, tool, repo, maxBytes) {
     2
   ) + "\n";
 }
+function resourceLinkFor(text, tool) {
+  const artifactName = ARTIFACT_FOR[tool];
+  if (!artifactName) return void 0;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+  if (parsed.truncated !== true || typeof parsed.artifact !== "string") return void 0;
+  return {
+    type: "resource_link",
+    uri: pathToFileURL2(parsed.artifact).href,
+    name: artifactName,
+    description: `The full ${tool} result this call was too large to inline.`,
+    mimeType: "application/json"
+  };
+}
 async function runMcpServer(opts = {}) {
   const serverInfo = {
     name: opts.serverInfo?.name ?? "codeindex",
     version: opts.serverInfo?.version ?? ENGINE_VERSION
   };
-  const tools = toolsFor(opts.defaultRepo);
+  let protocolVersion = PROTOCOL_VERSIONS[0];
+  let tools = toolsFor(opts.defaultRepo, protocolVersion);
   const send = (msg) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
   };
@@ -10832,10 +10897,12 @@ async function runMcpServer(opts = {}) {
     if (req.id === void 0 || req.id === null) return;
     try {
       if (req.method === "initialize") {
+        protocolVersion = negotiateProtocol(req.params?.protocolVersion);
+        tools = toolsFor(opts.defaultRepo, protocolVersion);
         send({
           id: req.id,
           result: {
-            protocolVersion: "2024-11-05",
+            protocolVersion,
             capabilities: { tools: {} },
             serverInfo
           }
@@ -10849,10 +10916,19 @@ async function runMcpServer(opts = {}) {
         const name2 = str(params.name) ?? "";
         const args2 = params.arguments ?? {};
         try {
+          const decl = tools.find(
+            (t) => t.name === name2
+          );
+          const invalid = decl ? validateArgs(decl.inputSchema, args2) : void 0;
+          if (invalid) throw new Error(invalid);
           const raw = await callTool(name2, args2, opts.defaultRepo);
           const repo = str(args2.repo) ?? opts.defaultRepo ?? "";
           const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-          send({ id: req.id, result: { content: [{ type: "text", text }] } });
+          const link = protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
+          send({
+            id: req.id,
+            result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] }
+          });
         } catch (e) {
           send({
             id: req.id,
@@ -10867,7 +10943,7 @@ async function runMcpServer(opts = {}) {
     }
   }
 }
-var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, SESSION_CACHE_MAX, sessionCaches, SCANLESS_TOOLS, DEFAULT_MAX_RESPONSE_BYTES, NARROWER, ARTIFACT_FOR;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, SESSION_CACHE_MAX, sessionCaches, SCANLESS_TOOLS, PROTOCOL_VERSIONS, LATEST_PROTOCOL, ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, TOOL_META, DEFAULT_MAX_RESPONSE_BYTES, NARROWER, ARTIFACT_FOR;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -11187,6 +11263,38 @@ var init_mcp = __esm({
       // already cached getScanSummary reuses it, warm grammars included.
       "scan_summary"
     ]);
+    PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+    LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
+    ANNOTATIONS_SINCE = "2025-03-26";
+    RICH_TOOLS_SINCE = "2025-06-18";
+    TOOL_META = {
+      scan_summary: { title: "Scan summary" },
+      graph: { title: "Link graph" },
+      symbols: { title: "Symbol index" },
+      callers: { title: "Caller index" },
+      workspaces: { title: "Monorepo workspaces" },
+      churn: { title: "Git churn" },
+      symbols_overview: { title: "File symbol overview" },
+      find_symbol: { title: "Find symbol" },
+      find_references: { title: "Find references" },
+      repo_map: { title: "Repository map" },
+      hotspots: { title: "Hotspots" },
+      coupling: { title: "Change coupling" },
+      replace_symbol_body: { title: "Replace symbol body", write: true, destructive: true, idempotent: true },
+      insert_after_symbol: { title: "Insert after symbol", write: true, destructive: false, idempotent: false },
+      insert_before_symbol: { title: "Insert before symbol", write: true, destructive: false, idempotent: false },
+      write_memory: { title: "Write memory", write: true, destructive: false, idempotent: true },
+      read_memory: { title: "Read memory" },
+      list_memories: { title: "List memories" },
+      delete_memory: { title: "Delete memory", write: true, destructive: true, idempotent: true },
+      dead_code: { title: "Dead-code candidates" },
+      complexity: { title: "Complexity" },
+      mermaid: { title: "Mermaid module diagram" },
+      grep: { title: "Grep file contents" },
+      search: { title: "Lexical search", openWorld: true },
+      embed_status: { title: "Embedding tier status", openWorld: true },
+      check_rules: { title: "Check architecture rules" }
+    };
     DEFAULT_MAX_RESPONSE_BYTES = 1e6;
     NARROWER = {
       graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",

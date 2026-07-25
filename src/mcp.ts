@@ -11,6 +11,7 @@
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, grammarKeysForExts } from "./ast/loader.js";
@@ -905,23 +906,157 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   throw new Error(`unknown tool: ${name}`);
 }
 
-// The advertised tool list. Without a server-level repo pin this is TOOLS
-// verbatim (byte-compat for existing consumers). With one, every tool drops
-// `repo` from its `required` set and documents the default — so a client that
-// omits it is spec-correct rather than relying on the server being lenient.
-// The pin is reflected in the schema, not just honoured at call time.
-function toolsFor(defaultRepo?: string): readonly unknown[] {
-  if (!defaultRepo) return TOOLS;
+// --- protocol versions -------------------------------------------------------
+// The server announced "2024-11-05" hard-coded and never even read the version
+// the client asked for. Three revisions have shipped since.
+//
+// Negotiation is what makes moving forward non-breaking: a client that asks for
+// an old revision gets that revision, and every field introduced later is
+// withheld — so its responses are exactly the bytes it received before. Newer
+// clients opt themselves in simply by asking.
+//
+// Dates sort lexicographically, so `>=` on the strings is a version comparison.
+const PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
+const LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1]!;
+
+// Feature floors, by the revision that introduced them.
+const ANNOTATIONS_SINCE = "2025-03-26"; // tool behaviour hints
+const RICH_TOOLS_SINCE = "2025-06-18"; // Tool.title, resource_link content
+
+// Validate `arguments` against the tool's declared inputSchema.
+//
+// There was no validation at all beyond presence checks, and the readers failed
+// silently in both directions: str() returns undefined for a non-string, so a
+// number where a path belongs became "missing", and every boolean was `=== true`,
+// so `"false"` and `1` alike read as false. The caller saw its option ignored
+// with no way to tell why.
+//
+// Only the shapes these schemas actually use are checked (string / number /
+// boolean / array-of-string) — this is a guard against silent misreads, not a
+// JSON Schema implementation. The spec (2025-11-25) is explicit that input
+// validation failures belong in a Tool Execution Error, not a protocol error,
+// precisely so the model can read the message and retry.
+// Required-ness stays with callTool, which raises tool-specific messages
+// ("`rules` (or `configPath`) is required"); duplicating it here would only let
+// the two drift.
+export function validateArgs(
+  schema: { properties?: Record<string, unknown> },
+  args: Record<string, unknown>,
+): string | undefined {
+  const props = (schema.properties ?? {}) as Record<string, { type?: string; items?: { type?: string } }>;
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined || value === null) continue;
+    const spec = props[key];
+    if (!spec?.type) continue; // undeclared extras stay tolerated
+    const actual = Array.isArray(value) ? "array" : typeof value;
+    if (spec.type === "number") {
+      // A numeric string is accepted (num() coerces it); anything else is not.
+      if (actual === "number") continue;
+      if (actual === "string" && Number.isFinite(Number(value as string)) && (value as string).trim() !== "") continue;
+      return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
+    }
+    if (spec.type === "array") {
+      if (actual !== "array") return `\`${key}\` must be an array of strings, got ${actual}`;
+      if (spec.items?.type === "string" && !(value as unknown[]).every((x) => typeof x === "string")) {
+        return `\`${key}\` must be an array of strings`;
+      }
+      continue;
+    }
+    if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
+  }
+  return undefined;
+}
+
+export function negotiateProtocol(requested: unknown): string {
+  return typeof requested === "string" && (PROTOCOL_VERSIONS as readonly string[]).includes(requested)
+    ? requested
+    : LATEST_PROTOCOL;
+}
+
+// Per-tool display title and behaviour hints.
+//
+// The hints matter operationally: they are what lets a host auto-approve the 23
+// read-only tools and hold a confirmation for the 5 that write. Without them a
+// client must treat `scan_summary` and `replace_symbol_body` alike.
+//
+// openWorldHint is true only where a call can leave this machine — `search`
+// with semantic:true and `embed_status` may contact CODEINDEX_EMBED_ENDPOINT.
+// Everything else reads the repo and nothing but the repo.
+interface ToolMeta {
+  title: string;
+  write?: boolean;
+  destructive?: boolean;
+  idempotent?: boolean;
+  openWorld?: boolean;
+}
+
+const TOOL_META: Record<string, ToolMeta> = {
+  scan_summary: { title: "Scan summary" },
+  graph: { title: "Link graph" },
+  symbols: { title: "Symbol index" },
+  callers: { title: "Caller index" },
+  workspaces: { title: "Monorepo workspaces" },
+  churn: { title: "Git churn" },
+  symbols_overview: { title: "File symbol overview" },
+  find_symbol: { title: "Find symbol" },
+  find_references: { title: "Find references" },
+  repo_map: { title: "Repository map" },
+  hotspots: { title: "Hotspots" },
+  coupling: { title: "Change coupling" },
+  replace_symbol_body: { title: "Replace symbol body", write: true, destructive: true, idempotent: true },
+  insert_after_symbol: { title: "Insert after symbol", write: true, destructive: false, idempotent: false },
+  insert_before_symbol: { title: "Insert before symbol", write: true, destructive: false, idempotent: false },
+  write_memory: { title: "Write memory", write: true, destructive: false, idempotent: true },
+  read_memory: { title: "Read memory" },
+  list_memories: { title: "List memories" },
+  delete_memory: { title: "Delete memory", write: true, destructive: true, idempotent: true },
+  dead_code: { title: "Dead-code candidates" },
+  complexity: { title: "Complexity" },
+  mermaid: { title: "Mermaid module diagram" },
+  grep: { title: "Grep file contents" },
+  search: { title: "Lexical search", openWorld: true },
+  embed_status: { title: "Embedding tier status", openWorld: true },
+  check_rules: { title: "Check architecture rules" },
+};
+
+function annotationsFor(name: string): Record<string, boolean> | undefined {
+  const meta = TOOL_META[name];
+  if (!meta) return undefined;
+  return {
+    readOnlyHint: !meta.write,
+    ...(meta.write ? { destructiveHint: meta.destructive === true, idempotentHint: meta.idempotent === true } : {}),
+    openWorldHint: meta.openWorld === true,
+  };
+}
+
+// The advertised tool list, for one negotiated protocol version.
+//
+// Without a server-level repo pin and on 2024-11-05 this is TOOLS verbatim —
+// byte-compat for every existing consumer. A pin drops `repo` from each
+// `required` set and documents the default, so a client that omits it is
+// spec-correct rather than relying on the server being lenient. Newer protocol
+// revisions additionally get `title` and `annotations`.
+function toolsFor(defaultRepo?: string, protocolVersion: string = PROTOCOL_VERSIONS[0]): readonly unknown[] {
+  const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
+  const withTitle = protocolVersion >= RICH_TOOLS_SINCE;
+  if (!defaultRepo && !withAnnotations && !withTitle) return TOOLS;
   return TOOLS.map((t) => ({
     ...t,
-    inputSchema: {
-      ...t.inputSchema,
-      properties: {
-        ...t.inputSchema.properties,
-        repo: { type: "string", description: `Absolute path to the repository root (optional — defaults to ${defaultRepo})` },
-      },
-      required: (t.inputSchema.required as readonly string[]).filter((r) => r !== "repo"),
-    },
+    ...(withTitle && TOOL_META[t.name] ? { title: TOOL_META[t.name]!.title } : {}),
+    ...(withAnnotations ? { annotations: annotationsFor(t.name) } : {}),
+    inputSchema: !defaultRepo
+      ? t.inputSchema
+      : {
+          ...t.inputSchema,
+          properties: {
+            ...t.inputSchema.properties,
+            repo: {
+              type: "string",
+              description: `Absolute path to the repository root (optional — defaults to ${defaultRepo})`,
+            },
+          },
+          required: (t.inputSchema.required as readonly string[]).filter((r) => r !== "repo"),
+        },
   }));
 }
 
@@ -980,6 +1115,28 @@ export function capResponse(text: string, tool: string, repo: string, maxBytes: 
   );
 }
 
+// When capResponse withheld a payload AND the artifact is on disk, hand the
+// client a resource_link to it. Returns undefined for every normal response —
+// this only ever adds a second content block to a capped one.
+export function resourceLinkFor(text: string, tool: string): Record<string, unknown> | undefined {
+  const artifactName = ARTIFACT_FOR[tool];
+  if (!artifactName) return undefined;
+  let parsed: { truncated?: boolean; artifact?: string };
+  try {
+    parsed = JSON.parse(text) as typeof parsed;
+  } catch {
+    return undefined; // a normal (non-JSON, or non-capped) response
+  }
+  if (parsed.truncated !== true || typeof parsed.artifact !== "string") return undefined;
+  return {
+    type: "resource_link",
+    uri: pathToFileURL(parsed.artifact).href,
+    name: artifactName,
+    description: `The full ${tool} result this call was too large to inline.`,
+    mimeType: "application/json",
+  };
+}
+
 export interface McpServerOptions {
   // Override the serverInfo announced in the initialize response — for
   // downstream consumers embedding this server under their own identity.
@@ -1000,8 +1157,13 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     name: opts.serverInfo?.name ?? "codeindex",
     version: opts.serverInfo?.version ?? ENGINE_VERSION,
   };
-  // Derived ONCE: the pin cannot change mid-session, so neither can the list.
-  const tools = toolsFor(opts.defaultRepo);
+  // The negotiated protocol version, settled by `initialize` and fixed for the
+  // session. Until a client says otherwise we assume the oldest revision, so a
+  // client that skips the handshake sees exactly the pre-negotiation server.
+  let protocolVersion: string = PROTOCOL_VERSIONS[0];
+  // Rebuilt when negotiation lands: the pin cannot change mid-session, but the
+  // fields we are allowed to advertise depend on the version.
+  let tools = toolsFor(opts.defaultRepo, protocolVersion);
   // No startup warm: each scan-needing tool warms the present-language grammars
   // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
@@ -1033,10 +1195,12 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
 
     try {
       if (req.method === "initialize") {
+        protocolVersion = negotiateProtocol(req.params?.protocolVersion);
+        tools = toolsFor(opts.defaultRepo, protocolVersion);
         send({
           id: req.id,
           result: {
-            protocolVersion: "2024-11-05",
+            protocolVersion,
             capabilities: { tools: {} },
             serverInfo,
           },
@@ -1050,10 +1214,23 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
         const name = str(params.name) ?? "";
         const args = (params.arguments ?? {}) as Record<string, unknown>;
         try {
+          const decl = (tools as { name: string; inputSchema: { properties?: Record<string, unknown> } }[]).find(
+            (t) => t.name === name,
+          );
+          const invalid = decl ? validateArgs(decl.inputSchema, args) : undefined;
+          if (invalid) throw new Error(invalid);
           const raw = await callTool(name, args, opts.defaultRepo);
           const repo = str(args.repo) ?? opts.defaultRepo ?? "";
           const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-          send({ id: req.id, result: { content: [{ type: "text", text }] } });
+          // A capped whole-repo response points at an artifact already on disk.
+          // From 2025-06-18 the protocol has a content type that says exactly
+          // that, so the client can fetch the bytes instead of re-asking.
+          const link =
+            protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+          send({
+            id: req.id,
+            result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] },
+          });
         } catch (e) {
           send({
             id: req.id,

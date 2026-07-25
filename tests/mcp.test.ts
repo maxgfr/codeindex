@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -6,7 +6,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { capResponse, getArtifacts, getScan, memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint, toCacheMap } from "../src/mcp.js";
+import {
+  capResponse,
+  getArtifacts,
+  getScan,
+  memoizedEmbeddingIndex,
+  memoizedEmbedModel,
+  negotiateProtocol,
+  scanFingerprint,
+  toCacheMap,
+  validateArgs,
+} from "../src/mcp.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -1114,5 +1124,118 @@ describe("capResponse — a guard, not a default page size", () => {
     const parsed = JSON.parse(capResponse("x".repeat(5000), "callers", repo, 1000));
     expect(parsed.narrower).toMatch(/name/);
     expect(parsed.artifactNote).toBeUndefined();
+  });
+});
+
+// The server announced "2024-11-05" hard-coded and never read what the client
+// asked for — three revisions behind. Negotiation is what makes moving forward
+// non-breaking: an old client keeps receiving exactly the bytes it did before,
+// and newer fields are opt-in by asking for a newer revision.
+describe("protocol negotiation", () => {
+  it("echoes a version it speaks", () => {
+    for (const v of ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]) {
+      expect(negotiateProtocol(v)).toBe(v);
+    }
+  });
+
+  it("falls back to the newest it speaks for anything else", () => {
+    for (const v of ["1999-01-01", "9999-12-31", "", 42, null, undefined]) {
+      expect(negotiateProtocol(v)).toBe("2025-11-25");
+    }
+  });
+});
+
+describe("tool metadata is gated on the negotiated version", () => {
+  const listAt = (version: string): Record<string, unknown>[] => {
+    const proc = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url)), "mcp"],
+      {
+        input:
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: { protocolVersion: version, capabilities: {}, clientInfo: { name: "t", version: "1" } },
+          }) +
+          "\n" +
+          JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) +
+          "\n",
+        encoding: "utf8",
+      },
+    );
+    const lines = proc.stdout.trim().split("\n").map((l) => JSON.parse(l));
+    return lines.find((m) => m.id === 2).result.tools;
+  };
+
+  it("a 2024-11-05 client sees neither title nor annotations", () => {
+    for (const t of listAt("2024-11-05")) {
+      expect(t.title, String(t.name)).toBeUndefined();
+      expect(t.annotations, String(t.name)).toBeUndefined();
+    }
+  });
+
+  it("annotations appear from 2025-03-26, titles only from 2025-06-18", () => {
+    const mid = listAt("2025-03-26").find((t) => t.name === "scan_summary")!;
+    expect(mid.annotations).toBeDefined();
+    expect(mid.title).toBeUndefined();
+    const late = listAt("2025-06-18").find((t) => t.name === "scan_summary")!;
+    expect(late.annotations).toBeDefined();
+    expect(late.title).toBe("Scan summary");
+  });
+
+  it("marks reads read-only and writes not — the hint hosts gate approval on", () => {
+    const tools = listAt("2025-11-25");
+    const byName = new Map(tools.map((t) => [t.name as string, t.annotations as Record<string, boolean>]));
+    const writes = [
+      "replace_symbol_body",
+      "insert_after_symbol",
+      "insert_before_symbol",
+      "write_memory",
+      "delete_memory",
+    ];
+    for (const [name, ann] of byName) {
+      expect(ann.readOnlyHint, name).toBe(!writes.includes(name));
+    }
+    expect(byName.get("replace_symbol_body")!.destructiveHint).toBe(true);
+    expect(byName.get("insert_after_symbol")!.destructiveHint).toBe(false);
+    // Only the tools that can reach a configured embedding endpoint leave the box.
+    expect(byName.get("search")!.openWorldHint).toBe(true);
+    expect(byName.get("graph")!.openWorldHint).toBe(false);
+  });
+});
+
+// Arguments were never validated: str() returned undefined for a non-string, so
+// a number where a path belonged read as "missing", and every boolean was
+// `=== true`, so "false" and 1 alike read as false. The caller saw its option
+// ignored with no way to tell why.
+describe("validateArgs", () => {
+  const schema = {
+    properties: {
+      repo: { type: "string" },
+      limit: { type: "number" },
+      substring: { type: "boolean" },
+      include: { type: "array", items: { type: "string" } },
+    },
+  };
+
+  it("accepts well-typed arguments", () => {
+    expect(validateArgs(schema, { repo: "/x", limit: 5, substring: true, include: ["a"] })).toBeUndefined();
+  });
+
+  it("accepts a numeric string, which the readers coerce anyway", () => {
+    expect(validateArgs(schema, { limit: "50" })).toBeUndefined();
+  });
+
+  it("names the offending argument and what it got", () => {
+    expect(validateArgs(schema, { limit: "banana" })).toMatch(/`limit` must be a number/);
+    expect(validateArgs(schema, { substring: "yes" })).toMatch(/`substring` must be a boolean, got string/);
+    expect(validateArgs(schema, { include: "a" })).toMatch(/`include` must be an array of strings, got string/);
+    expect(validateArgs(schema, { include: [1, 2] })).toMatch(/`include` must be an array of strings/);
+    expect(validateArgs(schema, { repo: 42 })).toMatch(/`repo` must be a string, got number/);
+  });
+
+  it("ignores null, undefined and undeclared extras", () => {
+    expect(validateArgs(schema, { limit: undefined, substring: null, future: "whatever" })).toBeUndefined();
   });
 });
