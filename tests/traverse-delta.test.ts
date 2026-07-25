@@ -177,6 +177,37 @@ describe("computeDelta", () => {
     expect(res.changes[0]?.hunks).toEqual([{ start: 1, end: Math.max(target.lines, 1) }]);
   });
 
+  it("does not charge dangling RISK for an import into an ignored tree", () => {
+    // A relative import into vendor/ (or dist/, build/ …) resolves to a file
+    // that exists and works, but the walker never indexed it, so the resolver
+    // reports the edge as dangling. Charging RISK_WEIGHTS.dangling for that
+    // would give any repo that vendors a dependency a permanent penalty on every
+    // change to the file importing it — which is what this repo's own consumers
+    // hit. The edge is still LISTED so the graph blind spot stays visible.
+    const target = graph.files.find((f) => f.rel === "src/util.ts")!;
+    const withVendorEdge: Graph = {
+      ...graph,
+      fileEdges: [
+        ...graph.fileEdges,
+        { from: target.rel, to: "./vendor/engine.mjs", kind: "import", weight: 1, dangling: true, reason: "missing-module" } as Edge,
+        { from: target.rel, to: "./genuinely-gone", kind: "import", weight: 1, dangling: true, reason: "missing-module" } as Edge,
+      ],
+    };
+    const res = computeDelta(withVendorEdge, symbols, {
+      files: [{ path: target.rel, status: "modified" }],
+      hunks: new Map([[target.rel, [{ start: 1, end: 3 }]]]),
+      base,
+    });
+    // Both are reported...
+    expect(res.dangling.map((d) => d.spec).sort()).toEqual(["./genuinely-gone", "./vendor/engine.mjs"]);
+    // ...but only the genuinely-broken one is named as a reason.
+    const mod = res.modules.find((m) => m.slug === "src")!;
+    const danglingReasons = mod.reasons.filter((r) => r.startsWith("dangling import"));
+    expect(danglingReasons).toHaveLength(1);
+    expect(danglingReasons[0]).toContain("./genuinely-gone");
+    expect(danglingReasons[0]).not.toContain("vendor");
+  });
+
   it("keeps the weight table pinned — a silent reweight changes every review", () => {
     expect(RISK_WEIGHTS).toEqual({
       exportedChange: 25,

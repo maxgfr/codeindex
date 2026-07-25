@@ -9,6 +9,7 @@ import type { Graph, ModuleNode, SymbolIndex } from "./types.js";
 import type { DiffFile, DiffSpec, Hunk } from "./git.js";
 import { isGitWorktree, resolveBaseRef, diffFiles, diffHunks, untrackedFiles } from "./git.js";
 import { byStr } from "./sort.js";
+import { IGNORE_DIRS } from "./walk.js";
 import { have, sh } from "./util.js";
 import { impactOf } from "./traverse.js";
 
@@ -208,6 +209,24 @@ export function computeDelta(
     .map((e) => ({ from: e.from, spec: e.to, reason: e.reason ?? "unknown" }))
     .sort((a, b) => byStr(a.from, b.from) || byStr(a.spec, b.spec));
 
+  // A relative import whose target lands in a directory the walker ignores
+  // (vendor/, dist/, build/ …) is reported as dangling because the resolver only
+  // looks inside the scan — but the file is there and the import works. It is a
+  // blind spot in the graph, not a broken reference, so it must NOT carry the
+  // dangling RISK weight: a repo that vendors a dependency would otherwise take
+  // a permanent penalty on every change to the file that imports it. Still
+  // listed above, so the blind spot stays visible.
+  const intoIgnoredTree = (from: string, spec: string): boolean => {
+    if (!spec.startsWith(".")) return false;
+    const segs = from.split("/").slice(0, -1);
+    for (const part of spec.split("/")) {
+      if (part === "." || part === "") continue;
+      if (part === "..") segs.pop();
+      else segs.push(part);
+    }
+    return segs.some((seg) => IGNORE_DIRS.has(seg));
+  };
+
   // Group by module and score.
   const byModule = new Map<string, DeltaChange[]>();
   for (const c of changes) {
@@ -296,7 +315,9 @@ export function computeDelta(
     }
 
     // 6. Dangling imports from this module's changed files.
-    const moduleDangling = dangling.filter((d) => moduleChanges.some((c) => c.path === d.from));
+    const moduleDangling = dangling.filter(
+      (d) => moduleChanges.some((c) => c.path === d.from) && !intoIgnoredTree(d.from, d.spec),
+    );
     if (moduleDangling.length) {
       score += RISK_WEIGHTS.dangling;
       const first = moduleDangling[0]!;

@@ -12539,6 +12539,7 @@ function neighborsOf(graph, target, depth = 1, kinds) {
 // src/delta.ts
 init_git();
 init_sort();
+init_walk();
 init_util();
 var RISK_WEIGHTS = {
   exportedChange: 25,
@@ -12648,6 +12649,16 @@ function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
   }
   const changedRels = new Set(changes.filter((c2) => c2.status !== "deleted").map((c2) => c2.path));
   const dangling = graph.fileEdges.filter((e) => e.dangling && (e.kind === "import" || e.kind === "doc-link") && changedRels.has(e.from)).map((e) => ({ from: e.from, spec: e.to, reason: e.reason ?? "unknown" })).sort((a, b) => byStr(a.from, b.from) || byStr(a.spec, b.spec));
+  const intoIgnoredTree = (from, spec) => {
+    if (!spec.startsWith(".")) return false;
+    const segs = from.split("/").slice(0, -1);
+    for (const part of spec.split("/")) {
+      if (part === "." || part === "") continue;
+      if (part === "..") segs.pop();
+      else segs.push(part);
+    }
+    return segs.some((seg) => IGNORE_DIRS.has(seg));
+  };
   const byModule = /* @__PURE__ */ new Map();
   for (const c2 of changes) {
     if (c2.status === "deleted" || !c2.module) continue;
@@ -12717,7 +12728,9 @@ function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
       score += RISK_WEIGHTS.surprise;
       reasons.push(`cross-community edge to ${sup.from === slug ? sup.to : sup.from} (surprising)`);
     }
-    const moduleDangling = dangling.filter((d) => moduleChanges.some((c2) => c2.path === d.from));
+    const moduleDangling = dangling.filter(
+      (d) => moduleChanges.some((c2) => c2.path === d.from) && !intoIgnoredTree(d.from, d.spec)
+    );
     if (moduleDangling.length) {
       score += RISK_WEIGHTS.dangling;
       const first = moduleDangling[0];
