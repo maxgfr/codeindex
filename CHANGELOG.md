@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.20.0](https://github.com/maxgfr/codeindex/compare/v2.19.1...v2.20.0) (2026-07-25)
+
+
+### Features
+
+* **walk:** stop capping at 20,000 files by default ([199bb48](https://github.com/maxgfr/codeindex/commit/199bb483ff1801742f19f54b91d0d4a078963ca2))
+
 ## [2.19.1](https://github.com/maxgfr/codeindex/compare/v2.19.0...v2.19.1) (2026-07-25)
 
 
