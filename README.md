@@ -299,12 +299,18 @@ Measured against universal-ctags, Serena (LSP over MCP) and Graphify with a
 reproducible harness (`scripts/bench/`); full methodology, fairness notes and
 all scenarios in [BENCHMARKS.md](./BENCHMARKS.md).
 
+Cold-index speed is not where this engine wins, and the table says so: a flat
+`tags` file is a smaller job and ctags finishes it first at every size. What a
+cold build buys is in the rows under it.
+
 | Metric | codeindex | Context |
 | --- | --- | --- |
-| `socialgouv/code-du-travail-numerique` — cold index | 1,746 ms | vs ctags 371 ms, 01x init 13,409 ms |
-| `socialgouv/code-du-travail-numerique` — warm rerun | 339 ms | |
-| `vercel/next.js` — cold index | 9,398 ms | vs ctags 3,431 ms |
-| `socialgouv/code-du-travail-numerique` — token ratio (measured) | 32.9× | structured index vs raw grep, single-symbol lookup |
+| `socialgouv/code-du-travail-numerique` (2,823 files) — cold index | 631 ms | vs ctags 330 ms, serena 7,695 ms, graphify 10,478 ms |
+| `vercel/next.js` (27,952 files) — cold index | 4,917 ms | vs ctags 3,357 ms; serena/graphify n/a — intractable at bench time |
+| `vercel/next.js` — warm rerun / one file touched | 1,234 ms / 2,489 ms | no competitor exposes an incremental reindex at all |
+| Byte-identical rebuilds | 7 / 7 repos | graphify's `graph.json` differed on all 6 it could be measured on; serena keeps no artifact |
+| Install footprint | 23.5 MB, zero runtime deps | serena 114.3 MB (+ language servers), graphify 140.1 MB |
+| `vercel/next.js` — token ratio (measured) | 390.3× | structured index vs raw grep, single-symbol lookup |
 
 ## Development
 

@@ -288,7 +288,7 @@ function scenarioCold(ctxs, comp, cfg) {
   }
   return {
     id: "cold", title: "Cold index",
-    note: "Full process spawn per run into a fresh output dir. ctags emits a flat `tags` file with `-R` and wins the small cold builds outright — at that size codeindex is mostly paying Node startup plus its wasm grammar load, with too little work to spread across cores. The ranking flips as the repo grows: on the largest one here (vercel/next.js, ~20k indexed files) codeindex finishes ahead, because extraction is distributed over worker threads (`--workers`, default cores-1 capped at 8) while a ctags pass is not. Both remain different jobs — ctags emits no call graph, no references and no MCP-servable structure. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally). Both are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags) are kept and measured there.",
+    note: "Full process spawn per run into a fresh output dir. This row measures how fast each tool FINISHES, not how much of the repo it can then answer for — read it alongside the tables below, which are the axes that time is spent on. ctags emits a flat `tags` file with `-R` and wins here on every repo measured, by an order of magnitude on the small ones, where codeindex is mostly paying Node startup plus its wasm grammar load with too little work to spread across cores. It wins on the largest one too (vercel/next.js): earlier sessions showed codeindex ahead there, but that number was bought with missing data — `walk()` still capped at 20,000 files by default, so codeindex was timed on 20,000 of that repo's 27,952 files while ctags read the whole tree, and the other 7,952 were in no lookup, no edge and no search result. With the cap removed (v2.20.0) both index the same tree, ctags is faster, and our answers cover the repo. Extraction is still distributed over worker threads (`--workers`, default cores-1 capped at 8), which is what keeps the whole-tree build in single-digit seconds. Both remain different jobs — ctags emits no call graph, no references and no MCP-servable structure. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally). Both are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags) are kept and measured there.",
     headers: ["Repo", "Files", "codeindex (ms)", "ctags -R (ms)", "serena project index (ms)", "graphify update (ms)"],
     rows,
   };
@@ -569,11 +569,19 @@ function scenarioSize(ctxs, comp, _cfg) {
   };
 }
 
+// SGR escapes around a path we are about to join(). uv colours `tool dir` when
+// FORCE_COLOR is set in the environment (a common shell default) even though
+// its stdout is a pipe, and the coloured string builds a path that exists
+// nowhere — which turned both competitor install cells into
+// `n/a (uv tool dir not found)` on a machine where both tools were installed.
+const stripAnsi = (s) => s.replace(/\u001b\[[0-9;]*m/g, "");
+
 // Resolve one uv-managed tool's install dir: `uv tool dir` when uv is
 // reachable, else the documented default location. Undefined when absent.
 function uvToolDir(name) {
   const r = runCmd("uv", ["tool", "dir"]);
-  const base = r.ok && r.stdout.trim() ? r.stdout.trim() : join(homedir(), ".local", "share", "uv", "tools");
+  const reported = r.ok ? stripAnsi(r.stdout).trim() : "";
+  const base = reported || join(homedir(), ".local", "share", "uv", "tools");
   const d = join(base, name);
   return existsSync(d) ? d : undefined;
 }

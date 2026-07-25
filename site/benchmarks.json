@@ -1,17 +1,17 @@
 {
-  "generatedAt": "2026-07-25T10:36:55.397Z",
+  "generatedAt": "2026-07-25T20:39:28.778Z",
   "environment": {
     "node": "v24.15.0",
     "cpu": "Apple M5",
     "ram": "16.0 GB",
-    "date": "2026-07-25T10:36:55.397Z"
+    "date": "2026-07-25T20:39:28.778Z"
   },
   "nominalRuns": 5,
   "sections": [
     {
       "id": "cold",
       "title": "Cold index",
-      "note": "Full process spawn per run into a fresh output dir. ctags emits a flat `tags` file with `-R` and, on small cold builds, is faster than codeindex's richer graph+symbol artifacts — an honest win for the simpler data model. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally). Both are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags) are kept and measured there.",
+      "note": "Full process spawn per run into a fresh output dir. This row measures how fast each tool FINISHES, not how much of the repo it can then answer for — read it alongside the tables below, which are the axes that time is spent on. ctags emits a flat `tags` file with `-R` and wins here on every repo measured, by an order of magnitude on the small ones, where codeindex is mostly paying Node startup plus its wasm grammar load with too little work to spread across cores. It wins on the largest one too (vercel/next.js): earlier sessions showed codeindex ahead there, but that number was bought with missing data — `walk()` still capped at 20,000 files by default, so codeindex was timed on 20,000 of that repo's 27,952 files while ctags read the whole tree, and the other 7,952 were in no lookup, no edge and no search result. With the cap removed (v2.20.0) both index the same tree, ctags is faster, and our answers cover the repo. Extraction is still distributed over worker threads (`--workers`, default cores-1 capped at 8), which is what keeps the whole-tree build in single-digit seconds. Both remain different jobs — ctags emits no call graph, no references and no MCP-servable structure. serena `project index` builds its document-symbol cache (its one-time per-language language-server download is absorbed by the untimed warmup, never a measured run); `graphify update` parses the repo into graph.json (keyless, clustering computed locally). Both are cleaned between runs and are the load-side counterpart of the near-instant `activate->ready` cells in the MCP sessions table. serena and graphify are marked n/a on repos above ~8k files (here: vercel/next.js, ~30k): a full LSP / Python-graph index of a monorepo that size is a multi-minute, multi-GB job that measures indexer memory limits rather than retrieval — the streaming indexers (codeindex, ctags) are kept and measured there.",
       "headers": [
         "Repo",
         "Files",
@@ -33,26 +33,26 @@
             "kind": "int"
           },
           {
-            "display": "358",
-            "value": 358.4169999999999,
+            "display": "274",
+            "value": 273.5425839999998,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "32",
-            "value": 31.98787500000026,
+            "display": "33",
+            "value": 33.01879199999985,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "2192",
-            "value": 2192.37075,
+            "display": "2218",
+            "value": 2217.9582500000015,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1759",
-            "value": 1759.0835000000006,
+            "display": "1780",
+            "value": 1780.0559999999969,
             "kind": "ms",
             "runs": 5
           }
@@ -69,26 +69,26 @@
             "kind": "int"
           },
           {
-            "display": "187",
-            "value": 186.7308750000011,
+            "display": "192",
+            "value": 191.5537919999988,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "20",
-            "value": 20.34570800000074,
+            "display": "21",
+            "value": 20.885708000001614,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "2352",
-            "value": 2352.0434999999998,
+            "display": "2370",
+            "value": 2370.3654160000006,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "884",
-            "value": 883.7731660000063,
+            "display": "865",
+            "value": 865.2750830000004,
             "kind": "ms",
             "runs": 5
           }
@@ -105,26 +105,26 @@
             "kind": "int"
           },
           {
-            "display": "131",
-            "value": 130.8227079999997,
+            "display": "130",
+            "value": 130.12437499999942,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "21",
-            "value": 20.82158299999719,
+            "display": "22",
+            "value": 21.800083000001905,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "878",
-            "value": 878.3116670000018,
+            "display": "854",
+            "value": 854.4835000000021,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "803",
-            "value": 802.9227920000048,
+            "display": "785",
+            "value": 785.1432089999944,
             "kind": "ms",
             "runs": 5
           }
@@ -141,26 +141,26 @@
             "kind": "int"
           },
           {
-            "display": "238",
-            "value": 238.44358300000022,
+            "display": "234",
+            "value": 233.72095799999806,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "28",
-            "value": 27.90341699999408,
+            "value": 27.767667000000074,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1118",
-            "value": 1117.518750000003,
+            "display": "1158",
+            "value": 1158.268833000002,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1001",
-            "value": 1001.2045829999988,
+            "display": "1007",
+            "value": 1006.557667000001,
             "kind": "ms",
             "runs": 5
           }
@@ -177,26 +177,26 @@
             "kind": "int"
           },
           {
-            "display": "640",
-            "value": 640.3809590000019,
+            "display": "631",
+            "value": 631.4868750000023,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "335",
-            "value": 334.8570000000036,
+            "display": "330",
+            "value": 329.79187499999534,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "7595",
-            "value": 7595.349792000008,
+            "display": "7695",
+            "value": 7694.5438749999885,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10215",
-            "value": 10214.67287499999,
+            "display": "10478",
+            "value": 10477.676458000002,
             "kind": "ms",
             "runs": 5
           }
@@ -213,26 +213,26 @@
             "kind": "int"
           },
           {
-            "display": "129",
-            "value": 128.8682909999916,
+            "display": "127",
+            "value": 127.35270799999125,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "26",
-            "value": 25.818292000010842,
+            "value": 25.829834000003757,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "939",
-            "value": 939.1759159999783,
+            "display": "952",
+            "value": 952.0628339999821,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "600",
-            "value": 600.3706660000025,
+            "display": "598",
+            "value": 598.3627919999999,
             "kind": "ms",
             "runs": 5
           }
@@ -244,19 +244,19 @@
             "kind": "text"
           },
           {
-            "display": "20000",
-            "value": 20000,
+            "display": "27952",
+            "value": 27952,
             "kind": "int"
           },
           {
-            "display": "2843",
-            "value": 2843.4187920000113,
+            "display": "4917",
+            "value": 4917.091083000007,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "3320",
-            "value": 3320.0392909999937,
+            "display": "3357",
+            "value": 3356.6805830000085,
             "kind": "ms",
             "runs": 5
           },
@@ -289,13 +289,13 @@
           },
           {
             "display": "53",
-            "value": 52.7512080000015,
+            "value": 52.7432919999992,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "105",
-            "value": 104.94566700002179,
+            "value": 105.14208399999188,
             "kind": "ms",
             "runs": 5
           }
@@ -308,13 +308,13 @@
           },
           {
             "display": "46",
-            "value": 46.19050000002608,
+            "value": 45.89041600000928,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "91",
-            "value": 91.02174999998533,
+            "value": 90.73750000001746,
             "kind": "ms",
             "runs": 5
           }
@@ -326,14 +326,14 @@
             "kind": "text"
           },
           {
-            "display": "52",
-            "value": 51.73908300002222,
+            "display": "50",
+            "value": 49.98099999999977,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "91",
-            "value": 90.86454199999571,
+            "display": "90",
+            "value": 89.7695829999866,
             "kind": "ms",
             "runs": 5
           }
@@ -346,13 +346,13 @@
           },
           {
             "display": "51",
-            "value": 50.777415999997174,
+            "value": 50.778707999998005,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "114",
-            "value": 113.81804199999897,
+            "display": "113",
+            "value": 112.54595800000243,
             "kind": "ms",
             "runs": 5
           }
@@ -365,13 +365,13 @@
           },
           {
             "display": "140",
-            "value": 139.86491600002046,
+            "value": 139.96562500001164,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "342",
-            "value": 341.7454170000274,
+            "display": "343",
+            "value": 342.5149589999928,
             "kind": "ms",
             "runs": 5
           }
@@ -383,14 +383,14 @@
             "kind": "text"
           },
           {
-            "display": "48",
-            "value": 47.90562500001397,
+            "display": "47",
+            "value": 46.96775000001071,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "87",
-            "value": 87.48470799997449,
+            "value": 87.03520899999421,
             "kind": "ms",
             "runs": 5
           }
@@ -402,14 +402,14 @@
             "kind": "text"
           },
           {
-            "display": "918",
-            "value": 917.8214579999913,
+            "display": "1234",
+            "value": 1234.3394170000101,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1783",
-            "value": 1783.4811660000123,
+            "display": "2489",
+            "value": 2489.162250000052,
             "kind": "ms",
             "runs": 5
           }
@@ -443,31 +443,31 @@
           },
           {
             "display": "0",
-            "value": 0.08866700000362471,
+            "value": 0.08345900004496798,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "424",
-            "value": 423.5097079999978,
+            "display": "411",
+            "value": 410.6755000000121,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.08554200001526624,
+            "value": 0.08295899996301159,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "5",
-            "value": 5.211916999949608,
+            "value": 4.8439999999827705,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.2677499999990687,
+            "value": 0.257458999985829,
             "kind": "ms",
             "runs": 5
           }
@@ -485,31 +485,31 @@
           },
           {
             "display": "0",
-            "value": 0.04466700000921264,
+            "value": 0.044374999997671694,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "214",
-            "value": 214.2251249999972,
+            "display": "212",
+            "value": 212.32654099998763,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.051042000006418675,
+            "value": 0.04649999999674037,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 2.3417500000214204,
+            "value": 2.1493749999790452,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.39374999998835847,
+            "value": 0.3871250000083819,
             "kind": "ms",
             "runs": 5
           }
@@ -527,31 +527,31 @@
           },
           {
             "display": "0",
-            "value": 0.004374999960418791,
+            "value": 0.004040999978315085,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "90",
-            "value": 89.62041600001976,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.02029199997195974,
+            "display": "87",
+            "value": 86.86566700000549,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.07858299999497831,
+            "value": 0.02016599994385615,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.2969170000287704,
+            "value": 0.08595800003968179,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.2867079999996349,
             "kind": "ms",
             "runs": 5
           }
@@ -569,31 +569,31 @@
           },
           {
             "display": "0",
-            "value": 0.02145800000289455,
+            "value": 0.022541999991517514,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "268",
-            "value": 267.7945840000175,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.07149999996181577,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 1.4727500000153668,
+            "display": "247",
+            "value": 246.5801250000368,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.12845900002866983,
+            "value": 0.07116699998732656,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.5416250000125729,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.12729099998250604,
             "kind": "ms",
             "runs": 5
           }
@@ -611,31 +611,31 @@
           },
           {
             "display": "0",
-            "value": 0.10533300001407042,
+            "value": 0.11158299999078736,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1291",
-            "value": 1290.7970000000205,
+            "display": "1201",
+            "value": 1201.4691250000033,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.1822499999543652,
+            "value": 0.14554200001293793,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "5",
+            "value": 4.736041999945883,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "6",
-            "value": 6.075124999973923,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "6",
-            "value": 6.19258400000399,
+            "value": 5.86099999997532,
             "kind": "ms",
             "runs": 5
           }
@@ -653,31 +653,31 @@
           },
           {
             "display": "0",
-            "value": 0.0032079999800771475,
+            "value": 0.003459000028669834,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "96",
-            "value": 95.56287500000326,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.006040999956894666,
+            "display": "90",
+            "value": 89.60912499995902,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04195899999467656,
+            "value": 0.005958000023383647,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04325000004610047,
+            "value": 0.04129200003808364,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.039791999966837466,
             "kind": "ms",
             "runs": 5
           }
@@ -695,31 +695,31 @@
           },
           {
             "display": "1",
-            "value": 0.8163749999948777,
+            "value": 1.173791999986861,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "6566",
-            "value": 6565.95304199995,
+            "display": "12061",
+            "value": 12060.681125000003,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "2",
-            "value": 2.193250000011176,
+            "display": "4",
+            "value": 4.1665419999626465,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "344",
-            "value": 344.45100000000093,
+            "display": "468",
+            "value": 467.5020829999703,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "111",
-            "value": 111.12445800000569,
+            "display": "104",
+            "value": 104.32554200000595,
             "kind": "ms",
             "runs": 5
           }
@@ -757,26 +757,26 @@
             "kind": "text"
           },
           {
-            "display": "62",
-            "value": 62.1,
+            "display": "53",
+            "value": 53.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "17",
-            "value": 16.6,
+            "display": "10",
+            "value": 10.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "13",
-            "value": 13.1,
+            "display": "10",
+            "value": 10.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "15",
-            "value": 15.3,
+            "display": "10",
+            "value": 9.8,
             "kind": "ms",
             "runs": 5
           }
@@ -798,20 +798,20 @@
             "kind": "text"
           },
           {
-            "display": "2795",
-            "value": 2794.7,
+            "display": "2246",
+            "value": 2245.8,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "134",
-            "value": 134.3,
+            "display": "144",
+            "value": 144.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "264",
-            "value": 264,
+            "display": "257",
+            "value": 257.3,
             "kind": "ms",
             "runs": 5
           },
@@ -839,14 +839,14 @@
             "kind": "text"
           },
           {
-            "display": "287",
-            "value": 287,
+            "display": "256",
+            "value": 256,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 1.1,
+            "value": 1,
             "kind": "ms",
             "runs": 5
           },
@@ -878,26 +878,26 @@
             "kind": "text"
           },
           {
-            "display": "52",
-            "value": 52.4,
+            "display": "46",
+            "value": 46,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10",
-            "value": 9.5,
+            "display": "8",
+            "value": 8.3,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10",
-            "value": 9.7,
+            "display": "8",
+            "value": 8.3,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "9",
-            "value": 9.3,
+            "display": "8",
+            "value": 8,
             "kind": "ms",
             "runs": 5
           }
@@ -919,147 +919,147 @@
             "kind": "text"
           },
           {
-            "display": "720",
-            "value": 719.9,
+            "display": "614",
+            "value": 614.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "131",
-            "value": 131.1,
+            "display": "133",
+            "value": 133,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "407",
-            "value": 407.4,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "103",
-            "value": 102.5,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "gin-gonic/gin",
-            "value": "gin-gonic/gin",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "New",
-            "value": "New",
-            "kind": "text"
-          },
-          {
-            "display": "244",
-            "value": 244.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 1.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "51",
-            "value": 50.9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "12",
-            "value": 12,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "12",
-            "value": 12.4,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "11",
-            "value": 11.1,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "665",
-            "value": 664.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "131",
-            "value": 131.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "114",
-            "value": 113.6,
+            "display": "368",
+            "value": 367.9,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "105",
-            "value": 104.5,
+            "value": 105.1,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "gin-gonic/gin",
+            "value": "gin-gonic/gin",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "New",
+            "value": "New",
+            "kind": "text"
+          },
+          {
+            "display": "215",
+            "value": 215.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "50",
+            "value": 50.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11",
+            "value": 11.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "10",
+            "value": 10.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "10",
+            "value": 10.3,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "615",
+            "value": 615,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "140",
+            "value": 139.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "131",
+            "value": 131,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "106",
+            "value": 105.9,
             "kind": "ms",
             "runs": 5
           }
@@ -1081,20 +1081,20 @@
             "kind": "text"
           },
           {
-            "display": "239",
-            "value": 238.9,
+            "display": "216",
+            "value": 215.7,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 0.9,
+            "value": 0.8,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 0.9,
+            "value": 0.8,
             "kind": "ms",
             "runs": 5
           },
@@ -1120,26 +1120,26 @@
             "kind": "text"
           },
           {
-            "display": "54",
-            "value": 53.8,
+            "display": "51",
+            "value": 50.7,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "12",
-            "value": 12.2,
+            "value": 11.5,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 12.3,
+            "display": "11",
+            "value": 10.8,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 12,
+            "display": "10",
+            "value": 10.1,
             "kind": "ms",
             "runs": 5
           }
@@ -1161,26 +1161,26 @@
             "kind": "text"
           },
           {
-            "display": "804",
-            "value": 804.1,
+            "display": "745",
+            "value": 745.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "127",
-            "value": 127.4,
+            "display": "143",
+            "value": 142.5,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "137",
-            "value": 137.2,
+            "display": "148",
+            "value": 148.3,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "106",
-            "value": 105.8,
+            "display": "108",
+            "value": 107.8,
             "kind": "ms",
             "runs": 5
           }
@@ -1202,8 +1202,8 @@
             "kind": "text"
           },
           {
-            "display": "239",
-            "value": 239.3,
+            "display": "213",
+            "value": 213.1,
             "kind": "ms",
             "runs": 5
           },
@@ -1215,7 +1215,7 @@
           },
           {
             "display": "5",
-            "value": 5,
+            "value": 4.6,
             "kind": "ms",
             "runs": 5
           },
@@ -1241,26 +1241,26 @@
             "kind": "text"
           },
           {
-            "display": "153",
-            "value": 153,
+            "display": "145",
+            "value": 145,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "75",
-            "value": 75.4,
+            "display": "71",
+            "value": 71,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "75",
-            "value": 74.6,
+            "display": "69",
+            "value": 69.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "72",
-            "value": 72.3,
+            "display": "69",
+            "value": 68.9,
             "kind": "ms",
             "runs": 5
           }
@@ -1282,155 +1282,34 @@
             "kind": "text"
           },
           {
-            "display": "1744",
-            "value": 1743.9,
+            "display": "1573",
+            "value": 1573.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "744",
-            "value": 743.7,
+            "display": "623",
+            "value": 622.9,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "272",
-            "value": 272.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "104",
-            "value": 104.2,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "socialgouv/code-du-travail-numerique",
-            "value": "socialgouv/code-du-travail-numerique",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "ElementBuilder",
-            "value": "ElementBuilder",
-            "kind": "text"
-          },
-          {
-            "display": "521",
-            "value": 520.6,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "2",
-            "value": 1.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.9,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "t3-oss/create-t3-turbo",
-            "value": "t3-oss/create-t3-turbo",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "Route",
-            "value": "Route",
-            "kind": "text"
-          },
-          {
-            "display": "51",
-            "value": 51.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "11",
-            "value": 11.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "12",
-            "value": 12.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "11",
-            "value": 11.2,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "t3-oss/create-t3-turbo",
-            "value": "t3-oss/create-t3-turbo",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "Route",
-            "value": "Route",
-            "kind": "text"
-          },
-          {
-            "display": "662",
-            "value": 662.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "125",
-            "value": 125.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "115",
-            "value": 114.9,
+            "display": "252",
+            "value": 252.3,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "106",
-            "value": 105.6,
+            "value": 106.3,
             "kind": "ms",
             "runs": 5
           }
         ],
         [
           {
-            "display": "t3-oss/create-t3-turbo",
-            "value": "t3-oss/create-t3-turbo",
+            "display": "socialgouv/code-du-travail-numerique",
+            "value": "socialgouv/code-du-travail-numerique",
             "kind": "text"
           },
           {
@@ -1439,19 +1318,140 @@
             "kind": "text"
           },
           {
-            "display": "Route",
-            "value": "Route",
+            "display": "ElementBuilder",
+            "value": "ElementBuilder",
             "kind": "text"
           },
           {
-            "display": "215",
-            "value": 215.1,
+            "display": "470",
+            "value": 469.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "2",
+            "value": 1.5,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
             "value": 0.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "47",
+            "value": 47.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "10",
+            "value": 9.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "9",
+            "value": 9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "9",
+            "value": 8.8,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "615",
+            "value": 614.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "139",
+            "value": 138.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "119",
+            "value": 119.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "108",
+            "value": 108.1,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "t3-oss/create-t3-turbo",
+            "value": "t3-oss/create-t3-turbo",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "Route",
+            "value": "Route",
+            "kind": "text"
+          },
+          {
+            "display": "205",
+            "value": 204.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.7,
             "kind": "ms",
             "runs": 5
           },
@@ -1483,26 +1483,26 @@
             "kind": "text"
           },
           {
-            "display": "1008",
-            "value": 1008,
+            "display": "1313",
+            "value": 1312.7,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "735",
-            "value": 735,
+            "display": "902",
+            "value": 901.5,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "726",
-            "value": 725.5,
+            "display": "904",
+            "value": 903.9,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "723",
-            "value": 723.3,
+            "display": "901",
+            "value": 900.7,
             "kind": "ms",
             "runs": 5
           }
@@ -2323,8 +2323,8 @@
             "kind": "int"
           },
           {
-            "display": "5595",
-            "value": 5595,
+            "display": "6317",
+            "value": 6317,
             "kind": "int"
           },
           {
@@ -2431,8 +2431,8 @@
             "na": "live LSP session — no artifact"
           },
           {
-            "display": "yes",
-            "value": true,
+            "display": "no",
+            "value": false,
             "kind": "bool"
           }
         ],
@@ -2577,7 +2577,7 @@
           },
           {
             "display": "5.0 MB",
-            "value": 5273968,
+            "value": 5273792,
             "kind": "bytes"
           }
         ],
@@ -2604,7 +2604,7 @@
           },
           {
             "display": "2.0 MB",
-            "value": 2110508,
+            "value": 2110478,
             "kind": "bytes"
           }
         ],
@@ -2631,7 +2631,7 @@
           },
           {
             "display": "1.2 MB",
-            "value": 1257155,
+            "value": 1257171,
             "kind": "bytes"
           }
         ],
@@ -2658,7 +2658,7 @@
           },
           {
             "display": "1.3 MB",
-            "value": 1395774,
+            "value": 1395579,
             "kind": "bytes"
           }
         ],
@@ -2685,7 +2685,7 @@
           },
           {
             "display": "13.7 MB",
-            "value": 14330534,
+            "value": 14328758,
             "kind": "bytes"
           }
         ],
@@ -2723,8 +2723,8 @@
             "kind": "text"
           },
           {
-            "display": "69.8 MB",
-            "value": 73197843,
+            "display": "100.9 MB",
+            "value": 105785547,
             "kind": "bytes"
           },
           {
@@ -2760,8 +2760,8 @@
             "kind": "text"
           },
           {
-            "display": "23.4 MB",
-            "value": 24575813,
+            "display": "23.5 MB",
+            "value": 24655093,
             "kind": "bytes"
           },
           {

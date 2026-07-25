@@ -67,17 +67,24 @@ vague "codeindex vs tool X":
   cold \`buildIndexArtifacts\`, and serialization of the *entire* symbol table —
   it is **not** a single-symbol lookup and must never be read as one. It is
   included so a one-shot CLI caller can see that cost too.
-- **ctags wins the small cold builds; the ranking flips as the repo grows.**
-  universal-ctags emits a flat \`tags\` file with \`-R\`, and on a small repo it
-  beats codeindex's richer graph+symbol artifacts by an order of magnitude —
-  at that size codeindex is mostly paying Node startup and its wasm grammar
-  load, and there is not enough work to spread across cores. On the largest
-  repo measured here (\`vercel/next.js\`, ~20k indexed files) codeindex comes
-  out ahead, because extraction is distributed over worker threads while a
-  ctags pass is not. Read the Cold index table for where the crossover falls
-  on your own repo size; either way ctags produces no call graph, no
-  references and no MCP-servable structure, so this is a comparison of two
-  different jobs, not a like-for-like race.
+- **Cold-index speed is the axis that matters least here, and it is the one a
+  flat tags file wins.** universal-ctags emits a \`tags\` file with \`-R\` and
+  finishes ahead of codeindex's graph+symbol artifacts on every repo in the
+  Cold index table — by an order of magnitude on the small ones, where
+  codeindex is mostly paying Node startup and its wasm grammar load with too
+  little work to spread across cores. That column measures how fast a tool
+  finishes, not how much of the repo it can answer for afterwards, and the two
+  are not independent. Sessions before 2026-07-25 showed codeindex *beating*
+  ctags on \`vercel/next.js\`, and that number was bought with missing data:
+  \`walk()\` still applied the 20,000-file default cap, so codeindex was timed
+  on 20,000 of that repo's 27,952 files while ctags read the whole tree. The
+  other 7,952 were absent from every symbol lookup, every edge and every
+  search result. With the cap removed (v2.20.0) both tools index the same
+  tree, ctags is faster, and codeindex's answers are about the whole repo
+  instead of a prefix of it. Read the tables after this one — references, call
+  graph, determinism, token cost — as the axes the extra time is spent on; a
+  \`tags\` file answers a strictly smaller question, so this is a comparison of
+  two different jobs, not a like-for-like race.
 
 ### MCP servers (Serena, Graphify): task equivalence
 
