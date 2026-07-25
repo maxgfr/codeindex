@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.19.0](https://github.com/maxgfr/codeindex/compare/v2.18.0...v2.19.0) (2026-07-25)
+
+
+### Features
+
+* **mcp:** declare outputSchema and emit structuredContent where it can conform ([443a699](https://github.com/maxgfr/codeindex/commit/443a69985a4fe8fcf3c85c5c0cf6b3118fa6658e))
+
 # [2.18.0](https://github.com/maxgfr/codeindex/compare/v2.17.1...v2.18.0) (2026-07-25)
 
 
