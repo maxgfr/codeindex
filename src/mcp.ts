@@ -9,17 +9,11 @@
 // (NOT `node scripts/engine.mjs mcp`: engine.mjs is a side-effect-free library
 // with no main-module guard — see src/engine.ts — so that command does nothing.
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
-import { ensureGrammars, grammarKeysForExts } from "./ast/loader.js";
-import { buildArtifactsFromScan, type IndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummary } from "./scan.js";
-import { preloadSession, toCacheMap, INDEX_DIR, type PersistedCacheEntry, type PersistedCacheMap } from "./preload.js";
-import { walk, type WalkResult } from "./walk.js";
 import { buildCallerIndex } from "./callers.js";
 import { callerIndexFor } from "./derived.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -35,11 +29,57 @@ import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, type StaticEmbedModel } from "./embed/model.js";
-import { buildEmbeddingIndex, type EmbeddingIndex } from "./embed/index.js";
+import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
+import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
-import { sha1 } from "./hash.js";
+import { walk, type WalkResult } from "./walk.js";
+import { toolsFor } from "./mcp/tools.js";
+import {
+  DEFAULT_MAX_RESPONSE_BYTES,
+  RICH_TOOLS_SINCE,
+  PROTOCOL_VERSIONS,
+  capResponse,
+  negotiateProtocol,
+  resourceLinkFor,
+  validateArgs,
+} from "./mcp/protocol.js";
+import {
+  getArtifacts,
+  getScan,
+  getScanSummary,
+  memoizedEmbeddingIndex,
+  memoizedEmbedModel,
+  scanFingerprint,
+  sessionClear,
+  warmGrammarsForWalk,
+  type SessionScanOptions,
+} from "./mcp/session.js";
+
+// The public surface of this module is unchanged: everything that used to live
+// here is re-exported, so `src/engine.ts`, the tests and any consumer importing
+// from "./mcp.js" keep working exactly as before.
+export { toolsFor, TOOLS, TOOL_META, annotationsFor } from "./mcp/tools.js";
+export {
+  DEFAULT_MAX_RESPONSE_BYTES,
+  PROTOCOL_VERSIONS,
+  capResponse,
+  negotiateProtocol,
+  resourceLinkFor,
+  validateArgs,
+} from "./mcp/protocol.js";
+export {
+  getArtifacts,
+  getScan,
+  getScanSummary,
+  memoizedEmbeddingIndex,
+  memoizedEmbedModel,
+  scanFingerprint,
+  toCacheMap,
+  warmGrammarsForRepo,
+  warmGrammarsForWalk,
+} from "./mcp/session.js";
+export type { EmbeddingIndexCacheKey, SessionScanOptions } from "./mcp/session.js";
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -47,306 +87,6 @@ interface RpcRequest {
   method: string;
   params?: Record<string, unknown>;
 }
-
-const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
-const scopeProps = {
-  scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
-  include: { type: "array", items: { type: "string" }, description: "Include globs" },
-  exclude: { type: "array", items: { type: "string" }, description: "Exclude globs" },
-};
-
-const TOOLS = [
-  {
-    name: "scan_summary",
-    description:
-      "Deterministically scan a repository: file count, per-language file histogram, HEAD commit, and whether the walk was capped. Fast first look at any codebase.",
-    inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] },
-  },
-  {
-    name: "graph",
-    description:
-      "Build the full typed cross-file link-graph (import/call/use/doc-link/mention edges, module grouping, PageRank centrality, Louvain communities, tests-map). Returns graph.json. Large on big repos — prefer scan_summary/symbols/callers for targeted questions.",
-    inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] },
-  },
-  {
-    name: "symbols",
-    description:
-      "Where is a symbol defined and which files reference it? Returns the definition sites (file, line, kind, exported) and referencing files. Omit `name` for the full symbol index.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Symbol name to look up" } },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "callers",
-    description:
-      "Who calls a function? Per-symbol caller index: each defined symbol with the exact (file, line) call sites that bind to it. Omit `name` for the full index.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...repoProp,
-        name: { type: "string", description: "Symbol name to look up" },
-        recall: {
-          type: "boolean",
-          description:
-            "Recall-oriented binding: relax the JS/TS import gate to unique repo-wide names, labelling each site corroborated|unique-name (default false = precision)",
-        },
-      },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "workspaces",
-    description:
-      "Detect monorepo packages (npm/pnpm/yarn/lerna/nx/cargo/go.work/maven) with the workspace dependency graph, one cycle if present, and a topological build order.",
-    inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
-  },
-  {
-    name: "churn",
-    description: "Per-file git commit counts (whole history, or since a ref) — the churn half of hotspot analysis.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "symbols_overview",
-    description:
-      "All symbols declared in ONE file (name, kind, line span, exported, parent), in declaration order — the fastest way to understand a file without reading it.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, file: { type: "string", description: "Repo-relative file path" } },
-      required: ["repo", "file"],
-    },
-  },
-  {
-    name: "find_symbol",
-    description:
-      "Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Options: substring matching, includeBody to return the declaration's source. Exact-name matches rank first.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...repoProp,
-        namePath: { type: "string", description: "Symbol name or Parent/child path" },
-        substring: { type: "boolean" },
-        includeBody: { type: "boolean" },
-        maxResults: { type: "number", description: "Cap matches (default 50)" },
-      },
-      required: ["repo", "namePath"],
-    },
-  },
-  {
-    name: "find_references",
-    description:
-      "Who references a symbol? Three labeled tiers: defs (declarations), callSites (line-precise, import-corroborated call bindings), referencingFiles (file-level identifier/doc mentions — may include homonyms). Confidence decreases across tiers; the labels let you decide what to trust.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Symbol name" } },
-      required: ["repo", "name"],
-    },
-  },
-  {
-    name: "repo_map",
-    description:
-      "Token-budgeted map of the repository: the highest-PageRank files with their key exported signatures, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, budgetTokens: { type: "number", description: "Approximate token budget (default 1024)" } },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "hotspots",
-    description:
-      "Where does work concentrate? Files ranked by git churn × size (commits × log2 lines). High-scoring files are where changes and defects cluster.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "coupling",
-    description:
-      "Change coupling: pairs of files that repeatedly change in the same commits — hidden dependencies no import shows. strength 1.0 = every change to one touched the other.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only mine commits after this ref" } },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "replace_symbol_body",
-    description:
-      "WRITE: replace a symbol's whole declaration with `body` (verbatim, supply full indentation). The symbol is resolved by name path ('Class/method'); ambiguity errors list the candidates — qualify with `file`. Line spans come from the AST index.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...repoProp,
-        namePath: { type: "string" },
-        body: { type: "string" },
-        file: { type: "string", description: "Disambiguate: repo-relative file containing the symbol" },
-      },
-      required: ["repo", "namePath", "body"],
-    },
-  },
-  {
-    name: "insert_after_symbol",
-    description:
-      "WRITE: insert `body` after a symbol's declaration (blank-line separation preserved for definition-like kinds). Resolved like replace_symbol_body.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
-      required: ["repo", "namePath", "body"],
-    },
-  },
-  {
-    name: "insert_before_symbol",
-    description:
-      "WRITE: insert `body` before a symbol's declaration (blank-line separation preserved). Resolved like replace_symbol_body.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
-      required: ["repo", "namePath", "body"],
-    },
-  },
-  {
-    name: "write_memory",
-    description:
-      "Persist a named markdown note under <repo>/.codeindex/memories/ (names may use topic/name form). Write small, focused notes: project map, build commands, conventions.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, name: { type: "string" }, content: { type: "string" } },
-      required: ["repo", "name", "content"],
-    },
-  },
-  {
-    name: "read_memory",
-    description: "Read one persisted memory by name.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, name: { type: "string" } },
-      required: ["repo", "name"],
-    },
-  },
-  {
-    name: "list_memories",
-    description: "List persisted memory names — load this first, then read individual memories on relevance.",
-    inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
-  },
-  {
-    name: "delete_memory",
-    description: "Delete one persisted memory by name.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, name: { type: "string" } },
-      required: ["repo", "name"],
-    },
-  },
-  {
-    name: "dead_code",
-    description:
-      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere — re-export, type position — but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...repoProp,
-        ...scopeProps,
-        limit: { type: "number", description: "Cap entries (default: all)" },
-      },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "complexity",
-    description:
-      "Cyclomatic-complexity estimates (branch-token counting over AST line spans), most-complex first. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, file: { type: "string" }, risk: { type: "boolean", description: "Return complexity × git-churn risk ranking instead" } },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "mermaid",
-    description:
-      "Mermaid diagram of the module graph (renders inline in Claude/GitHub — no graph database). Optionally scoped to one module's neighborhood.",
-    inputSchema: {
-      type: "object",
-      properties: { ...repoProp, module: { type: "string", description: "Module slug to focus on" } },
-      required: ["repo"],
-    },
-  },
-  {
-    name: "grep",
-    description:
-      "Search file contents (ripgrep when available, deterministic JS fallback otherwise). Returns sorted (file, line, text) hits.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...repoProp,
-        pattern: { type: "string", description: "Regular expression to search for" },
-        scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
-        globs: { type: "array", items: { type: "string" }, description: "Restrict to matching paths" },
-        ignoreCase: { type: "boolean" },
-        maxHits: { type: "number" },
-      },
-      required: ["repo", "pattern"],
-    },
-  },
-  {
-    name: "search",
-    description:
-      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse an embedding tier (HTTP endpoint, else a local static model) with lexical — the response then wraps the ranked list as `{ results, tier, degradedReason? }`, `tier` being "endpoint"/"static" when fusion happened or "lexical" (with `degradedReason`) when it did not (see embed_status). Without `semantic`, the response is the bare ranked array, unchanged.',
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...repoProp,
-        ...scopeProps,
-        query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", description: "Max results (default 20)" },
-        fuzzy: {
-          type: "boolean",
-          description:
-            "Trigram fuzzy fallback for query terms with zero document frequency (default true)",
-        },
-        semantic: {
-          type: "boolean",
-          description:
-            'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently — see embed_status.',
-        },
-      },
-      required: ["repo", "query"],
-    },
-  },
-  {
-    name: "embed_status",
-    description:
-      "Report the embedding tier: the effective mode (none/static/endpoint; endpoint > static model), the resolved model (opt-in, never shipped in the package) with its modelId/dim, EMBED_VERSION, and the configured HTTP endpoint with its reachability. Use to check whether `search` with semantic:true will fuse embeddings or degrade to lexical.",
-    inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
-  },
-  {
-    name: "check_rules",
-    description:
-      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"} (module-level import cycles; edge-less code files). Returns deterministic violations with severity error|warn — a CI gate.',
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...repoProp,
-        ...scopeProps,
-        rules: { type: "array", description: "Rules array (inline JSON — see description)" },
-        configPath: {
-          type: "string",
-          description:
-            "Read the rules from this JSON file instead (repo-relative or absolute) — the CLI's --config. Ignored when `rules` is given.",
-        },
-      },
-      required: ["repo"],
-    },
-  },
-] as const;
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v ? v : undefined;
@@ -363,276 +103,6 @@ function num(v: unknown): number | undefined {
 }
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-// --- embedding index memoization --------------------------------------------
-// The MCP server process is long-lived, but every `search` call used to redo
-// the FULL corpus embedding build — N `buildEndpointIndex` HTTP round-trips,
-// or a full `buildEmbeddingIndex` re-encode pass — even when nothing in the
-// repo changed between requests. Memoize the last build behind a fingerprint
-// of the scan contents plus the tier's identity, so an unchanged repo reuses
-// the cached index and any file add/edit/remove (or a switch of endpoint/model)
-// still rebuilds. RepoScan carries no fingerprint of its own (checked
-// scan.ts/types.ts) — every FileRecord already carries a content hash, so
-// hashing the (rel, hash) pairs is the staleness oracle scan.ts itself uses.
-export function scanFingerprint(scan: RepoScan): string {
-  return sha1(scan.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
-}
-
-export interface EmbeddingIndexCacheKey {
-  mode: "endpoint" | "static";
-  // Distinguishes cache entries across configs sharing the same scan: the
-  // endpoint URL, or the model dir + modelId for the static tier.
-  identity: string;
-  scan: RepoScan;
-}
-
-// A SINGLE entry — never an unbounded map — holding the most recent build.
-let embeddingIndexCache: { key: string; index: EmbeddingIndex } | undefined;
-
-// Reuse the cached index when (mode, identity, scanFingerprint) matches the
-// last build; otherwise call `build` and cache its result. A failed build is
-// NEVER cached (matches today's per-call error behavior: the next request
-// retries from scratch, and a still-valid previous entry — under a different
-// key — is left untouched).
-export async function memoizedEmbeddingIndex(
-  key: EmbeddingIndexCacheKey,
-  build: () => Promise<EmbeddingIndex> | EmbeddingIndex,
-): Promise<EmbeddingIndex> {
-  const cacheKey = `${key.mode}:${key.identity}:${scanFingerprint(key.scan)}`;
-  if (embeddingIndexCache && embeddingIndexCache.key === cacheKey) return embeddingIndexCache.index;
-  const index = await build();
-  embeddingIndexCache = { key: cacheKey, index };
-  return index;
-}
-
-// A SINGLE entry — never an unbounded map — holding the most recent parse.
-let embedModelCache: { key: string; model: StaticEmbedModel } | undefined;
-
-// model.json is 10-30 MB with the real asset; reading + JSON.parsing it on
-// EVERY request dominates static-tier latency, so the parsed model is memoized
-// across requests. One statSync per request keys the cache on
-// (dir, mtimeMs, size) so an in-place re-pull invalidates on the next call.
-// Same discipline as memoizedEmbeddingIndex: a failed load is NEVER cached —
-// the throw propagates and the cache is left as it was, so the next request
-// retries from scratch. A missing model.json returns undefined (the
-// not-present case, exactly like loadEmbedModel).
-export function memoizedEmbedModel(modelDir: string): StaticEmbedModel | undefined {
-  let stat;
-  try {
-    stat = statSync(join(modelDir, "model.json"));
-  } catch {
-    return undefined;
-  }
-  const key = `${modelDir}:${stat.mtimeMs}:${stat.size}`;
-  if (embedModelCache && embedModelCache.key === key) return embedModelCache.model;
-  const model = loadEmbedModel(modelDir);
-  if (model) embedModelCache = { key, model };
-  return model;
-}
-
-// --- session-level scan + artifacts memoization ------------------------------
-// Same single-entry discipline as the embedding caches above: the MCP server
-// process is long-lived, but every tool call used to redo a FULL scanRepo walk
-// + read + hash + extraction pass (and, for graph-shaped tools, the whole
-// pipeline) even when nothing in the repo changed between requests. Cache the
-// last (repo, scan-opts) scan and feed its records back to scanRepo as `cache`
-// on the next call — scan.ts's EXISTING stat-fastpath + exact-hash machinery
-// is the freshness oracle, so a cache hit costs one walk + per-file stats, not
-// reads. When the oracle proves the content unchanged the SAME RepoScan object
-// is returned, which keeps the per-scan WeakMap of derived structures
-// (src/derived.ts) warm across requests. Artifacts are memoized on scan object
-// identity. Rendered strings are NEVER memoized — a big repo's graph.json runs
-// tens of MB, so renders stay per-call while the expensive structures behind
-// them are reused.
-//
-// Determinism: reused records come from scan.ts's own reuse paths (stat
-// fastpath / exact content-hash match), which produce records value-identical
-// to a from-scratch scan — artifacts stay byte-identical; only repeated work
-// disappears.
-
-// The scan options a session entry is keyed on. `cache`/`precomputedWalk` are
-// excluded from the contract: the session cache OWNS the cache it feeds back,
-// and a caller-supplied stale walk would desynchronize the freshness oracle.
-export type SessionScanOptions = Omit<ScanOptions, "cache" | "precomputedWalk">;
-
-type SessionCacheEntry = PersistedCacheEntry;
-type SessionCacheMap = PersistedCacheMap;
-
-interface SessionEntry {
-  key: string;
-  scan: RepoScan;
-  cacheMap: SessionCacheMap;
-  arts?: IndexArtifacts;
-}
-
-// A SMALL bounded LRU — never an unbounded map.
-//
-// This was a single entry, which made two entirely normal agent behaviours
-// pathological: alternating between two repos, and alternating between two
-// `scope` values on one repo. Either one evicted the other on every call, so
-// every call paid a full cold rebuild. Four entries covers those patterns while
-// keeping the memory story the same order of magnitude as before.
-const SESSION_CACHE_MAX = 4;
-const sessionCaches: SessionEntry[] = []; // most-recently-used first
-
-function sessionGet(key: string): SessionEntry | undefined {
-  const i = sessionCaches.findIndex((e) => e.key === key);
-  if (i < 0) return undefined;
-  const [entry] = sessionCaches.splice(i, 1);
-  sessionCaches.unshift(entry!);
-  return entry;
-}
-
-function sessionPut(entry: SessionEntry): SessionEntry {
-  const i = sessionCaches.findIndex((e) => e.key === entry.key);
-  if (i >= 0) sessionCaches.splice(i, 1);
-  sessionCaches.unshift(entry);
-  sessionCaches.length = Math.min(sessionCaches.length, SESSION_CACHE_MAX);
-  return entry;
-}
-
-// Drop every entry. Used by the symbolic-edit tools: an edit landing in the same
-// mtime tick with the same byte count would pass the (size, mtimeMs) fastpath
-// and serve a stale scan.
-function sessionClear(): void {
-  sessionCaches.length = 0;
-}
-
-// Fixed property order (and JSON.stringify dropping undefined) keeps the key
-// deterministic regardless of how the caller assembled the options object.
-function sessionKey(repo: string, opts: SessionScanOptions): string {
-  return (
-    repo +
-    "\0" +
-    JSON.stringify({
-      scope: opts.scope,
-      include: opts.include,
-      exclude: opts.exclude,
-      gitignore: opts.gitignore,
-      ignoreDirs: opts.ignoreDirs,
-      maxBytes: opts.maxBytes,
-      maxFiles: opts.maxFiles,
-      maxCallsPerFile: opts.maxCallsPerFile,
-      out: opts.out,
-      fullHash: opts.fullHash,
-    })
-  );
-}
-
-// Re-exported for tests and for consumers that imported it from here before the
-// preload machinery moved into src/preload.ts.
-export { toCacheMap };
-
-// The memoizing replacement for scanRepo inside callTool. Exported for tests.
-export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): RepoScan {
-  const key = sessionKey(repo, opts);
-  const hit = sessionGet(key);
-  if (hit) {
-    const fresh = scanRepo(repo, { ...opts, cache: hit.cacheMap, precomputedWalk: walked });
-    if (fresh.contentUnchanged) {
-      // Content proven identical → return the SAME object (object identity is
-      // what keeps derived.ts's WeakMap and the memoized artifacts warm). A
-      // stat-only drift (e.g. a bare touch) still refreshes the cache map so
-      // the next call's stat fastpath keys on the new (size, mtimeMs).
-      if (fresh.cacheDirty) hit.cacheMap = toCacheMap(fresh);
-      // `commit` (headCommit(root)) is NOT part of the stat/hash freshness
-      // oracle: a git HEAD move that leaves the worktree untouched — commit /
-      // commit --amend / reset --soft / checkout to an identical-tree branch —
-      // changes headCommit without altering any file's size or mtime, so
-      // contentUnchanged stays true while the cached scan's commit went stale.
-      // `fresh` recomputed it just now (exactly what a cold process reports), so
-      // sync it onto the returned object; otherwise scan_summary would emit the
-      // OLD commit a from-scratch scanRepo never would. Mutate the SAME object
-      // rather than clone — cloning would forfeit the identity the artifacts and
-      // derived.ts WeakMap key on. Safe: no artifact carries commit (graph /
-      // symbols render byte-identically regardless), so nothing memoized here
-      // depends on this field.
-      if (hit.scan.commit !== fresh.commit) hit.scan.commit = fresh.commit;
-      return hit.scan;
-    }
-    sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
-    return fresh;
-  }
-  // First touch of this (repo, opts): try the persisted-index preload before a
-  // cold scan. A present, version-compatible .codeindex/cache.json seeds the
-  // scan (and, when the guard holds, the artifacts); absent it, fall through to
-  // the cold path EXACTLY as before.
-  const preloaded = preloadSession(repo, { ...opts, precomputedWalk: walked });
-  if (preloaded) {
-    sessionPut({ key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts });
-    return preloaded.scan;
-  }
-  const scan = scanRepo(repo, { ...opts, precomputedWalk: walked });
-  sessionPut({ key, scan, cacheMap: toCacheMap(scan) });
-  return scan;
-}
-
-// The scan_summary numbers, without paying for a scan.
-//
-// A file count and a language histogram come from the walk plus the path-based
-// classifiers — no read, no hash, no tree-sitter. When this session already
-// holds a scan for the same (repo, opts) we derive from it instead (identical
-// numbers, and it keeps a warm session warm); otherwise scanSummary walks once.
-// The summary is NEVER written into the session cache: it carries no
-// FileRecords, so caching it would starve every record-shaped tool that ran next.
-export function getScanSummary(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): ScanSummary {
-  if (sessionCaches.some((e) => e.key === sessionKey(repo, opts))) {
-    const scan = getScan(repo, opts, walked);
-    return {
-      root: scan.root,
-      commit: scan.commit,
-      fileCount: scan.files.length,
-      languages: scan.languages,
-      capped: scan.capped,
-      excluded: scan.excluded,
-    };
-  }
-  return scanSummary(repo, { ...opts, precomputedWalk: walked });
-}
-
-// Lazy pipeline memoized on scan OBJECT IDENTITY: graph-shaped tools reuse the
-// artifacts exactly as long as getScan keeps returning the same scan object.
-// Exported for tests.
-export function getArtifacts(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): IndexArtifacts {
-  const scan = getScan(repo, opts, walked);
-  const entry = sessionCaches.find((e) => e.scan === scan);
-  if (entry) return (entry.arts ??= buildArtifactsFromScan(scan, opts));
-  // Defensive fallback (getScan always leaves an entry holding `scan`).
-  return buildArtifactsFromScan(scan, opts);
-}
-
-// Warm the grammars for the languages CURRENTLY present in `repo`, re-derived on
-// EVERY scan-needing call — never frozen on first touch. The server no longer
-// warms every committed grammar at startup; most sessions touch one repo and a
-// handful of languages, so each scan-needing tool warms the walk-derived set
-// itself. It MUST re-derive per call because the session cache (getScan) is built
-// to pick up mid-session file adds/edits/removes: a language whose first file
-// appears only AFTER the initial scan-needing call must still get its grammar
-// warmed, or that file falls to the regex tier and its symbols diverge from a
-// cold build on the identical on-disk state — a byte-identity break. (A per-
-// repo-path memo froze the grammar set at first touch and silently missed
-// exactly this case.) ensureGrammars is idempotent and near-free once a grammar
-// is loaded — it warms only newly-seen keys — so the sole repeated cost is the
-// walk; the wasm for a given language loads at most once. Determinism: the walk's
-// extension set is a superset of what scanRepo keeps (scope/include/exclude only
-// filter further), so every extracted file has its grammar loaded; Language.load
-// calls are independent, so warming fewer grammars cannot alter the parse of a
-// loaded one.
-export async function warmGrammarsForRepo(repo: string): Promise<void> {
-  await warmGrammarsForWalk(walk(repo, {}));
-}
-
-// The same warm, against a walk the caller already has.
-//
-// callTool used to walk TWICE per scan-needing call: once here to derive the
-// present languages, then again inside scanRepo. On a large repo that fixed cost
-// dominated every response (the project's own benchmark shows find-symbol,
-// references and file-overview all landing within a few ms of each other on a
-// 20k-file monorepo — the signature of a per-call constant, not of the query).
-// One walk now feeds both.
-export async function warmGrammarsForWalk(walked: WalkResult): Promise<void> {
-  await ensureGrammars(grammarKeysForExts(walked.files.map((f) => f.ext)));
 }
 
 // Tools that never scan the file tree (git/grep/memory/embed-status only) — they
@@ -904,237 +374,6 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
   throw new Error(`unknown tool: ${name}`);
-}
-
-// --- protocol versions -------------------------------------------------------
-// The server announced "2024-11-05" hard-coded and never even read the version
-// the client asked for. Three revisions have shipped since.
-//
-// Negotiation is what makes moving forward non-breaking: a client that asks for
-// an old revision gets that revision, and every field introduced later is
-// withheld — so its responses are exactly the bytes it received before. Newer
-// clients opt themselves in simply by asking.
-//
-// Dates sort lexicographically, so `>=` on the strings is a version comparison.
-const PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] as const;
-const LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1]!;
-
-// Feature floors, by the revision that introduced them.
-const ANNOTATIONS_SINCE = "2025-03-26"; // tool behaviour hints
-const RICH_TOOLS_SINCE = "2025-06-18"; // Tool.title, resource_link content
-
-// Validate `arguments` against the tool's declared inputSchema.
-//
-// There was no validation at all beyond presence checks, and the readers failed
-// silently in both directions: str() returns undefined for a non-string, so a
-// number where a path belongs became "missing", and every boolean was `=== true`,
-// so `"false"` and `1` alike read as false. The caller saw its option ignored
-// with no way to tell why.
-//
-// Only the shapes these schemas actually use are checked (string / number /
-// boolean / array-of-string) — this is a guard against silent misreads, not a
-// JSON Schema implementation. The spec (2025-11-25) is explicit that input
-// validation failures belong in a Tool Execution Error, not a protocol error,
-// precisely so the model can read the message and retry.
-// Required-ness stays with callTool, which raises tool-specific messages
-// ("`rules` (or `configPath`) is required"); duplicating it here would only let
-// the two drift.
-export function validateArgs(
-  schema: { properties?: Record<string, unknown> },
-  args: Record<string, unknown>,
-): string | undefined {
-  const props = (schema.properties ?? {}) as Record<string, { type?: string; items?: { type?: string } }>;
-  for (const [key, value] of Object.entries(args)) {
-    if (value === undefined || value === null) continue;
-    const spec = props[key];
-    if (!spec?.type) continue; // undeclared extras stay tolerated
-    const actual = Array.isArray(value) ? "array" : typeof value;
-    if (spec.type === "number") {
-      // A numeric string is accepted (num() coerces it); anything else is not.
-      if (actual === "number") continue;
-      if (actual === "string" && Number.isFinite(Number(value as string)) && (value as string).trim() !== "") continue;
-      return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
-    }
-    if (spec.type === "array") {
-      if (actual !== "array") return `\`${key}\` must be an array of strings, got ${actual}`;
-      if (spec.items?.type === "string" && !(value as unknown[]).every((x) => typeof x === "string")) {
-        return `\`${key}\` must be an array of strings`;
-      }
-      continue;
-    }
-    if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
-  }
-  return undefined;
-}
-
-export function negotiateProtocol(requested: unknown): string {
-  return typeof requested === "string" && (PROTOCOL_VERSIONS as readonly string[]).includes(requested)
-    ? requested
-    : LATEST_PROTOCOL;
-}
-
-// Per-tool display title and behaviour hints.
-//
-// The hints matter operationally: they are what lets a host auto-approve the 23
-// read-only tools and hold a confirmation for the 5 that write. Without them a
-// client must treat `scan_summary` and `replace_symbol_body` alike.
-//
-// openWorldHint is true only where a call can leave this machine — `search`
-// with semantic:true and `embed_status` may contact CODEINDEX_EMBED_ENDPOINT.
-// Everything else reads the repo and nothing but the repo.
-interface ToolMeta {
-  title: string;
-  write?: boolean;
-  destructive?: boolean;
-  idempotent?: boolean;
-  openWorld?: boolean;
-}
-
-const TOOL_META: Record<string, ToolMeta> = {
-  scan_summary: { title: "Scan summary" },
-  graph: { title: "Link graph" },
-  symbols: { title: "Symbol index" },
-  callers: { title: "Caller index" },
-  workspaces: { title: "Monorepo workspaces" },
-  churn: { title: "Git churn" },
-  symbols_overview: { title: "File symbol overview" },
-  find_symbol: { title: "Find symbol" },
-  find_references: { title: "Find references" },
-  repo_map: { title: "Repository map" },
-  hotspots: { title: "Hotspots" },
-  coupling: { title: "Change coupling" },
-  replace_symbol_body: { title: "Replace symbol body", write: true, destructive: true, idempotent: true },
-  insert_after_symbol: { title: "Insert after symbol", write: true, destructive: false, idempotent: false },
-  insert_before_symbol: { title: "Insert before symbol", write: true, destructive: false, idempotent: false },
-  write_memory: { title: "Write memory", write: true, destructive: false, idempotent: true },
-  read_memory: { title: "Read memory" },
-  list_memories: { title: "List memories" },
-  delete_memory: { title: "Delete memory", write: true, destructive: true, idempotent: true },
-  dead_code: { title: "Dead-code candidates" },
-  complexity: { title: "Complexity" },
-  mermaid: { title: "Mermaid module diagram" },
-  grep: { title: "Grep file contents" },
-  search: { title: "Lexical search", openWorld: true },
-  embed_status: { title: "Embedding tier status", openWorld: true },
-  check_rules: { title: "Check architecture rules" },
-};
-
-function annotationsFor(name: string): Record<string, boolean> | undefined {
-  const meta = TOOL_META[name];
-  if (!meta) return undefined;
-  return {
-    readOnlyHint: !meta.write,
-    ...(meta.write ? { destructiveHint: meta.destructive === true, idempotentHint: meta.idempotent === true } : {}),
-    openWorldHint: meta.openWorld === true,
-  };
-}
-
-// The advertised tool list, for one negotiated protocol version.
-//
-// Without a server-level repo pin and on 2024-11-05 this is TOOLS verbatim —
-// byte-compat for every existing consumer. A pin drops `repo` from each
-// `required` set and documents the default, so a client that omits it is
-// spec-correct rather than relying on the server being lenient. Newer protocol
-// revisions additionally get `title` and `annotations`.
-function toolsFor(defaultRepo?: string, protocolVersion: string = PROTOCOL_VERSIONS[0]): readonly unknown[] {
-  const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
-  const withTitle = protocolVersion >= RICH_TOOLS_SINCE;
-  if (!defaultRepo && !withAnnotations && !withTitle) return TOOLS;
-  return TOOLS.map((t) => ({
-    ...t,
-    ...(withTitle && TOOL_META[t.name] ? { title: TOOL_META[t.name]!.title } : {}),
-    ...(withAnnotations ? { annotations: annotationsFor(t.name) } : {}),
-    inputSchema: !defaultRepo
-      ? t.inputSchema
-      : {
-          ...t.inputSchema,
-          properties: {
-            ...t.inputSchema.properties,
-            repo: {
-              type: "string",
-              description: `Absolute path to the repository root (optional — defaults to ${defaultRepo})`,
-            },
-          },
-          required: (t.inputSchema.required as readonly string[]).filter((r) => r !== "repo"),
-        },
-  }));
-}
-
-// --- response size guard -----------------------------------------------------
-// Several tools returned unbounded payloads. On facebook/react (7091 files):
-// graph 9.4 MB, symbols 6.3 MB, callers 6.0 MB, dead_code 771 KB — roughly
-// 2.35M, 1.57M, 1.51M and 193k tokens. A single `graph` call does not merely
-// bloat an agent's context, it exceeds what any MCP client can accept, so the
-// call fails and the turn is wasted.
-//
-// The guard is deliberately NOT a default page size: below the limit a response
-// is byte-identical to what it always was. Above it, the response could not be
-// consumed by any client anyway, so replacing it with something actionable
-// cannot regress a working call — it converts a hard failure into a usable
-// answer that says how big the payload is, where the artifact already sits on
-// disk, and which narrower tool answers the question.
-export const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
-
-// What to steer a caller toward when their whole-repo request is too large.
-const NARROWER: Record<string, string> = {
-  graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",
-  symbols: "pass `name` to look up one symbol, or use find_symbol / symbols_overview",
-  callers: "pass `name` to look up one symbol's call sites",
-  dead_code: "pass `scope` to a subdirectory",
-  find_references: "the symbol is referenced very widely — narrow with `scope` on a graph query",
-  check_rules: "narrow the rule set, or pass `scope` to a subdirectory",
-};
-
-// The persisted artifact backing a tool, when a `codeindex index` already wrote
-// one — far more useful to hand back than a truncated blob.
-const ARTIFACT_FOR: Record<string, string> = { graph: "graph.json", symbols: "symbols.json" };
-
-export function capResponse(text: string, tool: string, repo: string, maxBytes: number): string {
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes <= maxBytes) return text;
-  const artifact = ARTIFACT_FOR[tool] ? join(repo, INDEX_DIR, ARTIFACT_FOR[tool]!) : undefined;
-  return (
-    JSON.stringify(
-      {
-        truncated: true,
-        tool,
-        bytes,
-        maxBytes,
-        reason:
-          "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
-        narrower: NARROWER[tool] ?? "narrow the request with `scope`, `include`/`exclude`, or a `limit`",
-        ...(artifact && existsSync(artifact)
-          ? { artifact, artifactNote: "The full result is already on disk here — read it directly if you need all of it." }
-          : artifact
-            ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join(repo, INDEX_DIR)}\` to get this as a file.` }
-            : {}),
-      },
-      null,
-      2,
-    ) + "\n"
-  );
-}
-
-// When capResponse withheld a payload AND the artifact is on disk, hand the
-// client a resource_link to it. Returns undefined for every normal response —
-// this only ever adds a second content block to a capped one.
-export function resourceLinkFor(text: string, tool: string): Record<string, unknown> | undefined {
-  const artifactName = ARTIFACT_FOR[tool];
-  if (!artifactName) return undefined;
-  let parsed: { truncated?: boolean; artifact?: string };
-  try {
-    parsed = JSON.parse(text) as typeof parsed;
-  } catch {
-    return undefined; // a normal (non-JSON, or non-capped) response
-  }
-  if (parsed.truncated !== true || typeof parsed.artifact !== "string") return undefined;
-  return {
-    type: "resource_link",
-    uri: pathToFileURL(parsed.artifact).href,
-    name: artifactName,
-    description: `The full ${tool} result this call was too large to inline.`,
-    mimeType: "application/json",
-  };
 }
 
 export interface McpServerOptions {

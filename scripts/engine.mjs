@@ -10465,362 +10465,10 @@ var init_viz = __esm({
   }
 });
 
-// src/mcp.ts
-var mcp_exports = {};
-__export(mcp_exports, {
-  DEFAULT_MAX_RESPONSE_BYTES: () => DEFAULT_MAX_RESPONSE_BYTES,
-  capResponse: () => capResponse,
-  getArtifacts: () => getArtifacts,
-  getScan: () => getScan,
-  getScanSummary: () => getScanSummary,
-  memoizedEmbedModel: () => memoizedEmbedModel,
-  memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
-  negotiateProtocol: () => negotiateProtocol,
-  resourceLinkFor: () => resourceLinkFor,
-  runMcpServer: () => runMcpServer,
-  scanFingerprint: () => scanFingerprint,
-  toCacheMap: () => toCacheMap,
-  validateArgs: () => validateArgs,
-  warmGrammarsForRepo: () => warmGrammarsForRepo,
-  warmGrammarsForWalk: () => warmGrammarsForWalk
-});
-import { existsSync as existsSync6, readFileSync as readFileSync8, statSync as statSync5 } from "fs";
-import { isAbsolute, join as join16 } from "path";
+// src/mcp/protocol.ts
+import { existsSync as existsSync6 } from "fs";
+import { join as join16 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
-import { createInterface } from "readline";
-function str(v) {
-  return typeof v === "string" && v ? v : void 0;
-}
-function strArray(v) {
-  return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? v : void 0;
-}
-function num(v) {
-  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : void 0;
-}
-function errMessage(e) {
-  return e instanceof Error ? e.message : String(e);
-}
-function scanFingerprint(scan2) {
-  return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
-}
-async function memoizedEmbeddingIndex(key, build) {
-  const cacheKey = `${key.mode}:${key.identity}:${scanFingerprint(key.scan)}`;
-  if (embeddingIndexCache && embeddingIndexCache.key === cacheKey) return embeddingIndexCache.index;
-  const index = await build();
-  embeddingIndexCache = { key: cacheKey, index };
-  return index;
-}
-function memoizedEmbedModel(modelDir) {
-  let stat;
-  try {
-    stat = statSync5(join16(modelDir, "model.json"));
-  } catch {
-    return void 0;
-  }
-  const key = `${modelDir}:${stat.mtimeMs}:${stat.size}`;
-  if (embedModelCache && embedModelCache.key === key) return embedModelCache.model;
-  const model = loadEmbedModel(modelDir);
-  if (model) embedModelCache = { key, model };
-  return model;
-}
-function sessionGet(key) {
-  const i2 = sessionCaches.findIndex((e) => e.key === key);
-  if (i2 < 0) return void 0;
-  const [entry] = sessionCaches.splice(i2, 1);
-  sessionCaches.unshift(entry);
-  return entry;
-}
-function sessionPut(entry) {
-  const i2 = sessionCaches.findIndex((e) => e.key === entry.key);
-  if (i2 >= 0) sessionCaches.splice(i2, 1);
-  sessionCaches.unshift(entry);
-  sessionCaches.length = Math.min(sessionCaches.length, SESSION_CACHE_MAX);
-  return entry;
-}
-function sessionClear() {
-  sessionCaches.length = 0;
-}
-function sessionKey(repo, opts) {
-  return repo + "\0" + JSON.stringify({
-    scope: opts.scope,
-    include: opts.include,
-    exclude: opts.exclude,
-    gitignore: opts.gitignore,
-    ignoreDirs: opts.ignoreDirs,
-    maxBytes: opts.maxBytes,
-    maxFiles: opts.maxFiles,
-    maxCallsPerFile: opts.maxCallsPerFile,
-    out: opts.out,
-    fullHash: opts.fullHash
-  });
-}
-function getScan(repo, opts = {}, walked) {
-  const key = sessionKey(repo, opts);
-  const hit = sessionGet(key);
-  if (hit) {
-    const fresh = scanRepo(repo, { ...opts, cache: hit.cacheMap, precomputedWalk: walked });
-    if (fresh.contentUnchanged) {
-      if (fresh.cacheDirty) hit.cacheMap = toCacheMap(fresh);
-      if (hit.scan.commit !== fresh.commit) hit.scan.commit = fresh.commit;
-      return hit.scan;
-    }
-    sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
-    return fresh;
-  }
-  const preloaded = preloadSession(repo, { ...opts, precomputedWalk: walked });
-  if (preloaded) {
-    sessionPut({ key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts });
-    return preloaded.scan;
-  }
-  const scan2 = scanRepo(repo, { ...opts, precomputedWalk: walked });
-  sessionPut({ key, scan: scan2, cacheMap: toCacheMap(scan2) });
-  return scan2;
-}
-function getScanSummary(repo, opts = {}, walked) {
-  if (sessionCaches.some((e) => e.key === sessionKey(repo, opts))) {
-    const scan2 = getScan(repo, opts, walked);
-    return {
-      root: scan2.root,
-      commit: scan2.commit,
-      fileCount: scan2.files.length,
-      languages: scan2.languages,
-      capped: scan2.capped,
-      excluded: scan2.excluded
-    };
-  }
-  return scanSummary(repo, { ...opts, precomputedWalk: walked });
-}
-function getArtifacts(repo, opts = {}, walked) {
-  const scan2 = getScan(repo, opts, walked);
-  const entry = sessionCaches.find((e) => e.scan === scan2);
-  if (entry) return entry.arts ??= buildArtifactsFromScan(scan2, opts);
-  return buildArtifactsFromScan(scan2, opts);
-}
-async function warmGrammarsForRepo(repo) {
-  await warmGrammarsForWalk(walk(repo, {}));
-}
-async function warmGrammarsForWalk(walked) {
-  await ensureGrammars(grammarKeysForExts(walked.files.map((f) => f.ext)));
-}
-async function callTool(name2, args2, defaultRepo) {
-  const repo = str(args2.repo) ?? defaultRepo;
-  if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
-  const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
-  let walked;
-  if (!SCANLESS_TOOLS.has(name2)) {
-    walked = walk(repo, {});
-    await warmGrammarsForWalk(walked);
-  }
-  if (name2 === "scan_summary") {
-    const s = getScanSummary(repo, scanOpts, walked);
-    return JSON.stringify(
-      { engineVersion: ENGINE_VERSION, commit: s.commit, fileCount: s.fileCount, languages: s.languages, capped: s.capped },
-      null,
-      2
-    );
-  }
-  if (name2 === "graph") {
-    return renderGraphJson(getArtifacts(repo, scanOpts, walked).graph);
-  }
-  if (name2 === "symbols") {
-    const { symbols } = getArtifacts(repo, scanOpts, walked);
-    const lookup = str(args2.name);
-    if (lookup) {
-      return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
-    }
-    return JSON.stringify(symbols, null, 2);
-  }
-  if (name2 === "callers") {
-    const scan2 = getScan(repo, scanOpts, walked);
-    const index = args2.recall === true ? buildCallerIndex(scan2, void 0, { recall: true }) : callerIndexFor(scan2);
-    const lookup = str(args2.name);
-    if (lookup) {
-      const entry = index.get(lookup);
-      return JSON.stringify(entry ?? { error: `no tracked callers for "${lookup}"` }, null, 2);
-    }
-    const obj = {};
-    for (const [k, v] of index) obj[k] = v;
-    return JSON.stringify(obj, null, 2);
-  }
-  if (name2 === "workspaces") {
-    const info2 = detectWorkspaces(repo);
-    return JSON.stringify({ packages: info2.packages, cycle: info2.cycle ?? null, topoOrder: info2.topoOrder }, null, 2);
-  }
-  if (name2 === "churn") {
-    const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
-    const sorted = {};
-    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
-    return JSON.stringify({ ok, churn: sorted }, null, 2);
-  }
-  if (name2 === "symbols_overview") {
-    const file = str(args2.file);
-    if (!file) throw new Error("`file` is required");
-    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts, walked), file), null, 2);
-  }
-  if (name2 === "find_symbol") {
-    const namePath = str(args2.namePath);
-    if (!namePath) throw new Error("`namePath` is required");
-    const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
-      substring: args2.substring === true,
-      includeBody: args2.includeBody === true,
-      maxResults: num(args2.maxResults)
-    });
-    return JSON.stringify(matches, null, 2);
-  }
-  if (name2 === "find_references") {
-    const symName = str(args2.name);
-    if (!symName) throw new Error("`name` is required");
-    return JSON.stringify(findReferences(getScan(repo, scanOpts, walked), symName), null, 2);
-  }
-  if (name2 === "replace_symbol_body" || name2 === "insert_after_symbol" || name2 === "insert_before_symbol") {
-    const namePath = str(args2.namePath);
-    const body2 = typeof args2.body === "string" ? args2.body : void 0;
-    if (!namePath || body2 === void 0) throw new Error("`namePath` and `body` are required");
-    const scan2 = getScan(repo, scanOpts, walked);
-    const fn = name2 === "replace_symbol_body" ? replaceSymbolBody : name2 === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
-    const result = fn(scan2, namePath, body2, str(args2.file));
-    sessionClear();
-    return JSON.stringify(result, null, 2);
-  }
-  if (name2 === "write_memory") {
-    const memName = str(args2.name);
-    const content = typeof args2.content === "string" ? args2.content : void 0;
-    if (!memName || content === void 0) throw new Error("`name` and `content` are required");
-    return JSON.stringify({ written: writeMemory(repo, memName, content) }, null, 2);
-  }
-  if (name2 === "read_memory") {
-    const memName = str(args2.name);
-    if (!memName) throw new Error("`name` is required");
-    const content = readMemory(repo, memName);
-    if (content === void 0) throw new Error(`no memory named "${memName}" \u2014 see list_memories`);
-    return content;
-  }
-  if (name2 === "list_memories") {
-    return JSON.stringify(listMemories(repo), null, 2);
-  }
-  if (name2 === "delete_memory") {
-    const memName = str(args2.name);
-    if (!memName) throw new Error("`name` is required");
-    return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
-  }
-  if (name2 === "dead_code") {
-    const all = findDeadCode(getScan(repo, scanOpts, walked));
-    const limit = num(args2.limit);
-    if (limit === void 0 || all.length <= limit) return JSON.stringify(all, null, 2);
-    return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
-  }
-  if (name2 === "complexity") {
-    const scan2 = getScan(repo, scanOpts, walked);
-    if (args2.risk === true) {
-      const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
-      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn, num(args2.top)) }, null, 2);
-    }
-    return JSON.stringify(symbolComplexity(scan2, str(args2.file), num(args2.top)), null, 2);
-  }
-  if (name2 === "mermaid") {
-    const { graph } = getArtifacts(repo, scanOpts, walked);
-    return renderMermaid(graph, { module: str(args2.module), maxEdges: num(args2.maxEdges) });
-  }
-  if (name2 === "repo_map") {
-    const { scan: scan2, graph } = getArtifacts(repo, scanOpts, walked);
-    return renderRepoMap(scan2, graph, { budgetTokens: typeof args2.budgetTokens === "number" ? args2.budgetTokens : void 0 });
-  }
-  if (name2 === "hotspots") {
-    const scan2 = getScan(repo, scanOpts, walked);
-    const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
-    return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2);
-  }
-  if (name2 === "coupling") {
-    const { ok, couplings } = changeCoupling(repo, { since: str(args2.since) });
-    return JSON.stringify({ ok, couplings }, null, 2);
-  }
-  if (name2 === "grep") {
-    const pattern = str(args2.pattern);
-    if (!pattern) throw new Error("`pattern` is required");
-    const scope = str(args2.scope);
-    const globs = strArray(args2.globs);
-    const hits = grepRepo(repo, pattern, {
-      globs: scope ? [...globs ?? [], `${scope.replace(/\/+$/, "")}/**`] : globs,
-      ignoreCase: args2.ignoreCase === true,
-      maxHits: typeof args2.maxHits === "number" ? args2.maxHits : void 0
-    });
-    return JSON.stringify(hits, null, 2);
-  }
-  if (name2 === "search") {
-    const query = str(args2.query);
-    if (!query) throw new Error("`query` is required");
-    const scan2 = getScan(repo, scanOpts, walked);
-    const limit = typeof args2.limit === "number" ? args2.limit : void 0;
-    const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
-    if (args2.semantic === true) {
-      const endpoint = resolveEmbedEndpoint();
-      if (endpoint) {
-        try {
-          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan: scan2 }, () => buildEndpointIndex(scan2));
-          const queryVec = await encodeQueryViaEndpoint(query);
-          const results2 = searchSemantic(scan2, query, index, { queryVec, limit, fuzzy });
-          return JSON.stringify({ results: results2, tier: "endpoint" }, null, 2);
-        } catch (e) {
-          const results2 = searchIndex(scan2, query, { limit, fuzzy });
-          return JSON.stringify(
-            { results: results2, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
-            null,
-            2
-          );
-        }
-      }
-      const modelDir = resolveEmbedModelDir(repo);
-      const model = modelDir ? memoizedEmbedModel(modelDir) : void 0;
-      if (model) {
-        const index = await memoizedEmbeddingIndex(
-          { mode: "static", identity: `${modelDir}#${model.modelId}`, scan: scan2 },
-          () => buildEmbeddingIndex(scan2, model)
-        );
-        const results2 = searchSemantic(scan2, query, index, { model, limit, fuzzy });
-        return JSON.stringify({ results: results2, tier: "static" }, null, 2);
-      }
-      const results = searchIndex(scan2, query, { limit, fuzzy });
-      return JSON.stringify(
-        { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured \u2014 see embed_status" },
-        null,
-        2
-      );
-    }
-    return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy }), null, 2);
-  }
-  if (name2 === "embed_status") {
-    const modelDir = resolveEmbedModelDir(repo);
-    const model = modelDir ? memoizedEmbedModel(modelDir) : void 0;
-    const endpoint = resolveEmbedEndpoint();
-    const mode = endpoint ? "endpoint" : model ? "static" : "none";
-    const status = {
-      embedVersion: EMBED_VERSION,
-      mode,
-      model: model ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize } : { present: false },
-      endpoint: endpoint ?? null
-    };
-    if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
-    return JSON.stringify(status, null, 2);
-  }
-  if (name2 === "check_rules") {
-    const configPath = str(args2.configPath);
-    let payload = args2.rules;
-    if (payload === void 0 && configPath) {
-      const abs = isAbsolute(configPath) ? configPath : join16(repo, configPath);
-      try {
-        payload = JSON.parse(readFileSync8(abs, "utf8"));
-      } catch (e) {
-        throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
-      }
-    }
-    if (payload === void 0) throw new Error("`rules` (or `configPath`) is required");
-    const rules = parseRules(payload);
-    const { graph } = getArtifacts(repo, scanOpts, walked);
-    return JSON.stringify(checkRules(graph, rules), null, 2);
-  }
-  throw new Error(`unknown tool: ${name2}`);
-}
 function validateArgs(schema, args2) {
   const props = schema.properties ?? {};
   for (const [key, value] of Object.entries(args2)) {
@@ -10846,36 +10494,6 @@ function validateArgs(schema, args2) {
 }
 function negotiateProtocol(requested) {
   return typeof requested === "string" && PROTOCOL_VERSIONS.includes(requested) ? requested : LATEST_PROTOCOL;
-}
-function annotationsFor(name2) {
-  const meta = TOOL_META[name2];
-  if (!meta) return void 0;
-  return {
-    readOnlyHint: !meta.write,
-    ...meta.write ? { destructiveHint: meta.destructive === true, idempotentHint: meta.idempotent === true } : {},
-    openWorldHint: meta.openWorld === true
-  };
-}
-function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0]) {
-  const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
-  const withTitle = protocolVersion >= RICH_TOOLS_SINCE;
-  if (!defaultRepo && !withAnnotations && !withTitle) return TOOLS;
-  return TOOLS.map((t) => ({
-    ...t,
-    ...withTitle && TOOL_META[t.name] ? { title: TOOL_META[t.name].title } : {},
-    ...withAnnotations ? { annotations: annotationsFor(t.name) } : {},
-    inputSchema: !defaultRepo ? t.inputSchema : {
-      ...t.inputSchema,
-      properties: {
-        ...t.inputSchema.properties,
-        repo: {
-          type: "string",
-          description: `Absolute path to the repository root (optional \u2014 defaults to ${defaultRepo})`
-        }
-      },
-      required: t.inputSchema.required.filter((r) => r !== "repo")
-    }
-  }));
 }
 function capResponse(text, tool, repo, maxBytes) {
   const bytes = Buffer.byteLength(text, "utf8");
@@ -10913,111 +10531,64 @@ function resourceLinkFor(text, tool) {
     mimeType: "application/json"
   };
 }
-async function runMcpServer(opts = {}) {
-  const serverInfo = {
-    name: opts.serverInfo?.name ?? "codeindex",
-    version: opts.serverInfo?.version ?? ENGINE_VERSION
-  };
-  let protocolVersion = PROTOCOL_VERSIONS[0];
-  let tools = toolsFor(opts.defaultRepo, protocolVersion);
-  const send = (msg) => {
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
-  };
-  const rl = createInterface({ input: process.stdin, terminal: false });
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let parsed;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      send({ id: null, error: { code: -32700, message: "parse error" } });
-      continue;
-    }
-    const requests = Array.isArray(parsed) ? parsed : [parsed];
-    for (const req of requests) await handle2(req);
-  }
-  async function handle2(req) {
-    if (req.id === void 0 || req.id === null) return;
-    try {
-      if (req.method === "initialize") {
-        protocolVersion = negotiateProtocol(req.params?.protocolVersion);
-        tools = toolsFor(opts.defaultRepo, protocolVersion);
-        send({
-          id: req.id,
-          result: {
-            protocolVersion,
-            capabilities: { tools: {} },
-            serverInfo
-          }
-        });
-      } else if (req.method === "ping") {
-        send({ id: req.id, result: {} });
-      } else if (req.method === "tools/list") {
-        send({ id: req.id, result: { tools } });
-      } else if (req.method === "tools/call") {
-        const params = req.params ?? {};
-        const name2 = str(params.name) ?? "";
-        const args2 = params.arguments ?? {};
-        try {
-          const decl = tools.find(
-            (t) => t.name === name2
-          );
-          const invalid = decl ? validateArgs(decl.inputSchema, args2) : void 0;
-          if (invalid) throw new Error(invalid);
-          const raw = await callTool(name2, args2, opts.defaultRepo);
-          const repo = str(args2.repo) ?? opts.defaultRepo ?? "";
-          const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-          const link = text !== raw && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
-          send({
-            id: req.id,
-            result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] }
-          });
-        } catch (e) {
-          send({
-            id: req.id,
-            result: { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true }
-          });
-        }
-      } else {
-        send({ id: req.id, error: { code: -32601, message: `method not found: ${req.method}` } });
-      }
-    } catch (e) {
-      send({ id: req.id, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
-    }
-  }
-}
-var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, SESSION_CACHE_MAX, sessionCaches, SCANLESS_TOOLS, PROTOCOL_VERSIONS, LATEST_PROTOCOL, ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, TOOL_META, DEFAULT_MAX_RESPONSE_BYTES, NARROWER, ARTIFACT_FOR;
-var init_mcp = __esm({
-  "src/mcp.ts"() {
+var PROTOCOL_VERSIONS, LATEST_PROTOCOL, ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, DEFAULT_MAX_RESPONSE_BYTES, NARROWER, ARTIFACT_FOR;
+var init_protocol = __esm({
+  "src/mcp/protocol.ts"() {
     "use strict";
-    init_types();
-    init_loader();
-    init_pipeline();
-    init_graph_json();
-    init_scan();
     init_preload();
-    init_walk();
-    init_callers();
-    init_derived();
-    init_workspaces();
-    init_git();
-    init_grep();
-    init_coupling();
-    init_repomap();
-    init_deadcode();
-    init_complexity();
-    init_viz();
-    init_query();
-    init_edit();
-    init_memory();
-    init_bm25();
-    init_rules();
-    init_model();
-    init_embed();
-    init_search();
-    init_endpoint();
-    init_hash();
+    PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+    LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
+    ANNOTATIONS_SINCE = "2025-03-26";
+    RICH_TOOLS_SINCE = "2025-06-18";
+    DEFAULT_MAX_RESPONSE_BYTES = 1e6;
+    NARROWER = {
+      graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",
+      symbols: "pass `name` to look up one symbol, or use find_symbol / symbols_overview",
+      callers: "pass `name` to look up one symbol's call sites",
+      dead_code: "pass `scope` to a subdirectory",
+      find_references: "the symbol is referenced very widely \u2014 narrow with `scope` on a graph query",
+      check_rules: "narrow the rule set, or pass `scope` to a subdirectory"
+    };
+    ARTIFACT_FOR = { graph: "graph.json", symbols: "symbols.json" };
+  }
+});
+
+// src/mcp/tools.ts
+function annotationsFor(name2) {
+  const meta = TOOL_META[name2];
+  if (!meta) return void 0;
+  return {
+    readOnlyHint: !meta.write,
+    ...meta.write ? { destructiveHint: meta.destructive === true, idempotentHint: meta.idempotent === true } : {},
+    openWorldHint: meta.openWorld === true
+  };
+}
+function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0]) {
+  const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
+  const withTitle = protocolVersion >= RICH_TOOLS_SINCE;
+  if (!defaultRepo && !withAnnotations && !withTitle) return TOOLS;
+  return TOOLS.map((t) => ({
+    ...t,
+    ...withTitle && TOOL_META[t.name] ? { title: TOOL_META[t.name].title } : {},
+    ...withAnnotations ? { annotations: annotationsFor(t.name) } : {},
+    inputSchema: !defaultRepo ? t.inputSchema : {
+      ...t.inputSchema,
+      properties: {
+        ...t.inputSchema.properties,
+        repo: {
+          type: "string",
+          description: `Absolute path to the repository root (optional \u2014 defaults to ${defaultRepo})`
+        }
+      },
+      required: t.inputSchema.required.filter((r) => r !== "repo")
+    }
+  }));
+}
+var repoProp, scopeProps, TOOLS, TOOL_META;
+var init_tools = __esm({
+  "src/mcp/tools.ts"() {
+    "use strict";
+    init_protocol();
     repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
     scopeProps = {
       scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -11290,27 +10861,6 @@ var init_mcp = __esm({
         }
       }
     ];
-    SESSION_CACHE_MAX = 4;
-    sessionCaches = [];
-    SCANLESS_TOOLS = /* @__PURE__ */ new Set([
-      "workspaces",
-      "churn",
-      "coupling",
-      "grep",
-      "write_memory",
-      "read_memory",
-      "list_memories",
-      "delete_memory",
-      "embed_status",
-      // scan_summary counts and classifies by path only — it never parses, so the
-      // grammar warm (a whole extra walk) would be pure overhead. When a scan is
-      // already cached getScanSummary reuses it, warm grammars included.
-      "scan_summary"
-    ]);
-    PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
-    LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
-    ANNOTATIONS_SINCE = "2025-03-26";
-    RICH_TOOLS_SINCE = "2025-06-18";
     TOOL_META = {
       scan_summary: { title: "Scan summary" },
       graph: { title: "Link graph" },
@@ -11339,16 +10889,510 @@ var init_mcp = __esm({
       embed_status: { title: "Embedding tier status", openWorld: true },
       check_rules: { title: "Check architecture rules" }
     };
-    DEFAULT_MAX_RESPONSE_BYTES = 1e6;
-    NARROWER = {
-      graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",
-      symbols: "pass `name` to look up one symbol, or use find_symbol / symbols_overview",
-      callers: "pass `name` to look up one symbol's call sites",
-      dead_code: "pass `scope` to a subdirectory",
-      find_references: "the symbol is referenced very widely \u2014 narrow with `scope` on a graph query",
-      check_rules: "narrow the rule set, or pass `scope` to a subdirectory"
+  }
+});
+
+// src/mcp/session.ts
+import { statSync as statSync5 } from "fs";
+import { join as join17 } from "path";
+function scanFingerprint(scan2) {
+  return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
+}
+async function memoizedEmbeddingIndex(key, build) {
+  const cacheKey = `${key.mode}:${key.identity}:${scanFingerprint(key.scan)}`;
+  if (embeddingIndexCache && embeddingIndexCache.key === cacheKey) return embeddingIndexCache.index;
+  const index = await build();
+  embeddingIndexCache = { key: cacheKey, index };
+  return index;
+}
+function memoizedEmbedModel(modelDir) {
+  let stat;
+  try {
+    stat = statSync5(join17(modelDir, "model.json"));
+  } catch {
+    return void 0;
+  }
+  const key = `${modelDir}:${stat.mtimeMs}:${stat.size}`;
+  if (embedModelCache && embedModelCache.key === key) return embedModelCache.model;
+  const model = loadEmbedModel(modelDir);
+  if (model) embedModelCache = { key, model };
+  return model;
+}
+function sessionGet(key) {
+  const i2 = sessionCaches.findIndex((e) => e.key === key);
+  if (i2 < 0) return void 0;
+  const [entry] = sessionCaches.splice(i2, 1);
+  sessionCaches.unshift(entry);
+  return entry;
+}
+function sessionPut(entry) {
+  const i2 = sessionCaches.findIndex((e) => e.key === entry.key);
+  if (i2 >= 0) sessionCaches.splice(i2, 1);
+  sessionCaches.unshift(entry);
+  sessionCaches.length = Math.min(sessionCaches.length, SESSION_CACHE_MAX);
+  return entry;
+}
+function sessionClear() {
+  sessionCaches.length = 0;
+}
+function sessionKey(repo, opts) {
+  return repo + "\0" + JSON.stringify({
+    scope: opts.scope,
+    include: opts.include,
+    exclude: opts.exclude,
+    gitignore: opts.gitignore,
+    ignoreDirs: opts.ignoreDirs,
+    maxBytes: opts.maxBytes,
+    maxFiles: opts.maxFiles,
+    maxCallsPerFile: opts.maxCallsPerFile,
+    out: opts.out,
+    fullHash: opts.fullHash
+  });
+}
+function getScan(repo, opts = {}, walked) {
+  const key = sessionKey(repo, opts);
+  const hit = sessionGet(key);
+  if (hit) {
+    const fresh = scanRepo(repo, { ...opts, cache: hit.cacheMap, precomputedWalk: walked });
+    if (fresh.contentUnchanged) {
+      if (fresh.cacheDirty) hit.cacheMap = toCacheMap(fresh);
+      if (hit.scan.commit !== fresh.commit) hit.scan.commit = fresh.commit;
+      return hit.scan;
+    }
+    sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
+    return fresh;
+  }
+  const preloaded = preloadSession(repo, { ...opts, precomputedWalk: walked });
+  if (preloaded) {
+    sessionPut({ key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts });
+    return preloaded.scan;
+  }
+  const scan2 = scanRepo(repo, { ...opts, precomputedWalk: walked });
+  sessionPut({ key, scan: scan2, cacheMap: toCacheMap(scan2) });
+  return scan2;
+}
+function getScanSummary(repo, opts = {}, walked) {
+  if (sessionCaches.some((e) => e.key === sessionKey(repo, opts))) {
+    const scan2 = getScan(repo, opts, walked);
+    return {
+      root: scan2.root,
+      commit: scan2.commit,
+      fileCount: scan2.files.length,
+      languages: scan2.languages,
+      capped: scan2.capped,
+      excluded: scan2.excluded
     };
-    ARTIFACT_FOR = { graph: "graph.json", symbols: "symbols.json" };
+  }
+  return scanSummary(repo, { ...opts, precomputedWalk: walked });
+}
+function getArtifacts(repo, opts = {}, walked) {
+  const scan2 = getScan(repo, opts, walked);
+  const entry = sessionCaches.find((e) => e.scan === scan2);
+  if (entry) return entry.arts ??= buildArtifactsFromScan(scan2, opts);
+  return buildArtifactsFromScan(scan2, opts);
+}
+async function warmGrammarsForRepo(repo) {
+  await warmGrammarsForWalk(walk(repo, {}));
+}
+async function warmGrammarsForWalk(walked) {
+  await ensureGrammars(grammarKeysForExts(walked.files.map((f) => f.ext)));
+}
+var embeddingIndexCache, embedModelCache, SESSION_CACHE_MAX, sessionCaches;
+var init_session = __esm({
+  "src/mcp/session.ts"() {
+    "use strict";
+    init_pipeline();
+    init_scan();
+    init_preload();
+    init_walk();
+    init_loader();
+    init_model();
+    init_embed();
+    init_hash();
+    SESSION_CACHE_MAX = 4;
+    sessionCaches = [];
+  }
+});
+
+// src/mcp.ts
+var mcp_exports = {};
+__export(mcp_exports, {
+  DEFAULT_MAX_RESPONSE_BYTES: () => DEFAULT_MAX_RESPONSE_BYTES,
+  PROTOCOL_VERSIONS: () => PROTOCOL_VERSIONS,
+  TOOLS: () => TOOLS,
+  TOOL_META: () => TOOL_META,
+  annotationsFor: () => annotationsFor,
+  capResponse: () => capResponse,
+  getArtifacts: () => getArtifacts,
+  getScan: () => getScan,
+  getScanSummary: () => getScanSummary,
+  memoizedEmbedModel: () => memoizedEmbedModel,
+  memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
+  negotiateProtocol: () => negotiateProtocol,
+  resourceLinkFor: () => resourceLinkFor,
+  runMcpServer: () => runMcpServer,
+  scanFingerprint: () => scanFingerprint,
+  toCacheMap: () => toCacheMap,
+  toolsFor: () => toolsFor,
+  validateArgs: () => validateArgs,
+  warmGrammarsForRepo: () => warmGrammarsForRepo,
+  warmGrammarsForWalk: () => warmGrammarsForWalk
+});
+import { readFileSync as readFileSync8 } from "fs";
+import { isAbsolute, join as join18 } from "path";
+import { createInterface } from "readline";
+function str(v) {
+  return typeof v === "string" && v ? v : void 0;
+}
+function strArray(v) {
+  return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? v : void 0;
+}
+function num(v) {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : void 0;
+}
+function errMessage(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+async function callTool(name2, args2, defaultRepo) {
+  const repo = str(args2.repo) ?? defaultRepo;
+  if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
+  const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
+  let walked;
+  if (!SCANLESS_TOOLS.has(name2)) {
+    walked = walk(repo, {});
+    await warmGrammarsForWalk(walked);
+  }
+  if (name2 === "scan_summary") {
+    const s = getScanSummary(repo, scanOpts, walked);
+    return JSON.stringify(
+      { engineVersion: ENGINE_VERSION, commit: s.commit, fileCount: s.fileCount, languages: s.languages, capped: s.capped },
+      null,
+      2
+    );
+  }
+  if (name2 === "graph") {
+    return renderGraphJson(getArtifacts(repo, scanOpts, walked).graph);
+  }
+  if (name2 === "symbols") {
+    const { symbols } = getArtifacts(repo, scanOpts, walked);
+    const lookup = str(args2.name);
+    if (lookup) {
+      return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
+    }
+    return JSON.stringify(symbols, null, 2);
+  }
+  if (name2 === "callers") {
+    const scan2 = getScan(repo, scanOpts, walked);
+    const index = args2.recall === true ? buildCallerIndex(scan2, void 0, { recall: true }) : callerIndexFor(scan2);
+    const lookup = str(args2.name);
+    if (lookup) {
+      const entry = index.get(lookup);
+      return JSON.stringify(entry ?? { error: `no tracked callers for "${lookup}"` }, null, 2);
+    }
+    const obj = {};
+    for (const [k, v] of index) obj[k] = v;
+    return JSON.stringify(obj, null, 2);
+  }
+  if (name2 === "workspaces") {
+    const info2 = detectWorkspaces(repo);
+    return JSON.stringify({ packages: info2.packages, cycle: info2.cycle ?? null, topoOrder: info2.topoOrder }, null, 2);
+  }
+  if (name2 === "churn") {
+    const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
+    const sorted = {};
+    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k);
+    return JSON.stringify({ ok, churn: sorted }, null, 2);
+  }
+  if (name2 === "symbols_overview") {
+    const file = str(args2.file);
+    if (!file) throw new Error("`file` is required");
+    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts, walked), file), null, 2);
+  }
+  if (name2 === "find_symbol") {
+    const namePath = str(args2.namePath);
+    if (!namePath) throw new Error("`namePath` is required");
+    const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
+      substring: args2.substring === true,
+      includeBody: args2.includeBody === true,
+      maxResults: num(args2.maxResults)
+    });
+    return JSON.stringify(matches, null, 2);
+  }
+  if (name2 === "find_references") {
+    const symName = str(args2.name);
+    if (!symName) throw new Error("`name` is required");
+    return JSON.stringify(findReferences(getScan(repo, scanOpts, walked), symName), null, 2);
+  }
+  if (name2 === "replace_symbol_body" || name2 === "insert_after_symbol" || name2 === "insert_before_symbol") {
+    const namePath = str(args2.namePath);
+    const body2 = typeof args2.body === "string" ? args2.body : void 0;
+    if (!namePath || body2 === void 0) throw new Error("`namePath` and `body` are required");
+    const scan2 = getScan(repo, scanOpts, walked);
+    const fn = name2 === "replace_symbol_body" ? replaceSymbolBody : name2 === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
+    const result = fn(scan2, namePath, body2, str(args2.file));
+    sessionClear();
+    return JSON.stringify(result, null, 2);
+  }
+  if (name2 === "write_memory") {
+    const memName = str(args2.name);
+    const content = typeof args2.content === "string" ? args2.content : void 0;
+    if (!memName || content === void 0) throw new Error("`name` and `content` are required");
+    return JSON.stringify({ written: writeMemory(repo, memName, content) }, null, 2);
+  }
+  if (name2 === "read_memory") {
+    const memName = str(args2.name);
+    if (!memName) throw new Error("`name` is required");
+    const content = readMemory(repo, memName);
+    if (content === void 0) throw new Error(`no memory named "${memName}" \u2014 see list_memories`);
+    return content;
+  }
+  if (name2 === "list_memories") {
+    return JSON.stringify(listMemories(repo), null, 2);
+  }
+  if (name2 === "delete_memory") {
+    const memName = str(args2.name);
+    if (!memName) throw new Error("`name` is required");
+    return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
+  }
+  if (name2 === "dead_code") {
+    const all = findDeadCode(getScan(repo, scanOpts, walked));
+    const limit = num(args2.limit);
+    if (limit === void 0 || all.length <= limit) return JSON.stringify(all, null, 2);
+    return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
+  }
+  if (name2 === "complexity") {
+    const scan2 = getScan(repo, scanOpts, walked);
+    if (args2.risk === true) {
+      const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
+      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn, num(args2.top)) }, null, 2);
+    }
+    return JSON.stringify(symbolComplexity(scan2, str(args2.file), num(args2.top)), null, 2);
+  }
+  if (name2 === "mermaid") {
+    const { graph } = getArtifacts(repo, scanOpts, walked);
+    return renderMermaid(graph, { module: str(args2.module), maxEdges: num(args2.maxEdges) });
+  }
+  if (name2 === "repo_map") {
+    const { scan: scan2, graph } = getArtifacts(repo, scanOpts, walked);
+    return renderRepoMap(scan2, graph, { budgetTokens: typeof args2.budgetTokens === "number" ? args2.budgetTokens : void 0 });
+  }
+  if (name2 === "hotspots") {
+    const scan2 = getScan(repo, scanOpts, walked);
+    const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
+    return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2);
+  }
+  if (name2 === "coupling") {
+    const { ok, couplings } = changeCoupling(repo, { since: str(args2.since) });
+    return JSON.stringify({ ok, couplings }, null, 2);
+  }
+  if (name2 === "grep") {
+    const pattern = str(args2.pattern);
+    if (!pattern) throw new Error("`pattern` is required");
+    const scope = str(args2.scope);
+    const globs = strArray(args2.globs);
+    const hits = grepRepo(repo, pattern, {
+      globs: scope ? [...globs ?? [], `${scope.replace(/\/+$/, "")}/**`] : globs,
+      ignoreCase: args2.ignoreCase === true,
+      maxHits: typeof args2.maxHits === "number" ? args2.maxHits : void 0
+    });
+    return JSON.stringify(hits, null, 2);
+  }
+  if (name2 === "search") {
+    const query = str(args2.query);
+    if (!query) throw new Error("`query` is required");
+    const scan2 = getScan(repo, scanOpts, walked);
+    const limit = typeof args2.limit === "number" ? args2.limit : void 0;
+    const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
+    if (args2.semantic === true) {
+      const endpoint = resolveEmbedEndpoint();
+      if (endpoint) {
+        try {
+          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan: scan2 }, () => buildEndpointIndex(scan2));
+          const queryVec = await encodeQueryViaEndpoint(query);
+          const results2 = searchSemantic(scan2, query, index, { queryVec, limit, fuzzy });
+          return JSON.stringify({ results: results2, tier: "endpoint" }, null, 2);
+        } catch (e) {
+          const results2 = searchIndex(scan2, query, { limit, fuzzy });
+          return JSON.stringify(
+            { results: results2, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
+            null,
+            2
+          );
+        }
+      }
+      const modelDir = resolveEmbedModelDir(repo);
+      const model = modelDir ? memoizedEmbedModel(modelDir) : void 0;
+      if (model) {
+        const index = await memoizedEmbeddingIndex(
+          { mode: "static", identity: `${modelDir}#${model.modelId}`, scan: scan2 },
+          () => buildEmbeddingIndex(scan2, model)
+        );
+        const results2 = searchSemantic(scan2, query, index, { model, limit, fuzzy });
+        return JSON.stringify({ results: results2, tier: "static" }, null, 2);
+      }
+      const results = searchIndex(scan2, query, { limit, fuzzy });
+      return JSON.stringify(
+        { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured \u2014 see embed_status" },
+        null,
+        2
+      );
+    }
+    return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy }), null, 2);
+  }
+  if (name2 === "embed_status") {
+    const modelDir = resolveEmbedModelDir(repo);
+    const model = modelDir ? memoizedEmbedModel(modelDir) : void 0;
+    const endpoint = resolveEmbedEndpoint();
+    const mode = endpoint ? "endpoint" : model ? "static" : "none";
+    const status = {
+      embedVersion: EMBED_VERSION,
+      mode,
+      model: model ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize } : { present: false },
+      endpoint: endpoint ?? null
+    };
+    if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
+    return JSON.stringify(status, null, 2);
+  }
+  if (name2 === "check_rules") {
+    const configPath = str(args2.configPath);
+    let payload = args2.rules;
+    if (payload === void 0 && configPath) {
+      const abs = isAbsolute(configPath) ? configPath : join18(repo, configPath);
+      try {
+        payload = JSON.parse(readFileSync8(abs, "utf8"));
+      } catch (e) {
+        throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
+      }
+    }
+    if (payload === void 0) throw new Error("`rules` (or `configPath`) is required");
+    const rules = parseRules(payload);
+    const { graph } = getArtifacts(repo, scanOpts, walked);
+    return JSON.stringify(checkRules(graph, rules), null, 2);
+  }
+  throw new Error(`unknown tool: ${name2}`);
+}
+async function runMcpServer(opts = {}) {
+  const serverInfo = {
+    name: opts.serverInfo?.name ?? "codeindex",
+    version: opts.serverInfo?.version ?? ENGINE_VERSION
+  };
+  let protocolVersion = PROTOCOL_VERSIONS[0];
+  let tools = toolsFor(opts.defaultRepo, protocolVersion);
+  const send = (msg) => {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
+  };
+  const rl = createInterface({ input: process.stdin, terminal: false });
+  for await (const line of rl) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      send({ id: null, error: { code: -32700, message: "parse error" } });
+      continue;
+    }
+    const requests = Array.isArray(parsed) ? parsed : [parsed];
+    for (const req of requests) await handle2(req);
+  }
+  async function handle2(req) {
+    if (req.id === void 0 || req.id === null) return;
+    try {
+      if (req.method === "initialize") {
+        protocolVersion = negotiateProtocol(req.params?.protocolVersion);
+        tools = toolsFor(opts.defaultRepo, protocolVersion);
+        send({
+          id: req.id,
+          result: {
+            protocolVersion,
+            capabilities: { tools: {} },
+            serverInfo
+          }
+        });
+      } else if (req.method === "ping") {
+        send({ id: req.id, result: {} });
+      } else if (req.method === "tools/list") {
+        send({ id: req.id, result: { tools } });
+      } else if (req.method === "tools/call") {
+        const params = req.params ?? {};
+        const name2 = str(params.name) ?? "";
+        const args2 = params.arguments ?? {};
+        try {
+          const decl = tools.find(
+            (t) => t.name === name2
+          );
+          const invalid = decl ? validateArgs(decl.inputSchema, args2) : void 0;
+          if (invalid) throw new Error(invalid);
+          const raw = await callTool(name2, args2, opts.defaultRepo);
+          const repo = str(args2.repo) ?? opts.defaultRepo ?? "";
+          const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
+          const link = text !== raw && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
+          send({
+            id: req.id,
+            result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] }
+          });
+        } catch (e) {
+          send({
+            id: req.id,
+            result: { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true }
+          });
+        }
+      } else {
+        send({ id: req.id, error: { code: -32601, message: `method not found: ${req.method}` } });
+      }
+    } catch (e) {
+      send({ id: req.id, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+    }
+  }
+}
+var SCANLESS_TOOLS;
+var init_mcp = __esm({
+  "src/mcp.ts"() {
+    "use strict";
+    init_types();
+    init_graph_json();
+    init_callers();
+    init_derived();
+    init_workspaces();
+    init_git();
+    init_grep();
+    init_coupling();
+    init_repomap();
+    init_deadcode();
+    init_complexity();
+    init_viz();
+    init_query();
+    init_edit();
+    init_memory();
+    init_bm25();
+    init_rules();
+    init_model();
+    init_embed();
+    init_search();
+    init_endpoint();
+    init_walk();
+    init_tools();
+    init_protocol();
+    init_session();
+    init_tools();
+    init_protocol();
+    init_session();
+    SCANLESS_TOOLS = /* @__PURE__ */ new Set([
+      "workspaces",
+      "churn",
+      "coupling",
+      "grep",
+      "write_memory",
+      "read_memory",
+      "list_memories",
+      "delete_memory",
+      "embed_status",
+      // scan_summary counts and classifies by path only — it never parses, so the
+      // grammar warm (a whole extra walk) would be pure overhead. When a scan is
+      // already cached getScanSummary reuses it, warm grammars included.
+      "scan_summary"
+    ]);
   }
 });
 
@@ -12640,7 +12684,7 @@ init_types();
 init_types();
 init_loader();
 import { existsSync as existsSync7, mkdirSync as mkdirSync3, readFileSync as readFileSync9, writeFileSync as writeFileSync4 } from "fs";
-import { join as join17, resolve as resolve2 } from "path";
+import { join as join19, resolve as resolve2 } from "path";
 init_pipeline();
 init_hash();
 init_graph_json();
@@ -12983,7 +13027,7 @@ async function runCli(rawArgv) {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync3(outDir, { recursive: true });
-    const cachePath = join17(outDir, "cache.json");
+    const cachePath = join19(outDir, "cache.json");
     let cache;
     let meta = {};
     try {
@@ -13008,9 +13052,9 @@ async function runCli(rawArgv) {
     });
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
-    const graphPath = join17(outDir, "graph.json");
-    const symbolsPath = join17(outDir, "symbols.json");
-    const embedPath = join17(outDir, "embeddings.bin");
+    const graphPath = join19(outDir, "graph.json");
+    const symbolsPath = join19(outDir, "symbols.json");
+    const embedPath = join19(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
         return sha1(readFileSync9(path));
@@ -13194,14 +13238,14 @@ async function runCli(rawArgv) {
       mkdirSync3(flags2.out, { recursive: true });
       const scan2 = readScan();
       const index = buildEmbeddingIndex(scan2, model);
-      writeFileSync4(join17(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      writeFileSync4(join19(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
       const { url, sha256 } = resolveEmbedPullUrl();
-      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join17(flags2.repo, ".codeindex", "models");
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join19(flags2.repo, ".codeindex", "models");
       mkdirSync3(destDir, { recursive: true });
-      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join17(destDir, "model.json")}
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join19(destDir, "model.json")}
 `);
       let body2;
       try {
@@ -13222,8 +13266,8 @@ async function runCli(rawArgv) {
         process.exitCode = 1;
         return;
       }
-      writeFileSync4(join17(destDir, "model.json"), body2);
-      process.stderr.write(`codeindex: model written to ${join17(destDir, "model.json")}
+      writeFileSync4(join19(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join19(destDir, "model.json")}
 `);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");
@@ -13233,7 +13277,7 @@ async function runCli(rawArgv) {
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const runtimePresent = info2.dir ? existsSync7(join17(info2.dir, "web-tree-sitter.wasm")) : false;
+      const runtimePresent = info2.dir ? existsSync7(join19(info2.dir, "web-tree-sitter.wasm")) : false;
       const target = resolveGrammarsPullTarget();
       const status = {
         engineVersion: ENGINE_VERSION,
