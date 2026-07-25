@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.17.0](https://github.com/maxgfr/codeindex/compare/v2.16.0...v2.17.0) (2026-07-25)
+
+
+### Features
+
+* **mcp:** pin one repo with --repo, add `rewrite`, fix grep --scope ([a205c34](https://github.com/maxgfr/codeindex/commit/a205c343b7ce254d8cb4eecec76442d24633da62))
+
 # [2.16.0](https://github.com/maxgfr/codeindex/compare/v2.15.0...v2.16.0) (2026-07-24)
 
 
