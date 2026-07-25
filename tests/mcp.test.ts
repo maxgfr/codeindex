@@ -913,3 +913,100 @@ describe("MCP persisted-index preload — e2e byte-identity across servers", () 
     }
   }, 30_000);
 });
+
+// --- Server-level repo pin (`codeindex mcp --repo <dir>`) -------------------
+
+// A host that spawns one server per workspace should not have to teach the
+// agent an absolute path it cannot know. The pin makes `repo` optional; these
+// tests hold the line on the two ways that could go wrong: the schema must SAY
+// so (not merely tolerate it), and an explicit per-call repo must still win.
+describe("MCP --repo pin", () => {
+  interface SchemaTool {
+    name: string;
+    inputSchema: { required?: string[]; properties?: Record<string, { description?: string }> };
+  }
+  const toolsOf = (m: RpcMsg): SchemaTool[] => m.result!.tools as unknown as SchemaTool[];
+  const handshake = [
+    { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+    { method: "notifications/initialized" },
+  ];
+
+  it("drops `repo` from every tool's required set and documents the default", async () => {
+    const res = await mcpSession([...handshake, { id: 2, method: "tools/list" }], undefined, [CLI, "mcp", "--repo", REPO]);
+    const tools = toolsOf(res.get(2)!);
+    expect(tools.length).toBeGreaterThan(0);
+    for (const t of tools) {
+      expect(t.inputSchema.required ?? []).not.toContain("repo");
+      expect(t.inputSchema.properties!.repo!.description).toContain(REPO);
+    }
+    // Other required args are untouched — only `repo` is affected.
+    expect(tools.find((t) => t.name === "find_symbol")!.inputSchema.required).toEqual(["namePath"]);
+    expect(tools.find((t) => t.name === "grep")!.inputSchema.required).toEqual(["pattern"]);
+  }, 20_000);
+
+  it("keeps `repo` required when no pin is given (byte-compat)", async () => {
+    const res = await mcpSession([...handshake, { id: 2, method: "tools/list" }]);
+    for (const t of toolsOf(res.get(2)!)) {
+      expect(t.inputSchema.required ?? []).toContain("repo");
+    }
+  }, 20_000);
+
+  it("serves tool calls that omit `repo`", async () => {
+    const res = await mcpSession(
+      [...handshake, { id: 2, method: "tools/call", params: { name: "scan_summary", arguments: {} } }],
+      undefined,
+      [CLI, "mcp", "--repo", REPO],
+    );
+    const msg = res.get(2)!;
+    expect(msg.result!.isError).toBeUndefined();
+    expect(JSON.parse(msg.result!.content![0]!.text).fileCount).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("still errors on a repo-less call when unpinned", async () => {
+    const res = await mcpSession([...handshake, { id: 2, method: "tools/call", params: { name: "scan_summary", arguments: {} } }]);
+    expect(res.get(2)!.result!.isError).toBe(true);
+    expect(res.get(2)!.result!.content![0]!.text).toContain("`repo` is required");
+  }, 20_000);
+
+  it("lets an explicit per-call repo override the pin", async () => {
+    const other = tmpFixtureCopy("ci-pin-override-");
+    writeFileSync(join(other, "extra-marker.go"), "package p\nfunc MarkerOnlyHere() {}\n");
+    const res = await mcpSession(
+      [
+        ...handshake,
+        { id: 2, method: "tools/call", params: { name: "symbols", arguments: { name: "MarkerOnlyHere" } } },
+        { id: 3, method: "tools/call", params: { name: "symbols", arguments: { repo: other, name: "MarkerOnlyHere" } } },
+      ],
+      undefined,
+      [CLI, "mcp", "--repo", REPO],
+    );
+    // Pinned repo has no such symbol; the overridden one does.
+    expect(JSON.parse(res.get(2)!.result!.content![0]!.text).defs).toEqual([]);
+    expect(JSON.parse(res.get(3)!.result!.content![0]!.text).defs.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("fails fast on a nonexistent pin instead of erroring per call", async () => {
+    expect(() =>
+      execFileSync(process.execPath, [CLI, "mcp", "--repo", join(REPO, "does-not-exist")], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    ).toThrow(/--repo path does not exist/);
+  });
+
+  it("rejects an unknown mcp flag rather than ignoring it", () => {
+    expect(() =>
+      execFileSync(process.execPath, [CLI, "mcp", "--nope"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }),
+    ).toThrow(/unknown flag for `mcp`/);
+  });
+
+  it("overrides the announced serverInfo name with --server-name", async () => {
+    const res = await mcpSession([{ id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } }], undefined, [
+      CLI,
+      "mcp",
+      "--server-name",
+      "iterion-codeindex",
+    ]);
+    expect(res.get(1)!.result!.serverInfo!.name).toBe("iterion-codeindex");
+  }, 20_000);
+});

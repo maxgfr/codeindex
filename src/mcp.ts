@@ -667,8 +667,11 @@ const SCANLESS_TOOLS = new Set([
   "embed_status",
 ]);
 
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const repo = str(args.repo);
+async function callTool(name: string, args: Record<string, unknown>, defaultRepo?: string): Promise<string> {
+  // An explicit per-call `repo` always wins; `defaultRepo` is the server-level
+  // pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
+  // to one workspace, so agents need not know — or restate — the absolute path.
+  const repo = str(args.repo) ?? defaultRepo;
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // Scan-needing tools warm the present-language grammars (re-derived per call)
@@ -886,11 +889,36 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   throw new Error(`unknown tool: ${name}`);
 }
 
+// The advertised tool list. Without a server-level repo pin this is TOOLS
+// verbatim (byte-compat for existing consumers). With one, every tool drops
+// `repo` from its `required` set and documents the default — so a client that
+// omits it is spec-correct rather than relying on the server being lenient.
+// The pin is reflected in the schema, not just honoured at call time.
+function toolsFor(defaultRepo?: string): readonly unknown[] {
+  if (!defaultRepo) return TOOLS;
+  return TOOLS.map((t) => ({
+    ...t,
+    inputSchema: {
+      ...t.inputSchema,
+      properties: {
+        ...t.inputSchema.properties,
+        repo: { type: "string", description: `Absolute path to the repository root (optional — defaults to ${defaultRepo})` },
+      },
+      required: (t.inputSchema.required as readonly string[]).filter((r) => r !== "repo"),
+    },
+  }));
+}
+
 export interface McpServerOptions {
   // Override the serverInfo announced in the initialize response — for
   // downstream consumers embedding this server under their own identity.
   // Omitted fields keep the defaults (name "codeindex", ENGINE_VERSION).
   serverInfo?: { name?: string; version?: string };
+  // Bind the server to ONE repository, so `repo` becomes optional on every
+  // tool (an explicit per-call `repo` still wins). This is what lets a host
+  // spawn one server per workspace — `codeindex mcp --repo <dir>` — instead of
+  // requiring the agent to thread an absolute path through every single call.
+  defaultRepo?: string;
 }
 
 export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
@@ -898,6 +926,8 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     name: opts.serverInfo?.name ?? "codeindex",
     version: opts.serverInfo?.version ?? ENGINE_VERSION,
   };
+  // Derived ONCE: the pin cannot change mid-session, so neither can the list.
+  const tools = toolsFor(opts.defaultRepo);
   // No startup warm: each scan-needing tool warms the present-language grammars
   // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
@@ -940,13 +970,13 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
       } else if (req.method === "ping") {
         send({ id: req.id, result: {} });
       } else if (req.method === "tools/list") {
-        send({ id: req.id, result: { tools: TOOLS } });
+        send({ id: req.id, result: { tools } });
       } else if (req.method === "tools/call") {
         const params = req.params ?? {};
         const name = str(params.name) ?? "";
         const args = (params.arguments ?? {}) as Record<string, unknown>;
         try {
-          const text = await callTool(name, args);
+          const text = await callTool(name, args, opts.defaultRepo);
           send({ id: req.id, result: { content: [{ type: "text", text }] } });
         } catch (e) {
           send({

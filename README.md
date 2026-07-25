@@ -192,16 +192,64 @@ Full details incl. the HTTP protocol (build your own server):
 
 ## Use as an MCP server
 
-`codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio —
-tools: `scan_summary`, `graph`, `symbols`, `callers`, `workspaces`, `churn`,
-`grep`. Register it in Claude Code with:
+`codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio.
+Register it in Claude Code with:
 
 ```sh
 claude mcp add codeindex -- codeindex mcp
 ```
 
+**26 tools**, grouped by what they answer:
+
+| group | tools |
+|---|---|
+| orient | `scan_summary`, `repo_map`, `graph`, `mermaid`, `workspaces` |
+| find | `search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
+| impact | `find_references`, `callers`, `dead_code` |
+| risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules` |
+| edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
+| memory | `write_memory`, `read_memory`, `list_memories`, `delete_memory` *(write except reads)* |
+| embeddings | `embed_status` |
+
+### Pinning the server to one repository
+
+Every tool takes a `repo` argument. A host that runs one server per workspace
+can pin it instead, so `repo` becomes optional on every tool — the pin is
+reflected in the advertised schema, not merely tolerated at call time:
+
+```sh
+codeindex mcp --repo /path/to/workspace
+```
+
+An explicit per-call `repo` still wins, so a pinned server can still answer
+about another checkout. `--server-name <name>` overrides the announced
+`serverInfo.name` for hosts that embed the server under their own identity.
+
+**Prime the index first** and activation becomes a load, not a rebuild:
+`codeindex index --repo <dir> --out <dir>/.codeindex`. The first tool call
+deserializes those artifacts when the engine version, commit and artifact
+hashes all match.
+
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
 into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.
+
+## Command rewriting
+
+`codeindex rewrite '<command line>'` maps an expensive tree-wide search onto
+its indexed equivalent, for agent harnesses that intercept shell commands
+(iterion's `rewriters` plugin kind, generalizing rtk):
+
+```sh
+$ codeindex rewrite 'grep -rn TODO src'
+codeindex grep TODO --scope src
+```
+
+It prints the replacement and exits `0`, or exits `1` with empty stdout when it
+has no opinion — run the original. The parser is deliberately conservative: any
+shell metacharacter (pipe, redirect, substitution, chaining), any unrecognized
+flag, a non-recursive `grep`, or more than one search path all refuse the
+rewrite. A refusal costs nothing; a wrong rewrite silently changes what the
+agent asked for.
 
 ## Versioning
 

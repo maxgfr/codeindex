@@ -185,6 +185,13 @@ export type { RepoMapOptions } from "./repomap.js";
 export { runMcpServer } from "./mcp.js";
 export type { McpServerOptions } from "./mcp.js";
 
+// Command rewriting: an expensive tree-wide search → its indexed equivalent.
+// Exported so a host can decide for itself rather than shelling out to
+// `engine.mjs rewrite` (same conservative refusal semantics either way).
+// Only the decision function is public — the tokenizer/quoter are internal
+// details, and `tokenize` is already taken here by the wordpiece tokenizer.
+export { rewriteCommand } from "./rewrite.js";
+
 // General-purpose helpers shared by consumers (deterministic, dependency-free).
 export { sha1, shortHash } from "./hash.js";
 export { byStr, byKey } from "./sort.js";

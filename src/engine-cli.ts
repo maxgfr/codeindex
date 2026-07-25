@@ -77,8 +77,27 @@ Commands:
   repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
   hotspots    Churn × size ranking of the files where work concentrates (JSON)
   coupling    Change coupling: files that change together (JSON; --since <ref>)
-  mcp         Run as an MCP server over stdio (tools: scan_summary, graph,
-              symbols, callers, workspaces, churn, grep)
+  deadcode    Dead-code candidates in two labeled tiers: 'unreferenced' (no
+              call site binds AND nothing references the name) and 'uncalled'
+              (referenced — re-export, type position — but never called)
+  complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
+              positional for one file; omit for the repo-wide top
+  risk        Complexity × git-churn ranking (JSON; --since <ref> to bound)
+  mermaid     Mermaid diagram of the module graph; pass a module positional to
+              focus on one neighborhood
+  rewrite     Map an expensive tree-wide search onto its indexed equivalent:
+              cli.mjs rewrite '<command line>'. Prints the replacement command
+              and exits 0, or exits 1 when it has no opinion (run the original).
+              Deliberately conservative — any shell metacharacter or unknown
+              flag refuses the rewrite
+  mcp         Run as an MCP server over stdio (26 tools: scan_summary, graph,
+              symbols, callers, workspaces, churn, symbols_overview,
+              find_symbol, find_references, repo_map, hotspots, coupling,
+              dead_code, complexity, mermaid, grep, search, embed_status,
+              check_rules, the memory quartet and the three symbolic-edit
+              writes). Flags: --repo <dir> pins ONE repository so the per-tool
+              repo argument becomes optional (an explicit per-call repo still
+              wins); --server-name <name> overrides the announced serverInfo
   version     Print the engine version
 
 Flags:
@@ -108,6 +127,8 @@ Flags:
   --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
+  --ignore-case       \`grep\`: case-insensitive matching
+  --max-hits <n>      \`grep\`: cap returned hits (default 200)
 `;
 
 interface CliFlags {
@@ -212,6 +233,31 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
 // version/help/mcp return before we get there.
 const SCANLESS_COMMANDS = new Set(["grep", "churn", "coupling", "workspaces", "grammars"]);
 
+// Flags for `codeindex mcp`. Kept separate from parseFlags on purpose (see the
+// dispatch site). `--repo` is resolved to an absolute path and must exist: a
+// server pinned to a typo'd directory would otherwise answer every tool call
+// with the same confusing per-call error instead of failing at startup.
+export function parseMcpFlags(argv: string[]): { defaultRepo?: string; serverInfo?: { name?: string } } {
+  let defaultRepo: string | undefined;
+  let name: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--repo") {
+      const v = argv[++i];
+      if (!v) throw new Error("--repo requires a directory");
+      defaultRepo = resolve(v);
+    } else if (a === "--server-name") {
+      const v = argv[++i];
+      if (!v) throw new Error("--server-name requires a value");
+      name = v;
+    } else {
+      throw new Error(`unknown flag for \`mcp\`: ${a}`);
+    }
+  }
+  if (defaultRepo && !existsSync(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  return { defaultRepo, serverInfo: name ? { name } : undefined };
+}
+
 export async function runCli(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
@@ -222,9 +268,28 @@ export async function runCli(argv: string[]): Promise<void> {
     process.stdout.write(ENGINE_VERSION + "\n");
     return;
   }
+  if (cmd === "rewrite") {
+    // Host contract (iterion's `rewriters` kind, rtk's generalization): stdin
+    // is nothing, argv is ONE full command line, stdout is the command to run
+    // instead, and the exit code says whether to use it. Exit 1 = "no opinion,
+    // run the original" — the overwhelmingly common, deliberately cheap case.
+    const { rewriteCommand } = await import("./rewrite.js");
+    const rewritten = rewriteCommand(rest.join(" "));
+    if (!rewritten) {
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(rewritten + "\n");
+    return;
+  }
   if (cmd === "mcp") {
+    // `mcp` takes a deliberately tiny, self-contained flag set rather than
+    // going through parseFlags: the shared parser owns positional/scope
+    // semantics that mean nothing to a long-lived server, and every unknown
+    // flag there is fatal. Pinning is OPT-IN — a bare `codeindex mcp` keeps
+    // the historical contract where each tool call carries its own `repo`.
     const { runMcpServer } = await import("./mcp.js");
-    await runMcpServer();
+    await runMcpServer(parseMcpFlags(rest));
     return;
   }
 
@@ -646,7 +711,12 @@ export async function runCli(argv: string[]): Promise<void> {
     emit(renderMermaid(graph, { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
-    const globs = [...flags.include, ...flags.exclude.map((g) => `!${g}`)];
+    // `--scope <dir>` is documented as global sugar for `--include '<dir>/**'`;
+    // every other command gets it via scanOptions, but grep bypasses the scan
+    // and builds its own glob list — so it has to fold the sugar in itself, or
+    // the flag would be silently ignored here alone.
+    const scopeGlobs = flags.scope ? [`${flags.scope.replace(/\/+$/, "")}/**`] : [];
+    const globs = [...scopeGlobs, ...flags.include, ...flags.exclude.map((g) => `!${g}`)];
     const hits = grepRepo(flags.repo, flags.positional, {
       globs: globs.length ? globs : undefined,
       ignoreCase: flags.ignoreCase,
