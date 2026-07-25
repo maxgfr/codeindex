@@ -34,7 +34,13 @@ const prime = (repo: string): void => {
   run(repo, ["index", "--out", join(repo, ".codeindex")]);
 };
 
-describe("persisted-index reuse — output-identical", () => {
+// Every test here drives the REAL CLI, and the two output-identity tests spawn
+// 17-18 Node processes apiece (prime + each read command twice). Vitest's 5s
+// default was never a budget for that: on a 2-core CI runner the drift test
+// came in at 5513ms and failed the suite on timing alone, with nothing wrong
+// in the behaviour under test. The suite-wide budget is sized for the process
+// count, not for the assertion.
+describe("persisted-index reuse — output-identical", { timeout: 60_000 }, () => {
   it("every read command agrees with --no-index-cache once primed", () => {
     withRepo((repo) => {
       prime(repo);
