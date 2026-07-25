@@ -68,6 +68,30 @@ export function validateArgs(
   return undefined;
 }
 
+// The structuredContent for a tool response, or undefined when there must not
+// be one.
+//
+// Emitted only when ALL of these hold, because the spec requires a declared
+// outputSchema to be honoured by every structured result:
+//   * the tool declares an outputSchema (see OUTPUT_SCHEMAS),
+//   * the response was NOT replaced by the size guard — the truncation notice
+//     is a different shape and would not conform,
+//   * the text parses to a JSON object (never an array: structuredContent is
+//     specified as an object).
+// The text block is left exactly as it was, so this is purely additive and
+// content stays the serialization of structuredContent, as the spec asks.
+export function structuredContentFor(text: string, capped: boolean, hasSchema: boolean): Record<string, unknown> | undefined {
+  if (capped || !hasSchema) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  return parsed as Record<string, unknown>;
+}
+
 export function negotiateProtocol(requested: unknown): string {
   return typeof requested === "string" && (PROTOCOL_VERSIONS as readonly string[]).includes(requested)
     ? requested

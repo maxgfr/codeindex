@@ -306,6 +306,151 @@ export const TOOLS = [
   },
 ] as const;
 
+
+// --- output schemas ----------------------------------------------------------
+// `outputSchema` (protocol 2025-06-18) lets a client validate and type a tool's
+// result instead of re-parsing an opaque string, and `structuredContent` carries
+// that result alongside the text block.
+//
+// Only tools whose response is a JSON OBJECT for EVERY argument combination are
+// declared here, because the spec requires structuredContent to be an object and
+// requires it to conform whenever an outputSchema is present. That rules out:
+//
+//   * array responses — symbols_overview, find_symbol, grep, check_rules,
+//     list_memories. Wrapping them in `{ items: [...] }` would make
+//     structuredContent diverge from the text block, and changing the text block
+//     itself would break every existing client. Omitting the schema is the only
+//     option that breaks neither.
+//   * argument-dependent shapes — dead_code (array, object with `limit`),
+//     complexity (array, object with `risk`), search (array, object with
+//     `semantic`). A schema that cannot describe every response is worse than
+//     none: it would make a conforming client reject valid output.
+//   * text responses — repo_map, mermaid, read_memory, which are not JSON.
+//
+// Shapes are deliberately open (no `additionalProperties: false`): a later
+// engine adding a field must not turn a strict client's success into a failure.
+const strArr = { type: "array", items: { type: "string" } };
+const anyObj = { type: "object" };
+
+export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
+  scan_summary: {
+    type: "object",
+    properties: {
+      engineVersion: { type: "string" },
+      commit: { type: "string" },
+      fileCount: { type: "integer" },
+      languages: { type: "object", additionalProperties: { type: "integer" } },
+      capped: { type: "boolean" },
+    },
+    required: ["engineVersion", "fileCount", "languages", "capped"],
+  },
+  graph: {
+    type: "object",
+    properties: {
+      schemaVersion: { type: "integer" },
+      version: { type: "string" },
+      commit: { type: "string" },
+      fileCount: { type: "integer" },
+      languages: { type: "object", additionalProperties: { type: "integer" } },
+      files: { type: "array", items: anyObj },
+      modules: { type: "array", items: anyObj },
+      fileEdges: { type: "array", items: anyObj },
+      moduleEdges: { type: "array", items: anyObj },
+    },
+    required: ["schemaVersion", "files", "fileEdges", "modules", "moduleEdges"],
+  },
+  // Two shapes, both objects: the whole index, or one symbol's entry.
+  symbols: {
+    oneOf: [
+      {
+        type: "object",
+        properties: { schemaVersion: { type: "integer" }, defs: anyObj, refs: anyObj },
+        required: ["schemaVersion", "defs"],
+      },
+      {
+        type: "object",
+        properties: { name: { type: "string" }, defs: { type: "array", items: anyObj }, refs: strArr },
+        required: ["name", "defs", "refs"],
+      },
+    ],
+  },
+  // The whole index (symbol name -> entry), one entry, or the not-found notice.
+  callers: {
+    oneOf: [
+      { type: "object", additionalProperties: anyObj },
+      { type: "object", properties: { error: { type: "string" } }, required: ["error"] },
+    ],
+  },
+  workspaces: {
+    type: "object",
+    properties: {
+      packages: { type: "array", items: anyObj },
+      cycle: { type: ["array", "null"], items: { type: "string" } },
+      topoOrder: strArr,
+    },
+    required: ["packages", "topoOrder"],
+  },
+  churn: {
+    type: "object",
+    properties: { ok: { type: "boolean" }, churn: { type: "object", additionalProperties: { type: "integer" } } },
+    required: ["ok", "churn"],
+  },
+  find_references: {
+    type: "object",
+    properties: {
+      defs: { type: "array", items: anyObj },
+      callSites: { type: "array", items: anyObj },
+      referencingFiles: strArr,
+    },
+    required: ["defs", "callSites", "referencingFiles"],
+  },
+  hotspots: {
+    type: "object",
+    properties: { churnOk: { type: "boolean" }, hotspots: { type: "array", items: anyObj } },
+    required: ["churnOk", "hotspots"],
+  },
+  coupling: {
+    type: "object",
+    properties: { ok: { type: "boolean" }, couplings: { type: "array", items: anyObj } },
+    required: ["ok", "couplings"],
+  },
+  embed_status: {
+    type: "object",
+    properties: {
+      embedVersion: { type: "integer" },
+      mode: { type: "string", enum: ["none", "static", "endpoint"] },
+      model: {},
+      endpoint: {},
+      endpointReachable: { type: "boolean" },
+    },
+    required: ["embedVersion", "mode"],
+  },
+  write_memory: {
+    type: "object",
+    properties: { written: { type: "string" } },
+    required: ["written"],
+  },
+  delete_memory: {
+    type: "object",
+    properties: { deleted: { type: "boolean" } },
+    required: ["deleted"],
+  },
+};
+
+// The three symbolic edits share one result shape (see src/edit.ts EditResult).
+for (const name of ["replace_symbol_body", "insert_after_symbol", "insert_before_symbol"]) {
+  OUTPUT_SCHEMAS[name] = {
+    type: "object",
+    properties: {
+      file: { type: "string" },
+      symbol: { type: "string" },
+      startLine: { type: "integer" },
+      endLine: { type: "integer" },
+    },
+    required: ["file"],
+  };
+}
+
 // Per-tool display title and behaviour hints.
 //
 // The hints matter operationally: they are what lets a host auto-approve the 23
@@ -371,11 +516,13 @@ export function annotationsFor(name: string): Record<string, boolean> | undefine
 // revisions additionally get `title` and `annotations`.
 export function toolsFor(defaultRepo?: string, protocolVersion: string = PROTOCOL_VERSIONS[0]): readonly unknown[] {
   const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
-  const withTitle = protocolVersion >= RICH_TOOLS_SINCE;
-  if (!defaultRepo && !withAnnotations && !withTitle) return TOOLS;
+  // Tool.title and Tool.outputSchema both arrive in 2025-06-18.
+  const withRich = protocolVersion >= RICH_TOOLS_SINCE;
+  if (!defaultRepo && !withAnnotations && !withRich) return TOOLS;
   return TOOLS.map((t) => ({
     ...t,
-    ...(withTitle && TOOL_META[t.name] ? { title: TOOL_META[t.name]!.title } : {}),
+    ...(withRich && TOOL_META[t.name] ? { title: TOOL_META[t.name]!.title } : {}),
+    ...(withRich && OUTPUT_SCHEMAS[t.name] ? { outputSchema: OUTPUT_SCHEMAS[t.name] } : {}),
     ...(withAnnotations ? { annotations: annotationsFor(t.name) } : {}),
     inputSchema: !defaultRepo
       ? t.inputSchema

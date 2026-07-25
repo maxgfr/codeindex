@@ -34,7 +34,7 @@ import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
 import { walk, type WalkResult } from "./walk.js";
-import { toolsFor } from "./mcp/tools.js";
+import { toolsFor, OUTPUT_SCHEMAS } from "./mcp/tools.js";
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
   RICH_TOOLS_SINCE,
@@ -42,6 +42,7 @@ import {
   capResponse,
   negotiateProtocol,
   resourceLinkFor,
+  structuredContentFor,
   validateArgs,
 } from "./mcp/protocol.js";
 import {
@@ -59,13 +60,14 @@ import {
 // The public surface of this module is unchanged: everything that used to live
 // here is re-exported, so `src/engine.ts`, the tests and any consumer importing
 // from "./mcp.js" keep working exactly as before.
-export { toolsFor, TOOLS, TOOL_META, annotationsFor } from "./mcp/tools.js";
+export { toolsFor, TOOLS, TOOL_META, OUTPUT_SCHEMAS, annotationsFor } from "./mcp/tools.js";
 export {
   DEFAULT_MAX_RESPONSE_BYTES,
   PROTOCOL_VERSIONS,
   capResponse,
   negotiateProtocol,
   resourceLinkFor,
+  structuredContentFor,
   validateArgs,
 } from "./mcp/protocol.js";
 export {
@@ -468,11 +470,21 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
           // Gated on `text !== raw` — i.e. capResponse actually replaced the
           // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
           // every single call just to discover it was not truncated.
-          const link =
-            text !== raw && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+          const capped = text !== raw;
+          const link = capped && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+          // Typed, validatable result alongside the text block — for the tools
+          // that declare an outputSchema, and never when the guard replaced the
+          // payload (see structuredContentFor).
+          const structured =
+            protocolVersion >= RICH_TOOLS_SINCE
+              ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined)
+              : undefined;
           send({
             id: req.id,
-            result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] },
+            result: {
+              content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
+              ...(structured ? { structuredContent: structured } : {}),
+            },
           });
         } catch (e) {
           send({

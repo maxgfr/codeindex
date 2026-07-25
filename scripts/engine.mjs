@@ -10492,6 +10492,17 @@ function validateArgs(schema, args2) {
   }
   return void 0;
 }
+function structuredContentFor(text, capped, hasSchema) {
+  if (capped || !hasSchema) return void 0;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
+  return parsed;
+}
 function negotiateProtocol(requested) {
   return typeof requested === "string" && PROTOCOL_VERSIONS.includes(requested) ? requested : LATEST_PROTOCOL;
 }
@@ -10565,11 +10576,12 @@ function annotationsFor(name2) {
 }
 function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0]) {
   const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
-  const withTitle = protocolVersion >= RICH_TOOLS_SINCE;
-  if (!defaultRepo && !withAnnotations && !withTitle) return TOOLS;
+  const withRich = protocolVersion >= RICH_TOOLS_SINCE;
+  if (!defaultRepo && !withAnnotations && !withRich) return TOOLS;
   return TOOLS.map((t) => ({
     ...t,
-    ...withTitle && TOOL_META[t.name] ? { title: TOOL_META[t.name].title } : {},
+    ...withRich && TOOL_META[t.name] ? { title: TOOL_META[t.name].title } : {},
+    ...withRich && OUTPUT_SCHEMAS[t.name] ? { outputSchema: OUTPUT_SCHEMAS[t.name] } : {},
     ...withAnnotations ? { annotations: annotationsFor(t.name) } : {},
     inputSchema: !defaultRepo ? t.inputSchema : {
       ...t.inputSchema,
@@ -10584,7 +10596,7 @@ function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0]) {
     }
   }));
 }
-var repoProp, scopeProps, TOOLS, TOOL_META;
+var repoProp, scopeProps, TOOLS, strArr, anyObj, OUTPUT_SCHEMAS, TOOL_META;
 var init_tools = __esm({
   "src/mcp/tools.ts"() {
     "use strict";
@@ -10861,6 +10873,124 @@ var init_tools = __esm({
         }
       }
     ];
+    strArr = { type: "array", items: { type: "string" } };
+    anyObj = { type: "object" };
+    OUTPUT_SCHEMAS = {
+      scan_summary: {
+        type: "object",
+        properties: {
+          engineVersion: { type: "string" },
+          commit: { type: "string" },
+          fileCount: { type: "integer" },
+          languages: { type: "object", additionalProperties: { type: "integer" } },
+          capped: { type: "boolean" }
+        },
+        required: ["engineVersion", "fileCount", "languages", "capped"]
+      },
+      graph: {
+        type: "object",
+        properties: {
+          schemaVersion: { type: "integer" },
+          version: { type: "string" },
+          commit: { type: "string" },
+          fileCount: { type: "integer" },
+          languages: { type: "object", additionalProperties: { type: "integer" } },
+          files: { type: "array", items: anyObj },
+          modules: { type: "array", items: anyObj },
+          fileEdges: { type: "array", items: anyObj },
+          moduleEdges: { type: "array", items: anyObj }
+        },
+        required: ["schemaVersion", "files", "fileEdges", "modules", "moduleEdges"]
+      },
+      // Two shapes, both objects: the whole index, or one symbol's entry.
+      symbols: {
+        oneOf: [
+          {
+            type: "object",
+            properties: { schemaVersion: { type: "integer" }, defs: anyObj, refs: anyObj },
+            required: ["schemaVersion", "defs"]
+          },
+          {
+            type: "object",
+            properties: { name: { type: "string" }, defs: { type: "array", items: anyObj }, refs: strArr },
+            required: ["name", "defs", "refs"]
+          }
+        ]
+      },
+      // The whole index (symbol name -> entry), one entry, or the not-found notice.
+      callers: {
+        oneOf: [
+          { type: "object", additionalProperties: anyObj },
+          { type: "object", properties: { error: { type: "string" } }, required: ["error"] }
+        ]
+      },
+      workspaces: {
+        type: "object",
+        properties: {
+          packages: { type: "array", items: anyObj },
+          cycle: { type: ["array", "null"], items: { type: "string" } },
+          topoOrder: strArr
+        },
+        required: ["packages", "topoOrder"]
+      },
+      churn: {
+        type: "object",
+        properties: { ok: { type: "boolean" }, churn: { type: "object", additionalProperties: { type: "integer" } } },
+        required: ["ok", "churn"]
+      },
+      find_references: {
+        type: "object",
+        properties: {
+          defs: { type: "array", items: anyObj },
+          callSites: { type: "array", items: anyObj },
+          referencingFiles: strArr
+        },
+        required: ["defs", "callSites", "referencingFiles"]
+      },
+      hotspots: {
+        type: "object",
+        properties: { churnOk: { type: "boolean" }, hotspots: { type: "array", items: anyObj } },
+        required: ["churnOk", "hotspots"]
+      },
+      coupling: {
+        type: "object",
+        properties: { ok: { type: "boolean" }, couplings: { type: "array", items: anyObj } },
+        required: ["ok", "couplings"]
+      },
+      embed_status: {
+        type: "object",
+        properties: {
+          embedVersion: { type: "integer" },
+          mode: { type: "string", enum: ["none", "static", "endpoint"] },
+          model: {},
+          endpoint: {},
+          endpointReachable: { type: "boolean" }
+        },
+        required: ["embedVersion", "mode"]
+      },
+      write_memory: {
+        type: "object",
+        properties: { written: { type: "string" } },
+        required: ["written"]
+      },
+      delete_memory: {
+        type: "object",
+        properties: { deleted: { type: "boolean" } },
+        required: ["deleted"]
+      }
+    };
+    for (const name2 of ["replace_symbol_body", "insert_after_symbol", "insert_before_symbol"]) {
+      OUTPUT_SCHEMAS[name2] = {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          symbol: { type: "string" },
+          startLine: { type: "integer" },
+          endLine: { type: "integer" }
+        },
+        required: ["file"]
+      };
+    }
     TOOL_META = {
       scan_summary: { title: "Scan summary" },
       graph: { title: "Link graph" },
@@ -11018,6 +11148,7 @@ var init_session = __esm({
 var mcp_exports = {};
 __export(mcp_exports, {
   DEFAULT_MAX_RESPONSE_BYTES: () => DEFAULT_MAX_RESPONSE_BYTES,
+  OUTPUT_SCHEMAS: () => OUTPUT_SCHEMAS,
   PROTOCOL_VERSIONS: () => PROTOCOL_VERSIONS,
   TOOLS: () => TOOLS,
   TOOL_META: () => TOOL_META,
@@ -11032,6 +11163,7 @@ __export(mcp_exports, {
   resourceLinkFor: () => resourceLinkFor,
   runMcpServer: () => runMcpServer,
   scanFingerprint: () => scanFingerprint,
+  structuredContentFor: () => structuredContentFor,
   toCacheMap: () => toCacheMap,
   toolsFor: () => toolsFor,
   validateArgs: () => validateArgs,
@@ -11327,10 +11459,15 @@ async function runMcpServer(opts = {}) {
           const raw = await callTool(name2, args2, opts.defaultRepo);
           const repo = str(args2.repo) ?? opts.defaultRepo ?? "";
           const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-          const link = text !== raw && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
+          const capped = text !== raw;
+          const link = capped && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
+          const structured = protocolVersion >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name2] !== void 0) : void 0;
           send({
             id: req.id,
-            result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] }
+            result: {
+              content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
+              ...structured ? { structuredContent: structured } : {}
+            }
           });
         } catch (e) {
           send({
