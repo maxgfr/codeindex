@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.18.0](https://github.com/maxgfr/codeindex/compare/v2.17.1...v2.18.0) (2026-07-25)
+
+
+### Bug Fixes
+
+* **cli:** teach the flag hoister about --workers, --index and --max-response-bytes ([315d9ca](https://github.com/maxgfr/codeindex/commit/315d9caa4eca6385ecb4b1c36064822bb501e838))
+* **pool:** ask workers for the main thread's grammars, and bound a hung worker ([2fc4ec6](https://github.com/maxgfr/codeindex/commit/2fc4ec6de7e0b9dc67a0c5d433d359cf8c06c892))
+* **sources:** stop shipping literal NUL bytes in TypeScript sources ([76ad826](https://github.com/maxgfr/codeindex/commit/76ad82614537f38a82195f558e018868cdbe7065))
+
+
+### Features
+
+* **graph:** delta review, impact and neighbors — the traversals consumers kept reimplementing ([08c5fd8](https://github.com/maxgfr/codeindex/commit/08c5fd8570fc64ff2e2b3faf88fe7eae2cf20453))
+* **mcp:** bound oversized responses, expose the caps that already existed ([e46277a](https://github.com/maxgfr/codeindex/commit/e46277a0f11c96c699b46f5d14a8334dd6f0505b))
+* **mcp:** negotiate the protocol, annotate the tools, validate the arguments ([5b686d5](https://github.com/maxgfr/codeindex/commit/5b686d5481c2a589deb396db4ec38350b81c2c91))
+
+
+### Performance Improvements
+
+* **cli:** reuse the persisted index in every read command ([9e82664](https://github.com/maxgfr/codeindex/commit/9e82664eb2a22fa5c09dec4772930abe29ecab8d))
+* **extract:** fold four AST traversals into one, drop the discarded ones ([8ae58d2](https://github.com/maxgfr/codeindex/commit/8ae58d28e14ae7884da84fcbf65278bfb2cb955b))
+* **mcp:** one walk per call, a bounded LRU, and a memoized caller index ([ef6353a](https://github.com/maxgfr/codeindex/commit/ef6353afe2a096190d01a299f77396ab0b89a276))
+* **mcp:** skip the resource-link probe on responses that were not capped ([2ca6200](https://github.com/maxgfr/codeindex/commit/2ca6200b68e2838c82868c254dfc6131ea989f06))
+* **pool:** extract across worker_threads, byte-identical to sequential ([c53258c](https://github.com/maxgfr/codeindex/commit/c53258ccf7510a44d0219b3458e403840a9ffd85))
+* **scip:** assemble the protobuf into a growable Uint8Array, not a number[] ([8bbce52](https://github.com/maxgfr/codeindex/commit/8bbce52064d257cf77f210d231861b5233190e7e))
+
 ## [2.17.1](https://github.com/maxgfr/codeindex/compare/v2.17.0...v2.17.1) (2026-07-25)
 
 
