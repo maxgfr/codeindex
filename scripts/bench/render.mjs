@@ -50,9 +50,10 @@ function table(headers, rows, nominalRuns) {
 // Hand-written methodology & fairness prose, embedded here so `--write`
 // regenerates BENCHMARKS.md idempotently (it previously lived only in
 // BENCHMARKS.md and was lost on every --write). Emitted verbatim between the
-// intro paragraph and the first measured section. The "Notes on specific
-// cells" subsection is session-specific by nature — update it HERE when a
-// new measurement session changes those facts.
+// intro paragraph and the first measured section. Where this prose states a
+// measured fact — which tool takes the cold-index row, how many files a repo
+// has — a new session can falsify it, so re-read it against the tables the
+// run produced rather than assuming it still holds.
 const METHODOLOGY = `## Methodology & fairness
 
 The tools compared here are architecturally different, not just differently

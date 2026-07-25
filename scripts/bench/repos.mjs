@@ -67,9 +67,12 @@ export const REPOS = [
     sha: "203177bb7505837801281c7d1eb008519a242010",
     lang: "typescript",
     symbol: "NextResponse",
-    // ~30k files on disk. The streaming indexers (codeindex, ctags) handle it;
-    // the full in-memory indexers (serena's LSP, graphify's Python
-    // graph+clustering) are gated off here — see HEAVY_INDEX_MAX_FILES.
+    // 30,211 files ON DISK — deliberately not the 27,952 codeindex reports as
+    // indexed, and not a stale figure to "correct" down to it. This gates the
+    // whole-tree indexers (serena's LSP, graphify's Python graph+clustering),
+    // which walk everything; the binaries, lockfiles and ignored paths that
+    // codeindex drops are work those two still have to do. The streaming
+    // indexers (codeindex, ctags) stay measured — see HEAVY_INDEX_MAX_FILES.
     approxFiles: 30000,
   },
 ];

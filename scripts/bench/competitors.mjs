@@ -81,7 +81,7 @@ const MCP_HANDSHAKE_INPUT = [
 ].join("\n");
 
 // Known-good versions for the two MCP competitors (recorded in the report,
-// not enforced): serena 1.6.1, graphifyy 0.9.25.
+// not enforced): serena 1.6.1, graphifyy 0.9.26.
 
 // serena (oraios/serena, uv tool serena-agent). Language servers are
 // provisioned per language on first use into ~/.serena/language_servers, so

@@ -3,7 +3,7 @@ name: Bench
 # Manual only — never on push/cron, and never commits results (the measurement
 # session lives elsewhere). This is a SMOKE run: it proves the benchmark harness
 # executes end-to-end on a neutral runner where no competitor is installed
-# (ctags/ast-grep/01x all absent → every competitor cell is `n/a`, exit 0). The
+# (ctags/serena/graphify all absent → every competitor cell is `n/a`, exit 0). The
 # rendered markdown is uploaded as an artifact for inspection.
 
 on:
