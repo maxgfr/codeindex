@@ -1225,8 +1225,12 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
           // A capped whole-repo response points at an artifact already on disk.
           // From 2025-06-18 the protocol has a content type that says exactly
           // that, so the client can fetch the bytes instead of re-asking.
+          //
+          // Gated on `text !== raw` — i.e. capResponse actually replaced the
+          // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
+          // every single call just to discover it was not truncated.
           const link =
-            protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+            text !== raw && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
           send({
             id: req.id,
             result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] },

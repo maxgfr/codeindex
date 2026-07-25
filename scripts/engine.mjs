@@ -10968,7 +10968,7 @@ async function runMcpServer(opts = {}) {
           const raw = await callTool(name2, args2, opts.defaultRepo);
           const repo = str(args2.repo) ?? opts.defaultRepo ?? "";
           const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-          const link = protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
+          const link = text !== raw && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
           send({
             id: req.id,
             result: { content: link ? [{ type: "text", text }, link] : [{ type: "text", text }] }

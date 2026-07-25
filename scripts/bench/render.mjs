@@ -67,12 +67,17 @@ vague "codeindex vs tool X":
   cold \`buildIndexArtifacts\`, and serialization of the *entire* symbol table —
   it is **not** a single-symbol lookup and must never be read as one. It is
   included so a one-shot CLI caller can see that cost too.
-- **ctags is faster on cold, flat tags only.** universal-ctags emits a flat
-  \`tags\` file with \`-R\` and, on a cold build of a small repo, beats
-  codeindex's richer graph+symbol artifacts. That is an honest win for the
-  simpler data model, not a like-for-like result: ctags produces no call
-  graph, no references, and no MCP-servable structure — see the Queries and
-  Cold index tables for both sides of that trade.
+- **ctags wins the small cold builds; the ranking flips as the repo grows.**
+  universal-ctags emits a flat \`tags\` file with \`-R\`, and on a small repo it
+  beats codeindex's richer graph+symbol artifacts by an order of magnitude —
+  at that size codeindex is mostly paying Node startup and its wasm grammar
+  load, and there is not enough work to spread across cores. On the largest
+  repo measured here (\`vercel/next.js\`, ~20k indexed files) codeindex comes
+  out ahead, because extraction is distributed over worker threads while a
+  ctags pass is not. Read the Cold index table for where the crossover falls
+  on your own repo size; either way ctags produces no call graph, no
+  references and no MCP-servable structure, so this is a comparison of two
+  different jobs, not a like-for-like race.
 
 ### MCP servers (Serena, Graphify): task equivalence
 

@@ -21,7 +21,7 @@
   STORY: a developer evaluating a repo-indexing tool sees the headline
   speed/token claims, then immediately gets the receipts — a real chart, real
   tables sourced from one embedded JSON blob, and the honest caveats (ctags
-  is faster) placed next to the wins, not hidden.
+  wins the small cold builds) placed next to the wins, not hidden.
   FIRST VIEWPORT: titleblock eyebrow + h1 "codeindex" + one-line pitch +
   license/version/tool-count pills, install one-liners in a bordered spec
   box to the side, on the ruled-paper ground.
@@ -1108,9 +1108,10 @@
           Key numbers (JavaScript disabled — see full figures in
           <a href="https://github.com/maxgfr/codeindex/blob/main/BENCHMARKS.md"
             >BENCHMARKS.md</a
-          >): a full typed cross-file graph built in seconds; a warm rerun of
-          <code>vercel/next.js</code> under a second, one touched file in about
-          a second and a half; far fewer tokens than a raw grep dump for a
+          >): a full typed cross-file graph built in seconds, with extraction
+          spread across worker threads; a warm rerun of
+          <code>vercel/next.js</code> in around a second, and roughly twice that
+          for one touched file; far fewer tokens than a raw grep dump for a
           single-symbol lookup; 15 languages; 0 runtime dependencies;
           byte-identical rebuilds on 7/7 measured repos; 26 MCP tools.
         </p>
@@ -1161,10 +1162,11 @@
       <p class="chart-note">
         One row per thing an agent-tooling team weighs. A filled tile marks the
         leader on that axis — hover any cell for the measured number. Where a
-        rival wins it stays at the top of the table, unedited: ctags takes both
-        cold-index rows because a flat <code>tags</code> pass is a smaller job
-        than a typed cross-file graph. The rows below it are the ones that job
-        buys.
+        rival wins it stays at the top of the table, unedited: on a small repo
+        ctags takes the cold-index row, because a flat <code>tags</code> pass is
+        a smaller job than a typed cross-file graph and there is too little work
+        to spread across cores. That ordering flips on the largest repo measured
+        here. The rows below are what the bigger job buys.
       </p>
       <div class="vmatrix-wrap">
         <table class="vmatrix" id="vmatrix">
@@ -1495,8 +1497,9 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
               <td>Broad, generic parser rules</td>
               <td>Binary install</td>
               <td>
-                Fastest cold index in this report — definitions only, no
-                call graph, no import resolution, no cross-file links
+                Fastest cold index on small repos, overtaken on the largest one
+                measured — and definitions only: no call graph, no import
+                resolution, no cross-file links
               </td>
             </tr>
             <tr>
@@ -1553,12 +1556,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
 </footer>
 
 <script id="benchmarks-data" type="application/json">{
-  "generatedAt": "2026-07-24T20:25:23.491Z",
+  "generatedAt": "2026-07-25T10:36:55.397Z",
   "environment": {
-    "node": "v24.10.0",
+    "node": "v24.15.0",
     "cpu": "Apple M5",
     "ram": "16.0 GB",
-    "date": "2026-07-24T20:25:23.491Z"
+    "date": "2026-07-25T10:36:55.397Z"
   },
   "nominalRuns": 5,
   "sections": [
@@ -1587,26 +1590,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "432",
-            "value": 432.01870899999994,
+            "display": "358",
+            "value": 358.4169999999999,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "29",
-            "value": 28.6127919999999,
+            "display": "32",
+            "value": 31.98787500000026,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "2057",
-            "value": 2056.716292000001,
+            "display": "2192",
+            "value": 2192.37075,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1712",
-            "value": 1712.4600830000018,
+            "display": "1759",
+            "value": 1759.0835000000006,
             "kind": "ms",
             "runs": 5
           }
@@ -1623,26 +1626,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "252",
-            "value": 251.59412499999962,
+            "display": "187",
+            "value": 186.7308750000011,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "17",
-            "value": 16.847333000001527,
+            "display": "20",
+            "value": 20.34570800000074,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "2360",
-            "value": 2359.9102920000005,
+            "display": "2352",
+            "value": 2352.0434999999998,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "850",
-            "value": 849.5198749999981,
+            "display": "884",
+            "value": 883.7731660000063,
             "kind": "ms",
             "runs": 5
           }
@@ -1659,26 +1662,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "86",
-            "value": 85.69362499999988,
+            "display": "131",
+            "value": 130.8227079999997,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "18",
-            "value": 18.198167000002286,
+            "display": "21",
+            "value": 20.82158299999719,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "826",
-            "value": 826.4434170000022,
+            "display": "878",
+            "value": 878.3116670000018,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "774",
-            "value": 774.2350839999999,
+            "display": "803",
+            "value": 802.9227920000048,
             "kind": "ms",
             "runs": 5
           }
@@ -1695,26 +1698,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "282",
-            "value": 282.2427089999983,
+            "display": "238",
+            "value": 238.44358300000022,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "23",
-            "value": 23.409249999996973,
+            "display": "28",
+            "value": 27.90341699999408,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1161",
-            "value": 1160.894042,
+            "display": "1118",
+            "value": 1117.518750000003,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "973",
-            "value": 972.9781669999938,
+            "display": "1001",
+            "value": 1001.2045829999988,
             "kind": "ms",
             "runs": 5
           }
@@ -1731,26 +1734,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "1686",
-            "value": 1686.405792000005,
+            "display": "640",
+            "value": 640.3809590000019,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "319",
-            "value": 318.7879580000008,
+            "display": "335",
+            "value": 334.8570000000036,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "7031",
-            "value": 7031.463416999992,
+            "display": "7595",
+            "value": 7595.349792000008,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "10060",
-            "value": 10060.054541999998,
+            "display": "10215",
+            "value": 10214.67287499999,
             "kind": "ms",
             "runs": 5
           }
@@ -1767,26 +1770,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "92",
-            "value": 91.65787500000442,
+            "display": "129",
+            "value": 128.8682909999916,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "23",
-            "value": 22.920249999995576,
+            "display": "26",
+            "value": 25.818292000010842,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "927",
-            "value": 927.2957500000193,
+            "display": "939",
+            "value": 939.1759159999783,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "587",
-            "value": 586.5921660000167,
+            "display": "600",
+            "value": 600.3706660000025,
             "kind": "ms",
             "runs": 5
           }
@@ -1803,14 +1806,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "int"
           },
           {
-            "display": "7993",
-            "value": 7993.155958999996,
+            "display": "2843",
+            "value": 2843.4187920000113,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "3116",
-            "value": 3115.6487079999933,
+            "display": "3320",
+            "value": 3320.0392909999937,
             "kind": "ms",
             "runs": 5
           },
@@ -1842,14 +1845,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "48",
-            "value": 47.68545799999265,
+            "display": "53",
+            "value": 52.7512080000015,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "78",
-            "value": 77.72375000000466,
+            "display": "105",
+            "value": 104.94566700002179,
             "kind": "ms",
             "runs": 5
           }
@@ -1861,14 +1864,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "42",
-            "value": 41.52470800001174,
+            "display": "46",
+            "value": 46.19050000002608,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "64",
-            "value": 64.12208300002385,
+            "display": "91",
+            "value": 91.02174999998533,
             "kind": "ms",
             "runs": 5
           }
@@ -1880,14 +1883,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "45",
-            "value": 44.95145799999591,
+            "display": "52",
+            "value": 51.73908300002222,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "60",
-            "value": 59.61591699998826,
+            "display": "91",
+            "value": 90.86454199999571,
             "kind": "ms",
             "runs": 5
           }
@@ -1899,14 +1902,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "46",
-            "value": 45.71804200002225,
+            "display": "51",
+            "value": 50.777415999997174,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "86",
-            "value": 86.23770800000057,
+            "display": "114",
+            "value": 113.81804199999897,
             "kind": "ms",
             "runs": 5
           }
@@ -1918,14 +1921,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "132",
-            "value": 131.8720420000027,
+            "display": "140",
+            "value": 139.86491600002046,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "327",
-            "value": 326.9007500000298,
+            "display": "342",
+            "value": 341.7454170000274,
             "kind": "ms",
             "runs": 5
           }
@@ -1937,14 +1940,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "43",
-            "value": 42.9490409999853,
+            "display": "48",
+            "value": 47.90562500001397,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "59",
-            "value": 59.429457999998704,
+            "display": "87",
+            "value": 87.48470799997449,
             "kind": "ms",
             "runs": 5
           }
@@ -1956,14 +1959,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "877",
-            "value": 876.8855000000331,
+            "display": "918",
+            "value": 917.8214579999913,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1624",
-            "value": 1624.1327920000185,
+            "display": "1783",
+            "value": 1783.4811660000123,
             "kind": "ms",
             "runs": 5
           }
@@ -1997,31 +2000,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.0775419999845326,
+            "value": 0.08866700000362471,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "440",
-            "value": 439.82716600003187,
+            "display": "424",
+            "value": 423.5097079999978,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.08433400001376867,
+            "value": 0.08554200001526624,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "5",
-            "value": 4.938040999986697,
+            "value": 5.211916999949608,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.24424999998882413,
+            "value": 0.2677499999990687,
             "kind": "ms",
             "runs": 5
           }
@@ -2039,31 +2042,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.06004200002644211,
+            "value": 0.04466700000921264,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "250",
-            "value": 250.4860420000041,
+            "display": "214",
+            "value": 214.2251249999972,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04554099997039884,
+            "value": 0.051042000006418675,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 2.041333000001032,
+            "value": 2.3417500000214204,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.3701250000158325,
+            "value": 0.39374999998835847,
             "kind": "ms",
             "runs": 5
           }
@@ -2081,31 +2084,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.004207999969366938,
+            "value": 0.004374999960418791,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "84",
-            "value": 83.85270899999887,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.020665999967604876,
+            "display": "90",
+            "value": 89.62041600001976,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.07941599999321625,
+            "value": 0.02029199997195974,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.28700000001117587,
+            "value": 0.07858299999497831,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.2969170000287704,
             "kind": "ms",
             "runs": 5
           }
@@ -2123,31 +2126,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.01999999996041879,
+            "value": 0.02145800000289455,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "282",
-            "value": 282.4708329999703,
+            "display": "268",
+            "value": 267.7945840000175,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.06724999996367842,
+            "value": 0.07149999996181577,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 1.4695840000058524,
+            "value": 1.4727500000153668,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.12450000003445894,
+            "value": 0.12845900002866983,
             "kind": "ms",
             "runs": 5
           }
@@ -2165,31 +2168,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.09154100000159815,
+            "value": 0.10533300001407042,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1652",
-            "value": 1652.2270409999765,
+            "display": "1291",
+            "value": 1290.7970000000205,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.13979200000176206,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "5",
-            "value": 4.752374999981839,
+            "value": 0.1822499999543652,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "6",
-            "value": 5.8080420000478625,
+            "value": 6.075124999973923,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "6",
+            "value": 6.19258400000399,
             "kind": "ms",
             "runs": 5
           }
@@ -2207,31 +2210,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "0",
-            "value": 0.0032500000088475645,
+            "value": 0.0032079999800771475,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "91",
-            "value": 90.84679199999664,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "0",
-            "value": 0.005707999982405454,
+            "display": "96",
+            "value": 95.56287500000326,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.04112499998882413,
+            "value": 0.006040999956894666,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "0",
-            "value": 0.03854199999477714,
+            "value": 0.04195899999467656,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "0",
+            "value": 0.04325000004610047,
             "kind": "ms",
             "runs": 5
           }
@@ -2249,31 +2252,31 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "1",
-            "value": 0.6604170000064187,
+            "value": 0.8163749999948777,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "7796",
-            "value": 7796.256416000018,
+            "display": "6566",
+            "value": 6565.95304199995,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 1.6744170000310987,
+            "value": 2.193250000011176,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "318",
-            "value": 317.9462920000078,
+            "display": "344",
+            "value": 344.45100000000093,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "107",
-            "value": 106.67645899998024,
+            "display": "111",
+            "value": 111.12445800000569,
             "kind": "ms",
             "runs": 5
           }
@@ -2311,26 +2314,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "52",
-            "value": 52.4,
+            "display": "62",
+            "value": 62.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 12.2,
+            "display": "17",
+            "value": 16.6,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 11.6,
+            "display": "13",
+            "value": 13.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "12",
-            "value": 11.7,
+            "display": "15",
+            "value": 15.3,
             "kind": "ms",
             "runs": 5
           }
@@ -2352,26 +2355,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "2131",
-            "value": 2131,
+            "display": "2795",
+            "value": 2794.7,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "144",
-            "value": 144.4,
+            "display": "134",
+            "value": 134.3,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "257",
-            "value": 256.9,
+            "display": "264",
+            "value": 264,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "108",
-            "value": 108,
+            "display": "106",
+            "value": 105.5,
             "kind": "ms",
             "runs": 5
           }
@@ -2393,14 +2396,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "252",
-            "value": 251.6,
+            "display": "287",
+            "value": 287,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 1,
+            "value": 1.1,
             "kind": "ms",
             "runs": 5
           },
@@ -2432,26 +2435,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "43",
-            "value": 43.1,
+            "display": "52",
+            "value": 52.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "10",
+            "value": 9.5,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "10",
+            "value": 9.7,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "9",
-            "value": 8.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "8",
-            "value": 7.8,
+            "value": 9.3,
             "kind": "ms",
             "runs": 5
           }
@@ -2473,26 +2476,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "600",
-            "value": 600,
+            "display": "720",
+            "value": 719.9,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "137",
-            "value": 136.7,
+            "display": "131",
+            "value": 131.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "366",
-            "value": 365.5,
+            "display": "407",
+            "value": 407.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "106",
-            "value": 106.1,
+            "display": "103",
+            "value": 102.5,
             "kind": "ms",
             "runs": 5
           }
@@ -2514,20 +2517,20 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "209",
-            "value": 208.6,
+            "display": "244",
+            "value": 244.2,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 0.8,
+            "value": 0.9,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 1,
+            "value": 1.1,
             "kind": "ms",
             "runs": 5
           },
@@ -2553,135 +2556,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "50",
-            "value": 50.3,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "13",
-            "value": 13.1,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "13",
-            "value": 13,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "13",
-            "value": 12.8,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "serena",
-            "value": "serena",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "599",
-            "value": 598.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "142",
-            "value": 141.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "130",
-            "value": 130.2,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "107",
-            "value": 107.2,
-            "kind": "ms",
-            "runs": 5
-          }
-        ],
-        [
-          {
-            "display": "nrwl/nx-examples",
-            "value": "nrwl/nx-examples",
-            "kind": "text"
-          },
-          {
-            "display": "graphify",
-            "value": "graphify",
-            "kind": "text"
-          },
-          {
-            "display": "environment",
-            "value": "environment",
-            "kind": "text"
-          },
-          {
-            "display": "209",
-            "value": 209,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "1",
-            "value": 0.8,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "n/a (basename-keyed file nodes — n/a by design)",
-            "na": "basename-keyed file nodes — n/a by design"
-          }
-        ],
-        [
-          {
-            "display": "pallets/flask",
-            "value": "pallets/flask",
-            "kind": "text"
-          },
-          {
-            "display": "codeindex",
-            "value": "codeindex",
-            "kind": "text"
-          },
-          {
-            "display": "Flask",
-            "value": "Flask",
-            "kind": "text"
-          },
-          {
-            "display": "50",
-            "value": 49.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "12",
-            "value": 12.4,
+            "display": "51",
+            "value": 50.9,
             "kind": "ms",
             "runs": 5
           },
@@ -2693,7 +2569,134 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "12",
-            "value": 11.5,
+            "value": 12.4,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "11",
+            "value": 11.1,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "serena",
+            "value": "serena",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "665",
+            "value": 664.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "131",
+            "value": 131.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "114",
+            "value": 113.6,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "105",
+            "value": 104.5,
+            "kind": "ms",
+            "runs": 5
+          }
+        ],
+        [
+          {
+            "display": "nrwl/nx-examples",
+            "value": "nrwl/nx-examples",
+            "kind": "text"
+          },
+          {
+            "display": "graphify",
+            "value": "graphify",
+            "kind": "text"
+          },
+          {
+            "display": "environment",
+            "value": "environment",
+            "kind": "text"
+          },
+          {
+            "display": "239",
+            "value": 238.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "1",
+            "value": 0.9,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "n/a (basename-keyed file nodes — n/a by design)",
+            "na": "basename-keyed file nodes — n/a by design"
+          }
+        ],
+        [
+          {
+            "display": "pallets/flask",
+            "value": "pallets/flask",
+            "kind": "text"
+          },
+          {
+            "display": "codeindex",
+            "value": "codeindex",
+            "kind": "text"
+          },
+          {
+            "display": "Flask",
+            "value": "Flask",
+            "kind": "text"
+          },
+          {
+            "display": "54",
+            "value": 53.8,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12.2,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12.3,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12,
             "kind": "ms",
             "runs": 5
           }
@@ -2715,26 +2718,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "717",
-            "value": 716.7,
+            "display": "804",
+            "value": 804.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "141",
-            "value": 141.1,
+            "display": "127",
+            "value": 127.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "148",
-            "value": 147.5,
+            "display": "137",
+            "value": 137.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "108",
-            "value": 107.8,
+            "display": "106",
+            "value": 105.8,
             "kind": "ms",
             "runs": 5
           }
@@ -2756,8 +2759,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "206",
-            "value": 206,
+            "display": "239",
+            "value": 239.3,
             "kind": "ms",
             "runs": 5
           },
@@ -2769,7 +2772,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "5",
-            "value": 4.5,
+            "value": 5,
             "kind": "ms",
             "runs": 5
           },
@@ -2795,26 +2798,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "205",
-            "value": 204.7,
+            "display": "153",
+            "value": 153,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "122",
-            "value": 122.2,
+            "display": "75",
+            "value": 75.4,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "122",
-            "value": 122.2,
+            "display": "75",
+            "value": 74.6,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "121",
-            "value": 120.8,
+            "display": "72",
+            "value": 72.3,
             "kind": "ms",
             "runs": 5
           }
@@ -2836,26 +2839,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "1550",
-            "value": 1549.5,
+            "display": "1744",
+            "value": 1743.9,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "616",
-            "value": 615.6,
+            "display": "744",
+            "value": 743.7,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "251",
-            "value": 251,
+            "display": "272",
+            "value": 272.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "107",
-            "value": 107.3,
+            "display": "104",
+            "value": 104.2,
             "kind": "ms",
             "runs": 5
           }
@@ -2877,20 +2880,20 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "463",
-            "value": 462.8,
+            "display": "521",
+            "value": 520.6,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "2",
-            "value": 1.6,
+            "value": 1.7,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "1",
-            "value": 0.8,
+            "value": 0.9,
             "kind": "ms",
             "runs": 5
           },
@@ -2916,26 +2919,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "46",
-            "value": 45.7,
+            "display": "51",
+            "value": 51.1,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "11",
-            "value": 11,
+            "value": 11.1,
+            "kind": "ms",
+            "runs": 5
+          },
+          {
+            "display": "12",
+            "value": 12.3,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "11",
-            "value": 10.7,
-            "kind": "ms",
-            "runs": 5
-          },
-          {
-            "display": "10",
-            "value": 10.2,
+            "value": 11.2,
             "kind": "ms",
             "runs": 5
           }
@@ -2957,26 +2960,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "598",
-            "value": 598.3,
+            "display": "662",
+            "value": 662.1,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "139",
-            "value": 139,
+            "display": "125",
+            "value": 125.2,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "120",
-            "value": 119.5,
+            "display": "115",
+            "value": 114.9,
             "kind": "ms",
             "runs": 5
           },
           {
             "display": "106",
-            "value": 105.5,
+            "value": 105.6,
             "kind": "ms",
             "runs": 5
           }
@@ -2998,8 +3001,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "198",
-            "value": 198.1,
+            "display": "215",
+            "value": 215.1,
             "kind": "ms",
             "runs": 5
           },
@@ -3037,26 +3040,26 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "1601",
-            "value": 1601,
+            "display": "1008",
+            "value": 1008,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1340",
-            "value": 1340.1,
+            "display": "735",
+            "value": 735,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1350",
-            "value": 1349.7,
+            "display": "726",
+            "value": 725.5,
             "kind": "ms",
             "runs": 5
           },
           {
-            "display": "1345",
-            "value": 1344.8,
+            "display": "723",
+            "value": 723.3,
             "kind": "ms",
             "runs": 5
           }
@@ -3579,8 +3582,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "276",
-            "value": 276,
+            "display": "277",
+            "value": 277,
             "kind": "int"
           },
           {
@@ -4116,7 +4119,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "2.0 MB",
-            "value": 2104734,
+            "value": 2104742,
             "kind": "bytes"
           },
           {
@@ -4126,12 +4129,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "5.1 MB",
-            "value": 5344168,
+            "value": 5364651,
             "kind": "bytes"
           },
           {
             "display": "5.0 MB",
-            "value": 5274008,
+            "value": 5273968,
             "kind": "bytes"
           }
         ],
@@ -4153,12 +4156,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "2.0 MB",
-            "value": 2093316,
+            "value": 2101626,
             "kind": "bytes"
           },
           {
             "display": "2.0 MB",
-            "value": 2107208,
+            "value": 2110508,
             "kind": "bytes"
           }
         ],
@@ -4170,7 +4173,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "332.5 KB",
-            "value": 340477,
+            "value": 340468,
             "kind": "bytes"
           },
           {
@@ -4179,13 +4182,13 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "382.5 KB",
-            "value": 391675,
+            "display": "384.4 KB",
+            "value": 393613,
             "kind": "bytes"
           },
           {
             "display": "1.2 MB",
-            "value": 1257221,
+            "value": 1257155,
             "kind": "bytes"
           }
         ],
@@ -4197,7 +4200,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "1.2 MB",
-            "value": 1246889,
+            "value": 1246885,
             "kind": "bytes"
           },
           {
@@ -4207,12 +4210,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "3.1 MB",
-            "value": 3251913,
+            "value": 3269760,
             "kind": "bytes"
           },
           {
             "display": "1.3 MB",
-            "value": 1403226,
+            "value": 1395774,
             "kind": "bytes"
           }
         ],
@@ -4224,7 +4227,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "12.6 MB",
-            "value": 13243927,
+            "value": 13243959,
             "kind": "bytes"
           },
           {
@@ -4233,13 +4236,13 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "57.1 MB",
-            "value": 59855384,
+            "display": "57.3 MB",
+            "value": 60111839,
             "kind": "bytes"
           },
           {
             "display": "13.7 MB",
-            "value": 14333553,
+            "value": 14330534,
             "kind": "bytes"
           }
         ],
@@ -4251,7 +4254,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "277.3 KB",
-            "value": 283955,
+            "value": 283953,
             "kind": "bytes"
           },
           {
@@ -4260,13 +4263,13 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "bytes"
           },
           {
-            "display": "630.1 KB",
-            "value": 645257,
+            "display": "633.4 KB",
+            "value": 648639,
             "kind": "bytes"
           },
           {
-            "display": "823.1 KB",
-            "value": 842904,
+            "display": "822.3 KB",
+            "value": 842071,
             "kind": "bytes"
           }
         ],
@@ -4278,12 +4281,12 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "69.8 MB",
-            "value": 73197823,
+            "value": 73197843,
             "kind": "bytes"
           },
           {
             "display": "80.8 MB",
-            "value": 84698441,
+            "value": 84699353,
             "kind": "bytes"
           },
           {
@@ -4314,8 +4317,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
             "kind": "text"
           },
           {
-            "display": "23.3 MB",
-            "value": 24468671,
+            "display": "23.4 MB",
+            "value": 24575813,
             "kind": "bytes"
           },
           {
@@ -4349,7 +4352,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           },
           {
             "display": "140.1 MB",
-            "value": 146912402,
+            "value": 146942423,
             "kind": "bytes"
           },
           {
@@ -4641,9 +4644,17 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         label: "Cold index — vercel/next.js",
         value: codeindexColdDisp,
         unit: "ms",
+        // The ctags clause is derived, never asserted: if a future measurement
+        // flips the ordering back this tile reports that instead of going
+        // quietly stale.
         context:
           "a 20,000-file monorepo indexed into a full cross-file graph plus " +
-          "byte-identical artifacts — not just a flat symbol dump.",
+          "byte-identical artifacts — not just a flat symbol dump" +
+          (isFinite(codeindexMs) && isFinite(ctagsMs)
+            ? codeindexMs < ctagsMs
+              ? ", and faster here than ctags -R (" + ctagsColdDisp + " ms), which emits only a flat tags file."
+              : ", against " + ctagsColdDisp + " ms for a flat ctags -R tags file."
+            : "."),
       },
       {
         label: "Tokens per lookup",
