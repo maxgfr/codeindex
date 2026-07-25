@@ -100,7 +100,8 @@ Commands:
               wins); --server-name <name> overrides the announced serverInfo
   version     Print the engine version
 
-Flags:
+Flags (accepted before OR after the subcommand: '--repo X scan' and
+'scan --repo X' are equivalent):
   --repo <dir>        Repo root (default: cwd)
   --out <file>        Write output to a file instead of stdout (\`scip\`: --out -
                       writes the binary index to stdout)
@@ -258,7 +259,60 @@ export function parseMcpFlags(argv: string[]): { defaultRepo?: string; serverInf
   return { defaultRepo, serverInfo: name ? { name } : undefined };
 }
 
-export async function runCli(argv: string[]): Promise<void> {
+// Flags that consume the following argv element. Needed to hoist leading flags
+// past the subcommand without mistaking a flag's VALUE for the command name
+// (`--repo /x scan`: `/x` must not be read as the command).
+const VALUE_FLAGS = new Set([
+  "--repo",
+  "--out",
+  "--project-root",
+  "--include",
+  "--exclude",
+  "--scope",
+  "--ignore-dir",
+  "--max-files",
+  "--max-bytes",
+  "--max-calls",
+  "--max-hits",
+  "--budget-tokens",
+  "--since",
+  "--config",
+  "--limit",
+  "--server-name",
+]);
+
+// Accept global flags BEFORE the subcommand as well as after, so
+// `codeindex --repo /x scan` and `codeindex scan --repo /x` agree. A strict
+// subcommand-first parser reads the leading flag as the command name and fails
+// with a baffling "unknown flag: scan".
+//
+// This is not only ergonomics. A host that wraps the CLI may splice a flag in
+// right after the binary name — iterion's rewriter `inject_flag` does exactly
+// that, turning `codeindex grep foo` into `codeindex --max-hits 40 grep foo` —
+// and without hoisting that command cannot run at all.
+//
+// Returns argv unchanged when there is nothing to hoist, so `--help`,
+// `--version` and a bare subcommand all keep their existing behaviour.
+export function hoistLeadingFlags(argv: string[]): string[] {
+  const lead: string[] = [];
+  let i = 0;
+  while (i < argv.length) {
+    const a = argv[i];
+    if (a === undefined || !a.startsWith("-")) break;
+    lead.push(a);
+    i++;
+    if (VALUE_FLAGS.has(a) && i < argv.length) {
+      lead.push(argv[i] as string);
+      i++;
+    }
+  }
+  // No leading flags, or they were the whole line (`--help`, `--version`).
+  if (lead.length === 0 || i >= argv.length) return argv;
+  return [argv[i] as string, ...lead, ...argv.slice(i + 1)];
+}
+
+export async function runCli(rawArgv: string[]): Promise<void> {
+  const argv = hoistLeadingFlags(rawArgv);
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
     process.stdout.write(HELP);

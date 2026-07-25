@@ -11831,7 +11831,8 @@ Commands:
               wins); --server-name <name> overrides the announced serverInfo
   version     Print the engine version
 
-Flags:
+Flags (accepted before OR after the subcommand: '--repo X scan' and
+'scan --repo X' are equivalent):
   --repo <dir>        Repo root (default: cwd)
   --out <file>        Write output to a file instead of stdout (\`scip\`: --out -
                       writes the binary index to stdout)
@@ -11946,7 +11947,42 @@ function parseMcpFlags(argv) {
   if (defaultRepo && !existsSync5(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
   return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0 };
 }
-async function runCli(argv) {
+var VALUE_FLAGS = /* @__PURE__ */ new Set([
+  "--repo",
+  "--out",
+  "--project-root",
+  "--include",
+  "--exclude",
+  "--scope",
+  "--ignore-dir",
+  "--max-files",
+  "--max-bytes",
+  "--max-calls",
+  "--max-hits",
+  "--budget-tokens",
+  "--since",
+  "--config",
+  "--limit",
+  "--server-name"
+]);
+function hoistLeadingFlags(argv) {
+  const lead = [];
+  let i2 = 0;
+  while (i2 < argv.length) {
+    const a = argv[i2];
+    if (a === void 0 || !a.startsWith("-")) break;
+    lead.push(a);
+    i2++;
+    if (VALUE_FLAGS.has(a) && i2 < argv.length) {
+      lead.push(argv[i2]);
+      i2++;
+    }
+  }
+  if (lead.length === 0 || i2 >= argv.length) return argv;
+  return [argv[i2], ...lead, ...argv.slice(i2 + 1)];
+}
+async function runCli(rawArgv) {
+  const argv = hoistLeadingFlags(rawArgv);
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
     process.stdout.write(HELP);

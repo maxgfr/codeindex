@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { hoistLeadingFlags } from "../src/engine-cli.js";
 import { rewriteCommand, shellQuote, tokenize } from "../src/rewrite.js";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
@@ -163,5 +164,54 @@ describe("rewrite CLI contract", () => {
     const { status, stdout } = run(["git diff"]);
     expect(status).toBe(1);
     expect(stdout).toBe("");
+  });
+});
+
+describe("hoistLeadingFlags", () => {
+  it("moves leading global flags after the subcommand", () => {
+    expect(hoistLeadingFlags(["--repo", "/x", "scan"])).toEqual(["scan", "--repo", "/x"]);
+  });
+
+  it("handles the iterion inject_flag shape", () => {
+    // `codeindex grep foo` + inject_flag "--max-hits 40" spliced after argv[0].
+    expect(hoistLeadingFlags(["--max-hits", "40", "grep", "foo", "--scope", "src"])).toEqual([
+      "grep",
+      "--max-hits",
+      "40",
+      "foo",
+      "--scope",
+      "src",
+    ]);
+  });
+
+  it("does not mistake a flag value for the command", () => {
+    // `/x` is --repo's value, `scan` is the command — never the other way round.
+    expect(hoistLeadingFlags(["--repo", "/x", "scan"])[0]).toBe("scan");
+  });
+
+  it("keeps boolean flags adjacent without eating the command", () => {
+    expect(hoistLeadingFlags(["--semantic", "search", "q"])).toEqual(["search", "--semantic", "q"]);
+  });
+
+  it("leaves argv untouched when there is nothing to hoist", () => {
+    for (const argv of [["scan", "--repo", "/x"], ["--help"], ["--version"], ["mcp", "--repo", "/x"], []]) {
+      expect(hoistLeadingFlags(argv)).toEqual(argv);
+    }
+  });
+});
+
+describe("flag ordering is symmetric (CLI e2e)", () => {
+  const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
+  it("`--repo X scan` equals `scan --repo X`", () => {
+    const before = execFileSync(process.execPath, [CLI, "--repo", REPO, "scan"], { encoding: "utf8" });
+    const after = execFileSync(process.execPath, [CLI, "scan", "--repo", REPO], { encoding: "utf8" });
+    expect(before).toBe(after);
+  });
+
+  it("runs the exact command iterion's ultra mode produces", () => {
+    const out = execFileSync(process.execPath, [CLI, "--max-hits", "40", "grep", "func", "--repo", REPO], {
+      encoding: "utf8",
+    });
+    expect(Array.isArray(JSON.parse(out))).toBe(true);
   });
 });
