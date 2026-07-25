@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { cpSync, mkdtempSync, rmSync, utimesSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanRepo, type RepoScan } from "../src/scan.js";
+import { scanRepo, scanSummary, type RepoScan } from "../src/scan.js";
 import { walk } from "../src/walk.js";
 import type { FileRecord } from "../src/types.js";
 import { extractMarkdown } from "../src/extract/markdown.js";
@@ -176,5 +176,35 @@ describe("extractMarkdown — badges", () => {
     const info = extractMarkdown("# Project\n\n[![Quality Status](https://x/badge.svg)](https://x/ci)\n\nThe real description of the project.");
     expect(info.summary).toBe("The real description of the project.");
     expect(info.summary).not.toContain("Quality");
+  });
+});
+
+// The summary-only path exists so `codeindex scan` / the MCP `scan_summary`
+// tool stop paying a full tree-sitter pass to report a file count. It shares the
+// keptFiles loop with scanRepo; this pins that they can never report different
+// numbers, on the fixture and under every filter that changes the kept set.
+describe("scanSummary — agrees with scanRepo", () => {
+  const same = (opts: Parameters<typeof scanRepo>[1]): void => {
+    const full = scanRepo(REPO, opts);
+    const sum = scanSummary(REPO, opts);
+    expect(sum.fileCount).toBe(full.files.length);
+    expect(sum.languages).toEqual(full.languages);
+    expect(sum.capped).toBe(full.capped);
+    expect(sum.excluded).toBe(full.excluded);
+    expect(sum.commit).toBe(full.commit);
+    expect(sum.root).toBe(full.root);
+  };
+
+  it("matches on a plain scan", () => same(undefined));
+  it("matches under --scope", () => same({ scope: "src" }));
+  it("matches under --include", () => same({ include: ["**/*.ts"] }));
+  it("matches under --exclude", () => same({ exclude: ["docs/**"] }));
+  it("matches under --max-files (capped)", () => same({ maxFiles: 3 }));
+  it("matches under --no-gitignore", () => same({ gitignore: false }));
+
+  it("reports a non-empty language histogram without reading any file", () => {
+    const sum = scanSummary(REPO);
+    expect(sum.fileCount).toBeGreaterThan(0);
+    expect(Object.keys(sum.languages).length).toBeGreaterThan(0);
   });
 });

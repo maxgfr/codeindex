@@ -12,7 +12,7 @@ import { ENGINE_VERSION, SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord, typ
 import { ensureGrammars, grammarKeysForExts } from "./ast/loader.js";
 import { buildArtifactsFromScan, type IndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
+import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummary } from "./scan.js";
 import { walk } from "./walk.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -623,6 +623,29 @@ export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
   return scan;
 }
 
+// The scan_summary numbers, without paying for a scan.
+//
+// A file count and a language histogram come from the walk plus the path-based
+// classifiers — no read, no hash, no tree-sitter. When this session already
+// holds a scan for the same (repo, opts) we derive from it instead (identical
+// numbers, and it keeps a warm session warm); otherwise scanSummary walks once.
+// The summary is NEVER written into sessionCache: it carries no FileRecords, so
+// caching it would starve every record-shaped tool that ran next.
+export function getScanSummary(repo: string, opts: SessionScanOptions = {}): ScanSummary {
+  if (sessionCache && sessionCache.key === sessionKey(repo, opts)) {
+    const scan = getScan(repo, opts);
+    return {
+      root: scan.root,
+      commit: scan.commit,
+      fileCount: scan.files.length,
+      languages: scan.languages,
+      capped: scan.capped,
+      excluded: scan.excluded,
+    };
+  }
+  return scanSummary(repo, opts);
+}
+
 // Lazy pipeline memoized on scan OBJECT IDENTITY: graph-shaped tools reuse the
 // artifacts exactly as long as getScan keeps returning the same scan object.
 // Exported for tests.
@@ -665,6 +688,10 @@ const SCANLESS_TOOLS = new Set([
   "workspaces", "churn", "coupling", "grep",
   "write_memory", "read_memory", "list_memories", "delete_memory",
   "embed_status",
+  // scan_summary counts and classifies by path only — it never parses, so the
+  // grammar warm (a whole extra walk) would be pure overhead. When a scan is
+  // already cached getScanSummary reuses it, warm grammars included.
+  "scan_summary",
 ]);
 
 async function callTool(name: string, args: Record<string, unknown>, defaultRepo?: string): Promise<string> {
@@ -679,9 +706,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (!SCANLESS_TOOLS.has(name)) await warmGrammarsForRepo(repo);
 
   if (name === "scan_summary") {
-    const scan = getScan(repo, scanOpts);
+    const s = getScanSummary(repo, scanOpts);
     return JSON.stringify(
-      { engineVersion: ENGINE_VERSION, commit: scan.commit, fileCount: scan.files.length, languages: scan.languages, capped: scan.capped },
+      { engineVersion: ENGINE_VERSION, commit: s.commit, fileCount: s.fileCount, languages: s.languages, capped: s.capped },
       null,
       2,
     );

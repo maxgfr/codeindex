@@ -360,7 +360,10 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // extractors. Imports/pkg stay on the battle-tested regex path here — their
   // resolution is covered by resolve tests and the e2e ratchet; the new-language
   // AST importers land with their resolvers.
-  const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile });
+  // `imports: false` because of exactly that: `ast.refs` and `ast.pkg` were
+  // computed by a full extra tree traversal and then discarded right below, in
+  // favour of the regex results. Public `extractAst` still computes them.
+  const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile, imports: false });
   const symbols = (ast ? ast.symbols : extractSymbols(rel, ext, content)).slice(0, 400);
   // Add barrel re-exports the local def didn't already cover.
   const known = new Set(symbols.map((s) => s.name));

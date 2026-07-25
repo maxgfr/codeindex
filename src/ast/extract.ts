@@ -7,12 +7,18 @@ import { grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
 interface TSNode {
   type: string;
   text: string;
+  startIndex: number;
+  endIndex: number;
   startPosition: { row: number; column: number };
   endPosition: { row: number; column: number };
   namedChildCount: number;
   namedChild(i: number): TSNode | null;
   childForFieldName(name: string): TSNode | null;
   children: TSNode[];
+  // ONE marshal + ONE wasm call for the whole child list, memoized on the node —
+  // versus `namedChildCount` plus a `namedChild(i)` round-trip per index. Every
+  // traversal below reads children through this, never by index.
+  namedChildren: TSNode[];
 }
 
 export interface AstResult {
@@ -45,24 +51,8 @@ const ANON_DEFAULT_FN = new Set([
 ]);
 const ANON_DEFAULT_CLASS = new Set(["class", "class_declaration", "abstract_class_declaration"]);
 
-// Collect distinctive referenced identifiers across the whole tree, minus the
-// file's own definition names. Deterministic (sorted) and capped.
-function collectRefIdents(root: TSNode, defNames: Set<string>): string[] {
-  const found = new Set<string>();
-  const visit = (node: TSNode): void => {
-    if (
-      node.namedChildCount === 0 &&
-      /identifier|constant|(^|_)name$/.test(node.type) &&
-      /^[A-Za-z_]\w{4,}$/.test(node.text) &&
-      !defNames.has(node.text)
-    ) {
-      found.add(node.text);
-    }
-    for (let i = 0; i < node.namedChildCount; i++) visit(node.namedChild(i)!);
-  };
-  visit(root);
-  return [...found].sort().slice(0, MAX_REF_IDENTS);
-}
+const REF_IDENT_TYPE = /identifier|constant|(^|_)name$/;
+const REF_IDENT_TEXT = /^[A-Za-z_]\w{4,}$/;
 
 // How one grammar's declarations map to symbols. `defs` maps a node type to a
 // symbol kind; `containers` are nodes whose body we recurse into for nested
@@ -274,9 +264,17 @@ const SPECS: Record<string, LangSpec> = {
   },
 };
 
-function firstLine(node: TSNode): string {
-  const nl = node.text.indexOf("\n");
-  return (nl === -1 ? node.text : node.text.slice(0, nl)).trim().slice(0, 200);
+// The node's first line, read straight out of the source instead of through
+// `node.text` — that getter materialises the node's ENTIRE text across the wasm
+// boundary, so a 2000-line class allocated the whole class twice per symbol.
+// Slicing [startIndex, first newline) from `src` is the same string by
+// construction (node.text === src.slice(startIndex, endIndex)).
+function firstLine(node: TSNode, src: string): string {
+  const start = node.startIndex;
+  const end = node.endIndex;
+  const nl = src.indexOf("\n", start);
+  const stop = nl === -1 || nl > end ? end : nl;
+  return src.slice(start, stop).trim().slice(0, 200);
 }
 
 function nameOf(node: TSNode): string | undefined {
@@ -287,52 +285,21 @@ function nameOf(node: TSNode): string | undefined {
   // `declarator` field down to the identifier leaf.
   let decl = node.childForFieldName("declarator");
   while (decl) {
-    if (decl.namedChildCount === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
+    if (decl.namedChildren.length === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
     const next = decl.childForFieldName("declarator");
     if (!next || next === decl) break;
     decl = next;
   }
   // Fall back to the first identifier-like named child (covers grammars that do
   // not expose a `name` field on a given node).
-  for (let i = 0; i < node.namedChildCount; i++) {
-    const c = node.namedChild(i)!;
+  for (const c of node.namedChildren) {
     if (/(^|_)(identifier|name|constant)$/.test(c.type)) return c.text;
   }
   return undefined;
 }
 
-// Read import specifiers from the whole tree by scanning for the grammar's import
-// node types. "string" pulls the first string literal's inner text; "path" takes
-// the dotted/namespaced module text verbatim (resolution happens later).
-function collectImports(root: TSNode, spec: LangSpec): RawRef[] {
-  if (!spec.imports) return [];
-  const out: RawRef[] = [];
-  const seen = new Set<string>();
-  const add = (s: string): void => {
-    const v = s.trim();
-    if (v && !seen.has(v)) {
-      seen.add(v);
-      out.push({ kind: "import", spec: v });
-    }
-  };
-  const visit = (node: TSNode): void => {
-    const how = spec.imports![node.type];
-    if (how === "string") {
-      const str = findFirst(node, (n) => /string/.test(n.type));
-      if (str) add(str.text.replace(/^['"]|['"]$/g, ""));
-    } else if (how === "path") {
-      const name = node.childForFieldName("name") ?? node.childForFieldName("module_name");
-      add((name ?? node).text.replace(/^(import|from)\s+/, "").split(/\s+/)[0]!);
-    }
-    for (let i = 0; i < node.namedChildCount; i++) visit(node.namedChild(i)!);
-  };
-  visit(root);
-  return out;
-}
-
 function findFirst(node: TSNode, pred: (n: TSNode) => boolean): TSNode | undefined {
-  for (let i = 0; i < node.namedChildCount; i++) {
-    const c = node.namedChild(i)!;
+  for (const c of node.namedChildren) {
     if (pred(c)) return c;
     const deep = findFirst(c, pred);
     if (deep) return deep;
@@ -353,7 +320,8 @@ const IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
 // named child). Returns undefined for a computed/complex callee we can't name.
 function readName(node: TSNode | null): string | undefined {
   if (!node) return undefined;
-  if (node.namedChildCount === 0) return IDENT_LEAF.test(node.type) ? node.text : undefined;
+  const kids = node.namedChildren;
+  if (kids.length === 0) return IDENT_LEAF.test(node.type) ? node.text : undefined;
   const seg =
     node.childForFieldName("name") ??
     node.childForFieldName("property") ??
@@ -365,7 +333,7 @@ function readName(node: TSNode | null): string | undefined {
     // instead of tripping over type_arguments/arguments as the last child.
     node.childForFieldName("function");
   if (seg) return readName(seg);
-  const last = node.namedChild(node.namedChildCount - 1);
+  const last = kids[kids.length - 1];
   return last && last !== node ? readName(last) : undefined;
 }
 
@@ -379,7 +347,7 @@ function readName(node: TSNode | null): string | undefined {
 // expression's `table` (scala's field_expression reuses `value`). Undefined for a
 // bare callee or a computed/complex receiver (`fetch().then(...)`, `arr[0].map(...)`).
 function readReceiver(node: TSNode | null): string | undefined {
-  if (!node || node.namedChildCount === 0) return undefined;
+  if (!node || node.namedChildren.length === 0) return undefined;
   const obj =
     node.childForFieldName("object") ??
     node.childForFieldName("operand") ??
@@ -401,84 +369,153 @@ function readReceiver(node: TSNode | null): string | undefined {
 // Names are filtered to plausible identifiers (≥ 2 chars), deduped by name+line,
 // sorted, and capped (default MAX_CALLS; overridable via maxCalls), so the set
 // stays small and deterministic.
-function collectCalls(root: TSNode, spec: LangSpec, maxCalls: number = MAX_CALLS): { name: string; line: number; receiver?: string }[] {
-  if (!spec.calls) return [];
-  const out: { name: string; line: number; receiver?: string }[] = [];
-  const seen = new Set<string>();
-  const add = (name: string | undefined, node: TSNode, receiver?: string): void => {
+// Everything the post-declaration passes need, gathered in ONE pre-order walk.
+//
+// These four collections used to be four independent full-tree traversals, each
+// re-crossing the wasm boundary for every node. They are order-independent by
+// construction — idents and importedNames are Sets that get sorted, calls dedups
+// on (name, line) then sorts — so folding them into a single pre-order walk in
+// the original per-node order produces byte-identical results.
+//
+// `refs`/`pkg` are computed only when `wantImports` is set: the production path
+// (extractCode) recomputes both with regex and discards the AST's versions, so
+// paying for them by default was pure waste. The public `extractAst` still asks
+// for them, keeping its contract intact.
+interface Collected {
+  refs: RawRef[];
+  idents: string[];
+  calls: { name: string; line: number; receiver?: string }[];
+  importedNames: string[];
+}
+
+function collectAll(
+  root: TSNode,
+  spec: LangSpec,
+  defNames: Set<string>,
+  maxCalls: number,
+  wantImports: boolean,
+): Collected {
+  const identsFound = new Set<string>();
+
+  const wantCalls = spec.calls !== undefined;
+  const calls: { name: string; line: number; receiver?: string }[] = [];
+  const callSeen = new Set<string>();
+  const addCall = (name: string | undefined, node: TSNode, receiver?: string): void => {
     if (!name || name.length < 2 || !/^[A-Za-z_]\w*$/.test(name)) return;
     const line = node.startPosition.row + 1;
     const key = `${name} ${line}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(receiver ? { name, line, receiver } : { name, line });
+    if (callSeen.has(key)) return;
+    callSeen.add(key);
+    calls.push(receiver ? { name, line, receiver } : { name, line });
   };
-  const visit = (node: TSNode): void => {
-    const how = spec.calls![node.type];
-    if (how === "function") {
-      // Grammars name the callee field differently: `function` (TS/py/go/rust/
-      // c#/php), `name` (Java's method_invocation), `method` (Ruby's call). The
-      // receiver lives on the qualified callee node, or (java/ruby) on the call
-      // node itself.
-      const callee =
-        node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
-      add(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
-    } else if (how === "member") {
-      add(readName(node.childForFieldName("name")), node, readReceiver(node));
-    } else if (how === "constructor") {
-      // TS/Java/C# expose the type under a `constructor`/`type` field; PHP's
-      // object_creation_expression carries it as a bare `name` child, so fall
-      // back to the first identifier-ish child when no field matches.
-      let t = node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
-      for (let i = 0; !t && i < node.namedChildCount; i++) {
-        const c = node.namedChild(i)!;
-        if (IDENT_LEAF.test(c.type)) t = c;
-      }
-      add(readName(t), node, readReceiver(t ?? null));
-    }
-    for (let i = 0; i < node.namedChildCount; i++) visit(node.namedChild(i)!);
-  };
-  visit(root);
-  out.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
-  return out.slice(0, maxCalls);
-}
 
-// Collect JS/TS named-import bindings: `import { a, b as c } from "x"` →
-// `import_clause → named_imports → import_specifier`, reading each specifier's
-// `name` field (the pre-alias name). Default/namespace bindings are intentionally
-// NOT collected — the call-resolution gate only corroborates named imports, and a
-// default/namespace binding names a module, not a specific exported symbol.
-function collectImportedNames(root: TSNode, spec: LangSpec): string[] {
-  if (!spec.imports?.import_statement) return [];
-  const found = new Set<string>();
+  const wantNames = spec.imports?.import_statement !== undefined;
+  const namesFound = new Set<string>();
+
+  const wantRefs = wantImports && spec.imports !== undefined;
+  const refs: RawRef[] = [];
+  const refSeen = new Set<string>();
+  const addRef = (s: string): void => {
+    const v = s.trim();
+    if (v && !refSeen.has(v)) {
+      refSeen.add(v);
+      refs.push({ kind: "import", spec: v });
+    }
+  };
+
   const visit = (node: TSNode): void => {
-    if (node.type === "import_statement") {
-      for (let i = 0; i < node.namedChildCount; i++) {
-        const clause = node.namedChild(i)!;
+    const type = node.type;
+    const kids = node.namedChildren;
+
+    // --- distinctive referenced identifiers (leaves only) ---
+    if (kids.length === 0 && REF_IDENT_TYPE.test(type)) {
+      const text = node.text;
+      if (REF_IDENT_TEXT.test(text) && !defNames.has(text)) identsFound.add(text);
+    }
+
+    // --- call sites ---
+    if (wantCalls) {
+      const how = spec.calls![type];
+      if (how === "function") {
+        // Grammars name the callee field differently: `function` (TS/py/go/rust/
+        // c#/php), `name` (Java's method_invocation), `method` (Ruby's call). The
+        // receiver lives on the qualified callee node, or (java/ruby) on the call
+        // node itself.
+        const callee =
+          node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
+        addCall(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
+      } else if (how === "member") {
+        addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
+      } else if (how === "constructor") {
+        // TS/Java/C# expose the type under a `constructor`/`type` field; PHP's
+        // object_creation_expression carries it as a bare `name` child, so fall
+        // back to the first identifier-ish child when no field matches.
+        let t = node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
+        for (let i = 0; !t && i < kids.length; i++) {
+          const c = kids[i]!;
+          if (IDENT_LEAF.test(c.type)) t = c;
+        }
+        addCall(readName(t), node, readReceiver(t ?? null));
+      }
+    }
+
+    // --- JS/TS named-import bindings: import_clause → named_imports →
+    // import_specifier, reading each specifier's pre-alias `name`. Default and
+    // namespace bindings are intentionally NOT collected — the call-resolution
+    // gate only corroborates named imports.
+    if (wantNames && type === "import_statement") {
+      for (const clause of kids) {
         if (clause.type !== "import_clause") continue;
-        for (let j = 0; j < clause.namedChildCount; j++) {
-          const named = clause.namedChild(j)!;
+        for (const named of clause.namedChildren) {
           if (named.type !== "named_imports") continue;
-          for (let k = 0; k < named.namedChildCount; k++) {
-            const specifier = named.namedChild(k)!;
+          for (const specifier of named.namedChildren) {
             if (specifier.type !== "import_specifier") continue;
-            const nm = specifier.childForFieldName("name") ?? specifier.namedChild(0);
-            if (nm?.text) found.add(nm.text);
+            const nm = specifier.childForFieldName("name") ?? specifier.namedChildren[0];
+            if (nm?.text) namesFound.add(nm.text);
           }
         }
       }
     }
-    for (let i = 0; i < node.namedChildCount; i++) visit(node.namedChild(i)!);
+
+    // --- raw import specifiers. "string" pulls the first string literal's inner
+    // text; "path" takes the dotted/namespaced module text verbatim (resolution
+    // happens later).
+    if (wantRefs) {
+      const how = spec.imports![type];
+      if (how === "string") {
+        const str = findFirst(node, (n) => /string/.test(n.type));
+        if (str) addRef(str.text.replace(/^['"]|['"]$/g, ""));
+      } else if (how === "path") {
+        const name = node.childForFieldName("name") ?? node.childForFieldName("module_name");
+        addRef((name ?? node).text.replace(/^(import|from)\s+/, "").split(/\s+/)[0]!);
+      }
+    }
+
+    for (const c of kids) visit(c);
   };
   visit(root);
-  return [...found].sort(byStr).slice(0, MAX_IMPORTED_NAMES);
+
+  calls.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+  return {
+    refs,
+    idents: [...identsFound].sort().slice(0, MAX_REF_IDENTS),
+    calls: calls.slice(0, maxCalls),
+    importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
+  };
 }
 
 // Extract declared symbols from one file via its committed grammar. Returns
 // undefined when no grammar is loaded for the extension (caller falls back to the
 // regex extractor). Walks top-level declarations plus one level of nested members.
 // `opts.maxCalls` overrides the per-file call-site cap (default MAX_CALLS).
-export function extractAst(rel: string, ext: string, content: string, opts: { maxCalls?: number } = {}): AstResult | undefined {
+// `opts.imports` (default true) computes `refs`/`pkg`; extractCode passes false
+// because it recomputes both with regex and discards these — see collectAll.
+export function extractAst(
+  rel: string,
+  ext: string,
+  content: string,
+  opts: { maxCalls?: number; imports?: boolean } = {},
+): AstResult | undefined {
   const key = grammarKeyForExt(ext);
   if (!key || !grammarReady(key)) return undefined;
   const spec = SPECS[key];
@@ -503,13 +540,11 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
       // `export …` / `export default …` (JS/TS) marks the wrapped declaration.
       const nowExported = exported || node.type === "export_statement";
       if (node.type === "export_statement") {
-        for (let i = 0; i < node.namedChildCount; i++) {
-          const c = node.namedChild(i)!;
+        for (const c of node.namedChildren) {
           if (c.type === "identifier") exportedNames.add(c.text);
           else if (c.type === "export_clause") {
-            for (let j = 0; j < c.namedChildCount; j++) {
-              const spec = c.namedChild(j)!;
-              const nm = spec.childForFieldName("name") ?? spec.namedChild(0);
+            for (const spec of c.namedChildren) {
+              const nm = spec.childForFieldName("name") ?? spec.namedChildren[0];
               if (nm?.text) exportedNames.add(nm.text);
             }
           }
@@ -518,8 +553,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
         // declaration walk could pick up — name it after the file stem (ultradoc
         // parity), so the module's default export is a real, referencable symbol.
         if (stem && node.children.some((c) => c.type === "default")) {
-          for (let i = 0; i < node.namedChildCount; i++) {
-            const c = node.namedChild(i)!;
+          for (const c of node.namedChildren) {
             const fnLike = ANON_DEFAULT_FN.has(c.type);
             const classLike = ANON_DEFAULT_CLASS.has(c.type);
             if ((fnLike || classLike) && !c.childForFieldName("name")) {
@@ -529,7 +563,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
                 file: rel,
                 line: node.startPosition.row + 1,
                 endLine: node.endPosition.row + 1,
-                signature: firstLine(node),
+                signature: firstLine(node, content),
                 exported: true,
                 lang: spec.lang,
               });
@@ -543,7 +577,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
       // `exports.*` / `module.exports.*` targets count as exported — augmenting
       // a local object (res.*, Foo.prototype.*) is not a module export.
       if (spec.assignments && node.type === "expression_statement") {
-        const expr = node.namedChild(0);
+        const expr = node.namedChildren[0];
         if (expr?.type === "assignment_expression") {
           const left = expr.childForFieldName("left");
           const right = expr.childForFieldName("right");
@@ -552,8 +586,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
             // shorthand names, keys and identifier values as exported (key = the
             // exported surface, identifier value = the local declaration).
             if (right.type === "object") {
-              for (let i = 0; i < right.namedChildCount; i++) {
-                const p = right.namedChild(i)!;
+              for (const p of right.namedChildren) {
                 if (p.type === "shorthand_property_identifier") exportedNames.add(p.text);
                 else if (p.type === "pair") {
                   const k = p.childForFieldName("key");
@@ -592,7 +625,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
                 line: expr.startPosition.row + 1,
                 endLine: expr.endPosition.row + 1,
                 ...(parent ? { parent } : {}),
-                signature: firstLine(expr),
+                signature: firstLine(expr, content),
                 exported: nowExported || exportedAssign,
                 lang: spec.lang,
               });
@@ -616,7 +649,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
                     line: expr.startPosition.row + 1,
                     endLine: expr.endPosition.row + 1,
                     ...(parent ? { parent } : {}),
-                    signature: firstLine(expr),
+                    signature: firstLine(expr, content),
                     exported: true,
                     lang: spec.lang,
                   });
@@ -636,11 +669,14 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
       if (spec.assignments && node.type === "assignment_statement") {
         const vars = node.children.find((c) => c.type === "variable_list");
         const vals = node.children.find((c) => c.type === "expression_list");
-        const pairs = Math.min(vars?.namedChildCount ?? 0, vals?.namedChildCount ?? 0);
+        const targets = vars?.namedChildren ?? [];
+        const values = vals?.namedChildren ?? [];
+        const pairs = Math.min(targets.length, values.length);
         for (let i = 0; i < pairs; i++) {
-          const target = vars!.namedChild(i)!;
-          const value = vals!.namedChild(i)!;
+          const target = targets[i]!;
+          const value = values[i]!;
           if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
+          const line = firstLine(node, content);
           symbols.push({
             name: target.text,
             kind: "function",
@@ -648,8 +684,8 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
             line: node.startPosition.row + 1,
             endLine: node.endPosition.row + 1,
             ...(parent ? { parent } : {}),
-            signature: firstLine(node),
-            exported: nowExported || spec.exported(firstLine(node), target.text),
+            signature: line,
+            exported: nowExported || spec.exported(line, target.text),
             lang: spec.lang,
           });
         }
@@ -659,7 +695,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
       if (kind) {
         const name = nameOf(node);
         if (name) {
-          const line = firstLine(node);
+          const line = firstLine(node, content);
           symbols.push({
             name,
             kind,
@@ -673,14 +709,12 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
           });
           // Recurse into this declaration's body for nested members (methods),
           // scoping their parent to this symbol.
-          for (let i = 0; i < node.namedChildCount; i++) {
-            walkBody(node.namedChild(i)!, name, nowExported);
-          }
+          for (const c of node.namedChildren) walkBody(c, name, nowExported);
           return;
         }
       }
       if (spec.containers.has(node.type)) {
-        for (let i = 0; i < node.namedChildCount; i++) walk(node.namedChild(i)!, parent, nowExported);
+        for (const c of node.namedChildren) walk(c, parent, nowExported);
       }
     };
     // Recurse a declaration body one level: only container-ish children yield more
@@ -688,7 +722,7 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
     // the "top-level + one level" contract).
     const walkBody = (node: TSNode, parent: string, exported: boolean): void => {
       if (spec.containers.has(node.type)) {
-        for (let i = 0; i < node.namedChildCount; i++) walk(node.namedChild(i)!, parent, exported);
+        for (const c of node.namedChildren) walk(c, parent, exported);
       }
     };
 
@@ -697,12 +731,16 @@ export function extractAst(rel: string, ext: string, content: string, opts: { ma
       for (const s of symbols) if (!s.exported && exportedNames.has(s.name)) s.exported = true;
     }
 
-    const refs = collectImports(root, spec);
-    const idents = collectRefIdents(root, new Set(symbols.map((s) => s.name)));
-    const calls = collectCalls(root, spec, opts.maxCalls);
-    const importedNames = collectImportedNames(root, spec);
+    const wantImports = opts.imports !== false;
+    const { refs, idents, calls, importedNames } = collectAll(
+      root,
+      spec,
+      new Set(symbols.map((s) => s.name)),
+      opts.maxCalls ?? MAX_CALLS,
+      wantImports,
+    );
     let pkg: string | undefined;
-    if (spec.lang === "java") {
+    if (wantImports && spec.lang === "java") {
       const p = findFirst(root, (n) => n.type === "package_declaration");
       if (p) pkg = p.text.replace(/^package\s+/, "").replace(/;.*$/, "").trim();
     }

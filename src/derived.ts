@@ -80,6 +80,23 @@ export function importPairsFor(scan: RepoScan): Set<string> {
   return c.importPairs;
 }
 
+// Seed the import-pair cache with a set buildGraph already resolved.
+//
+// buildGraph resolves every import in the repo to draw its `import` edges and
+// keeps the resolved pairs to suppress redundant `use` edges — the exact set
+// importPairsFor computes. Without this, the pipeline resolved every import
+// twice: once in buildGraph, once again the first time anything asked for the
+// caller index / references / dead code.
+//
+// Guarded on resolve-context identity: buildGraph is a public export a consumer
+// may call with its own context, and pairs resolved under a foreign context must
+// never masquerade as this scan's. Never overwrites an existing entry.
+export function publishImportPairs(scan: RepoScan, ctx: ResolveContext, pairs: Set<string>): void {
+  const c = caches.get(scan);
+  if (!c || c.resolveCtx !== ctx || c.importPairs) return;
+  c.importPairs = pairs;
+}
+
 export function uniqueDefsFor(scan: RepoScan): Map<string, string> {
   const c = cacheFor(scan);
   return (c.uniqueDefs ??= uniqueSymbolDefs(scan));

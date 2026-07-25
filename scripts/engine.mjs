@@ -5663,65 +5663,30 @@ var init_loader = __esm({
 });
 
 // src/ast/extract.ts
-function collectRefIdents(root, defNames) {
-  const found = /* @__PURE__ */ new Set();
-  const visit = (node) => {
-    if (node.namedChildCount === 0 && /identifier|constant|(^|_)name$/.test(node.type) && /^[A-Za-z_]\w{4,}$/.test(node.text) && !defNames.has(node.text)) {
-      found.add(node.text);
-    }
-    for (let i2 = 0; i2 < node.namedChildCount; i2++) visit(node.namedChild(i2));
-  };
-  visit(root);
-  return [...found].sort().slice(0, MAX_REF_IDENTS);
-}
-function firstLine(node) {
-  const nl = node.text.indexOf("\n");
-  return (nl === -1 ? node.text : node.text.slice(0, nl)).trim().slice(0, 200);
+function firstLine(node, src) {
+  const start2 = node.startIndex;
+  const end = node.endIndex;
+  const nl = src.indexOf("\n", start2);
+  const stop2 = nl === -1 || nl > end ? end : nl;
+  return src.slice(start2, stop2).trim().slice(0, 200);
 }
 function nameOf(node) {
   const named = node.childForFieldName("name");
   if (named?.text) return named.text;
   let decl = node.childForFieldName("declarator");
   while (decl) {
-    if (decl.namedChildCount === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
+    if (decl.namedChildren.length === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
     const next = decl.childForFieldName("declarator");
     if (!next || next === decl) break;
     decl = next;
   }
-  for (let i2 = 0; i2 < node.namedChildCount; i2++) {
-    const c2 = node.namedChild(i2);
+  for (const c2 of node.namedChildren) {
     if (/(^|_)(identifier|name|constant)$/.test(c2.type)) return c2.text;
   }
   return void 0;
 }
-function collectImports(root, spec) {
-  if (!spec.imports) return [];
-  const out2 = [];
-  const seen = /* @__PURE__ */ new Set();
-  const add = (s) => {
-    const v = s.trim();
-    if (v && !seen.has(v)) {
-      seen.add(v);
-      out2.push({ kind: "import", spec: v });
-    }
-  };
-  const visit = (node) => {
-    const how = spec.imports[node.type];
-    if (how === "string") {
-      const str2 = findFirst(node, (n) => /string/.test(n.type));
-      if (str2) add(str2.text.replace(/^['"]|['"]$/g, ""));
-    } else if (how === "path") {
-      const name2 = node.childForFieldName("name") ?? node.childForFieldName("module_name");
-      add((name2 ?? node).text.replace(/^(import|from)\s+/, "").split(/\s+/)[0]);
-    }
-    for (let i2 = 0; i2 < node.namedChildCount; i2++) visit(node.namedChild(i2));
-  };
-  visit(root);
-  return out2;
-}
 function findFirst(node, pred) {
-  for (let i2 = 0; i2 < node.namedChildCount; i2++) {
-    const c2 = node.namedChild(i2);
+  for (const c2 of node.namedChildren) {
     if (pred(c2)) return c2;
     const deep = findFirst(c2, pred);
     if (deep) return deep;
@@ -5730,79 +5695,104 @@ function findFirst(node, pred) {
 }
 function readName(node) {
   if (!node) return void 0;
-  if (node.namedChildCount === 0) return IDENT_LEAF.test(node.type) ? node.text : void 0;
+  const kids = node.namedChildren;
+  if (kids.length === 0) return IDENT_LEAF.test(node.type) ? node.text : void 0;
   const seg = node.childForFieldName("name") ?? node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.childForFieldName("field") ?? // Callee wrappers that point at the real callee via a `function` field:
   // scala's generic_function (`foo[Int](x)`) and a curried/chained
   // call_expression callee (`curried(a)(b)`) — descend to the inner name
   // instead of tripping over type_arguments/arguments as the last child.
   node.childForFieldName("function");
   if (seg) return readName(seg);
-  const last = node.namedChild(node.namedChildCount - 1);
+  const last = kids[kids.length - 1];
   return last && last !== node ? readName(last) : void 0;
 }
 function readReceiver(node) {
-  if (!node || node.namedChildCount === 0) return void 0;
+  if (!node || node.namedChildren.length === 0) return void 0;
   const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver") ?? node.childForFieldName("table");
   const name2 = obj ? readName(obj) : void 0;
   return name2 && /^[A-Za-z_]\w*$/.test(name2) ? name2 : void 0;
 }
-function collectCalls(root, spec, maxCalls = MAX_CALLS) {
-  if (!spec.calls) return [];
-  const out2 = [];
-  const seen = /* @__PURE__ */ new Set();
-  const add = (name2, node, receiver) => {
+function collectAll(root, spec, defNames, maxCalls, wantImports) {
+  const identsFound = /* @__PURE__ */ new Set();
+  const wantCalls = spec.calls !== void 0;
+  const calls = [];
+  const callSeen = /* @__PURE__ */ new Set();
+  const addCall = (name2, node, receiver) => {
     if (!name2 || name2.length < 2 || !/^[A-Za-z_]\w*$/.test(name2)) return;
     const line = node.startPosition.row + 1;
     const key = `${name2} ${line}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out2.push(receiver ? { name: name2, line, receiver } : { name: name2, line });
+    if (callSeen.has(key)) return;
+    callSeen.add(key);
+    calls.push(receiver ? { name: name2, line, receiver } : { name: name2, line });
   };
-  const visit = (node) => {
-    const how = spec.calls[node.type];
-    if (how === "function") {
-      const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
-      add(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
-    } else if (how === "member") {
-      add(readName(node.childForFieldName("name")), node, readReceiver(node));
-    } else if (how === "constructor") {
-      let t = node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
-      for (let i2 = 0; !t && i2 < node.namedChildCount; i2++) {
-        const c2 = node.namedChild(i2);
-        if (IDENT_LEAF.test(c2.type)) t = c2;
-      }
-      add(readName(t), node, readReceiver(t ?? null));
+  const wantNames = spec.imports?.import_statement !== void 0;
+  const namesFound = /* @__PURE__ */ new Set();
+  const wantRefs = wantImports && spec.imports !== void 0;
+  const refs = [];
+  const refSeen = /* @__PURE__ */ new Set();
+  const addRef = (s) => {
+    const v = s.trim();
+    if (v && !refSeen.has(v)) {
+      refSeen.add(v);
+      refs.push({ kind: "import", spec: v });
     }
-    for (let i2 = 0; i2 < node.namedChildCount; i2++) visit(node.namedChild(i2));
   };
-  visit(root);
-  out2.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
-  return out2.slice(0, maxCalls);
-}
-function collectImportedNames(root, spec) {
-  if (!spec.imports?.import_statement) return [];
-  const found = /* @__PURE__ */ new Set();
   const visit = (node) => {
-    if (node.type === "import_statement") {
-      for (let i2 = 0; i2 < node.namedChildCount; i2++) {
-        const clause = node.namedChild(i2);
+    const type = node.type;
+    const kids = node.namedChildren;
+    if (kids.length === 0 && REF_IDENT_TYPE.test(type)) {
+      const text = node.text;
+      if (REF_IDENT_TEXT.test(text) && !defNames.has(text)) identsFound.add(text);
+    }
+    if (wantCalls) {
+      const how = spec.calls[type];
+      if (how === "function") {
+        const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
+        addCall(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
+      } else if (how === "member") {
+        addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
+      } else if (how === "constructor") {
+        let t = node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
+        for (let i2 = 0; !t && i2 < kids.length; i2++) {
+          const c2 = kids[i2];
+          if (IDENT_LEAF.test(c2.type)) t = c2;
+        }
+        addCall(readName(t), node, readReceiver(t ?? null));
+      }
+    }
+    if (wantNames && type === "import_statement") {
+      for (const clause of kids) {
         if (clause.type !== "import_clause") continue;
-        for (let j = 0; j < clause.namedChildCount; j++) {
-          const named = clause.namedChild(j);
+        for (const named of clause.namedChildren) {
           if (named.type !== "named_imports") continue;
-          for (let k = 0; k < named.namedChildCount; k++) {
-            const specifier = named.namedChild(k);
+          for (const specifier of named.namedChildren) {
             if (specifier.type !== "import_specifier") continue;
-            const nm = specifier.childForFieldName("name") ?? specifier.namedChild(0);
-            if (nm?.text) found.add(nm.text);
+            const nm = specifier.childForFieldName("name") ?? specifier.namedChildren[0];
+            if (nm?.text) namesFound.add(nm.text);
           }
         }
       }
     }
-    for (let i2 = 0; i2 < node.namedChildCount; i2++) visit(node.namedChild(i2));
+    if (wantRefs) {
+      const how = spec.imports[type];
+      if (how === "string") {
+        const str2 = findFirst(node, (n) => /string/.test(n.type));
+        if (str2) addRef(str2.text.replace(/^['"]|['"]$/g, ""));
+      } else if (how === "path") {
+        const name2 = node.childForFieldName("name") ?? node.childForFieldName("module_name");
+        addRef((name2 ?? node).text.replace(/^(import|from)\s+/, "").split(/\s+/)[0]);
+      }
+    }
+    for (const c2 of kids) visit(c2);
   };
   visit(root);
-  return [...found].sort(byStr).slice(0, MAX_IMPORTED_NAMES);
+  calls.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+  return {
+    refs,
+    idents: [...identsFound].sort().slice(0, MAX_REF_IDENTS),
+    calls: calls.slice(0, maxCalls),
+    importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES)
+  };
 }
 function extractAst(rel, ext, content, opts = {}) {
   const key = grammarKeyForExt(ext);
@@ -5822,20 +5812,17 @@ function extractAst(rel, ext, content, opts = {}) {
     const walk2 = (node, parent, exported) => {
       const nowExported = exported || node.type === "export_statement";
       if (node.type === "export_statement") {
-        for (let i2 = 0; i2 < node.namedChildCount; i2++) {
-          const c2 = node.namedChild(i2);
+        for (const c2 of node.namedChildren) {
           if (c2.type === "identifier") exportedNames.add(c2.text);
           else if (c2.type === "export_clause") {
-            for (let j = 0; j < c2.namedChildCount; j++) {
-              const spec2 = c2.namedChild(j);
-              const nm = spec2.childForFieldName("name") ?? spec2.namedChild(0);
+            for (const spec2 of c2.namedChildren) {
+              const nm = spec2.childForFieldName("name") ?? spec2.namedChildren[0];
               if (nm?.text) exportedNames.add(nm.text);
             }
           }
         }
         if (stem && node.children.some((c2) => c2.type === "default")) {
-          for (let i2 = 0; i2 < node.namedChildCount; i2++) {
-            const c2 = node.namedChild(i2);
+          for (const c2 of node.namedChildren) {
             const fnLike = ANON_DEFAULT_FN.has(c2.type);
             const classLike = ANON_DEFAULT_CLASS.has(c2.type);
             if ((fnLike || classLike) && !c2.childForFieldName("name")) {
@@ -5845,7 +5832,7 @@ function extractAst(rel, ext, content, opts = {}) {
                 file: rel,
                 line: node.startPosition.row + 1,
                 endLine: node.endPosition.row + 1,
-                signature: firstLine(node),
+                signature: firstLine(node, content),
                 exported: true,
                 lang: spec.lang
               });
@@ -5855,14 +5842,13 @@ function extractAst(rel, ext, content, opts = {}) {
         }
       }
       if (spec.assignments && node.type === "expression_statement") {
-        const expr = node.namedChild(0);
+        const expr = node.namedChildren[0];
         if (expr?.type === "assignment_expression") {
           const left = expr.childForFieldName("left");
           const right = expr.childForFieldName("right");
           if (left?.type === "member_expression" && left.text === "module.exports" && right) {
             if (right.type === "object") {
-              for (let i2 = 0; i2 < right.namedChildCount; i2++) {
-                const p = right.namedChild(i2);
+              for (const p of right.namedChildren) {
                 if (p.type === "shorthand_property_identifier") exportedNames.add(p.text);
                 else if (p.type === "pair") {
                   const k = p.childForFieldName("key");
@@ -5900,7 +5886,7 @@ function extractAst(rel, ext, content, opts = {}) {
                 line: expr.startPosition.row + 1,
                 endLine: expr.endPosition.row + 1,
                 ...parent ? { parent } : {},
-                signature: firstLine(expr),
+                signature: firstLine(expr, content),
                 exported: nowExported || exportedAssign,
                 lang: spec.lang
               });
@@ -5920,7 +5906,7 @@ function extractAst(rel, ext, content, opts = {}) {
                     line: expr.startPosition.row + 1,
                     endLine: expr.endPosition.row + 1,
                     ...parent ? { parent } : {},
-                    signature: firstLine(expr),
+                    signature: firstLine(expr, content),
                     exported: true,
                     lang: spec.lang
                   });
@@ -5934,11 +5920,14 @@ function extractAst(rel, ext, content, opts = {}) {
       if (spec.assignments && node.type === "assignment_statement") {
         const vars = node.children.find((c2) => c2.type === "variable_list");
         const vals = node.children.find((c2) => c2.type === "expression_list");
-        const pairs = Math.min(vars?.namedChildCount ?? 0, vals?.namedChildCount ?? 0);
+        const targets = vars?.namedChildren ?? [];
+        const values = vals?.namedChildren ?? [];
+        const pairs = Math.min(targets.length, values.length);
         for (let i2 = 0; i2 < pairs; i2++) {
-          const target = vars.namedChild(i2);
-          const value = vals.namedChild(i2);
+          const target = targets[i2];
+          const value = values[i2];
           if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
+          const line = firstLine(node, content);
           symbols.push({
             name: target.text,
             kind: "function",
@@ -5946,8 +5935,8 @@ function extractAst(rel, ext, content, opts = {}) {
             line: node.startPosition.row + 1,
             endLine: node.endPosition.row + 1,
             ...parent ? { parent } : {},
-            signature: firstLine(node),
-            exported: nowExported || spec.exported(firstLine(node), target.text),
+            signature: line,
+            exported: nowExported || spec.exported(line, target.text),
             lang: spec.lang
           });
         }
@@ -5957,7 +5946,7 @@ function extractAst(rel, ext, content, opts = {}) {
       if (kind) {
         const name2 = nameOf(node);
         if (name2) {
-          const line = firstLine(node);
+          const line = firstLine(node, content);
           symbols.push({
             name: name2,
             kind,
@@ -5969,31 +5958,33 @@ function extractAst(rel, ext, content, opts = {}) {
             exported: nowExported || spec.exported(line, name2),
             lang: spec.lang
           });
-          for (let i2 = 0; i2 < node.namedChildCount; i2++) {
-            walkBody(node.namedChild(i2), name2, nowExported);
-          }
+          for (const c2 of node.namedChildren) walkBody(c2, name2, nowExported);
           return;
         }
       }
       if (spec.containers.has(node.type)) {
-        for (let i2 = 0; i2 < node.namedChildCount; i2++) walk2(node.namedChild(i2), parent, nowExported);
+        for (const c2 of node.namedChildren) walk2(c2, parent, nowExported);
       }
     };
     const walkBody = (node, parent, exported) => {
       if (spec.containers.has(node.type)) {
-        for (let i2 = 0; i2 < node.namedChildCount; i2++) walk2(node.namedChild(i2), parent, exported);
+        for (const c2 of node.namedChildren) walk2(c2, parent, exported);
       }
     };
     walk2(root, void 0, false);
     if (exportedNames.size) {
       for (const s of symbols) if (!s.exported && exportedNames.has(s.name)) s.exported = true;
     }
-    const refs = collectImports(root, spec);
-    const idents = collectRefIdents(root, new Set(symbols.map((s) => s.name)));
-    const calls = collectCalls(root, spec, opts.maxCalls);
-    const importedNames = collectImportedNames(root, spec);
+    const wantImports = opts.imports !== false;
+    const { refs, idents, calls, importedNames } = collectAll(
+      root,
+      spec,
+      new Set(symbols.map((s) => s.name)),
+      opts.maxCalls ?? MAX_CALLS,
+      wantImports
+    );
     let pkg;
-    if (spec.lang === "java") {
+    if (wantImports && spec.lang === "java") {
       const p = findFirst(root, (n) => n.type === "package_declaration");
       if (p) pkg = p.text.replace(/^package\s+/, "").replace(/;.*$/, "").trim();
     }
@@ -6004,7 +5995,7 @@ function extractAst(rel, ext, content, opts = {}) {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, byPublicKeyword, byNotPrivate, byNotLocal, byPub, byCapital, byPyConvention, always, neverExport, TS_SPEC, SPECS, IDENT_LEAF;
+var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, byPublicKeyword, byNotPrivate, byNotLocal, byPub, byCapital, byPyConvention, always, neverExport, TS_SPEC, SPECS, IDENT_LEAF;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
@@ -6022,6 +6013,8 @@ var init_extract = __esm({
       "arrow_function"
     ]);
     ANON_DEFAULT_CLASS = /* @__PURE__ */ new Set(["class", "class_declaration", "abstract_class_declaration"]);
+    REF_IDENT_TYPE = /identifier|constant|(^|_)name$/;
+    REF_IDENT_TEXT = /^[A-Za-z_]\w{4,}$/;
     byPublicKeyword = (line) => /\b(public|internal)\b/.test(line);
     byNotPrivate = (line) => !/\b(private|protected)\b/.test(line);
     byNotLocal = (line) => !/^local\b/.test(line);
@@ -6464,7 +6457,7 @@ function collectCallsRegex(content, symbols = [], maxCalls = 512) {
   return [...out2.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line);
 }
 function extractCode(rel, ext, content, opts = {}) {
-  const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile });
+  const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile, imports: false });
   const symbols = (ast ? ast.symbols : extractSymbols(rel, ext, content)).slice(0, 400);
   const known = new Set(symbols.map((s) => s.name));
   const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
@@ -6545,7 +6538,7 @@ function countLines(s) {
   for (let i2 = 0; i2 < s.length; i2++) if (s.charCodeAt(i2) === 10) n++;
   return n;
 }
-function scanRepo(root, opts = {}) {
+function* keptFiles(root, opts) {
   const scoped = opts.scope ? [...opts.include ?? [], `${opts.scope.replace(/\/+$/, "")}/**`] : opts.include;
   const include = compileGlobs(scoped);
   const exclude = compileGlobs(opts.exclude);
@@ -6556,6 +6549,26 @@ function scanRepo(root, opts = {}) {
     ignoreDirs: opts.ignoreDirs
   });
   const outPrefix = opts.out ? opts.out.replace(/\/+$/, "") + "/" : null;
+  for (const f of walked) {
+    if (outPrefix && (f.abs === opts.out || f.abs.startsWith(outPrefix))) continue;
+    if (include && !include(f.rel)) continue;
+    if (exclude && exclude(f.rel)) continue;
+    yield { f, kind: classify(f.rel, f.ext), lang: extToLang(f.ext) };
+  }
+  return { capped, excluded };
+}
+function scanSummary(root, opts = {}) {
+  const languages = {};
+  let fileCount = 0;
+  const it = keptFiles(root, opts);
+  let step = it.next();
+  for (; !step.done; step = it.next()) {
+    languages[step.value.lang] = (languages[step.value.lang] ?? 0) + 1;
+    fileCount++;
+  }
+  return { root, commit: headCommit(root), fileCount, languages, capped: step.value.capped, excluded: step.value.excluded };
+}
+function scanRepo(root, opts = {}) {
   const files = [];
   const languages = {};
   const docText = /* @__PURE__ */ new Map();
@@ -6563,12 +6576,10 @@ function scanRepo(root, opts = {}) {
   const cache = opts.cache;
   let allReused = cache !== void 0;
   let cacheDirty = cache === void 0;
-  for (const f of walked) {
-    if (outPrefix && (f.abs === opts.out || f.abs.startsWith(outPrefix))) continue;
-    if (include && !include(f.rel)) continue;
-    if (exclude && exclude(f.rel)) continue;
-    const kind = classify(f.rel, f.ext);
-    const lang = extToLang(f.ext);
+  const it = keptFiles(root, opts);
+  let step = it.next();
+  for (; !step.done; step = it.next()) {
+    const { f, kind, lang } = step.value;
     languages[lang] = (languages[lang] ?? 0) + 1;
     mtimes.set(f.rel, f.mtimeMs);
     const cached = opts.cache?.get(f.rel);
@@ -6638,8 +6649,8 @@ function scanRepo(root, opts = {}) {
     languages,
     docText,
     mtimes,
-    capped,
-    excluded,
+    capped: step.value.capped,
+    excluded: step.value.excluded,
     contentUnchanged: allReused,
     cacheDirty
   };
@@ -7515,194 +7526,9 @@ var init_calls = __esm({
   }
 });
 
-// src/graph.ts
-import { join as join5 } from "path";
-function isDistinctive(name2) {
-  if (name2.length < 5) return false;
-  const internalUpper = /[a-z][A-Z]/.test(name2) || /[A-Z]{2}/.test(name2);
-  return internalUpper || name2.includes("_") || /\d/.test(name2);
-}
-function uniqueSymbolDefs(scan2) {
-  const byName = /* @__PURE__ */ new Map();
-  for (const f of scan2.files) {
-    for (const s of f.symbols) {
-      if (!s.exported || REFERENCE_KINDS2.has(s.kind) || !isDistinctive(s.name)) continue;
-      let set = byName.get(s.name);
-      if (!set) byName.set(s.name, set = /* @__PURE__ */ new Set());
-      set.add(f.rel);
-    }
-  }
-  const unique = /* @__PURE__ */ new Map();
-  for (const [name2, files] of byName) if (files.size === 1) unique.set(name2, [...files][0]);
-  return unique;
-}
-function collect(edges, e) {
-  const k = keyOf(e.from, e.to, e.kind);
-  const prev = edges.get(k);
-  if (prev) {
-    prev.weight += e.weight;
-    return;
-  }
-  edges.set(k, { ...e });
-}
-function buildGraph(scan2, ctx, modules, moduleOf, meta) {
-  const fileEdgeMap = /* @__PURE__ */ new Map();
-  const importPairs = /* @__PURE__ */ new Set();
-  for (const f of scan2.files) {
-    for (const ref of f.refs) {
-      if (ref.kind === "doc-link") {
-        const r = resolveDocLink(f.rel, ref.spec, ctx);
-        if (r.kind === "external") continue;
-        if (r.kind === "dangling") {
-          collect(fileEdgeMap, { from: f.rel, to: ref.spec, kind: "doc-link", weight: 1, dangling: true, reason: r.reason });
-        } else if (r.target !== f.rel) {
-          collect(fileEdgeMap, { from: f.rel, to: r.target, kind: "doc-link", weight: 1 });
-        }
-      } else {
-        const r = resolveImport(f.rel, f.ext, ref.spec, ctx);
-        if (r.kind === "external") continue;
-        if (r.kind === "dangling") {
-          collect(fileEdgeMap, { from: f.rel, to: ref.spec, kind: "import", weight: 1, dangling: true, reason: r.reason });
-        } else if (r.target !== f.rel) {
-          collect(fileEdgeMap, { from: f.rel, to: r.target, kind: "import", weight: 1 });
-          importPairs.add(`${f.rel}|${r.target}`);
-        }
-      }
-    }
-  }
-  const callPairs = /* @__PURE__ */ new Set();
-  for (const e of resolveCallEdges(scan2, importPairs)) {
-    collect(fileEdgeMap, e);
-    callPairs.add(`${e.from}|${e.to}`);
-  }
-  const unique = uniqueSymbolDefs(scan2);
-  if (unique.size) {
-    for (const f of scan2.files) {
-      if (f.kind !== "code" || !f.idents?.length) continue;
-      const perTarget = /* @__PURE__ */ new Map();
-      for (const id of f.idents) {
-        const target = unique.get(id);
-        if (!target || target === f.rel) continue;
-        perTarget.set(target, (perTarget.get(target) ?? 0) + 1);
-      }
-      for (const [target, count] of perTarget) {
-        const pair = `${f.rel}|${target}`;
-        if (importPairs.has(pair) || callPairs.has(pair)) continue;
-        collect(fileEdgeMap, { from: f.rel, to: target, kind: "use", weight: Math.min(count, 5) });
-      }
-    }
-  }
-  if (unique.size) {
-    for (const f of scan2.files) {
-      if (f.kind !== "doc") continue;
-      const content = scan2.docText.get(f.rel) ?? readText(join5(scan2.root, f.rel));
-      if (!content) continue;
-      const tokens = /* @__PURE__ */ new Map();
-      for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
-        if (unique.has(tok)) tokens.set(tok, (tokens.get(tok) ?? 0) + 1);
-      }
-      for (const [name2, count] of tokens) {
-        const target = unique.get(name2);
-        if (target === f.rel) continue;
-        collect(fileEdgeMap, { from: f.rel, to: target, kind: "mention", weight: Math.min(count, 5) });
-      }
-    }
-  }
-  const fileEdges = [...fileEdgeMap.values()].sort(
-    (a, b) => byStr(a.from, b.from) || byStr(a.to, b.to) || byStr(a.kind, b.kind)
-  );
-  const degIn = /* @__PURE__ */ new Map();
-  const degOut = /* @__PURE__ */ new Map();
-  const fileSet = new Set(scan2.files.map((f) => f.rel));
-  for (const e of fileEdges) {
-    if (e.dangling || !fileSet.has(e.to)) continue;
-    degOut.set(e.from, (degOut.get(e.from) ?? 0) + 1);
-    degIn.set(e.to, (degIn.get(e.to) ?? 0) + 1);
-  }
-  const KIND_RANK = { import: 5, call: 4, use: 3, "doc-link": 2, mention: 1, contains: 0 };
-  const modEdgeMap = /* @__PURE__ */ new Map();
-  for (const e of fileEdges) {
-    if (e.dangling || !fileSet.has(e.to)) continue;
-    const from = moduleOf.get(e.from);
-    const to = moduleOf.get(e.to);
-    if (!from || !to || from === to) continue;
-    const k = `${from}\0${to}`;
-    const prev = modEdgeMap.get(k);
-    if (prev) {
-      prev.weight += e.weight;
-      if ((KIND_RANK[e.kind] ?? 0) > (KIND_RANK[prev.kind] ?? 0)) prev.kind = e.kind;
-    } else {
-      modEdgeMap.set(k, { from, to, kind: e.kind, weight: e.weight });
-    }
-  }
-  const moduleEdges = [...modEdgeMap.values()].sort((a, b) => byStr(a.from, b.from) || byStr(a.to, b.to));
-  const modDegIn = /* @__PURE__ */ new Map();
-  const modDegOut = /* @__PURE__ */ new Map();
-  for (const e of moduleEdges) {
-    modDegOut.set(e.from, (modDegOut.get(e.from) ?? 0) + 1);
-    modDegIn.set(e.to, (modDegIn.get(e.to) ?? 0) + 1);
-  }
-  const files = scan2.files.map((f) => ({
-    id: f.rel,
-    kind: "file",
-    rel: f.rel,
-    fileKind: f.kind,
-    lang: f.lang,
-    module: moduleOf.get(f.rel) ?? "root",
-    title: f.title,
-    summary: f.summary,
-    symbols: f.symbols.length,
-    lines: f.lines,
-    degIn: degIn.get(f.rel) ?? 0,
-    degOut: degOut.get(f.rel) ?? 0
-  })).sort((a, b) => byStr(a.rel, b.rel));
-  const symbolsByModule = /* @__PURE__ */ new Map();
-  for (const f of scan2.files) {
-    const slug = moduleOf.get(f.rel) ?? "root";
-    symbolsByModule.set(slug, (symbolsByModule.get(slug) ?? 0) + f.symbols.length);
-  }
-  const moduleNodes = modules.map((m) => ({
-    id: m.slug,
-    kind: "module",
-    slug: m.slug,
-    path: m.path,
-    title: m.title,
-    summary: m.summary,
-    tier: m.tier,
-    members: m.members,
-    symbols: symbolsByModule.get(m.slug) ?? 0,
-    degIn: modDegIn.get(m.slug) ?? 0,
-    degOut: modDegOut.get(m.slug) ?? 0
-  })).sort((a, b) => byStr(a.slug, b.slug));
-  return {
-    schemaVersion: meta?.schemaVersion ?? SCHEMA_VERSION,
-    version: meta?.version ?? ENGINE_VERSION,
-    commit: scan2.commit,
-    fileCount: scan2.files.length,
-    languages: scan2.languages,
-    files,
-    modules: moduleNodes,
-    fileEdges,
-    moduleEdges
-  };
-}
-var REFERENCE_KINDS2, keyOf;
-var init_graph = __esm({
-  "src/graph.ts"() {
-    "use strict";
-    init_types();
-    init_resolve();
-    init_calls();
-    init_walk();
-    init_sort();
-    REFERENCE_KINDS2 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
-    keyOf = (from, to, kind) => `${from}\0${to}\0${kind}`;
-  }
-});
-
 // src/render/symbols-json.ts
 function computeSymbolRefs(scan2) {
-  const unique = uniqueSymbolDefs(scan2);
+  const unique = uniqueDefsFor(scan2);
   const refs = /* @__PURE__ */ new Map();
   if (!unique.size) return refs;
   const add = (name2, file) => {
@@ -7763,7 +7589,128 @@ var init_symbols_json = __esm({
     "use strict";
     init_types();
     init_sort();
-    init_graph();
+    init_derived();
+  }
+});
+
+// src/callers.ts
+function computeImportPairs(scan2) {
+  return new Set(importPairsFor(scan2));
+}
+function buildCallerIndex(scan2, importPairs, opts = {}) {
+  const pairs = importPairs ?? importPairsFor(scan2);
+  const recall = opts.recall === true;
+  const defs = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const s of f.symbols) {
+      if (!s.exported || REFERENCE_KINDS2.has(s.kind)) continue;
+      if (seen.has(s.name)) continue;
+      seen.add(s.name);
+      let arr = defs.get(s.name);
+      if (!arr) defs.set(s.name, arr = []);
+      arr.push(s);
+    }
+  }
+  const localDefs = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) {
+    const byName = /* @__PURE__ */ new Map();
+    for (const s of f.symbols) {
+      if (!REFERENCE_KINDS2.has(s.kind) && !byName.has(s.name)) byName.set(s.name, s);
+    }
+    localDefs.set(f.rel, byName);
+  }
+  const sites = /* @__PURE__ */ new Map();
+  const record = (def, caller) => {
+    let entry = sites.get(def.name + "\0" + def.file);
+    if (!entry) sites.set(def.name + "\0" + def.file, entry = { def, callers: [] });
+    entry.callers.push(caller);
+  };
+  for (const f of scan2.files) {
+    if (!f.calls?.length) continue;
+    const family = familyOf(f.lang);
+    const own = localDefs.get(f.rel);
+    for (const c2 of f.calls) {
+      const local = own.get(c2.name);
+      if (local) {
+        if (local.line !== c2.line)
+          record(local, recall ? { file: f.rel, line: c2.line, confidence: "corroborated" } : { file: f.rel, line: c2.line });
+        continue;
+      }
+      const cands = (defs.get(c2.name) ?? []).filter((d) => familyOf(d.lang) === family && d.file !== f.rel).map((d) => ({ file: d.file, lang: d.lang }));
+      if (!cands.length) continue;
+      const imported = cands.filter((d) => pairs.has(`${f.rel}|${d.file}`));
+      const chosen = family === "js" ? imported.length ? pickCandidate(f.rel, imported) : (
+        // JS/TS gate: no corroborating import → no binding. Recall mode
+        // relaxes this to a unique-repo-wide name match (issue #7).
+        recall && cands.length === 1 ? cands[0] : void 0
+      ) : imported.length ? pickCandidate(f.rel, imported) : pickCandidate(f.rel, cands);
+      if (!chosen) continue;
+      const def = defs.get(c2.name).find((d) => d.file === chosen.file);
+      record(
+        def,
+        recall ? { file: f.rel, line: c2.line, confidence: imported.length ? "corroborated" : "unique-name" } : { file: f.rel, line: c2.line }
+      );
+    }
+  }
+  const index = /* @__PURE__ */ new Map();
+  const keys = [...sites.keys()].sort(byStr);
+  for (const key of keys) {
+    const { def, callers } = sites.get(key);
+    callers.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
+    if (!index.has(def.name)) index.set(def.name, { def, callers });
+    else index.set(`${def.name}@${def.file}`, { def, callers });
+  }
+  return index;
+}
+function enclosingSymbol(scan2, file, line) {
+  const f = scan2.files.find((x) => x.rel === file);
+  if (!f?.symbols.length) return void 0;
+  return enclosingAmong(f.symbols, line);
+}
+function enclosingAmong(symbols, line) {
+  let best;
+  for (const s of symbols) {
+    if (REFERENCE_KINDS2.has(s.kind)) continue;
+    if (s.line > line) continue;
+    if (s.endLine !== void 0 && line > s.endLine) continue;
+    if (!best || s.line > best.line || s.line === best.line && (s.endLine ?? Infinity) <= (best.endLine ?? Infinity)) {
+      best = s;
+    }
+  }
+  return best;
+}
+function buildRawCallerIndex(scan2) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) {
+    if (!f.calls?.length) continue;
+    const symbols = f.symbols.filter((s) => !REFERENCE_KINDS2.has(s.kind));
+    for (const c2 of f.calls) {
+      const site = { file: f.rel, line: c2.line };
+      if (c2.receiver !== void 0) site.receiver = c2.receiver;
+      const enc = enclosingAmong(symbols, c2.line);
+      if (enc) site.enclosingSymbol = enc;
+      let arr = byName.get(c2.name);
+      if (!arr) byName.set(c2.name, arr = []);
+      arr.push(site);
+    }
+  }
+  const index = /* @__PURE__ */ new Map();
+  for (const name2 of [...byName.keys()].sort(byStr)) {
+    const sites = byName.get(name2);
+    sites.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
+    index.set(name2, sites);
+  }
+  return index;
+}
+var REFERENCE_KINDS2;
+var init_callers = __esm({
+  "src/callers.ts"() {
+    "use strict";
+    init_calls();
+    init_derived();
+    init_sort();
+    REFERENCE_KINDS2 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
   }
 });
 
@@ -7941,7 +7888,7 @@ var init_bm25 = __esm({
 });
 
 // src/complexity.ts
-import { join as join6 } from "path";
+import { join as join5 } from "path";
 function complexityOfSource(source) {
   return 1 + (source.match(BRANCH_RE) ?? []).length;
 }
@@ -7951,7 +7898,7 @@ function symbolComplexity(scan2, rel, top = 50) {
     if (f.kind !== "code") continue;
     if (rel && f.rel !== rel) continue;
     if (!f.symbols.length) continue;
-    const lines = readText(join6(scan2.root, f.rel)).split("\n");
+    const lines = readText(join5(scan2.root, f.rel)).split("\n");
     for (const s of f.symbols) {
       if (s.kind === "reexport" || s.kind === "reexport-all") continue;
       const end = s.endLine ?? s.line;
@@ -7986,7 +7933,7 @@ var init_complexity = __esm({
 });
 
 // src/derived.ts
-import { join as join7 } from "path";
+import { join as join6 } from "path";
 function cacheFor(scan2) {
   let c2 = caches.get(scan2);
   if (!c2) caches.set(scan2, c2 = {});
@@ -8011,6 +7958,11 @@ function importPairsFor(scan2) {
     c2.importPairs = pairs;
   }
   return c2.importPairs;
+}
+function publishImportPairs(scan2, ctx, pairs) {
+  const c2 = caches.get(scan2);
+  if (!c2 || c2.resolveCtx !== ctx || c2.importPairs) return;
+  c2.importPairs = pairs;
 }
 function uniqueDefsFor(scan2) {
   const c2 = cacheFor(scan2);
@@ -8039,7 +7991,7 @@ function fileComplexityFor(scan2) {
     const m = /* @__PURE__ */ new Map();
     for (const f of scan2.files) {
       if (f.kind !== "code") continue;
-      m.set(f.rel, complexityOfSource(readText(join7(scan2.root, f.rel))));
+      m.set(f.rel, complexityOfSource(readText(join6(scan2.root, f.rel))));
     }
     c2.fileComplexity = m;
   }
@@ -8060,124 +8012,190 @@ var init_derived = __esm({
   }
 });
 
-// src/callers.ts
-function computeImportPairs(scan2) {
-  return new Set(importPairsFor(scan2));
+// src/graph.ts
+import { join as join7 } from "path";
+function isDistinctive(name2) {
+  if (name2.length < 5) return false;
+  const internalUpper = /[a-z][A-Z]/.test(name2) || /[A-Z]{2}/.test(name2);
+  return internalUpper || name2.includes("_") || /\d/.test(name2);
 }
-function buildCallerIndex(scan2, importPairs, opts = {}) {
-  const pairs = importPairs ?? importPairsFor(scan2);
-  const recall = opts.recall === true;
-  const defs = /* @__PURE__ */ new Map();
-  for (const f of scan2.files) {
-    const seen = /* @__PURE__ */ new Set();
-    for (const s of f.symbols) {
-      if (!s.exported || REFERENCE_KINDS3.has(s.kind)) continue;
-      if (seen.has(s.name)) continue;
-      seen.add(s.name);
-      let arr = defs.get(s.name);
-      if (!arr) defs.set(s.name, arr = []);
-      arr.push(s);
-    }
-  }
-  const localDefs = /* @__PURE__ */ new Map();
-  for (const f of scan2.files) {
-    const byName = /* @__PURE__ */ new Map();
-    for (const s of f.symbols) {
-      if (!REFERENCE_KINDS3.has(s.kind) && !byName.has(s.name)) byName.set(s.name, s);
-    }
-    localDefs.set(f.rel, byName);
-  }
-  const sites = /* @__PURE__ */ new Map();
-  const record = (def, caller) => {
-    let entry = sites.get(def.name + "\0" + def.file);
-    if (!entry) sites.set(def.name + "\0" + def.file, entry = { def, callers: [] });
-    entry.callers.push(caller);
-  };
-  for (const f of scan2.files) {
-    if (!f.calls?.length) continue;
-    const family = familyOf(f.lang);
-    const own = localDefs.get(f.rel);
-    for (const c2 of f.calls) {
-      const local = own.get(c2.name);
-      if (local) {
-        if (local.line !== c2.line)
-          record(local, recall ? { file: f.rel, line: c2.line, confidence: "corroborated" } : { file: f.rel, line: c2.line });
-        continue;
-      }
-      const cands = (defs.get(c2.name) ?? []).filter((d) => familyOf(d.lang) === family && d.file !== f.rel).map((d) => ({ file: d.file, lang: d.lang }));
-      if (!cands.length) continue;
-      const imported = cands.filter((d) => pairs.has(`${f.rel}|${d.file}`));
-      const chosen = family === "js" ? imported.length ? pickCandidate(f.rel, imported) : (
-        // JS/TS gate: no corroborating import → no binding. Recall mode
-        // relaxes this to a unique-repo-wide name match (issue #7).
-        recall && cands.length === 1 ? cands[0] : void 0
-      ) : imported.length ? pickCandidate(f.rel, imported) : pickCandidate(f.rel, cands);
-      if (!chosen) continue;
-      const def = defs.get(c2.name).find((d) => d.file === chosen.file);
-      record(
-        def,
-        recall ? { file: f.rel, line: c2.line, confidence: imported.length ? "corroborated" : "unique-name" } : { file: f.rel, line: c2.line }
-      );
-    }
-  }
-  const index = /* @__PURE__ */ new Map();
-  const keys = [...sites.keys()].sort(byStr);
-  for (const key of keys) {
-    const { def, callers } = sites.get(key);
-    callers.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
-    if (!index.has(def.name)) index.set(def.name, { def, callers });
-    else index.set(`${def.name}@${def.file}`, { def, callers });
-  }
-  return index;
-}
-function enclosingSymbol(scan2, file, line) {
-  const f = scan2.files.find((x) => x.rel === file);
-  if (!f?.symbols.length) return void 0;
-  return enclosingAmong(f.symbols, line);
-}
-function enclosingAmong(symbols, line) {
-  let best;
-  for (const s of symbols) {
-    if (REFERENCE_KINDS3.has(s.kind)) continue;
-    if (s.line > line) continue;
-    if (s.endLine !== void 0 && line > s.endLine) continue;
-    if (!best || s.line > best.line || s.line === best.line && (s.endLine ?? Infinity) <= (best.endLine ?? Infinity)) {
-      best = s;
-    }
-  }
-  return best;
-}
-function buildRawCallerIndex(scan2) {
+function uniqueSymbolDefs(scan2) {
   const byName = /* @__PURE__ */ new Map();
   for (const f of scan2.files) {
-    if (!f.calls?.length) continue;
-    const symbols = f.symbols.filter((s) => !REFERENCE_KINDS3.has(s.kind));
-    for (const c2 of f.calls) {
-      const site = { file: f.rel, line: c2.line };
-      if (c2.receiver !== void 0) site.receiver = c2.receiver;
-      const enc = enclosingAmong(symbols, c2.line);
-      if (enc) site.enclosingSymbol = enc;
-      let arr = byName.get(c2.name);
-      if (!arr) byName.set(c2.name, arr = []);
-      arr.push(site);
+    for (const s of f.symbols) {
+      if (!s.exported || REFERENCE_KINDS3.has(s.kind) || !isDistinctive(s.name)) continue;
+      let set = byName.get(s.name);
+      if (!set) byName.set(s.name, set = /* @__PURE__ */ new Set());
+      set.add(f.rel);
     }
   }
-  const index = /* @__PURE__ */ new Map();
-  for (const name2 of [...byName.keys()].sort(byStr)) {
-    const sites = byName.get(name2);
-    sites.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
-    index.set(name2, sites);
-  }
-  return index;
+  const unique = /* @__PURE__ */ new Map();
+  for (const [name2, files] of byName) if (files.size === 1) unique.set(name2, [...files][0]);
+  return unique;
 }
-var REFERENCE_KINDS3;
-var init_callers = __esm({
-  "src/callers.ts"() {
+function collect(edges, e) {
+  const k = keyOf(e.from, e.to, e.kind);
+  const prev = edges.get(k);
+  if (prev) {
+    prev.weight += e.weight;
+    return;
+  }
+  edges.set(k, { ...e });
+}
+function buildGraph(scan2, ctx, modules, moduleOf, meta) {
+  const fileEdgeMap = /* @__PURE__ */ new Map();
+  const importPairs = /* @__PURE__ */ new Set();
+  for (const f of scan2.files) {
+    for (const ref of f.refs) {
+      if (ref.kind === "doc-link") {
+        const r = resolveDocLink(f.rel, ref.spec, ctx);
+        if (r.kind === "external") continue;
+        if (r.kind === "dangling") {
+          collect(fileEdgeMap, { from: f.rel, to: ref.spec, kind: "doc-link", weight: 1, dangling: true, reason: r.reason });
+        } else if (r.target !== f.rel) {
+          collect(fileEdgeMap, { from: f.rel, to: r.target, kind: "doc-link", weight: 1 });
+        }
+      } else {
+        const r = resolveImport(f.rel, f.ext, ref.spec, ctx);
+        if (r.kind === "external") continue;
+        if (r.kind === "dangling") {
+          collect(fileEdgeMap, { from: f.rel, to: ref.spec, kind: "import", weight: 1, dangling: true, reason: r.reason });
+        } else if (r.target !== f.rel) {
+          collect(fileEdgeMap, { from: f.rel, to: r.target, kind: "import", weight: 1 });
+          importPairs.add(`${f.rel}|${r.target}`);
+        }
+      }
+    }
+  }
+  const callPairs = /* @__PURE__ */ new Set();
+  for (const e of resolveCallEdges(scan2, importPairs)) {
+    collect(fileEdgeMap, e);
+    callPairs.add(`${e.from}|${e.to}`);
+  }
+  publishImportPairs(scan2, ctx, importPairs);
+  const unique = uniqueDefsFor(scan2);
+  if (unique.size) {
+    for (const f of scan2.files) {
+      if (f.kind !== "code" || !f.idents?.length) continue;
+      const perTarget = /* @__PURE__ */ new Map();
+      for (const id of f.idents) {
+        const target = unique.get(id);
+        if (!target || target === f.rel) continue;
+        perTarget.set(target, (perTarget.get(target) ?? 0) + 1);
+      }
+      for (const [target, count] of perTarget) {
+        const pair = `${f.rel}|${target}`;
+        if (importPairs.has(pair) || callPairs.has(pair)) continue;
+        collect(fileEdgeMap, { from: f.rel, to: target, kind: "use", weight: Math.min(count, 5) });
+      }
+    }
+  }
+  if (unique.size) {
+    for (const f of scan2.files) {
+      if (f.kind !== "doc") continue;
+      const content = scan2.docText.get(f.rel) ?? readText(join7(scan2.root, f.rel));
+      if (!content) continue;
+      const tokens = /* @__PURE__ */ new Map();
+      for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
+        if (unique.has(tok)) tokens.set(tok, (tokens.get(tok) ?? 0) + 1);
+      }
+      for (const [name2, count] of tokens) {
+        const target = unique.get(name2);
+        if (target === f.rel) continue;
+        collect(fileEdgeMap, { from: f.rel, to: target, kind: "mention", weight: Math.min(count, 5) });
+      }
+    }
+  }
+  const fileEdges = [...fileEdgeMap.values()].sort(
+    (a, b) => byStr(a.from, b.from) || byStr(a.to, b.to) || byStr(a.kind, b.kind)
+  );
+  const degIn = /* @__PURE__ */ new Map();
+  const degOut = /* @__PURE__ */ new Map();
+  const fileSet = new Set(scan2.files.map((f) => f.rel));
+  for (const e of fileEdges) {
+    if (e.dangling || !fileSet.has(e.to)) continue;
+    degOut.set(e.from, (degOut.get(e.from) ?? 0) + 1);
+    degIn.set(e.to, (degIn.get(e.to) ?? 0) + 1);
+  }
+  const KIND_RANK = { import: 5, call: 4, use: 3, "doc-link": 2, mention: 1, contains: 0 };
+  const modEdgeMap = /* @__PURE__ */ new Map();
+  for (const e of fileEdges) {
+    if (e.dangling || !fileSet.has(e.to)) continue;
+    const from = moduleOf.get(e.from);
+    const to = moduleOf.get(e.to);
+    if (!from || !to || from === to) continue;
+    const k = `${from}\0${to}`;
+    const prev = modEdgeMap.get(k);
+    if (prev) {
+      prev.weight += e.weight;
+      if ((KIND_RANK[e.kind] ?? 0) > (KIND_RANK[prev.kind] ?? 0)) prev.kind = e.kind;
+    } else {
+      modEdgeMap.set(k, { from, to, kind: e.kind, weight: e.weight });
+    }
+  }
+  const moduleEdges = [...modEdgeMap.values()].sort((a, b) => byStr(a.from, b.from) || byStr(a.to, b.to));
+  const modDegIn = /* @__PURE__ */ new Map();
+  const modDegOut = /* @__PURE__ */ new Map();
+  for (const e of moduleEdges) {
+    modDegOut.set(e.from, (modDegOut.get(e.from) ?? 0) + 1);
+    modDegIn.set(e.to, (modDegIn.get(e.to) ?? 0) + 1);
+  }
+  const files = scan2.files.map((f) => ({
+    id: f.rel,
+    kind: "file",
+    rel: f.rel,
+    fileKind: f.kind,
+    lang: f.lang,
+    module: moduleOf.get(f.rel) ?? "root",
+    title: f.title,
+    summary: f.summary,
+    symbols: f.symbols.length,
+    lines: f.lines,
+    degIn: degIn.get(f.rel) ?? 0,
+    degOut: degOut.get(f.rel) ?? 0
+  })).sort((a, b) => byStr(a.rel, b.rel));
+  const symbolsByModule = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) {
+    const slug = moduleOf.get(f.rel) ?? "root";
+    symbolsByModule.set(slug, (symbolsByModule.get(slug) ?? 0) + f.symbols.length);
+  }
+  const moduleNodes = modules.map((m) => ({
+    id: m.slug,
+    kind: "module",
+    slug: m.slug,
+    path: m.path,
+    title: m.title,
+    summary: m.summary,
+    tier: m.tier,
+    members: m.members,
+    symbols: symbolsByModule.get(m.slug) ?? 0,
+    degIn: modDegIn.get(m.slug) ?? 0,
+    degOut: modDegOut.get(m.slug) ?? 0
+  })).sort((a, b) => byStr(a.slug, b.slug));
+  return {
+    schemaVersion: meta?.schemaVersion ?? SCHEMA_VERSION,
+    version: meta?.version ?? ENGINE_VERSION,
+    commit: scan2.commit,
+    fileCount: scan2.files.length,
+    languages: scan2.languages,
+    files,
+    modules: moduleNodes,
+    fileEdges,
+    moduleEdges
+  };
+}
+var REFERENCE_KINDS3, keyOf;
+var init_graph = __esm({
+  "src/graph.ts"() {
     "use strict";
+    init_types();
+    init_resolve();
     init_calls();
     init_derived();
+    init_walk();
     init_sort();
     REFERENCE_KINDS3 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
+    keyOf = (from, to, kind) => `${from}\0${to}\0${kind}`;
   }
 });
 
@@ -10296,6 +10314,7 @@ var mcp_exports = {};
 __export(mcp_exports, {
   getArtifacts: () => getArtifacts,
   getScan: () => getScan,
+  getScanSummary: () => getScanSummary,
   memoizedEmbedModel: () => memoizedEmbedModel,
   memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
   runMcpServer: () => runMcpServer,
@@ -10429,6 +10448,20 @@ function getScan(repo, opts = {}) {
   sessionCache = { key, scan: scan2, cacheMap: toCacheMap(scan2) };
   return scan2;
 }
+function getScanSummary(repo, opts = {}) {
+  if (sessionCache && sessionCache.key === sessionKey(repo, opts)) {
+    const scan2 = getScan(repo, opts);
+    return {
+      root: scan2.root,
+      commit: scan2.commit,
+      fileCount: scan2.files.length,
+      languages: scan2.languages,
+      capped: scan2.capped,
+      excluded: scan2.excluded
+    };
+  }
+  return scanSummary(repo, opts);
+}
 function getArtifacts(repo, opts = {}) {
   const scan2 = getScan(repo, opts);
   if (sessionCache && sessionCache.scan === scan2) {
@@ -10446,9 +10479,9 @@ async function callTool(name2, args2, defaultRepo) {
   const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
   if (!SCANLESS_TOOLS.has(name2)) await warmGrammarsForRepo(repo);
   if (name2 === "scan_summary") {
-    const scan2 = getScan(repo, scanOpts);
+    const s = getScanSummary(repo, scanOpts);
     return JSON.stringify(
-      { engineVersion: ENGINE_VERSION, commit: scan2.commit, fileCount: scan2.files.length, languages: scan2.languages, capped: scan2.capped },
+      { engineVersion: ENGINE_VERSION, commit: s.commit, fileCount: s.fileCount, languages: s.languages, capped: s.capped },
       null,
       2
     );
@@ -10999,7 +11032,11 @@ var init_mcp = __esm({
       "read_memory",
       "list_memories",
       "delete_memory",
-      "embed_status"
+      "embed_status",
+      // scan_summary counts and classifies by path only — it never parses, so the
+      // grammar warm (a whole extra walk) would be pure overhead. When a scan is
+      // already cached getScanSummary reuses it, warm grammars included.
+      "scan_summary"
     ]);
   }
 });
@@ -12104,13 +12141,13 @@ async function runCli(rawArgv) {
 `);
     }
   } else if (cmd === "scan") {
-    const { scan: scan2 } = buildIndexArtifacts(flags2.repo, scanOptions(flags2, precomputedWalk));
+    const s = scanSummary(flags2.repo, scanOptions(flags2, precomputedWalk));
     const summary = {
       engineVersion: ENGINE_VERSION,
-      commit: scan2.commit,
-      fileCount: scan2.files.length,
-      languages: scan2.languages,
-      capped: scan2.capped
+      commit: s.commit,
+      fileCount: s.fileCount,
+      languages: s.languages,
+      capped: s.capped
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags2.out);
   } else if (cmd === "graph") {
@@ -12472,6 +12509,7 @@ export {
   runCli,
   runMcpServer,
   scanRepo,
+  scanSummary,
   searchIndex,
   searchSemantic,
   serializeEmbeddings,

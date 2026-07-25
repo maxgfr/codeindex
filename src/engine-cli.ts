@@ -9,7 +9,7 @@ import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
-import { scanRepo } from "./scan.js";
+import { scanRepo, scanSummary } from "./scan.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -512,13 +512,16 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${embedNote}${scan.capped ? " (capped)" : ""}\n`);
     }
   } else if (cmd === "scan") {
-    const { scan } = buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+    // Summary-only: a file count and a language histogram need the walk and the
+    // path-based classifiers, never a read or a parse. Same numbers as before by
+    // construction — scanSummary and scanRepo share the keptFiles loop.
+    const s = scanSummary(flags.repo, scanOptions(flags, precomputedWalk));
     const summary = {
       engineVersion: ENGINE_VERSION,
-      commit: scan.commit,
-      fileCount: scan.files.length,
-      languages: scan.languages,
-      capped: scan.capped,
+      commit: s.commit,
+      fileCount: s.fileCount,
+      languages: s.languages,
+      capped: s.capped,
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
   } else if (cmd === "graph") {

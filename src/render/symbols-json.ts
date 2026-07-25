@@ -2,14 +2,15 @@ import { SCHEMA_VERSION } from "../types.js";
 import type { SymbolIndex } from "../types.js";
 import type { RepoScan } from "../scan.js";
 import { byStr } from "../sort.js";
-import { uniqueSymbolDefs } from "../graph.js";
+import { uniqueDefsFor } from "../derived.js";
 
 // Files that REFERENCE each unique exported symbol — code files via their AST
 // identifiers, doc files via naming the symbol. Feeds symbols.json `refs` so
 // `symbols <name>` can answer "where is X used?". Mirrors the graph's use/mention
 // eligibility (unique + distinctive), so refs and edges stay consistent.
 export function computeSymbolRefs(scan: RepoScan): Map<string, Set<string>> {
-  const unique = uniqueSymbolDefs(scan);
+  // Memoized: buildGraph built exactly this map moments earlier in the pipeline.
+  const unique = uniqueDefsFor(scan);
   const refs = new Map<string, Set<string>>();
   if (!unique.size) return refs;
   const add = (name: string, file: string): void => {

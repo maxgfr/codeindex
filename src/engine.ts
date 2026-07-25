@@ -28,8 +28,8 @@ export type {
 // Files tier: walk, read, filter, classify.
 export { walk, readText, DEFAULT_MAX_FILES } from "./walk.js";
 export type { WalkOptions, WalkedFile, WalkResult } from "./walk.js";
-export { scanRepo } from "./scan.js";
-export type { RepoScan, ScanOptions } from "./scan.js";
+export { scanRepo, scanSummary } from "./scan.js";
+export type { RepoScan, ScanOptions, ScanSummary } from "./scan.js";
 export { compileGlobs } from "./glob.js";
 export { parseGitignore, isIgnored } from "./ignore.js";
 export type { IgnoreRule } from "./ignore.js";
