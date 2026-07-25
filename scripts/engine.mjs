@@ -6712,9 +6712,79 @@ var init_scan = __esm({
   }
 });
 
+// src/preload.ts
+import { readFileSync as readFileSync3 } from "fs";
+import { join as join3 } from "path";
+function toCacheMap(scan2) {
+  const m = /* @__PURE__ */ new Map();
+  for (const f of scan2.files) m.set(f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: scan2.mtimes.get(f.rel) });
+  return m;
+}
+function readPersistedIndex(repo, indexDir = INDEX_DIR) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync3(join3(repo, indexDir, "cache.json"), "utf8"));
+  } catch {
+    return void 0;
+  }
+  if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION || parsed.extractorVersion !== EXTRACTOR_VERSION || !parsed.files) {
+    return void 0;
+  }
+  return {
+    cacheMap: new Map(Object.entries(parsed.files)),
+    meta: {
+      engineVersion: parsed.engineVersion,
+      commit: parsed.commit,
+      graphSha1: parsed.graphSha1,
+      symbolsSha1: parsed.symbolsSha1
+    }
+  };
+}
+function preloadArtifacts(repo, scan2, meta, indexDir = INDEX_DIR) {
+  if (!scan2.contentUnchanged || meta.engineVersion !== ENGINE_VERSION || meta.commit !== scan2.commit || meta.graphSha1 === void 0 || meta.symbolsSha1 === void 0) {
+    return void 0;
+  }
+  const dir = join3(repo, indexDir);
+  let graphBytes;
+  let symbolsBytes;
+  try {
+    graphBytes = readFileSync3(join3(dir, "graph.json"));
+    symbolsBytes = readFileSync3(join3(dir, "symbols.json"));
+  } catch {
+    return void 0;
+  }
+  if (sha1(graphBytes) !== meta.graphSha1 || sha1(symbolsBytes) !== meta.symbolsSha1) {
+    return void 0;
+  }
+  try {
+    const graph = JSON.parse(graphBytes.toString("utf8"));
+    const symbols = JSON.parse(symbolsBytes.toString("utf8"));
+    if (graph.schemaVersion !== SCHEMA_VERSION || symbols.schemaVersion !== SCHEMA_VERSION) return void 0;
+    return { scan: scan2, graph, symbols };
+  } catch {
+    return void 0;
+  }
+}
+function preloadSession(repo, opts, indexDir = INDEX_DIR) {
+  const persisted = readPersistedIndex(repo, indexDir);
+  if (!persisted) return void 0;
+  const scan2 = scanRepo(repo, { ...opts, cache: persisted.cacheMap });
+  return { scan: scan2, cacheMap: toCacheMap(scan2), arts: preloadArtifacts(repo, scan2, persisted.meta, indexDir) };
+}
+var INDEX_DIR;
+var init_preload = __esm({
+  "src/preload.ts"() {
+    "use strict";
+    init_types();
+    init_scan();
+    init_hash();
+    INDEX_DIR = ".codeindex";
+  }
+});
+
 // src/resolve.ts
 import { posix } from "path";
-import { join as join5 } from "path";
+import { join as join6 } from "path";
 function distToSrcCandidates(target) {
   const segs = norm(target).split("/").filter((s) => s !== ".");
   const out2 = [];
@@ -6801,7 +6871,7 @@ function resolveExtends(fileSet, fromDir, ext) {
 function readTsConfig(root, fileSet, rel, warnings, seen) {
   if (seen.has(rel)) return void 0;
   seen.add(rel);
-  const cfg = tolerantJsonParse(readText(join5(root, rel)));
+  const cfg = tolerantJsonParse(readText(join6(root, rel)));
   if (cfg === void 0) {
     warnings.push(`unparseable ${rel} \u2014 its path aliases were ignored`);
     return void 0;
@@ -6930,7 +7000,7 @@ function buildResolveContext(scan2) {
   const goModules = [];
   for (const rel of fileSet) {
     if (rel !== "go.mod" && !rel.endsWith("/go.mod")) continue;
-    const text = readText(join5(scan2.root, rel));
+    const text = readText(join6(scan2.root, rel));
     const m = /^\s*module\s+(\S+)/m.exec(text);
     if (!m) continue;
     const dir = rel.includes("/") ? posix.dirname(rel) : "";
@@ -6940,7 +7010,7 @@ function buildResolveContext(scan2) {
   const rustCrates = [];
   for (const rel of fileSet) {
     if (rel !== "Cargo.toml" && !rel.endsWith("/Cargo.toml")) continue;
-    const text = readText(join5(scan2.root, rel));
+    const text = readText(join6(scan2.root, rel));
     const m = /\[package\][^[]*?^\s*name\s*=\s*"([^"]+)"/ms.exec(text);
     if (!m) continue;
     const dir = rel.includes("/") ? posix.dirname(rel) : "";
@@ -6967,7 +7037,7 @@ function buildResolveContext(scan2) {
   const workspacePackages = [];
   for (const rel of fileSet) {
     if (rel !== "package.json" && !rel.endsWith("/package.json")) continue;
-    const pkg = tolerantJsonParse(readText(join5(scan2.root, rel)));
+    const pkg = tolerantJsonParse(readText(join6(scan2.root, rel)));
     if (pkg === void 0) {
       warnings.push(`unparseable ${rel} \u2014 skipped for workspace resolution`);
       continue;
@@ -6994,7 +7064,7 @@ function buildResolveContext(scan2) {
   const phpPsr4 = [];
   for (const rel of fileSet) {
     if (rel !== "composer.json" && !rel.endsWith("/composer.json")) continue;
-    const composer = tolerantJsonParse(readText(join5(scan2.root, rel)));
+    const composer = tolerantJsonParse(readText(join6(scan2.root, rel)));
     if (!composer) {
       warnings.push(`unparseable ${rel} \u2014 skipped for PHP PSR-4 resolution`);
       continue;
@@ -7930,7 +8000,7 @@ var init_bm25 = __esm({
 });
 
 // src/complexity.ts
-import { join as join6 } from "path";
+import { join as join7 } from "path";
 function complexityOfSource(source) {
   return 1 + (source.match(BRANCH_RE) ?? []).length;
 }
@@ -7940,7 +8010,7 @@ function symbolComplexity(scan2, rel, top = 50) {
     if (f.kind !== "code") continue;
     if (rel && f.rel !== rel) continue;
     if (!f.symbols.length) continue;
-    const lines = readText(join6(scan2.root, f.rel)).split("\n");
+    const lines = readText(join7(scan2.root, f.rel)).split("\n");
     for (const s of f.symbols) {
       if (s.kind === "reexport" || s.kind === "reexport-all") continue;
       const end = s.endLine ?? s.line;
@@ -7975,7 +8045,7 @@ var init_complexity = __esm({
 });
 
 // src/derived.ts
-import { join as join7 } from "path";
+import { join as join8 } from "path";
 function cacheFor(scan2) {
   let c2 = caches.get(scan2);
   if (!c2) caches.set(scan2, c2 = {});
@@ -8033,7 +8103,7 @@ function fileComplexityFor(scan2) {
     const m = /* @__PURE__ */ new Map();
     for (const f of scan2.files) {
       if (f.kind !== "code") continue;
-      m.set(f.rel, complexityOfSource(readText(join7(scan2.root, f.rel))));
+      m.set(f.rel, complexityOfSource(readText(join8(scan2.root, f.rel))));
     }
     c2.fileComplexity = m;
   }
@@ -8055,7 +8125,7 @@ var init_derived = __esm({
 });
 
 // src/graph.ts
-import { join as join8 } from "path";
+import { join as join9 } from "path";
 function isDistinctive(name2) {
   if (name2.length < 5) return false;
   const internalUpper = /[a-z][A-Z]/.test(name2) || /[A-Z]{2}/.test(name2);
@@ -8135,7 +8205,7 @@ function buildGraph(scan2, ctx, modules, moduleOf, meta) {
   if (unique.size) {
     for (const f of scan2.files) {
       if (f.kind !== "doc") continue;
-      const content = scan2.docText.get(f.rel) ?? readText(join8(scan2.root, f.rel));
+      const content = scan2.docText.get(f.rel) ?? readText(join9(scan2.root, f.rel));
       if (!content) continue;
       const tokens = /* @__PURE__ */ new Map();
       for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
@@ -8242,7 +8312,7 @@ var init_graph = __esm({
 });
 
 // src/query.ts
-import { join as join9 } from "path";
+import { join as join10 } from "path";
 function symbolsOverview(scan2, rel) {
   const f = scan2.files.find((x) => x.rel === rel);
   if (!f) return [];
@@ -8273,7 +8343,7 @@ function findSymbol(scan2, namePath, opts = {}) {
   if (opts.includeBody) {
     for (const m of capped) {
       const end = m.endLine ?? m.line;
-      const content = readText(join9(scan2.root, m.file));
+      const content = readText(join10(scan2.root, m.file));
       if (!content) continue;
       m.body = content.split("\n").slice(m.line - 1, end).join("\n");
     }
@@ -8319,8 +8389,8 @@ var init_query = __esm({
 });
 
 // src/edit.ts
-import { readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "fs";
-import { join as join10 } from "path";
+import { readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "fs";
+import { join as join11 } from "path";
 function resolveUniqueSymbol(scan2, namePath, file) {
   let matches = findSymbol(scan2, namePath);
   if (file) matches = matches.filter((m) => m.file === file);
@@ -8333,12 +8403,12 @@ function resolveUniqueSymbol(scan2, namePath, file) {
   throw new Error(`"${namePath}" is ambiguous (${matches.length} matches: ${list}) \u2014 qualify with \`file\` or a Parent/name path`);
 }
 function readLines(abs) {
-  return readFileSync4(abs, "utf8").split("\n");
+  return readFileSync5(abs, "utf8").split("\n");
 }
 function replaceSymbolBody(scan2, namePath, body2, file) {
   const sym = resolveUniqueSymbol(scan2, namePath, file);
   const end = sym.endLine ?? sym.line;
-  const abs = join10(scan2.root, sym.file);
+  const abs = join11(scan2.root, sym.file);
   const lines = readLines(abs);
   const newLines = body2.replace(/^\n+|\n+$/g, "").split("\n");
   lines.splice(sym.line - 1, end - sym.line + 1, ...newLines);
@@ -8346,7 +8416,7 @@ function replaceSymbolBody(scan2, namePath, body2, file) {
   return { file: sym.file, startLine: sym.line, endLine: sym.line + newLines.length - 1, lines: newLines.length };
 }
 function insertAt(scan2, sym, body2, index, blankBefore, blankAfter) {
-  const abs = join10(scan2.root, sym.file);
+  const abs = join11(scan2.root, sym.file);
   const lines = readLines(abs);
   const minGap = SEPARATED_KINDS.has(sym.kind) ? 1 : 0;
   const newLines = body2.replace(/^\n+|\n+$/g, "").split("\n");
@@ -8377,8 +8447,8 @@ var init_edit = __esm({
 });
 
 // src/memory.ts
-import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync5, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync3 } from "fs";
-import { dirname as dirname4, join as join11 } from "path";
+import { mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync6, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync3 } from "fs";
+import { dirname as dirname4, join as join12 } from "path";
 function sanitize(name2) {
   const clean = name2.replace(/^mem:/, "").replace(/\.md$/, "");
   if (!clean) throw new Error("memory name is empty");
@@ -8392,7 +8462,7 @@ function sanitize(name2) {
   return clean;
 }
 function memoryPath(repo, name2) {
-  return join11(repo, ...MEMORY_DIR, `${sanitize(name2)}.md`);
+  return join12(repo, ...MEMORY_DIR, `${sanitize(name2)}.md`);
 }
 function writeMemory(repo, name2, content) {
   const path = memoryPath(repo, name2);
@@ -8402,7 +8472,7 @@ function writeMemory(repo, name2, content) {
 }
 function readMemory(repo, name2) {
   try {
-    return readFileSync5(memoryPath(repo, name2), "utf8");
+    return readFileSync6(memoryPath(repo, name2), "utf8");
   } catch {
     return void 0;
   }
@@ -8418,7 +8488,7 @@ function deleteMemory(repo, name2) {
   return true;
 }
 function listMemories(repo) {
-  const root = join11(repo, ...MEMORY_DIR);
+  const root = join12(repo, ...MEMORY_DIR);
   const out2 = [];
   const walk2 = (dir, prefix) => {
     let entries;
@@ -8428,7 +8498,7 @@ function listMemories(repo) {
       return;
     }
     for (const e of entries) {
-      if (e.isDirectory()) walk2(join11(dir, e.name), prefix ? `${prefix}/${e.name}` : e.name);
+      if (e.isDirectory()) walk2(join12(dir, e.name), prefix ? `${prefix}/${e.name}` : e.name);
       else if (e.name.endsWith(".md")) out2.push(prefix ? `${prefix}/${e.name.slice(0, -3)}` : e.name.slice(0, -3));
     }
   };
@@ -8445,7 +8515,7 @@ var init_memory = __esm({
 
 // src/workspaces.ts
 import { existsSync as existsSync4, readdirSync as readdirSync3, statSync as statSync4 } from "fs";
-import { join as join12 } from "path";
+import { join as join13 } from "path";
 function readJson(path, label, warnings) {
   const raw = readText(path);
   if (!raw) return void 0;
@@ -8496,7 +8566,7 @@ function wsGlobToRegExp(pat) {
   return new RegExp(`^${re}($|/)`);
 }
 function probeNodePkg(root, dir, kind, warnings) {
-  const path = join12(root, dir, "package.json");
+  const path = join13(root, dir, "package.json");
   if (!existsSync4(path)) return void 0;
   const manifest = `${dir}/package.json`;
   const pkg = readJson(path, manifest, warnings);
@@ -8510,7 +8580,7 @@ function probeNodePkg(root, dir, kind, warnings) {
   return out2;
 }
 function probeCargo(root, dir) {
-  const path = join12(root, dir, "Cargo.toml");
+  const path = join13(root, dir, "Cargo.toml");
   if (!existsSync4(path)) return void 0;
   const body2 = tomlSectionBody(readText(path), "package");
   const out2 = {
@@ -8524,18 +8594,18 @@ function probeCargo(root, dir) {
   return out2;
 }
 function probeGoMod(root, dir) {
-  const path = join12(root, dir, "go.mod");
+  const path = join13(root, dir, "go.mod");
   if (!existsSync4(path)) return void 0;
   const name2 = readText(path).match(/^module\s+(\S+)/m)?.[1] ?? dir;
   return { name: name2, dir, kind: "go", manifest: `${dir}/go.mod` };
 }
 function probeMaven(root, dir) {
-  const path = join12(root, dir, "pom.xml");
+  const path = join13(root, dir, "pom.xml");
   if (!existsSync4(path)) return void 0;
   return { name: ownArtifactId(readText(path)) ?? dir, dir, kind: "maven", manifest: `${dir}/pom.xml` };
 }
 function probePyproject(root, dir) {
-  const path = join12(root, dir, "pyproject.toml");
+  const path = join13(root, dir, "pyproject.toml");
   if (!existsSync4(path)) return void 0;
   const toml = readText(path);
   const project = tomlSectionBody(toml, "project");
@@ -8551,7 +8621,7 @@ function probePyproject(root, dir) {
   return out2;
 }
 function probeComposer(root, dir, warnings) {
-  const path = join12(root, dir, "composer.json");
+  const path = join13(root, dir, "composer.json");
   if (!existsSync4(path)) return void 0;
   const manifest = `${dir}/composer.json`;
   const pkg = readJson(path, manifest, warnings);
@@ -8565,7 +8635,7 @@ function probeComposer(root, dir, warnings) {
   return out2;
 }
 function probeNxProject(root, dir, warnings) {
-  const path = join12(root, dir, "project.json");
+  const path = join13(root, dir, "project.json");
   if (!existsSync4(path)) return void 0;
   const manifest = `${dir}/project.json`;
   const proj = readJson(path, manifest, warnings);
@@ -8578,7 +8648,7 @@ function probeNxProject(root, dir, warnings) {
 }
 function probeGradle(root, dir) {
   for (const f of ["build.gradle", "build.gradle.kts"]) {
-    if (existsSync4(join12(root, dir, f))) {
+    if (existsSync4(join13(root, dir, f))) {
       return { name: dir, dir, kind: "gradle", manifest: `${dir}/${f}` };
     }
   }
@@ -8613,7 +8683,7 @@ function addPackage(root, dir, found, kind, warnings) {
 }
 function isDirAt(root, rel) {
   try {
-    return statSync4(join12(root, rel)).isDirectory();
+    return statSync4(join13(root, rel)).isDirectory();
   } catch {
     return false;
   }
@@ -8621,7 +8691,7 @@ function isDirAt(root, rel) {
 function subdirsOf(root, base) {
   let entries;
   try {
-    entries = readdirSync3(base ? join12(root, base) : root, { withFileTypes: true });
+    entries = readdirSync3(base ? join13(root, base) : root, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -8683,14 +8753,14 @@ function npmFamilyPatterns(root, warnings) {
     if (t.startsWith("!")) negations.push(t.slice(1));
     else positives.push({ pattern: t, kind });
   };
-  const pkg = readJson(join12(root, "package.json"), "package.json", warnings);
+  const pkg = readJson(join13(root, "package.json"), "package.json", warnings);
   const ws = pkg?.workspaces;
   if (Array.isArray(ws)) {
     for (const x of ws) if (typeof x === "string") push(x, "npm");
   } else if (ws && typeof ws === "object" && Array.isArray(ws.packages)) {
     for (const x of ws.packages) if (typeof x === "string") push(x, "npm");
   }
-  const pnpm = readText(join12(root, "pnpm-workspace.yaml"));
+  const pnpm = readText(join13(root, "pnpm-workspace.yaml"));
   let inPackages = false;
   for (const line of pnpm.split(/\r?\n/)) {
     if (/^\S/.test(line)) {
@@ -8704,11 +8774,11 @@ function npmFamilyPatterns(root, warnings) {
   return { positives, negations };
 }
 function fallbackNpmPatterns(root, warnings) {
-  const lerna = readJson(join12(root, "lerna.json"), "lerna.json", warnings);
+  const lerna = readJson(join13(root, "lerna.json"), "lerna.json", warnings);
   if (lerna && Array.isArray(lerna.packages)) {
     return lerna.packages.filter((x) => typeof x === "string").map((pattern) => ({ pattern, kind: "lerna" }));
   }
-  const nx = readJson(join12(root, "nx.json"), "nx.json", warnings);
+  const nx = readJson(join13(root, "nx.json"), "nx.json", warnings);
   if (nx) {
     const layout = nx.workspaceLayout ?? {};
     const appsDir = typeof layout.appsDir === "string" ? layout.appsDir : "apps";
@@ -8718,7 +8788,7 @@ function fallbackNpmPatterns(root, warnings) {
   return [];
 }
 function detectCargoMembers(root, found, warnings) {
-  const toml = readText(join12(root, "Cargo.toml"));
+  const toml = readText(join13(root, "Cargo.toml"));
   if (!toml) return;
   const body2 = tomlSectionBody(toml, "workspace");
   if (!body2) return;
@@ -8733,7 +8803,7 @@ function detectCargoMembers(root, found, warnings) {
   }
 }
 function detectGoWork(root, found, warnings) {
-  const gowork = readText(join12(root, "go.work"));
+  const gowork = readText(join13(root, "go.work"));
   if (!gowork) return;
   const dirs = [];
   for (const block of gowork.matchAll(/^use\s*\(([\s\S]*?)\)/gm)) {
@@ -8749,7 +8819,7 @@ function detectGoWork(root, found, warnings) {
   }
 }
 function detectMavenModules(root, found, warnings) {
-  const pom = readText(join12(root, "pom.xml"));
+  const pom = readText(join13(root, "pom.xml"));
   if (!pom) return;
   const modules = pom.match(/<modules>([\s\S]*?)<\/modules>/)?.[1];
   if (!modules) return;
@@ -8758,7 +8828,7 @@ function detectMavenModules(root, found, warnings) {
   }
 }
 function detectUvMembers(root, found, warnings) {
-  const toml = readText(join12(root, "pyproject.toml"));
+  const toml = readText(join13(root, "pyproject.toml"));
   if (!toml) return;
   const body2 = tomlSectionBody(toml, "tool.uv.workspace");
   if (!body2) return;
@@ -8773,7 +8843,7 @@ function detectUvMembers(root, found, warnings) {
   }
 }
 function detectComposerPathRepos(root, found, warnings) {
-  const composer = readJson(join12(root, "composer.json"), "composer.json", warnings);
+  const composer = readJson(join13(root, "composer.json"), "composer.json", warnings);
   const repos = composer?.repositories;
   if (!Array.isArray(repos)) return;
   for (const r of repos) {
@@ -8784,7 +8854,7 @@ function detectComposerPathRepos(root, found, warnings) {
 }
 function detectGradleIncludes(root, found, warnings) {
   for (const f of ["settings.gradle", "settings.gradle.kts"]) {
-    const text = readText(join12(root, f));
+    const text = readText(join13(root, f));
     if (!text) continue;
     for (const line of text.split(/\r?\n/)) {
       if (!/^\s*include[\s(]/.test(line)) continue;
@@ -8796,7 +8866,7 @@ function detectGradleIncludes(root, found, warnings) {
   }
 }
 function npmEdges(root, pkg, byName, warnings) {
-  const manifest = readJson(join12(root, pkg.dir, "package.json"), `${pkg.dir}/package.json`, warnings);
+  const manifest = readJson(join13(root, pkg.dir, "package.json"), `${pkg.dir}/package.json`, warnings);
   if (!manifest) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
@@ -8819,7 +8889,7 @@ function normalizeDepPath(fromDir, rel) {
   return out2.join("/");
 }
 function cargoEdges(root, pkg, byName, byDir) {
-  const toml = readText(join12(root, pkg.dir, "Cargo.toml"));
+  const toml = readText(join13(root, pkg.dir, "Cargo.toml"));
   if (!toml) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const section of ["dependencies", "dev-dependencies", "build-dependencies"]) {
@@ -8843,7 +8913,7 @@ function cargoEdges(root, pkg, byName, byDir) {
   return [...edges];
 }
 function goPkgEdges(root, pkg, byName, byDir) {
-  const gomod = readText(join12(root, pkg.dir, "go.mod"));
+  const gomod = readText(join13(root, pkg.dir, "go.mod"));
   if (!gomod) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const m of gomod.matchAll(/^\s*(?:require\s+)?([^\s/(][^\s]*)\s+v[^\s]+/gm)) {
@@ -8857,7 +8927,7 @@ function goPkgEdges(root, pkg, byName, byDir) {
   return [...edges];
 }
 function mavenEdges(root, pkg, byName) {
-  const pom = readText(join12(root, pkg.dir, "pom.xml"));
+  const pom = readText(join13(root, pkg.dir, "pom.xml"));
   if (!pom) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const m of pom.replace(/<parent>[\s\S]*?<\/parent>/g, "").matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)) {
@@ -8867,7 +8937,7 @@ function mavenEdges(root, pkg, byName) {
   return [...edges];
 }
 function uvEdges(root, pkg, byName) {
-  const toml = readText(join12(root, pkg.dir, "pyproject.toml"));
+  const toml = readText(join13(root, pkg.dir, "pyproject.toml"));
   if (!toml) return [];
   const edges = /* @__PURE__ */ new Set();
   const project = tomlSectionBody(toml, "project");
@@ -8887,7 +8957,7 @@ function uvEdges(root, pkg, byName) {
   return [...edges];
 }
 function composerEdges(root, pkg, byName, warnings) {
-  const manifest = readJson(join12(root, pkg.dir, "composer.json"), `${pkg.dir}/composer.json`, warnings);
+  const manifest = readJson(join13(root, pkg.dir, "composer.json"), `${pkg.dir}/composer.json`, warnings);
   if (!manifest) return [];
   const edges = /* @__PURE__ */ new Set();
   for (const field of ["require", "require-dev"]) {
@@ -8901,7 +8971,7 @@ function composerEdges(root, pkg, byName, warnings) {
 }
 function gradleEdges(root, pkg, byName, byDir) {
   for (const f of ["build.gradle", "build.gradle.kts"]) {
-    const text = readText(join12(root, pkg.dir, f));
+    const text = readText(join13(root, pkg.dir, f));
     if (!text) continue;
     const edges = /* @__PURE__ */ new Set();
     for (const m of text.matchAll(/project\s*\(\s*["']:?([^"']+)["']\s*\)/g)) {
@@ -9625,16 +9695,16 @@ var init_grep = __esm({
 
 // src/embed/model.ts
 import { createHash as createHash3 } from "crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync6 } from "fs";
-import { join as join14 } from "path";
+import { existsSync as existsSync5, readFileSync as readFileSync7 } from "fs";
+import { join as join15 } from "path";
 function resolveEmbedModelDir(repo) {
   const env = process.env.CODEINDEX_EMBED_DIR;
   const candidates = [];
   if (env) candidates.push(env);
-  if (repo) candidates.push(join14(repo, ".codeindex", DEFAULT_EMBED_DIRNAME));
-  candidates.push(join14(process.cwd(), ".codeindex", DEFAULT_EMBED_DIRNAME));
+  if (repo) candidates.push(join15(repo, ".codeindex", DEFAULT_EMBED_DIRNAME));
+  candidates.push(join15(process.cwd(), ".codeindex", DEFAULT_EMBED_DIRNAME));
   for (const c2 of candidates) {
-    if (existsSync5(join14(c2, "model.json"))) return c2;
+    if (existsSync5(join15(c2, "model.json"))) return c2;
   }
   return void 0;
 }
@@ -9667,9 +9737,9 @@ function parseEmbedModel(raw, source) {
 }
 function loadEmbedModel(dir) {
   if (!dir) return void 0;
-  const path = join14(dir, "model.json");
+  const path = join15(dir, "model.json");
   if (!existsSync5(path)) return void 0;
-  const raw = JSON.parse(readFileSync6(path, "utf8"));
+  const raw = JSON.parse(readFileSync7(path, "utf8"));
   return parseEmbedModel(raw, path);
 }
 function resolveEmbedPullUrl() {
@@ -10348,76 +10418,6 @@ var init_viz = __esm({
     "use strict";
     init_sort();
     sanitizeId = (slug) => slug.replace(/[^\w]/g, "_");
-  }
-});
-
-// src/preload.ts
-import { readFileSync as readFileSync7 } from "fs";
-import { join as join15 } from "path";
-function toCacheMap(scan2) {
-  const m = /* @__PURE__ */ new Map();
-  for (const f of scan2.files) m.set(f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: scan2.mtimes.get(f.rel) });
-  return m;
-}
-function readPersistedIndex(repo, indexDir = INDEX_DIR) {
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync7(join15(repo, indexDir, "cache.json"), "utf8"));
-  } catch {
-    return void 0;
-  }
-  if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION || parsed.extractorVersion !== EXTRACTOR_VERSION || !parsed.files) {
-    return void 0;
-  }
-  return {
-    cacheMap: new Map(Object.entries(parsed.files)),
-    meta: {
-      engineVersion: parsed.engineVersion,
-      commit: parsed.commit,
-      graphSha1: parsed.graphSha1,
-      symbolsSha1: parsed.symbolsSha1
-    }
-  };
-}
-function preloadArtifacts(repo, scan2, meta, indexDir = INDEX_DIR) {
-  if (!scan2.contentUnchanged || meta.engineVersion !== ENGINE_VERSION || meta.commit !== scan2.commit || meta.graphSha1 === void 0 || meta.symbolsSha1 === void 0) {
-    return void 0;
-  }
-  const dir = join15(repo, indexDir);
-  let graphBytes;
-  let symbolsBytes;
-  try {
-    graphBytes = readFileSync7(join15(dir, "graph.json"));
-    symbolsBytes = readFileSync7(join15(dir, "symbols.json"));
-  } catch {
-    return void 0;
-  }
-  if (sha1(graphBytes) !== meta.graphSha1 || sha1(symbolsBytes) !== meta.symbolsSha1) {
-    return void 0;
-  }
-  try {
-    const graph = JSON.parse(graphBytes.toString("utf8"));
-    const symbols = JSON.parse(symbolsBytes.toString("utf8"));
-    if (graph.schemaVersion !== SCHEMA_VERSION || symbols.schemaVersion !== SCHEMA_VERSION) return void 0;
-    return { scan: scan2, graph, symbols };
-  } catch {
-    return void 0;
-  }
-}
-function preloadSession(repo, opts, indexDir = INDEX_DIR) {
-  const persisted = readPersistedIndex(repo, indexDir);
-  if (!persisted) return void 0;
-  const scan2 = scanRepo(repo, { ...opts, cache: persisted.cacheMap });
-  return { scan: scan2, cacheMap: toCacheMap(scan2), arts: preloadArtifacts(repo, scan2, persisted.meta, indexDir) };
-}
-var INDEX_DIR;
-var init_preload = __esm({
-  "src/preload.ts"() {
-    "use strict";
-    init_types();
-    init_scan();
-    init_hash();
-    INDEX_DIR = ".codeindex";
   }
 });
 
@@ -11428,6 +11428,7 @@ init_types();
 init_walk();
 init_scan();
 init_scan();
+init_preload();
 
 // src/pool.ts
 init_hash();
@@ -11437,14 +11438,14 @@ init_loader();
 init_scan();
 import { existsSync as existsSync2, statSync as statSync2 } from "fs";
 import { availableParallelism } from "os";
-import { dirname as dirname2, join as join3 } from "path";
+import { dirname as dirname2, join as join4 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 import { Worker } from "worker_threads";
 function resolveEngineUrl() {
   try {
     const here = fileURLToPath2(import.meta.url);
     if (here.endsWith("engine.mjs")) return pathToFileURL(here).href;
-    const adjacent = join3(dirname2(here), "engine.mjs");
+    const adjacent = join4(dirname2(here), "engine.mjs");
     if (existsSync2(adjacent)) return pathToFileURL(adjacent).href;
     return void 0;
   } catch {
@@ -11688,8 +11689,8 @@ init_loader();
 // src/ast/grammars-pull.ts
 init_types();
 import { createHash as createHash2 } from "crypto";
-import { existsSync as existsSync3, mkdirSync, mkdtempSync, readFileSync as readFileSync3, renameSync, rmSync, writeFileSync } from "fs";
-import { dirname as dirname3, join as join4, resolve, sep as sep2 } from "path";
+import { existsSync as existsSync3, mkdirSync, mkdtempSync, readFileSync as readFileSync4, renameSync, rmSync, writeFileSync } from "fs";
+import { dirname as dirname3, join as join5, resolve, sep as sep2 } from "path";
 import { gunzipSync } from "zlib";
 var DEFAULT_GRAMMARS_URL = `https://github.com/maxgfr/codeindex/releases/download/v${ENGINE_VERSION}/grammars-${ENGINE_VERSION}.tar.gz`;
 function resolveGrammarsPullTarget() {
@@ -11794,12 +11795,12 @@ async function pullGrammars(cacheDir, opts = {}) {
 `);
     }
   }
-  const runtime = join4(cacheDir, "web-tree-sitter.wasm");
-  const markerPath = join4(dirname3(cacheDir), `${ENGINE_VERSION}.sha256`);
+  const runtime = join5(cacheDir, "web-tree-sitter.wasm");
+  const markerPath = join5(dirname3(cacheDir), `${ENGINE_VERSION}.sha256`);
   if (existsSync3(runtime) && expected && existsSync3(markerPath)) {
     let marker = "";
     try {
-      marker = readFileSync3(markerPath, "utf8").trim();
+      marker = readFileSync4(markerPath, "utf8").trim();
     } catch {
     }
     if (marker === expected) {
@@ -11824,9 +11825,9 @@ async function pullGrammars(cacheDir, opts = {}) {
   let tmp;
   try {
     mkdirSync(dirname3(cacheDir), { recursive: true });
-    tmp = mkdtempSync(join4(dirname3(cacheDir), ".grammars-tmp-"));
+    tmp = mkdtempSync(join5(dirname3(cacheDir), ".grammars-tmp-"));
     extractGrammarsTarball(bytes, tmp);
-    if (!existsSync3(join4(tmp, "web-tree-sitter.wasm"))) {
+    if (!existsSync3(join5(tmp, "web-tree-sitter.wasm"))) {
       throw new Error("archive is missing web-tree-sitter.wasm");
     }
     if (existsSync3(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
@@ -11906,7 +11907,7 @@ init_graph_json();
 init_types();
 init_walk();
 init_sort();
-import { join as join13 } from "path";
+import { join as join14 } from "path";
 var Bytes = class {
   buf;
   len = 0;
@@ -12120,7 +12121,7 @@ function renderScip(scan2, opts = {}) {
   };
   const documents = [];
   for (const f of docs) {
-    const text = readText(join13(scan2.root, f.rel));
+    const text = readText(join14(scan2.root, f.rel));
     const lines = text.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
     const locate = (lineNo, name2) => {
       const line = lines[lineNo - 1];
@@ -12882,6 +12883,7 @@ export {
   EMBED_VERSION,
   ENGINE_VERSION,
   EXTRACTOR_VERSION,
+  INDEX_DIR,
   MARKDOWN_EXT,
   SCHEMA_VERSION,
   allGrammarKeys,
@@ -12890,6 +12892,7 @@ export {
   betweennessOf,
   buildArtifactsFromScan,
   buildCallerIndex,
+  buildCodeRecord,
   buildEmbeddingIndex,
   buildEndpointIndex,
   buildGraph,
@@ -12969,12 +12972,15 @@ export {
   pagerankOf,
   parseGitignore,
   parseRules,
+  preloadArtifacts,
+  preloadSession,
   probeEndpoint,
   pullGrammars,
   quantize,
   rankHotspots,
   rankedKeywords,
   readMemory,
+  readPersistedIndex,
   readText,
   renderGraphJson,
   renderMermaid,
@@ -13016,6 +13022,7 @@ export {
   symbolsOverview,
   testsForModule,
   tierForPath,
+  toCacheMap,
   tokenize,
   uniqueSymbolDefs,
   untestedModules,

@@ -272,6 +272,113 @@ with no `.codeindex/` behaves exactly as before.
   sidecar keeps its own memoization path (the graph/symbols shas are all the
   guard checks).
 
+## v2.18.0 — parallel extraction, persisted-index reads, MCP protocol negotiation
+
+Large release, all **additive**: `SCHEMA_VERSION` / `EMBED_VERSION` /
+`EXTRACTOR_VERSION` are untouched, `graph.json` / `symbols.json` / `index.scip`
+stay **byte-identical**, and every existing export keeps its signature. **No
+re-pin is required.** New capabilities are opt-in by calling the new functions
+or passing the new options.
+
+### Extraction is faster and its records are unchanged
+
+`extractAst` folded its four full-tree traversals into one and reads children
+via `namedChildren` instead of per-index `namedChild(i)`. Results are identical;
+this is purely fewer wasm boundary crossings.
+
+One signature grew: `extractAst(rel, ext, content, opts)` accepts
+`opts.imports` (**default `true`**), which computes `refs` and `pkg`. The
+default preserves today's contract, so a consumer reading `ast.refs` needs no
+change. `extractCode` passes `false` because it recomputes both with regex and
+discarded the AST's versions — that dead work is now skipped.
+
+### `scanSummary` — a file count without parsing the repo
+
+`scanSummary(root, opts)` returns `{root, commit, fileCount, languages, capped,
+excluded}` from the walk plus the path classifiers, with **no read, hash or
+parse**. It shares the kept-file loop with `scanRepo`, so the two cannot report
+different numbers. Use it wherever you only need the histogram — the CLI `scan`
+command went from 6.7s to 0.17s on a 7k-file repo. `scanRepo` is unchanged.
+
+### `scanRepoParallel` — worker_threads extraction (opt-in, degrades silently)
+
+`scanRepoParallel(root, opts)` is **async** and returns the same `RepoScan`
+`scanRepo` would, byte for byte. Code files are read/hashed/extracted across
+`min(cores-1, 8)` workers; docs and everything else stay on the main thread.
+`opts.workers` (or `CODEINDEX_WORKERS`) sets the count; `0` or `1` is the
+sequential path.
+
+`scanRepo` stays **synchronous and sequential** — the pipeline never becomes
+async, and consumers calling it are unaffected.
+
+Two things to know before switching:
+
+- **It degrades to sequential rather than risk a different result.** Workers
+  report the grammar keys they actually readied; any disagreement with the main
+  thread discards the whole parallel run. So does a failure to resolve the
+  engine URL, spawn, or complete. `extractInParallel` never throws.
+- **The worker imports the engine BY URL, so it must be a real file.** The URL
+  is resolved the way grammars are: the running module when it is
+  `engine.mjs`, else an adjacent `engine.mjs`. **If you re-bundle the engine
+  into your own entry, neither resolves and you get the sequential path** — by
+  design, since importing your bundle in a worker would run your top-level code.
+  Vendoring `scripts/engine.mjs` as a file (the documented layout) works.
+
+Memory is the trade: each worker carries its own tree-sitter wasm arena. On a
+7k-file repo, 1.63s / 1424 MB parallel versus 5.03s / 1019 MB sequential.
+
+New exports: `scanRepoParallel`, `extractInParallel`, `runExtractWorker`,
+`workerCount`, `keptCodeFiles`, `buildCodeRecord`, type `ExtractedRecord`, and
+`ScanOptions.extracted` (populated by `scanRepoParallel` — never set it by hand).
+
+`runExtractWorker` must stay exported from any re-export of the barrel: the
+worker bootstrap imports it by name, and a missing export is indistinguishable
+from "this is not the engine".
+
+### The persisted-index preload is public and no longer MCP-only
+
+v2.15.0 said these helpers were "entirely internal to `mcp.ts`". They now live
+in `src/preload.ts` and are exported: `preloadSession`, `preloadArtifacts`,
+`readPersistedIndex`, `toCacheMap`, `INDEX_DIR`, plus types `PersistedMeta`,
+`PersistedCacheEntry`, `PersistedCacheMap`. `toCacheMap` is still re-exported
+from `mcp.ts`, so existing imports keep working.
+
+The freshness guard is unchanged — same T4 oracle, same "never throws, always
+degrades to a cold build" contract. Every CLI read command now goes through it,
+which is where the 5s → 0.3s figures come from.
+
+### MCP: protocol negotiation, response cap, and closed CLI gaps
+
+- **Protocol is negotiated.** The server reads `params.protocolVersion` and
+  answers with it when it speaks it (`2024-11-05`, `2025-03-26`, `2025-06-18`,
+  `2025-11-25`), else with the newest. **A client that asks for `2024-11-05`
+  receives exactly the bytes it received before** — `title` and `annotations`
+  are gated on the negotiated version. Clients that never send `initialize` are
+  treated as `2024-11-05`.
+- **Responses are capped, not paginated.** Under `maxResponseBytes` (default
+  1e6, `--max-response-bytes`) a response is byte-identical to before. Over it —
+  where no MCP client could consume the payload anyway — it is replaced by a
+  parseable notice naming the size, the on-disk artifact, and the narrower tool.
+  New exports: `capResponse`, `DEFAULT_MAX_RESPONSE_BYTES`, `resourceLinkFor`,
+  `negotiateProtocol`, `validateArgs`.
+- **Arguments are type-checked** against the declared `inputSchema`, returning
+  a Tool Execution Error (`isError`). Previously a wrong-typed argument was
+  silently ignored. If you drive this server programmatically with loosely
+  typed arguments, a call that used to fall back to a default now errors —
+  numeric strings (`"50"`) are still accepted.
+- **New optional tool arguments**, all defaulting to today's behaviour:
+  `find_symbol.maxResults`, `complexity.top`, `complexity.since` (risk mode
+  previously dropped it), `mermaid.maxEdges`, `dead_code.limit`, `grep.scope`
+  (was CLI-only), `callers.recall` (was CLI-only), `check_rules.configPath`.
+  `check_rules` no longer requires `rules` when `configPath` is given.
+- **Session cache is a 4-entry LRU**, not one entry, so alternating repos or
+  scopes no longer forces a cold rebuild each call.
+
+### New CLI flags
+
+`--workers <n>` (index), `--index <dir>` and `--no-index-cache` (read commands),
+`--max-response-bytes <n>` (mcp).
+
 ## Typical mapping (what to replace with what)
 
 What a consumer usually deletes from its own codebase, and the engine export

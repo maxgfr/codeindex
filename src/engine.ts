@@ -30,7 +30,13 @@ export { walk, readText, DEFAULT_MAX_FILES } from "./walk.js";
 export type { WalkOptions, WalkedFile, WalkResult } from "./walk.js";
 export { scanRepo, scanSummary } from "./scan.js";
 export type { RepoScan, ScanOptions, ScanSummary, ExtractedRecord } from "./scan.js";
-export { keptCodeFiles } from "./scan.js";
+export { keptCodeFiles, buildCodeRecord } from "./scan.js";
+// Reusing a persisted `.codeindex/` index instead of rebuilding it. The MCP
+// server and every CLI read command go through this; a consumer that vendors
+// the engine gets the same shortcut. Every function degrades to undefined
+// (= "build it yourself") rather than throwing.
+export { preloadSession, preloadArtifacts, readPersistedIndex, toCacheMap, INDEX_DIR } from "./preload.js";
+export type { PersistedMeta, PersistedCacheEntry, PersistedCacheMap } from "./preload.js";
 // Parallel extraction. scanRepoParallel is scanRepo with the code files
 // extracted across worker_threads; it returns the same RepoScan, byte-for-byte,
 // and degrades to the sequential path whenever workers are unavailable.
