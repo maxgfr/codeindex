@@ -10415,12 +10415,53 @@ function renderMermaid(graph, opts = {}) {
   if (dropped) lines.push(`  %% ${dropped} lighter edges omitted (maxEdges=${maxEdges})`);
   return lines.join("\n") + "\n";
 }
-var sanitizeId;
+function clusterNodeId(slug) {
+  return "m_" + slug.replace(/[^A-Za-z0-9_]/g, "_");
+}
+function renderMermaidClustered(graph, opts = {}) {
+  const maxModules = opts.maxModules ?? CLUSTER_MAX_MODULES;
+  const maxEdges = opts.maxEdges ?? CLUSTER_MAX_EDGES;
+  const ranked = graph.modules.slice().sort((a, b) => degreeOf(b) - degreeOf(a) || byStr(a.slug, b.slug));
+  const shown = ranked.slice(0, maxModules);
+  const shownSet = new Set(shown.map((m) => m.slug));
+  const edges = graph.moduleEdges.filter((e) => shownSet.has(e.from) && shownSet.has(e.to)).sort((a, b) => b.weight - a.weight || byStr(a.from, b.from) || byStr(a.to, b.to)).slice(0, maxEdges);
+  const lines = [];
+  lines.push(
+    `%% ${opts.title ?? "module graph"} \u2014 ${shown.length} of ${graph.modules.length} modules, ${edges.length} of ${graph.moduleEdges.length} edges`
+  );
+  if (shown.length < graph.modules.length || edges.length < graph.moduleEdges.length) {
+    lines.push("%% truncated to the most-connected modules/edges; see graph.json for the full graph");
+  }
+  lines.push("flowchart LR");
+  for (const tier of [0, 1, 2]) {
+    const inTier = shown.filter((m) => m.tier === tier);
+    if (!inTier.length) continue;
+    lines.push(`  subgraph ${TIER_LABEL[tier]}`);
+    for (const m of inTier) lines.push(`    ${clusterNodeId(m.slug)}["${m.path.replace(/"/g, "'")}"]`);
+    lines.push("  end");
+  }
+  for (const e of edges) {
+    const label = e.weight > 1 ? `|${e.weight}| ` : "";
+    lines.push(`  ${clusterNodeId(e.from)} -->${label ? " " + label : " "}${clusterNodeId(e.to)}`);
+  }
+  return {
+    content: "```mermaid\n" + lines.join("\n") + "\n```\n",
+    shownModules: shown.length,
+    totalModules: graph.modules.length,
+    shownEdges: edges.length,
+    totalEdges: graph.moduleEdges.length
+  };
+}
+var sanitizeId, TIER_LABEL, CLUSTER_MAX_MODULES, CLUSTER_MAX_EDGES, degreeOf;
 var init_viz = __esm({
   "src/viz.ts"() {
     "use strict";
     init_sort();
     sanitizeId = (slug) => slug.replace(/[^\w]/g, "_");
+    TIER_LABEL = { 0: "Foundations", 1: "Features", 2: "Tail" };
+    CLUSTER_MAX_MODULES = 40;
+    CLUSTER_MAX_EDGES = 80;
+    degreeOf = (m) => m.degIn + m.degOut;
   }
 });
 
@@ -12219,6 +12260,375 @@ init_repomap();
 init_deadcode();
 init_complexity();
 init_viz();
+
+// src/traverse.ts
+init_sort();
+var DEPENDS_KINDS = /* @__PURE__ */ new Set(["import", "use", "call"]);
+function hubThreshold(degrees) {
+  const sorted = degrees.slice().sort((a, b) => a - b);
+  const n = sorted.length;
+  const p99 = n === 0 ? 0 : sorted[Math.min(n - 1, Math.floor(0.99 * n))];
+  return Math.max(50, p99);
+}
+function reverseClosure(edges, seeds, depth = Infinity) {
+  const dependents = /* @__PURE__ */ new Map();
+  for (const e of edges) {
+    if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
+    let arr = dependents.get(e.to);
+    if (!arr) dependents.set(e.to, arr = []);
+    arr.push(e);
+  }
+  const depthOf = /* @__PURE__ */ new Map();
+  const seen = new Set(seeds);
+  let frontier = [...seeds];
+  for (let d = 1; d <= depth && frontier.length; d++) {
+    const next = [];
+    for (const node of frontier) {
+      for (const e of (dependents.get(node) ?? []).slice().sort((a, b) => byStr(a.from, b.from))) {
+        if (seen.has(e.from)) continue;
+        seen.add(e.from);
+        depthOf.set(e.from, d);
+        next.push(e.from);
+      }
+    }
+    frontier = next;
+  }
+  return depthOf;
+}
+function impactOf(graph, target, depth = Infinity) {
+  const moduleOf = new Map(graph.files.map((f) => [f.rel, f.module]));
+  const mod = graph.modules.find((m) => m.slug === target);
+  const file = mod ? void 0 : graph.files.find((f) => f.rel === target);
+  if (!mod && !file) return void 0;
+  const seeds = mod ? mod.members : [file.rel];
+  const depthOf = reverseClosure(graph.fileEdges, seeds, depth);
+  const files = [...depthOf.entries()].map(([rel, d]) => ({ rel, module: moduleOf.get(rel) ?? "root", depth: d })).sort((a, b) => a.depth - b.depth || byStr(a.rel, b.rel));
+  const modules = [...new Set(files.map((f) => f.module).filter((m) => m !== target))].sort(byStr);
+  return { target, scope: mod ? "module" : "file", seeds, files, modules };
+}
+function bfs(edges, start2, depth, kinds) {
+  const out2 = /* @__PURE__ */ new Map();
+  const inn = /* @__PURE__ */ new Map();
+  const degree = /* @__PURE__ */ new Map();
+  for (const e of edges) {
+    if (e.dangling) continue;
+    if (kinds && !kinds.has(e.kind)) continue;
+    (out2.get(e.from) ?? out2.set(e.from, []).get(e.from)).push(e);
+    (inn.get(e.to) ?? inn.set(e.to, []).get(e.to)).push(e);
+    degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+    degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+  }
+  const threshold = hubThreshold([...degree.values()]);
+  const seen = /* @__PURE__ */ new Set([start2]);
+  const links = [];
+  let frontier = [start2];
+  for (let d = 1; d <= depth; d++) {
+    const next = [];
+    for (const node of frontier) {
+      if (node !== start2 && (degree.get(node) ?? 0) >= threshold) continue;
+      for (const e of (out2.get(node) ?? []).slice().sort((a, b) => byStr(a.to, b.to))) {
+        if (seen.has(e.to)) continue;
+        links.push({ node: e.to, direction: "out", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
+        seen.add(e.to);
+        next.push(e.to);
+      }
+      for (const e of (inn.get(node) ?? []).slice().sort((a, b) => byStr(a.from, b.from))) {
+        if (seen.has(e.from)) continue;
+        links.push({ node: e.from, direction: "in", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
+        seen.add(e.from);
+        next.push(e.from);
+      }
+    }
+    frontier = next;
+  }
+  return links;
+}
+function neighborsOf(graph, target, depth = 1, kinds) {
+  const mod = graph.modules.find((m) => m.slug === target);
+  if (mod) {
+    return { target, scope: "module", links: bfs(graph.moduleEdges, target, depth, kinds), members: mod.members };
+  }
+  const file = graph.files.find((f) => f.rel === target);
+  if (file) {
+    return { target, scope: "file", links: bfs(graph.fileEdges, target, depth, kinds) };
+  }
+  return void 0;
+}
+
+// src/delta.ts
+init_git();
+init_sort();
+init_util();
+var RISK_WEIGHTS = {
+  exportedChange: 25,
+  // an exported symbol changed: consumers may break
+  hubHigh: 20,
+  // pagerank percentile ≥ .90
+  hubMed: 10,
+  // pagerank percentile ≥ .75
+  blastHigh: 20,
+  // ≥ 20 dependent files or ≥ 5 dependent modules
+  blastMed: 10,
+  // ≥ 5 dependent files
+  testGap: 20,
+  // a testable module with no covering test
+  surprise: 10,
+  // the module sits on a surprising cross-community edge
+  dangling: 15
+  // a changed file carries a dangling import
+};
+var HIGH_MIN = 60;
+var MEDIUM_MIN = 30;
+var OPEN_CAP = 3;
+var DEFAULT_DELTA_DEPTH = 2;
+function symbolsInHunks(defs, hunks) {
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (d, approx) => {
+    const key = `${d.name}:${d.line}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out2.push({
+      name: d.name,
+      kind: d.kind,
+      exported: d.exported,
+      line: d.line,
+      ...d.endLine !== void 0 ? { endLine: d.endLine } : {},
+      ...d.parent !== void 0 ? { parent: d.parent } : {},
+      ...approx ? { approx: true } : {}
+    });
+  };
+  const span = (d) => (d.endLine ?? d.line) - d.line;
+  for (const h of hunks) {
+    const enclosing = defs.filter((d) => d.line <= h.end && (d.endLine ?? d.line) >= h.start);
+    if (enclosing.length) {
+      enclosing.sort((a, b) => span(a) - span(b) || b.line - a.line || byStr(a.name, b.name));
+      for (const d of enclosing) push(d, false);
+    } else {
+      const above = defs.filter((d) => d.line <= h.start && d.endLine === void 0);
+      const near = above[above.length - 1];
+      if (near) push(near, true);
+    }
+  }
+  return out2;
+}
+function percentile(values, mine) {
+  if (values.length <= 1) return 0;
+  let smaller = 0;
+  for (const v of values) if (v < mine) smaller++;
+  return smaller / (values.length - 1);
+}
+function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
+  const notes = [...diff.notes ?? []];
+  if (!symbols) notes.push("symbol index missing \u2014 symbol-level attribution disabled");
+  const fileByRel = new Map(graph.files.map((f) => [f.rel, f]));
+  const defsByFile = /* @__PURE__ */ new Map();
+  if (symbols) {
+    for (const [name2, entries] of Object.entries(symbols.defs)) {
+      for (const d of entries) {
+        let arr = defsByFile.get(d.file);
+        if (!arr) defsByFile.set(d.file, arr = []);
+        arr.push({ name: name2, ...d });
+      }
+    }
+    for (const arr of defsByFile.values()) arr.sort((a, b) => a.line - b.line || byStr(a.name, b.name));
+  }
+  const deleted = [];
+  const unindexed = [];
+  const changes = [];
+  for (const df of [...diff.files].sort((a, b) => byStr(a.path, b.path))) {
+    const carry = {
+      ...df.oldPath !== void 0 ? { oldPath: df.oldPath } : {},
+      ...df.binary ? { binary: true } : {},
+      ...df.linesAdded !== void 0 ? { linesAdded: df.linesAdded } : {},
+      ...df.linesDeleted !== void 0 ? { linesDeleted: df.linesDeleted } : {}
+    };
+    if (df.status === "deleted") {
+      deleted.push(df.path);
+      changes.push({ path: df.path, status: df.status, ...carry, hunks: [], symbols: [] });
+      continue;
+    }
+    const node = fileByRel.get(df.path);
+    if (!node) {
+      unindexed.push(df.path);
+      continue;
+    }
+    let hunks = diff.hunks.get(df.path) ?? [];
+    if (!hunks.length && df.status === "added" && !df.binary) hunks = [{ start: 1, end: Math.max(node.lines, 1) }];
+    const syms = df.binary ? [] : symbolsInHunks(defsByFile.get(df.path) ?? [], hunks);
+    changes.push({
+      path: df.path,
+      status: df.status,
+      ...carry,
+      module: node.module,
+      hunks: hunks.map((h) => ({ start: h.start, end: h.end })),
+      symbols: syms
+    });
+  }
+  const changedRels = new Set(changes.filter((c2) => c2.status !== "deleted").map((c2) => c2.path));
+  const dangling = graph.fileEdges.filter((e) => e.dangling && (e.kind === "import" || e.kind === "doc-link") && changedRels.has(e.from)).map((e) => ({ from: e.from, spec: e.to, reason: e.reason ?? "unknown" })).sort((a, b) => byStr(a.from, b.from) || byStr(a.spec, b.spec));
+  const byModule = /* @__PURE__ */ new Map();
+  for (const c2 of changes) {
+    if (c2.status === "deleted" || !c2.module) continue;
+    let arr = byModule.get(c2.module);
+    if (!arr) byModule.set(c2.module, arr = []);
+    arr.push(c2);
+  }
+  const nonTestCode = /* @__PURE__ */ new Set();
+  for (const f of graph.files) {
+    if (f.fileKind === "code" && !f.testFile) nonTestCode.add(f.module);
+  }
+  const pagerankKnown = graph.modules.some((m) => m.pagerank !== void 0);
+  const metricOf = (m) => pagerankKnown ? m.pagerank ?? 0 : m.degIn + m.degOut;
+  const metricValues = graph.modules.map(metricOf);
+  const metricName = pagerankKnown ? "pagerank" : "degree";
+  const modules = [];
+  for (const slug of [...byModule.keys()].sort(byStr)) {
+    const m = graph.modules.find((x) => x.slug === slug);
+    if (!m) continue;
+    const moduleChanges = byModule.get(slug);
+    const reasons = [];
+    let score = 0;
+    const exportedNames = [...new Set(moduleChanges.flatMap((c2) => c2.symbols.filter((s) => s.exported).map((s) => s.name)))].sort(byStr);
+    if (exportedNames.length) {
+      score += RISK_WEIGHTS.exportedChange;
+      const shown = exportedNames.slice(0, 3).join(", ") + (exportedNames.length > 3 ? ", \u2026" : "");
+      reasons.push(exportedNames.length === 1 ? `exported symbol ${shown} changed` : `exported symbols ${shown} changed`);
+    }
+    const pct = percentile(metricValues, metricOf(m));
+    if (pct >= 0.9) {
+      score += RISK_WEIGHTS.hubHigh;
+      reasons.push(`${metricName} p${Math.round(pct * 100)} hub`);
+    } else if (pct >= 0.75) {
+      score += RISK_WEIGHTS.hubMed;
+      reasons.push(`${metricName} p${Math.round(pct * 100)} hub`);
+    }
+    const depthByRel = /* @__PURE__ */ new Map();
+    const impModules = /* @__PURE__ */ new Set();
+    for (const c2 of moduleChanges) {
+      const imp = impactOf(graph, c2.path, depth);
+      if (!imp) continue;
+      for (const f of imp.files) {
+        const prev = depthByRel.get(f.rel);
+        if (prev === void 0 || f.depth < prev) depthByRel.set(f.rel, f.depth);
+      }
+      for (const im of imp.modules) if (im !== slug) impModules.add(im);
+    }
+    const transitiveFiles = depthByRel.size;
+    const directFiles = [...depthByRel.values()].filter((d) => d === 1).length;
+    const impact = { directFiles, transitiveFiles, modules: [...impModules].sort(byStr) };
+    if (transitiveFiles >= 20 || impact.modules.length >= 5) {
+      score += RISK_WEIGHTS.blastHigh;
+      reasons.push(`${transitiveFiles} dependent files across ${impact.modules.length} modules (depth ${depth})`);
+    } else if (transitiveFiles >= 5) {
+      score += RISK_WEIGHTS.blastMed;
+      reasons.push(`${transitiveFiles} dependent files across ${impact.modules.length} modules (depth ${depth})`);
+    }
+    const testable = m.tier <= 1 && m.symbols > 0 && nonTestCode.has(slug);
+    const coveredBy = m.testedBy ?? [];
+    const tests = testable ? coveredBy.length ? { status: "covered", files: coveredBy } : { status: "gap", files: [] } : { status: "n/a", files: [] };
+    if (tests.status === "gap") {
+      score += RISK_WEIGHTS.testGap;
+      reasons.push("no test covers this module");
+    }
+    const sup = (graph.surprises ?? []).find((s) => s.from === slug || s.to === slug);
+    if (sup) {
+      score += RISK_WEIGHTS.surprise;
+      reasons.push(`cross-community edge to ${sup.from === slug ? sup.to : sup.from} (surprising)`);
+    }
+    const moduleDangling = dangling.filter((d) => moduleChanges.some((c2) => c2.path === d.from));
+    if (moduleDangling.length) {
+      score += RISK_WEIGHTS.dangling;
+      const first = moduleDangling[0];
+      const more = moduleDangling.length > 1 ? ` (+${moduleDangling.length - 1} more)` : "";
+      reasons.push(`dangling import "${first.spec}" in ${first.from}${more}`);
+    }
+    score = Math.min(100, score);
+    const changedFiles = moduleChanges.map((c2) => c2.path).sort(byStr);
+    const allSyms = moduleChanges.flatMap((c2) => c2.symbols);
+    const open = moduleChanges.slice().sort(
+      (a, b) => b.symbols.filter((s) => s.exported).length - a.symbols.filter((s) => s.exported).length || b.symbols.length - a.symbols.length || byStr(a.path, b.path)
+    ).slice(0, OPEN_CAP).map((c2) => c2.path);
+    modules.push({
+      slug,
+      path: m.path,
+      score,
+      bucket: score >= HIGH_MIN ? "HIGH" : score >= MEDIUM_MIN ? "MEDIUM" : "LOW",
+      reasons,
+      changedFiles,
+      changedSymbols: {
+        total: new Set(allSyms.map((s) => `${s.name}:${s.line}`)).size,
+        exported: new Set(allSyms.filter((s) => s.exported).map((s) => `${s.name}:${s.line}`)).size
+      },
+      impact,
+      tests,
+      open
+    });
+  }
+  modules.sort((a, b) => b.score - a.score || byStr(a.slug, b.slug));
+  return {
+    base: diff.base,
+    ...graph.commit !== void 0 ? { indexCommit: graph.commit } : {},
+    depth,
+    changes,
+    modules,
+    dangling,
+    deleted: deleted.sort(byStr),
+    unindexed: unindexed.sort(byStr),
+    notes
+  };
+}
+function deltaFor(repo, graph, symbols, opts = {}) {
+  if (!have("git")) return { error: "git is required for delta and was not found on PATH" };
+  if (!isGitWorktree(repo)) return { error: `delta needs a git worktree \u2014 ${repo} is not inside one` };
+  const notes = [];
+  let base;
+  if (opts.staged) {
+    const head = sh("git", ["-C", repo, "rev-parse", "HEAD"]);
+    if (!head.ok) return { error: "cannot resolve HEAD \u2014 empty repository?" };
+    base = { ref: "HEAD", mergeBase: head.stdout.trim(), staged: true };
+  } else {
+    const r = resolveBaseRef(repo, opts.base);
+    if ("error" in r) return { error: r.error };
+    if (r.note) notes.push(r.note);
+    base = { ref: r.ref, mergeBase: r.mergeBase, staged: false };
+  }
+  const spec = opts.staged ? { staged: true } : { mergeBase: base.mergeBase };
+  const files = diffFiles(repo, spec);
+  if (!opts.staged) {
+    const known = new Set(files.map((f) => f.path));
+    for (const u of untrackedFiles(repo)) {
+      if (!known.has(u)) files.push({ path: u, status: "added" });
+    }
+  }
+  return computeDelta(graph, symbols, { files, hunks: diffHunks(repo, spec), base, notes }, opts.depth ?? DEFAULT_DELTA_DEPTH);
+}
+function formatDeltaPanel(res) {
+  const mb = res.base.mergeBase.slice(0, 7);
+  const vs = `${res.base.staged ? "staged vs " : ""}${res.base.ref}`;
+  if (!res.changes.length && !res.unindexed.length) {
+    return `codeindex: no changes vs ${vs} (merge-base ${mb})
+`;
+  }
+  const changedCount = res.changes.length + res.unindexed.length;
+  const lines = [
+    `codeindex: delta vs ${vs} (merge-base ${mb}) \u2014 ${changedCount} changed file(s), ${res.modules.length} module(s)${res.indexCommit ? `, index @ ${res.indexCommit}` : ""}`
+  ];
+  for (const n of res.notes) lines.push(`  note: ${n}`);
+  for (const m of res.modules) {
+    lines.push(`  ${m.bucket.padEnd(6)} ${m.slug}  score ${m.score}${m.reasons.length ? ` \u2014 ${m.reasons.join("; ")}` : ""}`);
+    const tests = m.tests.status === "gap" ? "GAP" : m.tests.status === "covered" ? `covered (${m.tests.files.length})` : "n/a";
+    lines.push(`         open: ${m.open.join(", ") || "\u2014"} \xB7 tests: ${tests}`);
+  }
+  if (res.dangling.length) {
+    lines.push(`  dangling:  ${res.dangling.map((d) => `${d.spec} (from ${d.from})`).join(" \xB7 ")}`);
+  }
+  if (res.deleted.length) lines.push(`  deleted:   ${res.deleted.join(", ")}`);
+  if (res.unindexed.length) lines.push(`  unindexed: ${res.unindexed.join(", ")}`);
+  return lines.join("\n") + "\n";
+}
+
+// src/engine.ts
 init_mcp();
 init_rewrite();
 init_hash();
@@ -12304,6 +12714,13 @@ Commands:
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
               positional for one file; omit for the repo-wide top
   risk        Complexity \xD7 git-churn ranking (JSON; --since <ref> to bound)
+  delta       Review panel for the git diff: changed files -> enclosing symbols ->
+              blast radius -> risk score with explained reasons
+              (--base <ref> | --staged, --depth <n>, --json)
+  impact      Reverse dependency closure of a file or module: everything that
+              transitively imports/uses/calls it (--depth <n>; JSON)
+  neighbors   Graph neighbours of a file or module, both directions
+              (--depth <n>, --kind import,call,use,doc-link,mention; JSON)
   mermaid     Mermaid diagram of the module graph; pass a module positional to
               focus on one neighborhood
   rewrite     Map an expensive tree-wide search onto its indexed equivalent:
@@ -12411,6 +12828,11 @@ function parseFlags(args2) {
     else if (a === "--semantic") flags2.semantic = true;
     else if (a === "--recall") flags2.recall = true;
     else if (a === "--run") flags2.run = true;
+    else if (a === "--base") flags2.base = next();
+    else if (a === "--staged") flags2.staged = true;
+    else if (a === "--depth") flags2.depth = num2();
+    else if (a === "--kind") flags2.kind = next();
+    else if (a === "--json") flags2.json = true;
     else if (!a.startsWith("--") && flags2.positional === void 0) flags2.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -12869,6 +13291,28 @@ async function runCli(rawArgv) {
     const scan2 = readScan();
     const { churn, ok } = gitChurn(flags2.repo, { since: flags2.since });
     emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2) + "\n", flags2.out);
+  } else if (cmd === "delta") {
+    const { graph, symbols } = readArtifacts();
+    const res = deltaFor(flags2.repo, graph, symbols, {
+      base: flags2.base,
+      staged: flags2.staged,
+      depth: flags2.depth
+    });
+    if ("error" in res) throw new Error(res.error);
+    emit(flags2.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags2.out);
+  } else if (cmd === "impact") {
+    if (!flags2.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
+    const { graph } = readArtifacts();
+    const res = impactOf(graph, flags2.positional, flags2.depth ?? Infinity);
+    if (!res) throw new Error(`no such file or module in the index: ${flags2.positional}`);
+    emit(JSON.stringify(res, null, 2) + "\n", flags2.out);
+  } else if (cmd === "neighbors") {
+    if (!flags2.positional) throw new Error("neighbors needs a target: cli.mjs neighbors <file|module> --repo <dir>");
+    const { graph } = readArtifacts();
+    const kinds = flags2.kind ? new Set(flags2.kind.split(",").map((k) => k.trim()).filter(Boolean)) : void 0;
+    const res = neighborsOf(graph, flags2.positional, flags2.depth ?? 1, kinds);
+    if (!res) throw new Error(`no such file or module in the index: ${flags2.positional}`);
+    emit(JSON.stringify(res, null, 2) + "\n", flags2.out);
   } else if (cmd === "mermaid") {
     const { graph } = readArtifacts();
     emit(renderMermaid(graph, { module: flags2.positional }), flags2.out);
@@ -12890,6 +13334,7 @@ ${HELP}`);
   }
 }
 export {
+  DEFAULT_DELTA_DEPTH,
   DEFAULT_GRAMMARS_URL,
   DEFAULT_MAX_FILES,
   EMBED_VERSION,
@@ -12897,6 +13342,7 @@ export {
   EXTRACTOR_VERSION,
   INDEX_DIR,
   MARKDOWN_EXT,
+  RISK_WEIGHTS,
   SCHEMA_VERSION,
   allGrammarKeys,
   applyCentrality,
@@ -12925,11 +13371,13 @@ export {
   communityOf,
   compileGlobs,
   complexityOfSource,
+  computeDelta,
   computeImportPairs,
   computeSurprises,
   computeSymbolRefs,
   computeTestMap,
   deleteMemory,
+  deltaFor,
   deserializeEmbeddings,
   detectCommunities,
   detectWorkspaces,
@@ -12957,6 +13405,7 @@ export {
   findReferences,
   findSymbol,
   foldText,
+  formatDeltaPanel,
   gitChurn,
   grammarKeyForExt,
   grammarKeysForExts,
@@ -12966,6 +13415,8 @@ export {
   have,
   headCommit,
   healthzUrl,
+  hubThreshold,
+  impactOf,
   insertAfterSymbol,
   insertBeforeSymbol,
   intDot,
@@ -12981,6 +13432,7 @@ export {
   languageOf,
   listMemories,
   loadEmbedModel,
+  neighborsOf,
   pagerankOf,
   parseGitignore,
   parseRules,
@@ -12996,6 +13448,7 @@ export {
   readText,
   renderGraphJson,
   renderMermaid,
+  renderMermaidClustered,
   renderRepoMap,
   renderScip,
   renderSymbolsJson,
@@ -13011,6 +13464,7 @@ export {
   resolveGrammarsTier,
   resolveImport,
   resolveUniqueSymbol,
+  reverseClosure,
   rewriteCommand,
   riskHotspots,
   roundHalfToEven,
@@ -13031,6 +13485,7 @@ export {
   slugify,
   subtokens,
   symbolComplexity,
+  symbolsInHunks,
   symbolsOverview,
   testsForModule,
   tierForPath,

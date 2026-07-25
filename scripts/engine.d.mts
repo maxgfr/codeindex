@@ -816,6 +816,152 @@ interface MermaidOptions {
     maxEdges?: number;
 }
 declare function renderMermaid(graph: Graph, opts?: MermaidOptions): string;
+interface ClusteredMermaidResult {
+    content: string;
+    shownModules: number;
+    totalModules: number;
+    shownEdges: number;
+    totalEdges: number;
+}
+interface ClusteredMermaidOptions {
+    maxModules?: number;
+    maxEdges?: number;
+    title?: string;
+}
+declare function renderMermaidClustered(graph: Graph, opts?: ClusteredMermaidOptions): ClusteredMermaidResult;
+
+declare function hubThreshold(degrees: number[]): number;
+interface ImpactedFile {
+    rel: string;
+    module: string;
+    depth: number;
+}
+interface ImpactResult {
+    target: string;
+    scope: "module" | "file";
+    seeds: string[];
+    files: ImpactedFile[];
+    modules: string[];
+}
+declare function reverseClosure(edges: Edge[], seeds: string[], depth?: number): Map<string, number>;
+declare function impactOf(graph: Graph, target: string, depth?: number): ImpactResult | undefined;
+interface NeighborLink {
+    node: string;
+    direction: "out" | "in";
+    kind: string;
+    weight: number;
+    depth: number;
+    confidence?: "extracted" | "inferred";
+}
+interface NeighborResult {
+    target: string;
+    scope: "module" | "file";
+    links: NeighborLink[];
+    members?: string[];
+}
+declare function neighborsOf(graph: Graph, target: string, depth?: number, kinds?: Set<string>): NeighborResult | undefined;
+
+interface DeltaOptions {
+    base?: string;
+    staged?: boolean;
+    depth?: number;
+}
+interface ChangedSymbol {
+    name: string;
+    kind: string;
+    exported: boolean;
+    line: number;
+    endLine?: number;
+    parent?: string;
+    approx?: boolean;
+}
+interface DeltaChange {
+    path: string;
+    status: DiffFile["status"];
+    oldPath?: string;
+    binary?: boolean;
+    linesAdded?: number;
+    linesDeleted?: number;
+    module?: string;
+    hunks: {
+        start: number;
+        end: number;
+    }[];
+    symbols: ChangedSymbol[];
+}
+interface DeltaModule {
+    slug: string;
+    path: string;
+    score: number;
+    bucket: "HIGH" | "MEDIUM" | "LOW";
+    reasons: string[];
+    changedFiles: string[];
+    changedSymbols: {
+        total: number;
+        exported: number;
+    };
+    impact: {
+        directFiles: number;
+        transitiveFiles: number;
+        modules: string[];
+    };
+    tests: {
+        status: "covered" | "gap" | "n/a";
+        files: string[];
+    };
+    open: string[];
+}
+interface DeltaResult {
+    base: {
+        ref: string;
+        mergeBase: string;
+        staged: boolean;
+    };
+    indexCommit?: string;
+    depth: number;
+    changes: DeltaChange[];
+    modules: DeltaModule[];
+    dangling: {
+        from: string;
+        spec: string;
+        reason: string;
+    }[];
+    deleted: string[];
+    unindexed: string[];
+    notes: string[];
+}
+type DeltaError = {
+    error: string;
+};
+declare const RISK_WEIGHTS: {
+    readonly exportedChange: 25;
+    readonly hubHigh: 20;
+    readonly hubMed: 10;
+    readonly blastHigh: 20;
+    readonly blastMed: 10;
+    readonly testGap: 20;
+    readonly surprise: 10;
+    readonly dangling: 15;
+};
+declare const DEFAULT_DELTA_DEPTH = 2;
+interface NamedDef {
+    name: string;
+    file: string;
+    line: number;
+    endLine?: number;
+    kind: string;
+    exported: boolean;
+    parent?: string;
+}
+declare function symbolsInHunks(defs: NamedDef[], hunks: Hunk[]): ChangedSymbol[];
+declare function computeDelta(graph: Graph, symbols: SymbolIndex | undefined, diff: {
+    files: DiffFile[];
+    hunks: Map<string, Hunk[]>;
+    base: DeltaResult["base"];
+    notes?: string[];
+}, depth?: number): DeltaResult;
+declare function deltaFor(repo: string, graph: Graph, symbols: SymbolIndex | undefined, opts?: DeltaOptions): DeltaResult | DeltaError;
+declare function formatDeltaPanel(res: DeltaResult): string;
 
 interface McpServerOptions {
     serverInfo?: {
@@ -860,4 +1006,4 @@ declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): M
 
 declare function runCli(rawArgv: string[]): Promise<void>;
 
-export { type ArchRule, type BuildIndexOptions, type BuiltinRule, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_GRAMMARS_URL, DEFAULT_MAX_FILES, type DeadSymbol, type DiffFile, type DiffSpec, EMBED_VERSION, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type EmbedEndpointOptions, type EmbedPullTarget, type EmbeddingIndex, type EmbeddingRecord, type EmbeddingUnit, type ExtractedRecord, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type GrammarsPullResult, type GrammarsPullTarget, type GrammarsTier, type GrammarsTierName, type Graph, type GrepOptions, type Hotspot, type Hunk, INDEX_DIR, type IgnoreRule, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type McpServerOptions, type MermaidOptions, type ModuleInfo, type ModuleNode, type PersistedCacheEntry, type PersistedCacheMap, type PersistedMeta, type RawCallerIndex, type RawCallerSite, type RawRef, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type ScanSummary, type SearchHit, type SearchOptions, type SearchResult, type SemanticSearchOptions, type SemanticSearchResult, type ShResult, type StaticEmbedModel, type SurpriseEdge, type SymbolComplexity, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WarmGrammarsOptions, type WarmGrammarsResult, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, basicTokenize, betweennessOf, buildArtifactsFromScan, buildCallerIndex, buildCodeRecord, buildEmbeddingIndex, buildEndpointIndex, buildGraph, buildIndexArtifacts, buildModules, buildRawCallerIndex, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, complexityOfSource, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, deserializeEmbeddings, detectCommunities, detectWorkspaces, diffFiles, diffHunks, embedEndpointUrl, embedViaEndpoint, embeddingUnits, enclosingSymbol, encode, encodeQueryViaEndpoint, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractGrammarsTarball, extractInParallel, extractMarkdown, extractSymbols, extractTarInto, fetchExpectedSha256, fetchGrammarsTarball, findDeadCode, findReferences, findSymbol, foldText, gitChurn, grammarKeyForExt, grammarKeysForExts, grammarReady, grepRepo, hasEmbedModel, have, headCommit, healthzUrl, insertAfterSymbol, insertBeforeSymbol, intDot, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keptCodeFiles, keywords, languageOf, listMemories, loadEmbedModel, pagerankOf, parseGitignore, parseRules, preloadArtifacts, preloadSession, probeEndpoint, pullGrammars, quantize, rankHotspots, rankedKeywords, readMemory, readPersistedIndex, readText, renderGraphJson, renderMermaid, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveEmbedEndpoint, resolveEmbedModelDir, resolveEmbedPullUrl, resolveGrammarsDir, resolveGrammarsPullTarget, resolveGrammarsTier, resolveImport, resolveUniqueSymbol, rewriteCommand, riskHotspots, roundHalfToEven, rrf, runCli, runExtractWorker, runMcpServer, scanRepo, scanRepoParallel, scanSummary, searchIndex, searchSemantic, serializeEmbeddings, sh, sha1, sharedGrammarsCacheDir, shortHash, slugify, subtokens, symbolComplexity, symbolsOverview, testsForModule, tierForPath, toCacheMap, tokenize, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, warmGrammars, wordpiece, workerCount, writeMemory };
+export { type ArchRule, type BuildIndexOptions, type BuiltinRule, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type ChangedSymbol, type ClusteredMermaidOptions, type ClusteredMermaidResult, type CodeInfo, type CodeSymbol, type CouplingOptions, DEFAULT_DELTA_DEPTH, DEFAULT_GRAMMARS_URL, DEFAULT_MAX_FILES, type DeadSymbol, type DeltaChange, type DeltaError, type DeltaModule, type DeltaOptions, type DeltaResult, type DiffFile, type DiffSpec, EMBED_VERSION, ENGINE_VERSION, EXTRACTOR_VERSION, type Edge, type EdgeKind, type EditResult, type EmbedEndpointOptions, type EmbedPullTarget, type EmbeddingIndex, type EmbeddingRecord, type EmbeddingUnit, type ExtractedRecord, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type GrammarsPullResult, type GrammarsPullTarget, type GrammarsTier, type GrammarsTierName, type Graph, type GrepOptions, type Hotspot, type Hunk, INDEX_DIR, type IgnoreRule, type ImpactResult, type ImpactedFile, type IndexArtifacts, MARKDOWN_EXT, type MarkdownInfo, type McpServerOptions, type MermaidOptions, type ModuleInfo, type ModuleNode, type NeighborLink, type NeighborResult, type PersistedCacheEntry, type PersistedCacheMap, type PersistedMeta, RISK_WEIGHTS, type RawCallerIndex, type RawCallerSite, type RawRef, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type ScanSummary, type SearchHit, type SearchOptions, type SearchResult, type SemanticSearchOptions, type SemanticSearchResult, type ShResult, type StaticEmbedModel, type SurpriseEdge, type SymbolComplexity, type SymbolIndex, type SymbolMatch, type SymbolReferences, type TestMap, type Tier, type WalkOptions, type WalkResult, type WalkedFile, type WarmGrammarsOptions, type WarmGrammarsResult, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, basicTokenize, betweennessOf, buildArtifactsFromScan, buildCallerIndex, buildCodeRecord, buildEmbeddingIndex, buildEndpointIndex, buildGraph, buildIndexArtifacts, buildModules, buildRawCallerIndex, buildResolveContext, buildSymbolIndex, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, complexityOfSource, computeDelta, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, deltaFor, deserializeEmbeddings, detectCommunities, detectWorkspaces, diffFiles, diffHunks, embedEndpointUrl, embedViaEndpoint, embeddingUnits, enclosingSymbol, encode, encodeQueryViaEndpoint, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractGrammarsTarball, extractInParallel, extractMarkdown, extractSymbols, extractTarInto, fetchExpectedSha256, fetchGrammarsTarball, findDeadCode, findReferences, findSymbol, foldText, formatDeltaPanel, gitChurn, grammarKeyForExt, grammarKeysForExts, grammarReady, grepRepo, hasEmbedModel, have, headCommit, healthzUrl, hubThreshold, impactOf, insertAfterSymbol, insertBeforeSymbol, intDot, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keptCodeFiles, keywords, languageOf, listMemories, loadEmbedModel, neighborsOf, pagerankOf, parseGitignore, parseRules, preloadArtifacts, preloadSession, probeEndpoint, pullGrammars, quantize, rankHotspots, rankedKeywords, readMemory, readPersistedIndex, readText, renderGraphJson, renderMermaid, renderMermaidClustered, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveEmbedEndpoint, resolveEmbedModelDir, resolveEmbedPullUrl, resolveGrammarsDir, resolveGrammarsPullTarget, resolveGrammarsTier, resolveImport, resolveUniqueSymbol, reverseClosure, rewriteCommand, riskHotspots, roundHalfToEven, rrf, runCli, runExtractWorker, runMcpServer, scanRepo, scanRepoParallel, scanSummary, searchIndex, searchSemantic, serializeEmbeddings, sh, sha1, sharedGrammarsCacheDir, shortHash, slugify, subtokens, symbolComplexity, symbolsInHunks, symbolsOverview, testsForModule, tierForPath, toCacheMap, tokenize, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, warmGrammars, wordpiece, workerCount, writeMemory };

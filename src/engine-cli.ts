@@ -22,6 +22,8 @@ import { renderRepoMap } from "./repomap.js";
 import { findDeadCode } from "./deadcode.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
+import { impactOf, neighborsOf } from "./traverse.js";
+import { deltaFor, formatDeltaPanel } from "./delta.js";
 import { searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, parseEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
@@ -85,6 +87,13 @@ Commands:
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
               positional for one file; omit for the repo-wide top
   risk        Complexity × git-churn ranking (JSON; --since <ref> to bound)
+  delta       Review panel for the git diff: changed files -> enclosing symbols ->
+              blast radius -> risk score with explained reasons
+              (--base <ref> | --staged, --depth <n>, --json)
+  impact      Reverse dependency closure of a file or module: everything that
+              transitively imports/uses/calls it (--depth <n>; JSON)
+  neighbors   Graph neighbours of a file or module, both directions
+              (--depth <n>, --kind import,call,use,doc-link,mention; JSON)
   mermaid     Mermaid diagram of the module graph; pass a module positional to
               focus on one neighborhood
   rewrite     Map an expensive tree-wide search onto its indexed equivalent:
@@ -173,6 +182,11 @@ interface CliFlags {
   recall?: boolean; // callers: recall-oriented binding
   run?: boolean; // `embed serve`: actually run the docker command (default: print)
   projectRoot?: string; // scip: override Metadata.project_root
+  base?: string; // delta: branch/ref to diff against (default: the repo's default branch)
+  staged?: boolean; // delta: diff the index instead of the merge-base
+  depth?: number; // delta/impact/neighbors: traversal hops
+  kind?: string; // neighbors: comma-separated edge kinds to traverse
+  json?: boolean; // delta: emit JSON instead of the human panel
   positional?: string; // e.g. the grep pattern or search query
 }
 
@@ -224,6 +238,11 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--semantic") flags.semantic = true;
     else if (a === "--recall") flags.recall = true;
     else if (a === "--run") flags.run = true;
+    else if (a === "--base") flags.base = next();
+    else if (a === "--staged") flags.staged = true;
+    else if (a === "--depth") flags.depth = num();
+    else if (a === "--kind") flags.kind = next();
+    else if (a === "--json") flags.json = true;
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -837,6 +856,28 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const scan = readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
     emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2) + "\n", flags.out);
+  } else if (cmd === "delta") {
+    const { graph, symbols } = readArtifacts();
+    const res = deltaFor(flags.repo, graph, symbols, {
+      base: flags.base,
+      staged: flags.staged,
+      depth: flags.depth,
+    });
+    if ("error" in res) throw new Error(res.error);
+    emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);
+  } else if (cmd === "impact") {
+    if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
+    const { graph } = readArtifacts();
+    const res = impactOf(graph, flags.positional, flags.depth ?? Infinity);
+    if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
+    emit(JSON.stringify(res, null, 2) + "\n", flags.out);
+  } else if (cmd === "neighbors") {
+    if (!flags.positional) throw new Error("neighbors needs a target: cli.mjs neighbors <file|module> --repo <dir>");
+    const { graph } = readArtifacts();
+    const kinds = flags.kind ? new Set(flags.kind.split(",").map((k) => k.trim()).filter(Boolean)) : undefined;
+    const res = neighborsOf(graph, flags.positional, flags.depth ?? 1, kinds);
+    if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
+    emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "mermaid") {
     const { graph } = readArtifacts();
     emit(renderMermaid(graph, { module: flags.positional }), flags.out);

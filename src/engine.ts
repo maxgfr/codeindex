@@ -192,8 +192,20 @@ export { findDeadCode } from "./deadcode.js";
 export type { DeadSymbol } from "./deadcode.js";
 export { symbolComplexity, riskHotspots, complexityOfSource } from "./complexity.js";
 export type { SymbolComplexity, RiskHotspot } from "./complexity.js";
-export { renderMermaid } from "./viz.js";
-export type { MermaidOptions } from "./viz.js";
+export { renderMermaid, renderMermaidClustered } from "./viz.js";
+export type { MermaidOptions, ClusteredMermaidOptions, ClusteredMermaidResult } from "./viz.js";
+
+// Graph traversal: reverse-dependency closure ("what breaks if I change this")
+// and bidirectional neighbourhood walks. Pure functions of a Graph, so a
+// consumer holding a persisted graph.json answers both without a rescan.
+export { impactOf, neighborsOf, reverseClosure, hubThreshold } from "./traverse.js";
+export type { ImpactResult, ImpactedFile, NeighborResult, NeighborLink } from "./traverse.js";
+
+// Diff review: git diff -> enclosing symbols -> blast radius -> risk-scored,
+// reasons-first panel. `computeDelta` is the pure core (no git, no fs);
+// `deltaFor` adds the git plumbing against a graph the caller supplies.
+export { computeDelta, deltaFor, formatDeltaPanel, symbolsInHunks, RISK_WEIGHTS, DEFAULT_DELTA_DEPTH } from "./delta.js";
+export type { DeltaOptions, DeltaResult, DeltaError, DeltaModule, DeltaChange, ChangedSymbol } from "./delta.js";
 export type { RepoMapOptions } from "./repomap.js";
 
 // MCP server over stdio (also reachable as `engine.mjs mcp`).
