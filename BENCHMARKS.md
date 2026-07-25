@@ -74,13 +74,13 @@ _Full process spawn per run into a fresh output dir. ctags emits a flat `tags` f
 
 | Repo | Files | codeindex (ms) | ctags -R (ms) | serena project index (ms) | graphify update (ms) |
 | --- | --- | --- | --- | --- | --- |
-| BurntSushi/ripgrep | 223 | 432 | 29 | 2057 | 1712 |
-| gin-gonic/gin | 129 | 252 | 17 | 2360 | 850 |
-| nrwl/nx-examples | 230 | 86 | 18 | 826 | 774 |
-| pallets/flask | 227 | 282 | 23 | 1161 | 973 |
-| socialgouv/code-du-travail-numerique | 2823 | 1686 | 319 | 7031 | 10060 |
-| t3-oss/create-t3-turbo | 132 | 92 | 23 | 927 | 587 |
-| vercel/next.js | 20000 | 7993 | 3116 | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
+| BurntSushi/ripgrep | 223 | 358 | 32 | 2192 | 1759 |
+| gin-gonic/gin | 129 | 187 | 20 | 2352 | 884 |
+| nrwl/nx-examples | 230 | 131 | 21 | 878 | 803 |
+| pallets/flask | 227 | 238 | 28 | 1118 | 1001 |
+| socialgouv/code-du-travail-numerique | 2823 | 640 | 335 | 7595 | 10215 |
+| t3-oss/create-t3-turbo | 132 | 129 | 26 | 939 | 600 |
+| vercel/next.js | 20000 | 2843 | 3320 | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
 
 ## Warm / incremental
 
@@ -88,13 +88,13 @@ _Re-index with a warm cache present, then with exactly one file touched (comment
 
 | Repo | codeindex warm rerun (ms) | codeindex +1 file (ms) |
 | --- | --- | --- |
-| BurntSushi/ripgrep | 48 | 78 |
-| gin-gonic/gin | 42 | 64 |
-| nrwl/nx-examples | 45 | 60 |
-| pallets/flask | 46 | 86 |
-| socialgouv/code-du-travail-numerique | 132 | 327 |
-| t3-oss/create-t3-turbo | 43 | 59 |
-| vercel/next.js | 877 | 1624 |
+| BurntSushi/ripgrep | 53 | 105 |
+| gin-gonic/gin | 46 | 91 |
+| nrwl/nx-examples | 52 | 91 |
+| pallets/flask | 51 | 114 |
+| socialgouv/code-du-travail-numerique | 140 | 342 |
+| t3-oss/create-t3-turbo | 48 | 87 |
+| vercel/next.js | 918 | 1783 |
 
 ## Queries (find-symbol / references / callers)
 
@@ -102,13 +102,13 @@ _`find-symbol in-proc` / `references in-proc`: a single API call on an already-l
 
 | Repo | Symbol | find-symbol in-proc (ms) | full-index spawn (ms) | references in-proc (ms) | caller-index in-proc (ms) | ctags lookup (ms) |
 | --- | --- | --- | --- | --- | --- | --- |
-| BurntSushi/ripgrep | WalkBuilder | 0 | 440 | 0 | 5 | 0 |
-| gin-gonic/gin | New | 0 | 250 | 0 | 2 | 0 |
-| nrwl/nx-examples | environment | 0 | 84 | 0 | 0 | 0 |
-| pallets/flask | Flask | 0 | 282 | 0 | 1 | 0 |
-| socialgouv/code-du-travail-numerique | ElementBuilder | 0 | 1652 | 0 | 5 | 6 |
-| t3-oss/create-t3-turbo | Route | 0 | 91 | 0 | 0 | 0 |
-| vercel/next.js | NextResponse | 1 | 7796 | 2 | 318 | 107 |
+| BurntSushi/ripgrep | WalkBuilder | 0 | 424 | 0 | 5 | 0 |
+| gin-gonic/gin | New | 0 | 214 | 0 | 2 | 0 |
+| nrwl/nx-examples | environment | 0 | 90 | 0 | 0 | 0 |
+| pallets/flask | Flask | 0 | 268 | 0 | 1 | 0 |
+| socialgouv/code-du-travail-numerique | ElementBuilder | 0 | 1291 | 0 | 6 | 6 |
+| t3-oss/create-t3-turbo | Route | 0 | 96 | 0 | 0 | 0 |
+| vercel/next.js | NextResponse | 1 | 6566 | 2 | 344 | 111 |
 
 ## MCP sessions (activate + per-call queries)
 
@@ -116,25 +116,25 @@ _All three servers speak the same stdio JSON-RPC transport to the same client, o
 
 | Repo | Server | Symbol | activate->ready (ms) | find-symbol (ms) | references (ms) | file-overview (ms) |
 | --- | --- | --- | --- | --- | --- | --- |
-| BurntSushi/ripgrep | codeindex | WalkBuilder | 52 | 12 | 12 | 12 |
-| BurntSushi/ripgrep | serena | WalkBuilder | 2131 | 144 | 257 | 108 |
-| BurntSushi/ripgrep | graphify | WalkBuilder | 252 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| gin-gonic/gin | codeindex | New | 43 | 9 | 8 | 8 |
-| gin-gonic/gin | serena | New | 600 | 137 | 366 | 106 |
-| gin-gonic/gin | graphify | New | 209 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| nrwl/nx-examples | codeindex | environment | 50 | 13 | 13 | 13 |
-| nrwl/nx-examples | serena | environment | 599 | 142 | 130 | 107 |
-| nrwl/nx-examples | graphify | environment | 209 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| pallets/flask | codeindex | Flask | 50 | 12 | 12 | 12 |
-| pallets/flask | serena | Flask | 717 | 141 | 148 | 108 |
-| pallets/flask | graphify | Flask | 206 | 1 | 5 | n/a (basename-keyed file nodes — n/a by design) |
-| socialgouv/code-du-travail-numerique | codeindex | ElementBuilder | 205 | 122 | 122 | 121 |
-| socialgouv/code-du-travail-numerique | serena | ElementBuilder | 1550 | 616 | 251 | 107 |
-| socialgouv/code-du-travail-numerique | graphify | ElementBuilder | 463 | 2 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| t3-oss/create-t3-turbo | codeindex | Route | 46 | 11 | 11 | 10 |
-| t3-oss/create-t3-turbo | serena | Route | 598 | 139 | 120 | 106 |
-| t3-oss/create-t3-turbo | graphify | Route | 198 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
-| vercel/next.js | codeindex | NextResponse | 1601 | 1340 | 1350 | 1345 |
+| BurntSushi/ripgrep | codeindex | WalkBuilder | 62 | 17 | 13 | 15 |
+| BurntSushi/ripgrep | serena | WalkBuilder | 2795 | 134 | 264 | 106 |
+| BurntSushi/ripgrep | graphify | WalkBuilder | 287 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| gin-gonic/gin | codeindex | New | 52 | 10 | 10 | 9 |
+| gin-gonic/gin | serena | New | 720 | 131 | 407 | 103 |
+| gin-gonic/gin | graphify | New | 244 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| nrwl/nx-examples | codeindex | environment | 51 | 12 | 12 | 11 |
+| nrwl/nx-examples | serena | environment | 665 | 131 | 114 | 105 |
+| nrwl/nx-examples | graphify | environment | 239 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| pallets/flask | codeindex | Flask | 54 | 12 | 12 | 12 |
+| pallets/flask | serena | Flask | 804 | 127 | 137 | 106 |
+| pallets/flask | graphify | Flask | 239 | 1 | 5 | n/a (basename-keyed file nodes — n/a by design) |
+| socialgouv/code-du-travail-numerique | codeindex | ElementBuilder | 153 | 75 | 75 | 72 |
+| socialgouv/code-du-travail-numerique | serena | ElementBuilder | 1744 | 744 | 272 | 104 |
+| socialgouv/code-du-travail-numerique | graphify | ElementBuilder | 521 | 2 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| t3-oss/create-t3-turbo | codeindex | Route | 51 | 11 | 12 | 11 |
+| t3-oss/create-t3-turbo | serena | Route | 662 | 125 | 115 | 106 |
+| t3-oss/create-t3-turbo | graphify | Route | 215 | 1 | 1 | n/a (basename-keyed file nodes — n/a by design) |
+| vercel/next.js | codeindex | NextResponse | 1008 | 735 | 726 | 723 |
 | vercel/next.js | serena | NextResponse | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
 | vercel/next.js | graphify | NextResponse | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
 
@@ -165,7 +165,7 @@ _Context cost of each MCP answer: tokens ~= bytes/4 of the tool-call response te
 | gin-gonic/gin | serena | 31 | 8740 | 264 |
 | gin-gonic/gin | graphify | 35 | 1557 | n/a (basename-keyed file nodes — n/a by design) |
 | nrwl/nx-examples | codeindex | 235 | 279 | 59 |
-| nrwl/nx-examples | serena | 276 | 1 | 7 |
+| nrwl/nx-examples | serena | 277 | 1 | 7 |
 | nrwl/nx-examples | graphify | 59 | 37 | n/a (basename-keyed file nodes — n/a by design) |
 | pallets/flask | codeindex | 115 | 2778 | 2705 |
 | pallets/flask | serena | 74 | 67 | 54 |
@@ -202,10 +202,10 @@ _Our artifacts (graph.json + symbols.json + cache.json) vs the ctags `tags` file
 | --- | --- | --- | --- | --- |
 | BurntSushi/ripgrep | 2.0 MB | 524.4 KB | 5.1 MB | 5.0 MB |
 | gin-gonic/gin | 1.2 MB | 267.2 KB | 2.0 MB | 2.0 MB |
-| nrwl/nx-examples | 332.5 KB | 238.2 KB | 382.5 KB | 1.2 MB |
+| nrwl/nx-examples | 332.5 KB | 238.2 KB | 384.4 KB | 1.2 MB |
 | pallets/flask | 1.2 MB | 282.3 KB | 3.1 MB | 1.3 MB |
-| socialgouv/code-du-travail-numerique | 12.6 MB | 4.4 MB | 57.1 MB | 13.7 MB |
-| t3-oss/create-t3-turbo | 277.3 KB | 87.9 KB | 630.1 KB | 823.1 KB |
+| socialgouv/code-du-travail-numerique | 12.6 MB | 4.4 MB | 57.3 MB | 13.7 MB |
+| t3-oss/create-t3-turbo | 277.3 KB | 87.9 KB | 633.4 KB | 822.3 KB |
 | vercel/next.js | 69.8 MB | 80.8 MB | n/a (repo too large for a bench-time full index (~30k files)) | n/a (repo too large for a bench-time full index (~30k files)) |
 
 ## Install footprint
@@ -214,7 +214,7 @@ _Measured, not declared. Our tarball is the unpacked size from `npm pack --dry-r
 
 | Tool | Install footprint | Notes |
 | --- | --- | --- |
-| codeindex | 23.3 MB | zero runtime dependencies; single engine.mjs |
+| codeindex | 23.4 MB | zero runtime dependencies; single engine.mjs |
 | serena | 114.3 MB | uv tool venv; + 25.6 MB language servers in ~/.serena/language_servers (measured); requires node/npm (TS), gopls (Go), rust-analyzer (Rust) |
 | graphify | 140.1 MB | uv tool venv (graphifyy); tree-sitter grammar wheels bundled; [mcp] extra required for the MCP server |
 
@@ -222,7 +222,7 @@ _Measured, not declared. Our tarball is the unpacked size from `npm pack --dry-r
 
 _This section records the measurement machine and session date; it is explicitly OUTSIDE the reproducibility scope._
 
-- Node: v24.10.0
+- Node: v24.15.0
 - CPU: Apple M5
 - RAM: 16.0 GB
-- Date: 2026-07-24T20:25:23.491Z
+- Date: 2026-07-25T10:36:55.397Z

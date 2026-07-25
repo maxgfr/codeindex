@@ -287,7 +287,7 @@ a consumer can stamp its own identity into artifacts it persists.
 
 ## Benchmarks
 
-Measured against 01x-in/codeindex, universal-ctags and scip-typescript with a
+Measured against universal-ctags, Serena (LSP over MCP) and Graphify with a
 reproducible harness (`scripts/bench/`); full methodology, fairness notes and
 all scenarios in [BENCHMARKS.md](./BENCHMARKS.md).
 
