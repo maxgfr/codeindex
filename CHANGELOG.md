@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.17.1](https://github.com/maxgfr/codeindex/compare/v2.17.0...v2.17.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **cli:** accept global flags before the subcommand ([75ccc7d](https://github.com/maxgfr/codeindex/commit/75ccc7d35fdb094200074bde2ad2306e30dd8f38))
+
 # [2.17.0](https://github.com/maxgfr/codeindex/compare/v2.16.0...v2.17.0) (2026-07-25)
 
 
