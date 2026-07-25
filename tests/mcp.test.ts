@@ -1,12 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { getArtifacts, getScan, memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint, toCacheMap } from "../src/mcp.js";
+import { capResponse, getArtifacts, getScan, memoizedEmbeddingIndex, memoizedEmbedModel, scanFingerprint, toCacheMap } from "../src/mcp.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -1050,5 +1050,69 @@ describe("getScan — bounded LRU, not a single entry", () => {
     for (const scope of ["docs", "gopkg", "rustcrate", "javapkg"]) getScan(repo, { scope });
     const again = getScan(repo, { scope: "src" });
     expect(again.files.map((f) => f.rel)).toEqual(first.files.map((f) => f.rel));
+  });
+});
+
+// Several tools returned unbounded payloads: on facebook/react, graph came back
+// at 9.4 MB (~2.35M tokens), symbols at 6.3 MB, callers at 6.0 MB. That is not
+// merely wasteful — it exceeds what an MCP client can accept, so the call fails
+// outright. The guard replaces such a response with something actionable.
+//
+// The property that keeps this non-breaking: BELOW the cap, nothing changes.
+describe("capResponse — a guard, not a default page size", () => {
+  const repo = "/some/repo";
+
+  it("returns a response under the cap byte-for-byte", () => {
+    const payload = JSON.stringify({ hello: "world" }, null, 2);
+    expect(capResponse(payload, "graph", repo, 1_000_000)).toBe(payload);
+  });
+
+  it("passes a response exactly at the cap through untouched", () => {
+    const payload = "x".repeat(100);
+    expect(capResponse(payload, "graph", repo, 100)).toBe(payload);
+  });
+
+  it("measures UTF-8 bytes, not JS string length", () => {
+    // 60 two-byte chars: 60 by .length (under the cap), 120 as UTF-8 bytes
+    // (over it). A length check would wave this straight through.
+    const payload = "é".repeat(60);
+    expect(payload.length).toBeLessThan(100);
+    const out = capResponse(payload, "graph", repo, 100);
+    expect(out).not.toBe(payload);
+    expect(JSON.parse(out).bytes).toBe(120);
+  });
+
+  it("replaces an oversized response with a parseable, actionable notice", () => {
+    const out = capResponse("x".repeat(5000), "graph", repo, 1000);
+    const parsed = JSON.parse(out);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.tool).toBe("graph");
+    expect(parsed.bytes).toBe(5000);
+    expect(parsed.maxBytes).toBe(1000);
+    // It must say what to do instead — an agent that only learns "too big"
+    // has no next move.
+    expect(parsed.narrower).toMatch(/scope|repo_map|mermaid/);
+  });
+
+  it("points at the persisted artifact when one exists", () => {
+    const dir = tmpFixtureCopy("ci-cap-");
+    mkdirSync(join(dir, ".codeindex"), { recursive: true });
+    writeFileSync(join(dir, ".codeindex", "graph.json"), "{}");
+    const parsed = JSON.parse(capResponse("x".repeat(5000), "graph", dir, 1000));
+    expect(parsed.artifact).toBe(join(dir, ".codeindex", "graph.json"));
+    expect(parsed.artifactNote).toMatch(/on disk/);
+  });
+
+  it("tells you how to create the artifact when there is none", () => {
+    const dir = tmpFixtureCopy("ci-cap-none-");
+    const parsed = JSON.parse(capResponse("x".repeat(5000), "graph", dir, 1000));
+    expect(parsed.artifact).toBeUndefined();
+    expect(parsed.artifactNote).toMatch(/codeindex index/);
+  });
+
+  it("still guides tools that have no on-disk artifact", () => {
+    const parsed = JSON.parse(capResponse("x".repeat(5000), "callers", repo, 1000));
+    expect(parsed.narrower).toMatch(/name/);
+    expect(parsed.artifactNote).toBeUndefined();
   });
 });

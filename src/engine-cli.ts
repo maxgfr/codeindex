@@ -99,7 +99,10 @@ Commands:
               check_rules, the memory quartet and the three symbolic-edit
               writes). Flags: --repo <dir> pins ONE repository so the per-tool
               repo argument becomes optional (an explicit per-call repo still
-              wins); --server-name <name> overrides the announced serverInfo
+              wins); --server-name <name> overrides the announced serverInfo;
+              --max-response-bytes <n> caps a single tool response (default 1e6;
+              a response under the cap is byte-identical, one over it is
+              replaced by an actionable notice instead of an unusable blob)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -262,9 +265,14 @@ const SCANLESS_COMMANDS = new Set(["grep", "churn", "coupling", "workspaces", "g
 // dispatch site). `--repo` is resolved to an absolute path and must exist: a
 // server pinned to a typo'd directory would otherwise answer every tool call
 // with the same confusing per-call error instead of failing at startup.
-export function parseMcpFlags(argv: string[]): { defaultRepo?: string; serverInfo?: { name?: string } } {
+export function parseMcpFlags(argv: string[]): {
+  defaultRepo?: string;
+  serverInfo?: { name?: string };
+  maxResponseBytes?: number;
+} {
   let defaultRepo: string | undefined;
   let name: string | undefined;
+  let maxResponseBytes: number | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--repo") {
@@ -275,12 +283,17 @@ export function parseMcpFlags(argv: string[]): { defaultRepo?: string; serverInf
       const v = argv[++i];
       if (!v) throw new Error("--server-name requires a value");
       name = v;
+    } else if (a === "--max-response-bytes") {
+      const v = argv[++i];
+      const n = Number(v);
+      if (!v || !Number.isFinite(n) || n <= 0) throw new Error("--max-response-bytes requires a positive number");
+      maxResponseBytes = n;
     } else {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
   if (defaultRepo && !existsSync(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
-  return { defaultRepo, serverInfo: name ? { name } : undefined };
+  return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes };
 }
 
 // Flags that consume the following argv element. Needed to hoist leading flags

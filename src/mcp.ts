@@ -1,20 +1,25 @@
 // MCP (Model Context Protocol) server over stdio — hand-rolled JSON-RPC 2.0 so
 // the engine stays zero-dependency. Newline-delimited JSON messages, protocol
 // 2024-11-05 (compatible with later revisions' initialize handshake). Exposes
-// the engine's read-only indexing capabilities as MCP tools; every tool takes a
-// `repo` path and returns JSON text content.
+// the engine's indexing capabilities as MCP tools; every tool takes a `repo`
+// path and returns text content — JSON, except repo_map, mermaid and
+// read_memory, which return their own formats.
 //
-// Register in an MCP client as:  node scripts/engine.mjs mcp
-import { statSync } from "node:fs";
-import { join } from "node:path";
+// Register in an MCP client as:  codeindex mcp
+// (NOT `node scripts/engine.mjs mcp`: engine.mjs is a side-effect-free library
+// with no main-module guard — see src/engine.ts — so that command does nothing.
+// The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { ensureGrammars, grammarKeysForExts } from "./ast/loader.js";
 import { buildArtifactsFromScan, type IndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummary } from "./scan.js";
-import { preloadSession, toCacheMap, type PersistedCacheEntry, type PersistedCacheMap } from "./preload.js";
+import { preloadSession, toCacheMap, INDEX_DIR, type PersistedCacheEntry, type PersistedCacheMap } from "./preload.js";
 import { walk, type WalkResult } from "./walk.js";
+import { buildCallerIndex } from "./callers.js";
 import { callerIndexFor } from "./derived.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
@@ -78,7 +83,15 @@ const TOOLS = [
       "Who calls a function? Per-symbol caller index: each defined symbol with the exact (file, line) call sites that bind to it. Omit `name` for the full index.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Symbol name to look up" } },
+      properties: {
+        ...repoProp,
+        name: { type: "string", description: "Symbol name to look up" },
+        recall: {
+          type: "boolean",
+          description:
+            "Recall-oriented binding: relax the JS/TS import gate to unique repo-wide names, labelling each site corroborated|unique-name (default false = precision)",
+        },
+      },
       required: ["repo"],
     },
   },
@@ -118,6 +131,7 @@ const TOOLS = [
         namePath: { type: "string", description: "Symbol name or Parent/child path" },
         substring: { type: "boolean" },
         includeBody: { type: "boolean" },
+        maxResults: { type: "number", description: "Cap matches (default 50)" },
       },
       required: ["repo", "namePath"],
     },
@@ -233,8 +247,16 @@ const TOOLS = [
   {
     name: "dead_code",
     description:
-      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere — re-export, type position — but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots.",
-    inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] },
+      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere — re-export, type position — but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...scopeProps,
+        limit: { type: "number", description: "Cap entries (default: all)" },
+      },
+      required: ["repo"],
+    },
   },
   {
     name: "complexity",
@@ -265,6 +287,7 @@ const TOOLS = [
       properties: {
         ...repoProp,
         pattern: { type: "string", description: "Regular expression to search for" },
+        scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
         globs: { type: "array", items: { type: "string" }, description: "Restrict to matching paths" },
         ignoreCase: { type: "boolean" },
         maxHits: { type: "number" },
@@ -313,8 +336,13 @@ const TOOLS = [
         ...repoProp,
         ...scopeProps,
         rules: { type: "array", description: "Rules array (inline JSON — see description)" },
+        configPath: {
+          type: "string",
+          description:
+            "Read the rules from this JSON file instead (repo-relative or absolute) — the CLI's --config. Ignored when `rules` is given.",
+        },
       },
-      required: ["repo", "rules"],
+      required: ["repo"],
     },
   },
 ] as const;
@@ -324,6 +352,13 @@ function str(v: unknown): string | undefined {
 }
 function strArray(v: unknown): string[] | undefined {
   return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? (v as string[]) : undefined;
+}
+// A positive numeric argument. Also accepts the numeric STRING a JSON-Schema-less
+// client may send: `"50"` used to fall through to the default in silence, which
+// reads to the caller as the option being ignored.
+function num(v: unknown): number | undefined {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -653,7 +688,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // this rebuilt the whole index on EVERY request (318ms per call on a 20k-file
     // repo in the project's own benchmark). The memoized one is keyed on scan
     // object identity, which the session cache preserves across calls.
-    const index = callerIndexFor(getScan(repo, scanOpts, walked));
+    // Recall mode is option-dependent, so it cannot use the memoized index.
+    const scan = getScan(repo, scanOpts, walked);
+    const index = args.recall === true ? buildCallerIndex(scan, undefined, { recall: true }) : callerIndexFor(scan);
     const lookup = str(args.name);
     if (lookup) {
       const entry = index.get(lookup);
@@ -684,6 +721,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
       substring: args.substring === true,
       includeBody: args.includeBody === true,
+      maxResults: num(args.maxResults),
     });
     return JSON.stringify(matches, null, 2);
   }
@@ -730,19 +768,24 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name === "dead_code") {
-    return JSON.stringify(findDeadCode(getScan(repo, scanOpts, walked)), null, 2);
+    const all = findDeadCode(getScan(repo, scanOpts, walked));
+    const limit = num(args.limit);
+    // Additive: without `limit` the payload is exactly what it always was.
+    if (limit === undefined || all.length <= limit) return JSON.stringify(all, null, 2);
+    return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
   }
   if (name === "complexity") {
     const scan = getScan(repo, scanOpts, walked);
     if (args.risk === true) {
-      const { churn, ok } = gitChurn(repo);
-      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2);
+      // `since` was accepted by the CLI's `risk` but silently dropped here.
+      const { churn, ok } = gitChurn(repo, { since: str(args.since) });
+      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, num(args.top)) }, null, 2);
     }
-    return JSON.stringify(symbolComplexity(scan, str(args.file)), null, 2);
+    return JSON.stringify(symbolComplexity(scan, str(args.file), num(args.top)), null, 2);
   }
   if (name === "mermaid") {
     const { graph } = getArtifacts(repo, scanOpts, walked);
-    return renderMermaid(graph, { module: str(args.module) });
+    return renderMermaid(graph, { module: str(args.module), maxEdges: num(args.maxEdges) });
   }
   if (name === "repo_map") {
     const { scan, graph } = getArtifacts(repo, scanOpts, walked);
@@ -760,8 +803,12 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "grep") {
     const pattern = str(args.pattern);
     if (!pattern) throw new Error("`pattern` is required");
+    // `scope` was CLI-only: the a205c34 fix folded it into the CLI's glob list
+    // but this handler ignored scanOpts entirely.
+    const scope = str(args.scope);
+    const globs = strArray(args.globs);
     const hits = grepRepo(repo, pattern, {
-      globs: strArray(args.globs),
+      globs: scope ? [...(globs ?? []), `${scope.replace(/\/+$/, "")}/**`] : globs,
       ignoreCase: args.ignoreCase === true,
       maxHits: typeof args.maxHits === "number" ? args.maxHits : undefined,
     });
@@ -837,7 +884,21 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify(status, null, 2);
   }
   if (name === "check_rules") {
-    const rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
+    // Inline `rules` stays the primary form; `configPath` is the CLI's --config,
+    // which had no MCP equivalent, so a repo with a committed rules file had to
+    // have it re-pasted into every call.
+    const configPath = str(args.configPath);
+    let payload: unknown = args.rules;
+    if (payload === undefined && configPath) {
+      const abs = isAbsolute(configPath) ? configPath : join(repo, configPath);
+      try {
+        payload = JSON.parse(readFileSync(abs, "utf8"));
+      } catch (e) {
+        throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
+      }
+    }
+    if (payload === undefined) throw new Error("`rules` (or `configPath`) is required");
+    const rules = parseRules(payload); // throws a descriptive error on a malformed payload
     const { graph } = getArtifacts(repo, scanOpts, walked);
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
@@ -864,6 +925,61 @@ function toolsFor(defaultRepo?: string): readonly unknown[] {
   }));
 }
 
+// --- response size guard -----------------------------------------------------
+// Several tools returned unbounded payloads. On facebook/react (7091 files):
+// graph 9.4 MB, symbols 6.3 MB, callers 6.0 MB, dead_code 771 KB — roughly
+// 2.35M, 1.57M, 1.51M and 193k tokens. A single `graph` call does not merely
+// bloat an agent's context, it exceeds what any MCP client can accept, so the
+// call fails and the turn is wasted.
+//
+// The guard is deliberately NOT a default page size: below the limit a response
+// is byte-identical to what it always was. Above it, the response could not be
+// consumed by any client anyway, so replacing it with something actionable
+// cannot regress a working call — it converts a hard failure into a usable
+// answer that says how big the payload is, where the artifact already sits on
+// disk, and which narrower tool answers the question.
+export const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
+
+// What to steer a caller toward when their whole-repo request is too large.
+const NARROWER: Record<string, string> = {
+  graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",
+  symbols: "pass `name` to look up one symbol, or use find_symbol / symbols_overview",
+  callers: "pass `name` to look up one symbol's call sites",
+  dead_code: "pass `scope` to a subdirectory",
+  find_references: "the symbol is referenced very widely — narrow with `scope` on a graph query",
+  check_rules: "narrow the rule set, or pass `scope` to a subdirectory",
+};
+
+// The persisted artifact backing a tool, when a `codeindex index` already wrote
+// one — far more useful to hand back than a truncated blob.
+const ARTIFACT_FOR: Record<string, string> = { graph: "graph.json", symbols: "symbols.json" };
+
+export function capResponse(text: string, tool: string, repo: string, maxBytes: number): string {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= maxBytes) return text;
+  const artifact = ARTIFACT_FOR[tool] ? join(repo, INDEX_DIR, ARTIFACT_FOR[tool]!) : undefined;
+  return (
+    JSON.stringify(
+      {
+        truncated: true,
+        tool,
+        bytes,
+        maxBytes,
+        reason:
+          "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
+        narrower: NARROWER[tool] ?? "narrow the request with `scope`, `include`/`exclude`, or a `limit`",
+        ...(artifact && existsSync(artifact)
+          ? { artifact, artifactNote: "The full result is already on disk here — read it directly if you need all of it." }
+          : artifact
+            ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join(repo, INDEX_DIR)}\` to get this as a file.` }
+            : {}),
+      },
+      null,
+      2,
+    ) + "\n"
+  );
+}
+
 export interface McpServerOptions {
   // Override the serverInfo announced in the initialize response — for
   // downstream consumers embedding this server under their own identity.
@@ -874,6 +990,9 @@ export interface McpServerOptions {
   // spawn one server per workspace — `codeindex mcp --repo <dir>` — instead of
   // requiring the agent to thread an absolute path through every single call.
   defaultRepo?: string;
+  // Cap on a single tool response, in bytes (default DEFAULT_MAX_RESPONSE_BYTES).
+  // Responses under it are untouched; see capResponse for what happens above it.
+  maxResponseBytes?: number;
 }
 
 export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
@@ -931,7 +1050,9 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
         const name = str(params.name) ?? "";
         const args = (params.arguments ?? {}) as Record<string, unknown>;
         try {
-          const text = await callTool(name, args, opts.defaultRepo);
+          const raw = await callTool(name, args, opts.defaultRepo);
+          const repo = str(args.repo) ?? opts.defaultRepo ?? "";
+          const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
           send({ id: req.id, result: { content: [{ type: "text", text }] } });
         } catch (e) {
           send({

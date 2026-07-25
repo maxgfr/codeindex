@@ -606,9 +606,9 @@ function diffFiles(dir, spec) {
     }
   }
   const byPath = new Map(out2.map((f) => [f.path, f]));
-  const num = sh("git", [...gitArgs(dir), "diff", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
-  if (num.ok) {
-    const toks = num.stdout.split("\0");
+  const num2 = sh("git", [...gitArgs(dir), "diff", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
+  if (num2.ok) {
+    const toks = num2.stdout.split("\0");
     let i2 = 0;
     while (i2 < toks.length) {
       const head = toks[i2++];
@@ -2841,7 +2841,7 @@ async function Module2(moduleArg = {}) {
   _fd_close.sig = "ii";
   var INT53_MAX = 9007199254740992;
   var INT53_MIN = -9007199254740992;
-  var bigintToI53Checked = /* @__PURE__ */ __name((num) => num < INT53_MIN || num > INT53_MAX ? NaN : Number(num), "bigintToI53Checked");
+  var bigintToI53Checked = /* @__PURE__ */ __name((num2) => num2 < INT53_MIN || num2 > INT53_MAX ? NaN : Number(num2), "bigintToI53Checked");
   function _fd_seek(fd, offset, whence, newOffset) {
     offset = bigintToI53Checked(offset);
     return 70;
@@ -2859,7 +2859,7 @@ async function Module2(moduleArg = {}) {
     }
   }, "printChar");
   var _fd_write = /* @__PURE__ */ __name((fd, iov, iovcnt, pnum) => {
-    var num = 0;
+    var num2 = 0;
     for (var i2 = 0; i2 < iovcnt; i2++) {
       var ptr = LE_HEAP_LOAD_U32((iov >> 2) * 4);
       var len = LE_HEAP_LOAD_U32((iov + 4 >> 2) * 4);
@@ -2867,9 +2867,9 @@ async function Module2(moduleArg = {}) {
       for (var j = 0; j < len; j++) {
         printChar(fd, HEAPU8[ptr + j]);
       }
-      num += len;
+      num2 += len;
     }
-    LE_HEAP_STORE_U32((pnum >> 2) * 4, num);
+    LE_HEAP_STORE_U32((pnum >> 2) * 4, num2);
     return 0;
   }, "_fd_write");
   _fd_write.sig = "iippp";
@@ -10424,6 +10424,8 @@ var init_preload = __esm({
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
+  DEFAULT_MAX_RESPONSE_BYTES: () => DEFAULT_MAX_RESPONSE_BYTES,
+  capResponse: () => capResponse,
   getArtifacts: () => getArtifacts,
   getScan: () => getScan,
   getScanSummary: () => getScanSummary,
@@ -10435,14 +10437,18 @@ __export(mcp_exports, {
   warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
-import { statSync as statSync5 } from "fs";
-import { join as join16 } from "path";
+import { existsSync as existsSync6, readFileSync as readFileSync8, statSync as statSync5 } from "fs";
+import { isAbsolute, join as join16 } from "path";
 import { createInterface } from "readline";
 function str(v) {
   return typeof v === "string" && v ? v : void 0;
 }
 function strArray(v) {
   return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? v : void 0;
+}
+function num(v) {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : void 0;
 }
 function errMessage(e) {
   return e instanceof Error ? e.message : String(e);
@@ -10578,7 +10584,8 @@ async function callTool(name2, args2, defaultRepo) {
     return JSON.stringify(symbols, null, 2);
   }
   if (name2 === "callers") {
-    const index = callerIndexFor(getScan(repo, scanOpts, walked));
+    const scan2 = getScan(repo, scanOpts, walked);
+    const index = args2.recall === true ? buildCallerIndex(scan2, void 0, { recall: true }) : callerIndexFor(scan2);
     const lookup = str(args2.name);
     if (lookup) {
       const entry = index.get(lookup);
@@ -10608,7 +10615,8 @@ async function callTool(name2, args2, defaultRepo) {
     if (!namePath) throw new Error("`namePath` is required");
     const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
       substring: args2.substring === true,
-      includeBody: args2.includeBody === true
+      includeBody: args2.includeBody === true,
+      maxResults: num(args2.maxResults)
     });
     return JSON.stringify(matches, null, 2);
   }
@@ -10649,19 +10657,22 @@ async function callTool(name2, args2, defaultRepo) {
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name2 === "dead_code") {
-    return JSON.stringify(findDeadCode(getScan(repo, scanOpts, walked)), null, 2);
+    const all = findDeadCode(getScan(repo, scanOpts, walked));
+    const limit = num(args2.limit);
+    if (limit === void 0 || all.length <= limit) return JSON.stringify(all, null, 2);
+    return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
   }
   if (name2 === "complexity") {
     const scan2 = getScan(repo, scanOpts, walked);
     if (args2.risk === true) {
-      const { churn, ok } = gitChurn(repo);
-      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2);
+      const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
+      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn, num(args2.top)) }, null, 2);
     }
-    return JSON.stringify(symbolComplexity(scan2, str(args2.file)), null, 2);
+    return JSON.stringify(symbolComplexity(scan2, str(args2.file), num(args2.top)), null, 2);
   }
   if (name2 === "mermaid") {
     const { graph } = getArtifacts(repo, scanOpts, walked);
-    return renderMermaid(graph, { module: str(args2.module) });
+    return renderMermaid(graph, { module: str(args2.module), maxEdges: num(args2.maxEdges) });
   }
   if (name2 === "repo_map") {
     const { scan: scan2, graph } = getArtifacts(repo, scanOpts, walked);
@@ -10679,8 +10690,10 @@ async function callTool(name2, args2, defaultRepo) {
   if (name2 === "grep") {
     const pattern = str(args2.pattern);
     if (!pattern) throw new Error("`pattern` is required");
+    const scope = str(args2.scope);
+    const globs = strArray(args2.globs);
     const hits = grepRepo(repo, pattern, {
-      globs: strArray(args2.globs),
+      globs: scope ? [...globs ?? [], `${scope.replace(/\/+$/, "")}/**`] : globs,
       ignoreCase: args2.ignoreCase === true,
       maxHits: typeof args2.maxHits === "number" ? args2.maxHits : void 0
     });
@@ -10743,7 +10756,18 @@ async function callTool(name2, args2, defaultRepo) {
     return JSON.stringify(status, null, 2);
   }
   if (name2 === "check_rules") {
-    const rules = parseRules(args2.rules);
+    const configPath = str(args2.configPath);
+    let payload = args2.rules;
+    if (payload === void 0 && configPath) {
+      const abs = isAbsolute(configPath) ? configPath : join16(repo, configPath);
+      try {
+        payload = JSON.parse(readFileSync8(abs, "utf8"));
+      } catch (e) {
+        throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
+      }
+    }
+    if (payload === void 0) throw new Error("`rules` (or `configPath`) is required");
+    const rules = parseRules(payload);
     const { graph } = getArtifacts(repo, scanOpts, walked);
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
@@ -10762,6 +10786,24 @@ function toolsFor(defaultRepo) {
       required: t.inputSchema.required.filter((r) => r !== "repo")
     }
   }));
+}
+function capResponse(text, tool, repo, maxBytes) {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= maxBytes) return text;
+  const artifact = ARTIFACT_FOR[tool] ? join16(repo, INDEX_DIR, ARTIFACT_FOR[tool]) : void 0;
+  return JSON.stringify(
+    {
+      truncated: true,
+      tool,
+      bytes,
+      maxBytes,
+      reason: "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
+      narrower: NARROWER[tool] ?? "narrow the request with `scope`, `include`/`exclude`, or a `limit`",
+      ...artifact && existsSync6(artifact) ? { artifact, artifactNote: "The full result is already on disk here \u2014 read it directly if you need all of it." } : artifact ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join16(repo, INDEX_DIR)}\` to get this as a file.` } : {}
+    },
+    null,
+    2
+  ) + "\n";
 }
 async function runMcpServer(opts = {}) {
   const serverInfo = {
@@ -10807,7 +10849,9 @@ async function runMcpServer(opts = {}) {
         const name2 = str(params.name) ?? "";
         const args2 = params.arguments ?? {};
         try {
-          const text = await callTool(name2, args2, opts.defaultRepo);
+          const raw = await callTool(name2, args2, opts.defaultRepo);
+          const repo = str(args2.repo) ?? opts.defaultRepo ?? "";
+          const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
           send({ id: req.id, result: { content: [{ type: "text", text }] } });
         } catch (e) {
           send({
@@ -10823,7 +10867,7 @@ async function runMcpServer(opts = {}) {
     }
   }
 }
-var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, SESSION_CACHE_MAX, sessionCaches, SCANLESS_TOOLS;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, SESSION_CACHE_MAX, sessionCaches, SCANLESS_TOOLS, DEFAULT_MAX_RESPONSE_BYTES, NARROWER, ARTIFACT_FOR;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -10834,6 +10878,7 @@ var init_mcp = __esm({
     init_scan();
     init_preload();
     init_walk();
+    init_callers();
     init_derived();
     init_workspaces();
     init_git();
@@ -10884,7 +10929,14 @@ var init_mcp = __esm({
         description: "Who calls a function? Per-symbol caller index: each defined symbol with the exact (file, line) call sites that bind to it. Omit `name` for the full index.",
         inputSchema: {
           type: "object",
-          properties: { ...repoProp, name: { type: "string", description: "Symbol name to look up" } },
+          properties: {
+            ...repoProp,
+            name: { type: "string", description: "Symbol name to look up" },
+            recall: {
+              type: "boolean",
+              description: "Recall-oriented binding: relax the JS/TS import gate to unique repo-wide names, labelling each site corroborated|unique-name (default false = precision)"
+            }
+          },
           required: ["repo"]
         }
       },
@@ -10920,7 +10972,8 @@ var init_mcp = __esm({
             ...repoProp,
             namePath: { type: "string", description: "Symbol name or Parent/child path" },
             substring: { type: "boolean" },
-            includeBody: { type: "boolean" }
+            includeBody: { type: "boolean" },
+            maxResults: { type: "number", description: "Cap matches (default 50)" }
           },
           required: ["repo", "namePath"]
         }
@@ -11027,8 +11080,16 @@ var init_mcp = __esm({
       },
       {
         name: "dead_code",
-        description: "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere \u2014 re-export, type position \u2014 but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots.",
-        inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] }
+        description: "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere \u2014 re-export, type position \u2014 but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots. On a large repo this list runs to thousands of entries \u2014 pass `limit`, or `scope` to one subdirectory.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ...repoProp,
+            ...scopeProps,
+            limit: { type: "number", description: "Cap entries (default: all)" }
+          },
+          required: ["repo"]
+        }
       },
       {
         name: "complexity",
@@ -11056,6 +11117,7 @@ var init_mcp = __esm({
           properties: {
             ...repoProp,
             pattern: { type: "string", description: "Regular expression to search for" },
+            scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
             globs: { type: "array", items: { type: "string" }, description: "Restrict to matching paths" },
             ignoreCase: { type: "boolean" },
             maxHits: { type: "number" }
@@ -11098,9 +11160,13 @@ var init_mcp = __esm({
           properties: {
             ...repoProp,
             ...scopeProps,
-            rules: { type: "array", description: "Rules array (inline JSON \u2014 see description)" }
+            rules: { type: "array", description: "Rules array (inline JSON \u2014 see description)" },
+            configPath: {
+              type: "string",
+              description: "Read the rules from this JSON file instead (repo-relative or absolute) \u2014 the CLI's --config. Ignored when `rules` is given."
+            }
           },
-          required: ["repo", "rules"]
+          required: ["repo"]
         }
       }
     ];
@@ -11121,6 +11187,16 @@ var init_mcp = __esm({
       // already cached getScanSummary reuses it, warm grammars included.
       "scan_summary"
     ]);
+    DEFAULT_MAX_RESPONSE_BYTES = 1e6;
+    NARROWER = {
+      graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",
+      symbols: "pass `name` to look up one symbol, or use find_symbol / symbols_overview",
+      callers: "pass `name` to look up one symbol's call sites",
+      dead_code: "pass `scope` to a subdirectory",
+      find_references: "the symbol is referenced very widely \u2014 narrow with `scope` on a graph query",
+      check_rules: "narrow the rule set, or pass `scope` to a subdirectory"
+    };
+    ARTIFACT_FOR = { graph: "graph.json", symbols: "symbols.json" };
   }
 });
 
@@ -12032,7 +12108,7 @@ init_util();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync6, mkdirSync as mkdirSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync3, readFileSync as readFileSync9, writeFileSync as writeFileSync4 } from "fs";
 import { join as join17, resolve as resolve2 } from "path";
 init_pipeline();
 init_hash();
@@ -12121,7 +12197,10 @@ Commands:
               check_rules, the memory quartet and the three symbolic-edit
               writes). Flags: --repo <dir> pins ONE repository so the per-tool
               repo argument becomes optional (an explicit per-call repo still
-              wins); --server-name <name> overrides the announced serverInfo
+              wins); --server-name <name> overrides the announced serverInfo;
+              --max-response-bytes <n> caps a single tool response (default 1e6;
+              a response under the cap is byte-identical, one over it is
+              replaced by an actionable notice instead of an unusable blob)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -12174,7 +12253,7 @@ function parseFlags(args2) {
       if (v === void 0) throw new Error(`missing value for ${a}`);
       return v;
     };
-    const num = () => {
+    const num2 = () => {
       const raw = next();
       const n = Number(raw);
       if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
@@ -12190,12 +12269,12 @@ function parseFlags(args2) {
     else if (a === "--scope") flags2.scope = next();
     else if (a === "--no-gitignore") flags2.gitignore = false;
     else if (a === "--ignore-dir") flags2.ignoreDirs.push(next());
-    else if (a === "--max-files") flags2.maxFiles = num();
-    else if (a === "--max-bytes") flags2.maxBytes = num();
-    else if (a === "--max-calls") flags2.maxCalls = num();
+    else if (a === "--max-files") flags2.maxFiles = num2();
+    else if (a === "--max-bytes") flags2.maxBytes = num2();
+    else if (a === "--max-calls") flags2.maxCalls = num2();
     else if (a === "--ignore-case") flags2.ignoreCase = true;
-    else if (a === "--max-hits") flags2.maxHits = num();
-    else if (a === "--budget-tokens") flags2.budgetTokens = num();
+    else if (a === "--max-hits") flags2.maxHits = num2();
+    else if (a === "--budget-tokens") flags2.budgetTokens = num2();
     else if (a === "--no-ast") flags2.noAst = true;
     else if (a === "--index") flags2.indexDir = next();
     else if (a === "--no-index-cache") flags2.noIndexCache = true;
@@ -12206,7 +12285,7 @@ function parseFlags(args2) {
       flags2.workers = n;
     } else if (a === "--since") flags2.since = next();
     else if (a === "--config") flags2.config = resolve2(next());
-    else if (a === "--limit") flags2.limit = num();
+    else if (a === "--limit") flags2.limit = num2();
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
     else if (a === "--semantic") flags2.semantic = true;
     else if (a === "--recall") flags2.recall = true;
@@ -12240,6 +12319,7 @@ var SCANLESS_COMMANDS = /* @__PURE__ */ new Set(["grep", "churn", "coupling", "w
 function parseMcpFlags(argv) {
   let defaultRepo;
   let name2;
+  let maxResponseBytes;
   for (let i2 = 0; i2 < argv.length; i2++) {
     const a = argv[i2];
     if (a === "--repo") {
@@ -12250,12 +12330,17 @@ function parseMcpFlags(argv) {
       const v = argv[++i2];
       if (!v) throw new Error("--server-name requires a value");
       name2 = v;
+    } else if (a === "--max-response-bytes") {
+      const v = argv[++i2];
+      const n = Number(v);
+      if (!v || !Number.isFinite(n) || n <= 0) throw new Error("--max-response-bytes requires a positive number");
+      maxResponseBytes = n;
     } else {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
-  if (defaultRepo && !existsSync6(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
-  return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0 };
+  if (defaultRepo && !existsSync7(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes };
 }
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--repo",
@@ -12318,7 +12403,7 @@ async function runCli(rawArgv) {
     return;
   }
   const flags2 = parseFlags(rest);
-  if (!existsSync6(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
+  if (!existsSync7(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
   const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags2.positional !== "build");
   let precomputedWalk;
   if (scans && !flags2.noAst) {
@@ -12356,7 +12441,7 @@ async function runCli(rawArgv) {
     let cache;
     let meta = {};
     try {
-      const parsed = JSON.parse(readFileSync8(cachePath, "utf8"));
+      const parsed = JSON.parse(readFileSync9(cachePath, "utf8"));
       if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
         cache = new Map(Object.entries(parsed.files));
         meta = {
@@ -12382,7 +12467,7 @@ async function runCli(rawArgv) {
     const embedPath = join17(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
-        return sha1(readFileSync8(path));
+        return sha1(readFileSync9(path));
       } catch {
         return void 0;
       }
@@ -12602,7 +12687,7 @@ async function runCli(rawArgv) {
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const runtimePresent = info2.dir ? existsSync6(join17(info2.dir, "web-tree-sitter.wasm")) : false;
+      const runtimePresent = info2.dir ? existsSync7(join17(info2.dir, "web-tree-sitter.wasm")) : false;
       const target = resolveGrammarsPullTarget();
       const status = {
         engineVersion: ENGINE_VERSION,
@@ -12623,7 +12708,7 @@ async function runCli(rawArgv) {
     }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRules(JSON.parse(readFileSync8(flags2.config, "utf8")));
+    const rules = parseRules(JSON.parse(readFileSync9(flags2.config, "utf8")));
     const { graph } = readArtifacts();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;

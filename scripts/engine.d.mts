@@ -794,6 +794,7 @@ interface McpServerOptions {
         version?: string;
     };
     defaultRepo?: string;
+    maxResponseBytes?: number;
 }
 declare function runMcpServer(opts?: McpServerOptions): Promise<void>;
 
