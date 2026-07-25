@@ -244,7 +244,13 @@ exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
 the 21 read tools, `destructiveHint`/`idempotentHint` on the five that write —
-which is what lets a host auto-approve reads and confirm only writes.
+which is what lets a host auto-approve reads and confirm only writes. From
+`2025-06-18`, the 15 tools whose result is always a JSON object also declare an
+`outputSchema` and return `structuredContent`, so a client can validate and type
+the result instead of re-parsing a string. The remaining tools return arrays,
+argument-dependent shapes or plain text, which cannot yield a conforming
+structured result without diverging from the text block — they are left
+unschema'd rather than described inaccurately.
 
 Responses are capped (`--max-response-bytes`, default 1 MB). Under the cap
 nothing changes. Over it — where a whole-repo `graph` on a large monorepo runs

@@ -366,6 +366,16 @@ which is where the 5s → 0.3s figures come from.
   silently ignored. If you drive this server programmatically with loosely
   typed arguments, a call that used to fall back to a default now errors —
   numeric strings (`"50"`) are still accepted.
+- **outputSchema + structuredContent** on the 15 tools whose response is a JSON
+  object for every argument combination (scan_summary, graph, symbols, callers,
+  workspaces, churn, find_references, hotspots, coupling, embed_status, the
+  three symbolic edits, write_memory, delete_memory). Additive: `content` is
+  unchanged, `structuredContent` is added beside it, and both are gated on the
+  negotiated version. The other 11 tools deliberately have no schema — array
+  responses and argument-dependent shapes cannot produce a conforming object
+  without either diverging from `content` or breaking existing clients, and
+  repo_map/mermaid/read_memory are not JSON. structuredContent is also withheld
+  when the response was capped, since the truncation notice would not conform.
 - **New optional tool arguments**, all defaulting to today's behaviour:
   `find_symbol.maxResults`, `complexity.top`, `complexity.since` (risk mode
   previously dropped it), `mermaid.maxEdges`, `dead_code.limit`, `grep.scope`
@@ -373,6 +383,16 @@ which is where the 5s → 0.3s figures come from.
   `check_rules` no longer requires `rules` when `configPath` is given.
 - **Session cache is a 4-entry LRU**, not one entry, so alternating repos or
   scopes no longer forces a cold rebuild each call.
+
+### src/mcp.ts is now a facade over src/mcp/
+
+The server split into `src/mcp/protocol.ts` (version negotiation, argument
+validation, the response guard), `src/mcp/tools.ts` (tool definitions, metadata,
+output schemas) and `src/mcp/session.ts` (the scan/artifacts LRU and the embed
+memoization). `src/mcp.ts` keeps `callTool` + `runMcpServer` and **re-exports
+every symbol that used to live there**, so imports from `"./mcp.js"` are
+unaffected. New exports available either way: `TOOLS`, `TOOL_META`,
+`OUTPUT_SCHEMAS`, `annotationsFor`, `toolsFor`, `structuredContentFor`.
 
 ### New CLI flags
 
