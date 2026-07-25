@@ -10432,7 +10432,8 @@ __export(mcp_exports, {
   runMcpServer: () => runMcpServer,
   scanFingerprint: () => scanFingerprint,
   toCacheMap: () => toCacheMap,
-  warmGrammarsForRepo: () => warmGrammarsForRepo
+  warmGrammarsForRepo: () => warmGrammarsForRepo,
+  warmGrammarsForWalk: () => warmGrammarsForWalk
 });
 import { statSync as statSync5 } from "fs";
 import { join as join16 } from "path";
@@ -10469,6 +10470,23 @@ function memoizedEmbedModel(modelDir) {
   if (model) embedModelCache = { key, model };
   return model;
 }
+function sessionGet(key) {
+  const i2 = sessionCaches.findIndex((e) => e.key === key);
+  if (i2 < 0) return void 0;
+  const [entry] = sessionCaches.splice(i2, 1);
+  sessionCaches.unshift(entry);
+  return entry;
+}
+function sessionPut(entry) {
+  const i2 = sessionCaches.findIndex((e) => e.key === entry.key);
+  if (i2 >= 0) sessionCaches.splice(i2, 1);
+  sessionCaches.unshift(entry);
+  sessionCaches.length = Math.min(sessionCaches.length, SESSION_CACHE_MAX);
+  return entry;
+}
+function sessionClear() {
+  sessionCaches.length = 0;
+}
 function sessionKey(repo, opts) {
   return repo + "\0" + JSON.stringify({
     scope: opts.scope,
@@ -10483,30 +10501,31 @@ function sessionKey(repo, opts) {
     fullHash: opts.fullHash
   });
 }
-function getScan(repo, opts = {}) {
+function getScan(repo, opts = {}, walked) {
   const key = sessionKey(repo, opts);
-  if (sessionCache && sessionCache.key === key) {
-    const fresh = scanRepo(repo, { ...opts, cache: sessionCache.cacheMap });
+  const hit = sessionGet(key);
+  if (hit) {
+    const fresh = scanRepo(repo, { ...opts, cache: hit.cacheMap, precomputedWalk: walked });
     if (fresh.contentUnchanged) {
-      if (fresh.cacheDirty) sessionCache.cacheMap = toCacheMap(fresh);
-      if (sessionCache.scan.commit !== fresh.commit) sessionCache.scan.commit = fresh.commit;
-      return sessionCache.scan;
+      if (fresh.cacheDirty) hit.cacheMap = toCacheMap(fresh);
+      if (hit.scan.commit !== fresh.commit) hit.scan.commit = fresh.commit;
+      return hit.scan;
     }
-    sessionCache = { key, scan: fresh, cacheMap: toCacheMap(fresh) };
+    sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
     return fresh;
   }
-  const preloaded = preloadSession(repo, opts);
+  const preloaded = preloadSession(repo, { ...opts, precomputedWalk: walked });
   if (preloaded) {
-    sessionCache = { key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts };
+    sessionPut({ key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts });
     return preloaded.scan;
   }
-  const scan2 = scanRepo(repo, opts);
-  sessionCache = { key, scan: scan2, cacheMap: toCacheMap(scan2) };
+  const scan2 = scanRepo(repo, { ...opts, precomputedWalk: walked });
+  sessionPut({ key, scan: scan2, cacheMap: toCacheMap(scan2) });
   return scan2;
 }
-function getScanSummary(repo, opts = {}) {
-  if (sessionCache && sessionCache.key === sessionKey(repo, opts)) {
-    const scan2 = getScan(repo, opts);
+function getScanSummary(repo, opts = {}, walked) {
+  if (sessionCaches.some((e) => e.key === sessionKey(repo, opts))) {
+    const scan2 = getScan(repo, opts, walked);
     return {
       root: scan2.root,
       commit: scan2.commit,
@@ -10516,26 +10535,31 @@ function getScanSummary(repo, opts = {}) {
       excluded: scan2.excluded
     };
   }
-  return scanSummary(repo, opts);
+  return scanSummary(repo, { ...opts, precomputedWalk: walked });
 }
-function getArtifacts(repo, opts = {}) {
-  const scan2 = getScan(repo, opts);
-  if (sessionCache && sessionCache.scan === scan2) {
-    return sessionCache.arts ??= buildArtifactsFromScan(scan2, opts);
-  }
+function getArtifacts(repo, opts = {}, walked) {
+  const scan2 = getScan(repo, opts, walked);
+  const entry = sessionCaches.find((e) => e.scan === scan2);
+  if (entry) return entry.arts ??= buildArtifactsFromScan(scan2, opts);
   return buildArtifactsFromScan(scan2, opts);
 }
 async function warmGrammarsForRepo(repo) {
-  const { files } = walk(repo, {});
-  await ensureGrammars(grammarKeysForExts(files.map((f) => f.ext)));
+  await warmGrammarsForWalk(walk(repo, {}));
+}
+async function warmGrammarsForWalk(walked) {
+  await ensureGrammars(grammarKeysForExts(walked.files.map((f) => f.ext)));
 }
 async function callTool(name2, args2, defaultRepo) {
   const repo = str(args2.repo) ?? defaultRepo;
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
-  if (!SCANLESS_TOOLS.has(name2)) await warmGrammarsForRepo(repo);
+  let walked;
+  if (!SCANLESS_TOOLS.has(name2)) {
+    walked = walk(repo, {});
+    await warmGrammarsForWalk(walked);
+  }
   if (name2 === "scan_summary") {
-    const s = getScanSummary(repo, scanOpts);
+    const s = getScanSummary(repo, scanOpts, walked);
     return JSON.stringify(
       { engineVersion: ENGINE_VERSION, commit: s.commit, fileCount: s.fileCount, languages: s.languages, capped: s.capped },
       null,
@@ -10543,10 +10567,10 @@ async function callTool(name2, args2, defaultRepo) {
     );
   }
   if (name2 === "graph") {
-    return renderGraphJson(getArtifacts(repo, scanOpts).graph);
+    return renderGraphJson(getArtifacts(repo, scanOpts, walked).graph);
   }
   if (name2 === "symbols") {
-    const { symbols } = getArtifacts(repo, scanOpts);
+    const { symbols } = getArtifacts(repo, scanOpts, walked);
     const lookup = str(args2.name);
     if (lookup) {
       return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
@@ -10554,7 +10578,7 @@ async function callTool(name2, args2, defaultRepo) {
     return JSON.stringify(symbols, null, 2);
   }
   if (name2 === "callers") {
-    const index = buildCallerIndex(getScan(repo, scanOpts));
+    const index = callerIndexFor(getScan(repo, scanOpts, walked));
     const lookup = str(args2.name);
     if (lookup) {
       const entry = index.get(lookup);
@@ -10577,12 +10601,12 @@ async function callTool(name2, args2, defaultRepo) {
   if (name2 === "symbols_overview") {
     const file = str(args2.file);
     if (!file) throw new Error("`file` is required");
-    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts), file), null, 2);
+    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts, walked), file), null, 2);
   }
   if (name2 === "find_symbol") {
     const namePath = str(args2.namePath);
     if (!namePath) throw new Error("`namePath` is required");
-    const matches = findSymbol(getScan(repo, scanOpts), namePath, {
+    const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
       substring: args2.substring === true,
       includeBody: args2.includeBody === true
     });
@@ -10591,16 +10615,16 @@ async function callTool(name2, args2, defaultRepo) {
   if (name2 === "find_references") {
     const symName = str(args2.name);
     if (!symName) throw new Error("`name` is required");
-    return JSON.stringify(findReferences(getScan(repo, scanOpts), symName), null, 2);
+    return JSON.stringify(findReferences(getScan(repo, scanOpts, walked), symName), null, 2);
   }
   if (name2 === "replace_symbol_body" || name2 === "insert_after_symbol" || name2 === "insert_before_symbol") {
     const namePath = str(args2.namePath);
     const body2 = typeof args2.body === "string" ? args2.body : void 0;
     if (!namePath || body2 === void 0) throw new Error("`namePath` and `body` are required");
-    const scan2 = getScan(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts, walked);
     const fn = name2 === "replace_symbol_body" ? replaceSymbolBody : name2 === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
     const result = fn(scan2, namePath, body2, str(args2.file));
-    sessionCache = void 0;
+    sessionClear();
     return JSON.stringify(result, null, 2);
   }
   if (name2 === "write_memory") {
@@ -10625,10 +10649,10 @@ async function callTool(name2, args2, defaultRepo) {
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name2 === "dead_code") {
-    return JSON.stringify(findDeadCode(getScan(repo, scanOpts)), null, 2);
+    return JSON.stringify(findDeadCode(getScan(repo, scanOpts, walked)), null, 2);
   }
   if (name2 === "complexity") {
-    const scan2 = getScan(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts, walked);
     if (args2.risk === true) {
       const { churn, ok } = gitChurn(repo);
       return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan2, churn) }, null, 2);
@@ -10636,15 +10660,15 @@ async function callTool(name2, args2, defaultRepo) {
     return JSON.stringify(symbolComplexity(scan2, str(args2.file)), null, 2);
   }
   if (name2 === "mermaid") {
-    const { graph } = getArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts, walked);
     return renderMermaid(graph, { module: str(args2.module) });
   }
   if (name2 === "repo_map") {
-    const { scan: scan2, graph } = getArtifacts(repo, scanOpts);
+    const { scan: scan2, graph } = getArtifacts(repo, scanOpts, walked);
     return renderRepoMap(scan2, graph, { budgetTokens: typeof args2.budgetTokens === "number" ? args2.budgetTokens : void 0 });
   }
   if (name2 === "hotspots") {
-    const scan2 = getScan(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts, walked);
     const { churn, ok } = gitChurn(repo, { since: str(args2.since) });
     return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan2, churn) }, null, 2);
   }
@@ -10665,7 +10689,7 @@ async function callTool(name2, args2, defaultRepo) {
   if (name2 === "search") {
     const query = str(args2.query);
     if (!query) throw new Error("`query` is required");
-    const scan2 = getScan(repo, scanOpts);
+    const scan2 = getScan(repo, scanOpts, walked);
     const limit = typeof args2.limit === "number" ? args2.limit : void 0;
     const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
     if (args2.semantic === true) {
@@ -10720,7 +10744,7 @@ async function callTool(name2, args2, defaultRepo) {
   }
   if (name2 === "check_rules") {
     const rules = parseRules(args2.rules);
-    const { graph } = getArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts, walked);
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
   throw new Error(`unknown tool: ${name2}`);
@@ -10799,7 +10823,7 @@ async function runMcpServer(opts = {}) {
     }
   }
 }
-var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, sessionCache, SCANLESS_TOOLS;
+var repoProp, scopeProps, TOOLS, embeddingIndexCache, embedModelCache, SESSION_CACHE_MAX, sessionCaches, SCANLESS_TOOLS;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -10810,7 +10834,7 @@ var init_mcp = __esm({
     init_scan();
     init_preload();
     init_walk();
-    init_callers();
+    init_derived();
     init_workspaces();
     init_git();
     init_grep();
@@ -11080,6 +11104,8 @@ var init_mcp = __esm({
         }
       }
     ];
+    SESSION_CACHE_MAX = 4;
+    sessionCaches = [];
     SCANLESS_TOOLS = /* @__PURE__ */ new Set([
       "workspaces",
       "churn",

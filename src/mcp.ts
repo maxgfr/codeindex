@@ -14,8 +14,8 @@ import { buildArtifactsFromScan, type IndexArtifacts } from "./pipeline.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummary } from "./scan.js";
 import { preloadSession, toCacheMap, type PersistedCacheEntry, type PersistedCacheMap } from "./preload.js";
-import { walk } from "./walk.js";
-import { buildCallerIndex } from "./callers.js";
+import { walk, type WalkResult } from "./walk.js";
+import { callerIndexFor } from "./derived.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
@@ -423,10 +423,45 @@ export type SessionScanOptions = Omit<ScanOptions, "cache" | "precomputedWalk">;
 type SessionCacheEntry = PersistedCacheEntry;
 type SessionCacheMap = PersistedCacheMap;
 
-// A SINGLE entry — never an unbounded map — holding the most recent scan.
-let sessionCache:
-  | { key: string; scan: RepoScan; cacheMap: SessionCacheMap; arts?: IndexArtifacts }
-  | undefined;
+interface SessionEntry {
+  key: string;
+  scan: RepoScan;
+  cacheMap: SessionCacheMap;
+  arts?: IndexArtifacts;
+}
+
+// A SMALL bounded LRU — never an unbounded map.
+//
+// This was a single entry, which made two entirely normal agent behaviours
+// pathological: alternating between two repos, and alternating between two
+// `scope` values on one repo. Either one evicted the other on every call, so
+// every call paid a full cold rebuild. Four entries covers those patterns while
+// keeping the memory story the same order of magnitude as before.
+const SESSION_CACHE_MAX = 4;
+const sessionCaches: SessionEntry[] = []; // most-recently-used first
+
+function sessionGet(key: string): SessionEntry | undefined {
+  const i = sessionCaches.findIndex((e) => e.key === key);
+  if (i < 0) return undefined;
+  const [entry] = sessionCaches.splice(i, 1);
+  sessionCaches.unshift(entry!);
+  return entry;
+}
+
+function sessionPut(entry: SessionEntry): SessionEntry {
+  const i = sessionCaches.findIndex((e) => e.key === entry.key);
+  if (i >= 0) sessionCaches.splice(i, 1);
+  sessionCaches.unshift(entry);
+  sessionCaches.length = Math.min(sessionCaches.length, SESSION_CACHE_MAX);
+  return entry;
+}
+
+// Drop every entry. Used by the symbolic-edit tools: an edit landing in the same
+// mtime tick with the same byte count would pass the (size, mtimeMs) fastpath
+// and serve a stale scan.
+function sessionClear(): void {
+  sessionCaches.length = 0;
+}
 
 // Fixed property order (and JSON.stringify dropping undefined) keeps the key
 // deterministic regardless of how the caller assembled the options object.
@@ -454,16 +489,17 @@ function sessionKey(repo: string, opts: SessionScanOptions): string {
 export { toCacheMap };
 
 // The memoizing replacement for scanRepo inside callTool. Exported for tests.
-export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
+export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): RepoScan {
   const key = sessionKey(repo, opts);
-  if (sessionCache && sessionCache.key === key) {
-    const fresh = scanRepo(repo, { ...opts, cache: sessionCache.cacheMap });
+  const hit = sessionGet(key);
+  if (hit) {
+    const fresh = scanRepo(repo, { ...opts, cache: hit.cacheMap, precomputedWalk: walked });
     if (fresh.contentUnchanged) {
       // Content proven identical → return the SAME object (object identity is
       // what keeps derived.ts's WeakMap and the memoized artifacts warm). A
       // stat-only drift (e.g. a bare touch) still refreshes the cache map so
       // the next call's stat fastpath keys on the new (size, mtimeMs).
-      if (fresh.cacheDirty) sessionCache.cacheMap = toCacheMap(fresh);
+      if (fresh.cacheDirty) hit.cacheMap = toCacheMap(fresh);
       // `commit` (headCommit(root)) is NOT part of the stat/hash freshness
       // oracle: a git HEAD move that leaves the worktree untouched — commit /
       // commit --amend / reset --soft / checkout to an identical-tree branch —
@@ -476,23 +512,23 @@ export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
       // derived.ts WeakMap key on. Safe: no artifact carries commit (graph /
       // symbols render byte-identically regardless), so nothing memoized here
       // depends on this field.
-      if (sessionCache.scan.commit !== fresh.commit) sessionCache.scan.commit = fresh.commit;
-      return sessionCache.scan;
+      if (hit.scan.commit !== fresh.commit) hit.scan.commit = fresh.commit;
+      return hit.scan;
     }
-    sessionCache = { key, scan: fresh, cacheMap: toCacheMap(fresh) };
+    sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
     return fresh;
   }
   // First touch of this (repo, opts): try the persisted-index preload before a
   // cold scan. A present, version-compatible .codeindex/cache.json seeds the
   // scan (and, when the guard holds, the artifacts); absent it, fall through to
   // the cold path EXACTLY as before.
-  const preloaded = preloadSession(repo, opts);
+  const preloaded = preloadSession(repo, { ...opts, precomputedWalk: walked });
   if (preloaded) {
-    sessionCache = { key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts };
+    sessionPut({ key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts });
     return preloaded.scan;
   }
-  const scan = scanRepo(repo, opts);
-  sessionCache = { key, scan, cacheMap: toCacheMap(scan) };
+  const scan = scanRepo(repo, { ...opts, precomputedWalk: walked });
+  sessionPut({ key, scan, cacheMap: toCacheMap(scan) });
   return scan;
 }
 
@@ -502,11 +538,11 @@ export function getScan(repo: string, opts: SessionScanOptions = {}): RepoScan {
 // classifiers — no read, no hash, no tree-sitter. When this session already
 // holds a scan for the same (repo, opts) we derive from it instead (identical
 // numbers, and it keeps a warm session warm); otherwise scanSummary walks once.
-// The summary is NEVER written into sessionCache: it carries no FileRecords, so
-// caching it would starve every record-shaped tool that ran next.
-export function getScanSummary(repo: string, opts: SessionScanOptions = {}): ScanSummary {
-  if (sessionCache && sessionCache.key === sessionKey(repo, opts)) {
-    const scan = getScan(repo, opts);
+// The summary is NEVER written into the session cache: it carries no
+// FileRecords, so caching it would starve every record-shaped tool that ran next.
+export function getScanSummary(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): ScanSummary {
+  if (sessionCaches.some((e) => e.key === sessionKey(repo, opts))) {
+    const scan = getScan(repo, opts, walked);
     return {
       root: scan.root,
       commit: scan.commit,
@@ -516,18 +552,17 @@ export function getScanSummary(repo: string, opts: SessionScanOptions = {}): Sca
       excluded: scan.excluded,
     };
   }
-  return scanSummary(repo, opts);
+  return scanSummary(repo, { ...opts, precomputedWalk: walked });
 }
 
 // Lazy pipeline memoized on scan OBJECT IDENTITY: graph-shaped tools reuse the
 // artifacts exactly as long as getScan keeps returning the same scan object.
 // Exported for tests.
-export function getArtifacts(repo: string, opts: SessionScanOptions = {}): IndexArtifacts {
-  const scan = getScan(repo, opts);
-  if (sessionCache && sessionCache.scan === scan) {
-    return (sessionCache.arts ??= buildArtifactsFromScan(scan, opts));
-  }
-  // Defensive fallback (getScan always leaves sessionCache holding `scan`).
+export function getArtifacts(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): IndexArtifacts {
+  const scan = getScan(repo, opts, walked);
+  const entry = sessionCaches.find((e) => e.scan === scan);
+  if (entry) return (entry.arts ??= buildArtifactsFromScan(scan, opts));
+  // Defensive fallback (getScan always leaves an entry holding `scan`).
   return buildArtifactsFromScan(scan, opts);
 }
 
@@ -549,8 +584,19 @@ export function getArtifacts(repo: string, opts: SessionScanOptions = {}): Index
 // calls are independent, so warming fewer grammars cannot alter the parse of a
 // loaded one.
 export async function warmGrammarsForRepo(repo: string): Promise<void> {
-  const { files } = walk(repo, {});
-  await ensureGrammars(grammarKeysForExts(files.map((f) => f.ext)));
+  await warmGrammarsForWalk(walk(repo, {}));
+}
+
+// The same warm, against a walk the caller already has.
+//
+// callTool used to walk TWICE per scan-needing call: once here to derive the
+// present languages, then again inside scanRepo. On a large repo that fixed cost
+// dominated every response (the project's own benchmark shows find-symbol,
+// references and file-overview all landing within a few ms of each other on a
+// 20k-file monorepo — the signature of a per-call constant, not of the query).
+// One walk now feeds both.
+export async function warmGrammarsForWalk(walked: WalkResult): Promise<void> {
+  await ensureGrammars(grammarKeysForExts(walked.files.map((f) => f.ext)));
 }
 
 // Tools that never scan the file tree (git/grep/memory/embed-status only) — they
@@ -576,10 +622,15 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // Scan-needing tools warm the present-language grammars (re-derived per call)
   // before any scan so extraction takes the AST tier; scan-less tools skip it.
-  if (!SCANLESS_TOOLS.has(name)) await warmGrammarsForRepo(repo);
+  // ONE walk feeds both the warm and the scan below — see warmGrammarsForWalk.
+  let walked: WalkResult | undefined;
+  if (!SCANLESS_TOOLS.has(name)) {
+    walked = walk(repo, {});
+    await warmGrammarsForWalk(walked);
+  }
 
   if (name === "scan_summary") {
-    const s = getScanSummary(repo, scanOpts);
+    const s = getScanSummary(repo, scanOpts, walked);
     return JSON.stringify(
       { engineVersion: ENGINE_VERSION, commit: s.commit, fileCount: s.fileCount, languages: s.languages, capped: s.capped },
       null,
@@ -587,10 +638,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     );
   }
   if (name === "graph") {
-    return renderGraphJson(getArtifacts(repo, scanOpts).graph);
+    return renderGraphJson(getArtifacts(repo, scanOpts, walked).graph);
   }
   if (name === "symbols") {
-    const { symbols } = getArtifacts(repo, scanOpts);
+    const { symbols } = getArtifacts(repo, scanOpts, walked);
     const lookup = str(args.name);
     if (lookup) {
       return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
@@ -598,7 +649,11 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify(symbols, null, 2);
   }
   if (name === "callers") {
-    const index = buildCallerIndex(getScan(repo, scanOpts));
+    // callerIndexFor, not buildCallerIndex: the public builder is unmemoized, so
+    // this rebuilt the whole index on EVERY request (318ms per call on a 20k-file
+    // repo in the project's own benchmark). The memoized one is keyed on scan
+    // object identity, which the session cache preserves across calls.
+    const index = callerIndexFor(getScan(repo, scanOpts, walked));
     const lookup = str(args.name);
     if (lookup) {
       const entry = index.get(lookup);
@@ -621,12 +676,12 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "symbols_overview") {
     const file = str(args.file);
     if (!file) throw new Error("`file` is required");
-    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts), file), null, 2);
+    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts, walked), file), null, 2);
   }
   if (name === "find_symbol") {
     const namePath = str(args.namePath);
     if (!namePath) throw new Error("`namePath` is required");
-    const matches = findSymbol(getScan(repo, scanOpts), namePath, {
+    const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
       substring: args.substring === true,
       includeBody: args.includeBody === true,
     });
@@ -635,13 +690,13 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "find_references") {
     const symName = str(args.name);
     if (!symName) throw new Error("`name` is required");
-    return JSON.stringify(findReferences(getScan(repo, scanOpts), symName), null, 2);
+    return JSON.stringify(findReferences(getScan(repo, scanOpts, walked), symName), null, 2);
   }
   if (name === "replace_symbol_body" || name === "insert_after_symbol" || name === "insert_before_symbol") {
     const namePath = str(args.namePath);
     const body = typeof args.body === "string" ? args.body : undefined;
     if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
-    const scan = getScan(repo, scanOpts);
+    const scan = getScan(repo, scanOpts, walked);
     const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
     const result = fn(scan, namePath, body, str(args.file));
     // A write WE just performed must not be trusted to the stat oracle: an
@@ -650,7 +705,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // session entry unconditionally — the next call rescans from scratch.
     // (write_memory needs no invalidation: .codeindex/ is excluded from the
     // walk, so memories never enter a scan.)
-    sessionCache = undefined;
+    sessionClear();
     return JSON.stringify(result, null, 2);
   }
   if (name === "write_memory") {
@@ -675,10 +730,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name === "dead_code") {
-    return JSON.stringify(findDeadCode(getScan(repo, scanOpts)), null, 2);
+    return JSON.stringify(findDeadCode(getScan(repo, scanOpts, walked)), null, 2);
   }
   if (name === "complexity") {
-    const scan = getScan(repo, scanOpts);
+    const scan = getScan(repo, scanOpts, walked);
     if (args.risk === true) {
       const { churn, ok } = gitChurn(repo);
       return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2);
@@ -686,15 +741,15 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify(symbolComplexity(scan, str(args.file)), null, 2);
   }
   if (name === "mermaid") {
-    const { graph } = getArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts, walked);
     return renderMermaid(graph, { module: str(args.module) });
   }
   if (name === "repo_map") {
-    const { scan, graph } = getArtifacts(repo, scanOpts);
+    const { scan, graph } = getArtifacts(repo, scanOpts, walked);
     return renderRepoMap(scan, graph, { budgetTokens: typeof args.budgetTokens === "number" ? args.budgetTokens : undefined });
   }
   if (name === "hotspots") {
-    const scan = getScan(repo, scanOpts);
+    const scan = getScan(repo, scanOpts, walked);
     const { churn, ok } = gitChurn(repo, { since: str(args.since) });
     return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2);
   }
@@ -715,7 +770,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
-    const scan = getScan(repo, scanOpts);
+    const scan = getScan(repo, scanOpts, walked);
     const limit = typeof args.limit === "number" ? args.limit : undefined;
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     if (args.semantic === true) {
@@ -783,7 +838,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   }
   if (name === "check_rules") {
     const rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
-    const { graph } = getArtifacts(repo, scanOpts);
+    const { graph } = getArtifacts(repo, scanOpts, walked);
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
   throw new Error(`unknown tool: ${name}`);

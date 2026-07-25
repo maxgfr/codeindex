@@ -551,7 +551,7 @@ function gitIn(dir: string): (...args: string[]) => void {
   };
 }
 
-describe("getScan (session-level single-entry scan cache)", () => {
+describe("getScan (session-level scan cache)", () => {
   it("returns the SAME RepoScan object across two calls on an unchanged repo", () => {
     const repo = tmpFixtureCopy("ci-scan-memo-");
     const s1 = getScan(repo, {});
@@ -1009,4 +1009,46 @@ describe("MCP --repo pin", () => {
     ]);
     expect(res.get(1)!.result!.serverInfo!.name).toBe("iterion-codeindex");
   }, 20_000);
+});
+
+// The session cache used to hold exactly ONE entry, which made two completely
+// ordinary agent behaviours pathological: alternating between two repos, and
+// alternating between two `scope` values on the same repo. Each alternation
+// evicted the other, so every call paid a full cold rebuild. A small LRU fixes
+// that without becoming an unbounded map.
+describe("getScan — bounded LRU, not a single entry", () => {
+  it("keeps both scopes warm when a caller alternates between them", () => {
+    const repo = tmpFixtureCopy("ci-scan-lru-");
+    const a1 = getScan(repo, { scope: "src" });
+    const b1 = getScan(repo, { scope: "docs" });
+    // With a single entry, each of these would be a fresh object.
+    expect(getScan(repo, { scope: "src" })).toBe(a1);
+    expect(getScan(repo, { scope: "docs" })).toBe(b1);
+    expect(getScan(repo, { scope: "src" })).toBe(a1);
+  });
+
+  it("keeps two repos warm when a caller alternates between them", () => {
+    const one = tmpFixtureCopy("ci-scan-lru-a-");
+    const two = tmpFixtureCopy("ci-scan-lru-b-");
+    const s1 = getScan(one, {});
+    const s2 = getScan(two, {});
+    expect(getScan(one, {})).toBe(s1);
+    expect(getScan(two, {})).toBe(s2);
+  });
+
+  it("stays bounded: the oldest entry is evicted past the cap", () => {
+    const repo = tmpFixtureCopy("ci-scan-lru-cap-");
+    const oldest = getScan(repo, { scope: "src" });
+    // Four more distinct keys push the first one out of a 4-entry cache.
+    for (const scope of ["docs", "gopkg", "rustcrate", "javapkg"]) getScan(repo, { scope });
+    expect(getScan(repo, { scope: "src" })).not.toBe(oldest);
+  });
+
+  it("an evicted entry still returns a correct scan", () => {
+    const repo = tmpFixtureCopy("ci-scan-lru-evict-");
+    const first = getScan(repo, { scope: "src" });
+    for (const scope of ["docs", "gopkg", "rustcrate", "javapkg"]) getScan(repo, { scope });
+    const again = getScan(repo, { scope: "src" });
+    expect(again.files.map((f) => f.rel)).toEqual(first.files.map((f) => f.rel));
+  });
 });
