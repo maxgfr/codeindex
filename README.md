@@ -16,7 +16,10 @@ engine as a single file instead of taking an npm dependency.
 - **Walk** a repo deterministically: ignore lists, binary/lockfile skips, size
   and count caps (`capped` flag, never silent truncation), symlink-cycle guard.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
-  imports, headings, hashes — with an incremental cache fastpath.
+  imports, headings, hashes — with an incremental cache fastpath. Extraction
+  runs across worker threads by default (`--workers`, `CODEINDEX_WORKERS`);
+  artifacts are byte-identical either way, and anything that would make a
+  worker's result differ falls back to the single-threaded path.
 - **Extract symbols** via tree-sitter (13 languages, when the wasm sidecar is
   present) or per-language regex rules (15 languages, always available).
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
@@ -228,7 +231,27 @@ about another checkout. `--server-name <name>` overrides the announced
 **Prime the index first** and activation becomes a load, not a rebuild:
 `codeindex index --repo <dir> --out <dir>/.codeindex`. The first tool call
 deserializes those artifacts when the engine version, commit and artifact
-hashes all match.
+hashes all match. The same index also makes every CLI read command
+(`search`, `symbols`, `graph`, `repomap`, …) a lookup instead of a rebuild.
+
+### Protocol, and what it costs an agent
+
+The server negotiates its protocol version: it answers with whatever revision
+the client asked for among `2024-11-05`, `2025-03-26`, `2025-06-18` and
+`2025-11-25`, and otherwise with the newest. Fields a later revision
+introduced are only sent to clients that asked for it, so an older client sees
+exactly what it saw before.
+
+From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
+the 21 read tools, `destructiveHint`/`idempotentHint` on the five that write —
+which is what lets a host auto-approve reads and confirm only writes.
+
+Responses are capped (`--max-response-bytes`, default 1 MB). Under the cap
+nothing changes. Over it — where a whole-repo `graph` on a large monorepo runs
+to millions of tokens and no client can accept it — the response is replaced by
+a short notice naming the size, the artifact already on disk, and the narrower
+tool that answers the question. Most tools also take a `limit`/`maxResults`/
+`top`/`maxEdges` argument to stay well under it.
 
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
 into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.

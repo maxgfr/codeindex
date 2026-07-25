@@ -8236,7 +8236,7 @@ function buildGraph(scan2, ctx, modules, moduleOf, meta) {
     const from = moduleOf.get(e.from);
     const to = moduleOf.get(e.to);
     if (!from || !to || from === to) continue;
-    const k = `${from}\0${to}`;
+    const k = `${from}${SEP}${to}`;
     const prev = modEdgeMap.get(k);
     if (prev) {
       prev.weight += e.weight;
@@ -8296,7 +8296,7 @@ function buildGraph(scan2, ctx, modules, moduleOf, meta) {
     moduleEdges
   };
 }
-var REFERENCE_KINDS3, keyOf;
+var REFERENCE_KINDS3, SEP, keyOf;
 var init_graph = __esm({
   "src/graph.ts"() {
     "use strict";
@@ -8307,7 +8307,8 @@ var init_graph = __esm({
     init_walk();
     init_sort();
     REFERENCE_KINDS3 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
-    keyOf = (from, to, kind) => `${from}\0${to}\0${kind}`;
+    SEP = "\0";
+    keyOf = (from, to, kind) => `${from}${SEP}${to}${SEP}${kind}`;
   }
 });
 
@@ -10283,7 +10284,7 @@ function changeCoupling(dir, opts = {}) {
     for (const f of unique) totals.set(f, (totals.get(f) ?? 0) + 1);
     for (let i2 = 0; i2 < unique.length; i2++) {
       for (let j = i2 + 1; j < unique.length; j++) {
-        const key = `${unique[i2]}\0${unique[j]}`;
+        const key = `${unique[i2]}${SEP2}${unique[j]}`;
         pairs.set(key, (pairs.get(key) ?? 0) + 1);
       }
     }
@@ -10291,7 +10292,7 @@ function changeCoupling(dir, opts = {}) {
   const out2 = [];
   for (const [key, together] of pairs) {
     if (together < minTogether) continue;
-    const [a, b] = key.split("\0");
+    const [a, b] = key.split(SEP2);
     const totalA = totals.get(a) ?? together;
     const totalB = totals.get(b) ?? together;
     out2.push({ a, b, together, totalA, totalB, strength: Number((together / Math.min(totalA, totalB)).toFixed(3)) });
@@ -10307,11 +10308,13 @@ function rankHotspots(scan2, churn, top = 20) {
   out2.sort((a, b) => b.score - a.score || b.lines - a.lines || byStr(a.rel, b.rel));
   return out2.slice(0, top);
 }
+var SEP2;
 var init_coupling = __esm({
   "src/coupling.ts"() {
     "use strict";
     init_util();
     init_sort();
+    SEP2 = "\0";
   }
 });
 
@@ -11519,7 +11522,7 @@ runExtractWorker(workerData.input, (o) => parentPort.postMessage(o)).catch((e) =
     const out2 = /* @__PURE__ */ new Map();
     for (const o of outputs) {
       if ("error" in o) return void 0;
-      if (o.ready.slice().sort().join("\0") !== expected.join("\0")) return void 0;
+      if (o.ready.slice().sort().join(",") !== expected.join(",")) return void 0;
       for (const r of o.records) out2.set(r.rel, { size: r.size, mtimeMs: r.mtimeMs, record: r.record });
     }
     return out2;
