@@ -127,7 +127,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --no-gitignore      Do not honor .gitignore files (default: honored)
   --ignore-dir <name> Directory names to skip (repeatable) — REPLACES the
                       default ignored-directory set, never merges with it
-  --max-files <n>     Cap walked files (default 20000)
+  --max-files <n>     Cap walked files (default: none — the whole tree is
+                      indexed; a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --max-calls <n>     Per-file call-site cap for extraction (default 512)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)

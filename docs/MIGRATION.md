@@ -399,6 +399,42 @@ unaffected. New exports available either way: `TOOLS`, `TOOL_META`,
 `--workers <n>` (index), `--index <dir>` and `--no-index-cache` (read commands),
 `--max-response-bytes <n>` (mcp).
 
+## v2.20.0 — the walk no longer caps at 20,000 files by default
+
+**Behaviour change, and the one thing to check before re-pinning.**
+
+`walk()` (and therefore `scanRepo`, every CLI command and the MCP server)
+applied `DEFAULT_MAX_FILES = 20_000` unless the caller passed `maxFiles`. On a
+repo above that size the index silently described a PREFIX of the tree:
+`vercel/next.js` indexed 20,000 of its 27,952 files, so 28% of the repo was
+absent from every symbol lookup, every edge and every search result, with the
+`capped` flag as the only hint.
+
+The default is now no cap. `capped` therefore reports only a limit the CALLER
+chose, never one the engine imposed.
+
+`DEFAULT_MAX_FILES` is still exported and still 20,000 — it is part of the
+public surface and some consumers pass it deliberately. **To keep the old
+behaviour exactly, pass it:** `scanRepo(repo, { maxFiles: DEFAULT_MAX_FILES })`,
+or `--max-files 20000` on the CLI.
+
+What to expect if you index a repo larger than 20,000 files:
+
+- **Artifacts grow and builds get slower**, because they now cover the whole
+  tree. Measured on `vercel/next.js` (10-core M5): 20,000 files in 2.94s
+  becomes 27,952 files in 7.05s.
+- **Peak memory grows more than time does** — 2.15 GB on that build, since
+  each extraction worker carries its own tree-sitter wasm arena. `--workers`
+  trades it back: the same build is 1.59 GB at `--workers 2` (7.84s) and
+  1.85 GB at `--workers 4` (5.88s). `CODEINDEX_WORKERS` sets it globally, and
+  `--workers 0` restores the single-threaded path.
+- **Nothing changes below 20,000 files.** Artifacts for such repos are
+  byte-identical to the previous release.
+
+If you run in a memory-constrained CI container and index a large monorepo,
+pin either `--max-files` or `--workers` deliberately rather than inheriting
+whatever the runner allows.
+
 ## Typical mapping (what to replace with what)
 
 What a consumer usually deletes from its own codebase, and the engine export

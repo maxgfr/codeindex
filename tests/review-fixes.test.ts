@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { walk } from "../src/walk.js";
+import { walk, DEFAULT_MAX_FILES } from "../src/walk.js";
 import { parseGitignore, isIgnored } from "../src/ignore.js";
+import { scanRepo } from "../src/scan.js";
 import { detectWorkspaces } from "../src/workspaces.js";
 import { grepRepo } from "../src/grep.js";
 import { compileGlobFilter } from "../src/glob.js";
@@ -90,6 +91,31 @@ describe("F4: maxFiles cap in flat directories", () => {
     const full = walk(root);
     expect(full.files.length).toBe(5);
     expect(full.capped).toBe(false);
+  });
+
+  // The walk used to cap at DEFAULT_MAX_FILES (20,000) with no one asking:
+  // vercel/next.js indexed 20,000 of its 27,952 files, so 28% of the repo was
+  // silently absent from every answer while `capped` was the only hint. A cap
+  // is now something the caller chooses.
+  it("applies NO cap unless the caller asks for one", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-nocap-"));
+    for (let i = 0; i < 12; i++) writeFileSync(join(root, `f${i}.ts`), "export {};\n");
+    const r = walk(root);
+    expect(r.files.length).toBe(12);
+    expect(r.capped).toBe(false);
+    // The old rail is still reachable — it is a public export, not a default.
+    expect(DEFAULT_MAX_FILES).toBe(20_000);
+    const railed = walk(root, { maxFiles: 5 });
+    expect(railed.files.length).toBe(5);
+    expect(railed.capped).toBe(true);
+  });
+
+  it("scanRepo inherits the uncapped default", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-nocap-scan-"));
+    for (let i = 0; i < 12; i++) writeFileSync(join(root, `f${i}.ts`), "export const x = 1;\n");
+    expect(scanRepo(root).files.length).toBe(12);
+    expect(scanRepo(root).capped).toBe(false);
+    expect(scanRepo(root, { maxFiles: 4 }).capped).toBe(true);
   });
 });
 

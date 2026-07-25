@@ -13,8 +13,10 @@ engine as a single file instead of taking an npm dependency.
 
 ## What it does
 
-- **Walk** a repo deterministically: ignore lists, binary/lockfile skips, size
-  and count caps (`capped` flag, never silent truncation), symlink-cycle guard.
+- **Walk** a repo deterministically: ignore lists, binary/lockfile skips, a size
+  cap, symlink-cycle guard. No file-count cap unless you ask for one
+  (`--max-files`), and asking sets the `capped` flag — never a silent
+  truncation.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
   imports, headings, hashes — with an incremental cache fastpath. Extraction
   runs across worker threads by default (`--workers`, `CODEINDEX_WORKERS`);

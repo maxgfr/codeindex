@@ -34,7 +34,7 @@ export const BINARY_EXT = new Set([
 
 export interface WalkOptions {
   maxFileBytes?: number; // skip files larger than this (default 1 MiB)
-  maxFiles?: number; // hard cap on indexed files (default 20000)
+  maxFiles?: number; // hard cap on indexed files (default: none — see DEFAULT_MAX_FILES)
   // Honor .gitignore files (root and nested, with negation/anchoring/dir-only
   // semantics — see ignore.ts). Default TRUE: an ignored file is noise for
   // every consumer; pass false to index generated/ignored trees deliberately.
@@ -65,15 +65,22 @@ export interface WalkResult {
   excluded: number;
 }
 
+// The cap this walk USED to apply by default. Kept exported — it is part of the
+// public surface and consumers pass it deliberately — but no longer the default:
+// silently indexing 20,000 files of a 30,000-file monorepo answers questions
+// about two thirds of a repo while looking like an answer about the repo. A
+// caller that wants the old rail passes `maxFiles: DEFAULT_MAX_FILES`.
 export const DEFAULT_MAX_FILES = 20_000;
 
 // Recursively list source-like files under `root`, applying ignore rules. Pure
 // filesystem walk — no git dependency, so it works on any directory. Returns a
-// `capped` flag (never a silent truncation) so the caller can warn when the
-// maxFiles cap stopped the walk with files still unindexed.
+// `capped` flag (never a silent truncation) so the caller can warn when a
+// caller-supplied maxFiles cap stopped the walk with files still unindexed.
 export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
-  const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
+  // No cap unless the caller asks for one. `capped` therefore reports only a
+  // limit the caller chose, never one the engine imposed behind their back.
+  const maxFiles = opts.maxFiles ?? Infinity;
   const useGitignore = opts.gitignore !== false;
   // Effective ignored-directory set, built once: the caller's replacement when
   // given (see WalkOptions.ignoreDirs — replace, never merge), else the default.
