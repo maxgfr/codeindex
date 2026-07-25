@@ -11455,6 +11455,7 @@ function resolveEngineUrl() {
     return void 0;
   }
 }
+var WORKER_TIMEOUT_MS = 10 * 60 * 1e3;
 function workerCount(requested) {
   const env = process.env["CODEINDEX_WORKERS"];
   const raw = requested ?? (env !== void 0 && env !== "" ? Number(env) : void 0);
@@ -11493,7 +11494,7 @@ async function extractInParallel(jobs, grammarKeys, count, opts = {}) {
   if (count < 2 || jobs.length === 0) return void 0;
   const engineUrl = resolveEngineUrl();
   if (!engineUrl) return void 0;
-  const expected = grammarKeys.filter((k) => grammarReady(k)).sort();
+  const wanted = grammarKeys.filter((k) => grammarReady(k)).sort();
   const shards = Array.from({ length: Math.min(count, jobs.length) }, () => []);
   jobs.forEach((j, i2) => shards[i2 % shards.length].push(j));
   const bootstrap = `import { runExtractWorker } from ${JSON.stringify(engineUrl)};
@@ -11506,15 +11507,23 @@ runExtractWorker(workerData.input, (o) => parentPort.postMessage(o)).catch((e) =
         (jobsForShard) => new Promise((resolve3, reject) => {
           const w = new Worker(bootstrap, {
             eval: true,
-            workerData: { input: { jobs: jobsForShard, grammarKeys, maxCallsPerFile: opts.maxCallsPerFile } }
+            workerData: { input: { jobs: jobsForShard, grammarKeys: wanted, maxCallsPerFile: opts.maxCallsPerFile } }
           });
+          const timer = setTimeout(() => {
+            reject(new Error("extraction worker timed out"));
+            void w.terminate();
+          }, WORKER_TIMEOUT_MS);
+          const settle = (fn) => {
+            clearTimeout(timer);
+            fn();
+          };
           w.once("message", (m) => {
-            resolve3(m);
+            settle(() => resolve3(m));
             void w.terminate();
           });
-          w.once("error", reject);
+          w.once("error", (e) => settle(() => reject(e)));
           w.once("exit", (code) => {
-            if (code !== 0) reject(new Error(`extraction worker exited with ${code}`));
+            if (code !== 0) settle(() => reject(new Error(`extraction worker exited with ${code}`)));
           });
         })
       )
@@ -11522,7 +11531,7 @@ runExtractWorker(workerData.input, (o) => parentPort.postMessage(o)).catch((e) =
     const out2 = /* @__PURE__ */ new Map();
     for (const o of outputs) {
       if ("error" in o) return void 0;
-      if (o.ready.slice().sort().join(",") !== expected.join(",")) return void 0;
+      if (o.ready.slice().sort().join(",") !== wanted.join(",")) return void 0;
       for (const r of o.records) out2.set(r.rel, { size: r.size, mtimeMs: r.mtimeMs, record: r.record });
     }
     return out2;

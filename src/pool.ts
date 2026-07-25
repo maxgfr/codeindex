@@ -70,6 +70,11 @@ function resolveEngineUrl(): string | undefined {
   }
 }
 
+// Deadlock guard for a worker that never answers. Generous on purpose: a shard
+// of a very large repo can legitimately take minutes, and tripping this only
+// costs a fallback to the sequential scan.
+const WORKER_TIMEOUT_MS = 10 * 60 * 1000;
+
 // How many workers to run. `CODEINDEX_WORKERS` wins when set; 0 or 1 means
 // sequential. Default leaves a core for the main thread and caps at 8 — past
 // that the wasm arena per worker costs more than the wall-clock it saves.
@@ -137,8 +142,16 @@ export async function extractInParallel(
   const engineUrl = resolveEngineUrl();
   if (!engineUrl) return undefined;
 
-  // What the main thread would use. Workers must match this exactly.
-  const expected = grammarKeys.filter((k) => grammarReady(k)).sort();
+  // Ask workers for exactly the grammars the MAIN THREAD has ready — not for
+  // every grammar the repo's extensions imply.
+  //
+  // This is what makes the tiers agree by construction. Under `--no-ast` (or any
+  // caller that never warmed grammars) the main thread would extract with regex,
+  // so the workers must too; asking for the walk-derived set instead would have
+  // them load wasm, produce AST-tier records, mismatch, and silently drop the
+  // whole run back to sequential — losing parallelism on exactly the tier where
+  // it is cheapest.
+  const wanted = grammarKeys.filter((k) => grammarReady(k)).sort();
 
   // Round-robin over the path-sorted job list, so every shard sees the same
   // language mix and no shard loads a grammar the others don't.
@@ -158,15 +171,28 @@ export async function extractInParallel(
           new Promise<WorkerOutput | { error: string }>((resolve, reject) => {
             const w = new Worker(bootstrap, {
               eval: true,
-              workerData: { input: { jobs: jobsForShard, grammarKeys, maxCallsPerFile: opts.maxCallsPerFile } },
+              workerData: { input: { jobs: jobsForShard, grammarKeys: wanted, maxCallsPerFile: opts.maxCallsPerFile } },
             });
+            // A worker that neither answers nor errors would hang the whole
+            // index, since Promise.all waits forever. The bound is a deadlock
+            // guard, not a performance knob — tripping it costs a fallback to
+            // the sequential scan, which is always correct.
+            const timer = setTimeout(() => {
+              reject(new Error("extraction worker timed out"));
+              void w.terminate();
+            }, WORKER_TIMEOUT_MS);
+            const settle = (fn: () => void): void => {
+              clearTimeout(timer);
+              fn();
+            };
             w.once("message", (m: WorkerOutput | { error: string }) => {
-              resolve(m);
+              settle(() => resolve(m));
               void w.terminate();
             });
-            w.once("error", reject);
+            w.once("error", (e) => settle(() => reject(e)));
             w.once("exit", (code) => {
-              if (code !== 0) reject(new Error(`extraction worker exited with ${code}`));
+              // Already-settled rejects are no-ops; terminate() itself exits non-zero.
+              if (code !== 0) settle(() => reject(new Error(`extraction worker exited with ${code}`)));
             });
           }),
       ),
@@ -175,10 +201,10 @@ export async function extractInParallel(
     const out = new Map<string, ExtractedRecord>();
     for (const o of outputs) {
       if ("error" in o) return undefined;
-      // A worker that resolved a different grammar tier would have produced
+      // A worker that readied a different grammar set would have produced
       // regex-tier records for some language — discard the whole run rather
-      // than emit a mix.
-      if (o.ready.slice().sort().join(",") !== expected.join(",")) return undefined;
+      // than emit a mix of tiers.
+      if (o.ready.slice().sort().join(",") !== wanted.join(",")) return undefined;
       for (const r of o.records) out.set(r.rel, { size: r.size, mtimeMs: r.mtimeMs, record: r.record });
     }
     return out;
