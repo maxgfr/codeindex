@@ -6132,7 +6132,18 @@ var init_specs = __esm({
         // shape inside a class body is a field, and inside a function it is a local
         // (excluded via ctx.inFunctionBody).
         extraMembers: (node, ctx) => {
-          if (ctx.inFunctionBody || node.type !== "expression_statement") return [];
+          if (ctx.inFunctionBody) return [];
+          if (node.type === "import_from_statement") {
+            const out2 = [];
+            for (const child of node.namedChildren) {
+              if (child.type !== "aliased_import") continue;
+              const original = child.namedChildren[0]?.text;
+              const alias = child.childForFieldName("alias")?.text;
+              if (original && alias && original === alias) out2.push({ name: alias, kind: "reexport" });
+            }
+            return out2;
+          }
+          if (node.type !== "expression_statement") return [];
           const assign = node.namedChildren[0];
           if (!assign || assign.type !== "assignment") return [];
           const left = assign.childForFieldName("left");
@@ -6153,7 +6164,11 @@ var init_specs = __esm({
           // `method_elem` in 0.23 — both listed so a grammar bump cannot silently
           // drop every interface method from the index.
           method_spec: "method",
-          method_elem: "method"
+          method_elem: "method",
+          // The `package` clause. PHP's `namespace` and Scala's `package` are already
+          // symbols — Go's is the same declaration and was the single largest cluster
+          // the universal-ctags differential reported against gin (one per file).
+          package_clause: "package"
         },
         containers: /* @__PURE__ */ new Set([
           "type_declaration",
@@ -6359,6 +6374,11 @@ var init_specs = __esm({
           // the TYPE in both forms (the trait is recorded as a relation, not a parent).
           impl_item: (node) => readTypeName(node.childForFieldName("type"))
         },
+        // `static ARGS_GZIP: &[&str] = …` inside a function is a named, addressable
+        // declaration — Rust keeps `let` for the local binding, so these two node
+        // types are never one. ripgrep declares ~15 of them inside functions and the
+        // ctags differential caught every one.
+        nestedDefs: /* @__PURE__ */ new Set(["const_item", "static_item"]),
         publicMembersIn: {
           // A trait implementation's methods are callable by anyone holding the
           // trait, so `pub` is neither required nor allowed on them.
@@ -7395,7 +7415,7 @@ function extractAst(rel2, ext, content, opts = {}) {
           }
           return;
         }
-        const declaresFunction = FUNCTION_KINDS.has(kind) || NESTED_TYPE_KINDS.has(kind) || FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
+        const declaresFunction = FUNCTION_KINDS.has(kind) || NESTED_TYPE_KINDS.has(kind) || spec.nestedDefs?.has(type) === true || FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
         if (name2 && (!ctx.inFunctionBody || declaresFunction)) {
           const header = declHeader(node, content);
           const doc = docOf(node);

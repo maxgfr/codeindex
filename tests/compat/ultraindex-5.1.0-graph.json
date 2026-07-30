@@ -79,7 +79,7 @@
       "module": "gopkg",
       "title": "main.go",
       "summary": "Command main wires the sub package together.",
-      "symbols": 1,
+      "symbols": 2,
       "lines": 13,
       "degIn": 0,
       "degOut": 2,
@@ -94,7 +94,7 @@
       "module": "gopkg-sub",
       "title": "sub.go",
       "summary": "Package sub provides a trivial exported function.",
-      "symbols": 1,
+      "symbols": 2,
       "lines": 8,
       "degIn": 2,
       "degOut": 0,
@@ -248,7 +248,7 @@
       "members": [
         "gopkg/main.go"
       ],
-      "symbols": 1,
+      "symbols": 2,
       "degIn": 0,
       "degOut": 1,
       "community": 1,
@@ -266,7 +266,7 @@
       "members": [
         "gopkg/sub/sub.go"
       ],
-      "symbols": 1,
+      "symbols": 2,
       "degIn": 1,
       "degOut": 0,
       "community": 1,

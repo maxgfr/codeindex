@@ -651,6 +651,7 @@ export function extractAst(
         const declaresFunction =
           FUNCTION_KINDS.has(kind) ||
           NESTED_TYPE_KINDS.has(kind) ||
+          spec.nestedDefs?.has(type) === true ||
           FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
         if (name && (!ctx.inFunctionBody || declaresFunction)) {
           const header = declHeader(node, content);

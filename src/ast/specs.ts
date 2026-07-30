@@ -159,6 +159,14 @@ export interface LangSpec {
   bareMembers?: Record<string, string>;
 
   /**
+   * Node types that stay indexable INSIDE a function body even though their kind
+   * is not function-like. The nested filter exists to keep locals out; a language
+   * that spells "named constant" and "local binding" as different nodes (Rust's
+   * `static_item` vs `let_declaration`) can say so here rather than lose both.
+   */
+  nestedDefs?: Set<string>;
+
+  /**
    * The last resort: extra symbols a container child declares that no table
    * above can describe. Used by Python (module/class-scope assignments are the
    * only way constants and dataclass fields exist) and Ruby (`MAX = 5`,
@@ -427,7 +435,24 @@ export const SPECS: Record<string, LangSpec> = {
     // shape inside a class body is a field, and inside a function it is a local
     // (excluded via ctx.inFunctionBody).
     extraMembers: (node, ctx) => {
-      if (ctx.inFunctionBody || node.type !== "expression_statement") return [];
+      if (ctx.inFunctionBody) return [];
+      // `from .app import Flask as Flask` — PEP 484's explicit re-export marker.
+      // Redundant-looking aliasing is the language's way of saying "this name is
+      // part of MY public surface", which is exactly what a package's
+      // `__init__.py` is made of: flask re-exports 39 names this way and the
+      // index reported none of them. Only the same-name form counts, so an
+      // ordinary `import x as y` rename is still just an import.
+      if (node.type === "import_from_statement") {
+        const out: { name: string; kind: string }[] = [];
+        for (const child of node.namedChildren) {
+          if (child.type !== "aliased_import") continue;
+          const original = child.namedChildren[0]?.text;
+          const alias = child.childForFieldName("alias")?.text;
+          if (original && alias && original === alias) out.push({ name: alias, kind: "reexport" });
+        }
+        return out;
+      }
+      if (node.type !== "expression_statement") return [];
       const assign = node.namedChildren[0];
       if (!assign || assign.type !== "assignment") return [];
       const left = assign.childForFieldName("left");
@@ -449,6 +474,10 @@ export const SPECS: Record<string, LangSpec> = {
       // drop every interface method from the index.
       method_spec: "method",
       method_elem: "method",
+      // The `package` clause. PHP's `namespace` and Scala's `package` are already
+      // symbols — Go's is the same declaration and was the single largest cluster
+      // the universal-ctags differential reported against gin (one per file).
+      package_clause: "package",
     },
     containers: new Set([
       "type_declaration",
@@ -667,6 +696,11 @@ export const SPECS: Record<string, LangSpec> = {
       // the TYPE in both forms (the trait is recorded as a relation, not a parent).
       impl_item: (node) => readTypeName(node.childForFieldName("type")),
     },
+    // `static ARGS_GZIP: &[&str] = …` inside a function is a named, addressable
+    // declaration — Rust keeps `let` for the local binding, so these two node
+    // types are never one. ripgrep declares ~15 of them inside functions and the
+    // ctags differential caught every one.
+    nestedDefs: new Set(["const_item", "static_item"]),
     publicMembersIn: {
       // A trait implementation's methods are callable by anyone holding the
       // trait, so `pub` is neither required nor allowed on them.

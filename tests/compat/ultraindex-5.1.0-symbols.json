@@ -68,6 +68,14 @@
     "main": [
       {
         "file": "gopkg/main.go",
+        "line": 2,
+        "endLine": 2,
+        "kind": "package",
+        "exported": false,
+        "lang": "go"
+      },
+      {
+        "file": "gopkg/main.go",
         "line": 10,
         "endLine": 12,
         "kind": "function",
@@ -94,6 +102,16 @@
         "exported": true,
         "lang": "typescript",
         "parent": "HttpClient"
+      }
+    ],
+    "sub": [
+      {
+        "file": "gopkg/sub/sub.go",
+        "line": 2,
+        "endLine": 2,
+        "kind": "package",
+        "exported": false,
+        "lang": "go"
       }
     ]
   },

@@ -4,7 +4,7 @@
   "base": {
     "languages": 17,
     "files": 18,
-    "symbols": 264,
+    "symbols": 265,
     "calls": 47,
     "relations": 21,
     "docLabels": 147,
@@ -88,7 +88,7 @@
         "symbolsRecall": 1,
         "symbolsF1": 1,
         "kindAccuracy": 1,
-        "exportedAccuracy": 1,
+        "exportedAccuracy": 0.9444,
         "docCoverage": 1,
         "sigCoverage": 1,
         "callsF1": 1,
