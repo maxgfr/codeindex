@@ -22,17 +22,60 @@ engine as a single file instead of taking an npm dependency.
   runs across worker threads by default (`--workers`, `CODEINDEX_WORKERS`);
   artifacts are byte-identical either way, and anything that would make a
   worker's result differ falls back to the single-threaded path.
-- **Extract symbols** via tree-sitter (13 languages, when the wasm sidecar is
-  present) or per-language regex rules (15 languages, always available).
+- **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
+  `grammars pull`) or per-language regex rules (16 languages, always available).
+  Each symbol carries its **complete signature** (parameters and return type,
+  not the first physical line), its own **doc comment**, its qualified `parent`,
+  and its line span — including the members a declaration-only walk misses:
+  interface members, class fields, enum members, every `declare`/`.d.ts`
+  declaration, Rust trait method signatures, Go interface method sets, record
+  components and constructor `val` parameters.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
-- **Build a typed link-graph**: `import` / `call` / `use` / `doc-link` /
-  `mention` edges at file and module level, plus Louvain communities, PageRank/
-  betweenness centrality, a tests→code map, and surprise-edge detection.
+- **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
+  `use` / `doc-link` / `mention` edges at file and module level, plus Louvain
+  communities, PageRank/betweenness centrality, a tests→code map, and
+  surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
+  type extends and implements, and what extends and implements IT) and a
+  **symbol-level graph** for bounded "what does this reach" neighborhoods.
 - **Render** byte-stable `graph.json` / `symbols.json` (two builds of an
   unchanged repo are byte-identical), plus a **SCIP** code-intelligence index
   (`index.scip`) via a hand-rolled zero-dependency protobuf encoder — validated
   by the official `scip` CLI (`stats`/`lint`).
+
+## Measured quality
+
+"Finds better" is a claim, so it is measured. `tests/fixtures/quality/` holds
+hand-labelled ground truth for **15 languages** — every declaration a correct
+indexer should report, with its kind, visibility, doc and signature — plus a
+relevance-judged search corpus whose query terms live only in prose. `pnpm
+quality:report` scores both; `tests/quality.test.ts` enforces the scores as a
+**ratchet in both directions**: losing quality fails CI, and gaining it fails
+too until the baseline is refreshed in the same commit. Every number below is
+reproducible with `pnpm quality:report`.
+
+| | before | now |
+|---|---|---|
+| symbol recall | 59.4% | **100%** |
+| symbol precision | 91.8% | **100%** |
+| kind / visibility accuracy | 100% / 89.3% | **100% / 100%** |
+| doc coverage | 0% | **100%** |
+| signature completeness | 10% | **100%** |
+| inheritance relations | 0% | **100%** |
+| search MRR | 62.5% | **93.8%** |
+| search nDCG@10 | 59.6% | **86.0%** |
+| search recall@5 | 59.4% | **84.4%** |
+| judged queries returning nothing relevant | 6 of 16 | **1 of 16** |
+
+The remaining search miss is honest: a query for "authentication" against a file
+that never writes "auth" in any form. No lexical index can answer that; the
+[semantic tier](docs/SEMANTIC.md) is what it is for.
+
+Two independent checks back the labels. `tests/quality/harness.ts` also runs each
+grammar's **own** `queries/tags.scm` — the patterns GitHub uses for code
+navigation — and reports every definition the official query sees that this
+engine did not, so a construct nobody thought to label cannot hide. And two
+builds of an unchanged repo remain byte-identical.
 
 ## Use as a library (the vendoring model)
 
@@ -49,6 +92,26 @@ const { scan, graph, symbols } = buildIndexArtifacts("/path/to/repo");
 The AST tier is optional: without a `grammars/` directory next to the bundle
 the engine silently uses its regex tier. Only tools that want AST precision
 also vendor `scripts/grammars/` (~17 MiB of wasm).
+
+### Two grammar tiers
+
+| tier | languages | how you get it |
+|---|---|---|
+| **core** (committed) | TypeScript, TSX, JavaScript, Python, Go, Rust, Java, C, C++, C#, Ruby, PHP, Scala, Bash, Lua | ships in the bundle — no network, no install |
+| **extended** (pull-only) | Kotlin, Elixir, Zig, Solidity, HCL, Terraform | `codeindex grammars pull` |
+
+The extended set is **not** in git: it adds ~6 MiB of wasm for languages most
+repos do not contain, so committing it would grow every vendoring consumer's
+checkout for a benefit only some can use. It ships inside the per-release
+`grammars-<version>.tar.gz` asset instead. Without a pull those grammars are
+simply absent and the engine falls back to the regex tier, exactly as it does for
+a language it has no grammar for at all — `codeindex grammars status` reports
+resolved-vs-missing per tier so a Kotlin repo quietly indexed by regex is visible
+rather than guesswork.
+
+*Not included, and why:* **Swift** publishes no prebuilt wasm at all, and
+**Dart**'s does not load under web-tree-sitter 0.26 — shipping it would be dead
+bytes advertising precision that silently degrades. Both have regex extractors.
 
 ### Slim grammars (pull instead of vendor)
 
@@ -99,6 +162,9 @@ codeindex index   --repo . --out .codeindex   # graph + symbols + incremental ca
 codeindex graph   --repo . > graph.json
 codeindex scip    --repo . --out index.scip   # SCIP index (--out - for stdout)
 codeindex callers --repo .                    # per-symbol caller index
+codeindex hierarchy       --repo .            # type hierarchy (both directions)
+codeindex implementations Runnable --repo .   # who implements it, transitively
+codeindex callgraph buildGraph --repo . --depth 2
 codeindex grep    'pattern' --repo .
 ```
 
@@ -130,10 +196,27 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp
 
 ## Search
 
-`codeindex search "<query>" --repo .` ranks files with keyless BM25 over symbol
-names, path segments, markdown headings and summaries. A query term that
-matches nothing in the corpus (zero document frequency) gets a deterministic
-**trigram fuzzy fallback** — typo tolerance without embeddings: the term is
+`codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six
+weighted fields: symbol names, path segments, markdown headings, the file
+summary, per-symbol **doc comments**, and the **prose body** (words from comments
+and short string literals, captured at extraction time so they ride the
+incremental cache).
+
+The last two are the point. An index built only from names is a perfectly scored
+index of the wrong text — the words people search with are overwhelmingly in
+prose. Against relevance judgements, adding them took MRR from 62.5% to 93.8%
+and cut queries that returned *nothing* relevant from 6 of 16 to 1. Field weights
+are calibrated against nDCG@10 on the judged corpus, not chosen by taste.
+
+Results carry `matchedFields` (was it the path or a doc comment?), a `line`
+anchor and `symbolHits` (name, kind, line), so a hit is a place to open rather
+than a file to re-read. A whole-identifier match outranks a subtoken match, and a
+test file ranks below the code it tests unless the query asks for tests. A query term that
+matches nothing in the corpus (zero document frequency) gets two deterministic
+fallbacks, morphology first: a **stem match** ("caching" finds "cache",
+"retries" finds "retry") because an unmatched term is far more often an
+inflection than a typo, and only then a **trigram fuzzy fallback** — typo
+tolerance without embeddings: the term is
 compared to the corpus vocabulary by character-trigram Dice similarity
 (threshold 0.6, top-3 candidates, contribution scaled by the Dice score so a
 near-miss always ranks below an exact hit). Terms that already match anything
@@ -204,13 +287,14 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**26 tools**, grouped by what they answer:
+**29 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
-| impact | `find_references`, `callers`, `dead_code` |
+| impact | `find_references`, `callers`, `call_graph`, `dead_code` |
+| types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
 | memory | `write_memory`, `read_memory`, `list_memories`, `delete_memory` *(write except reads)* |

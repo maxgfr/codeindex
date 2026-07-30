@@ -3,17 +3,77 @@
   "files": {
     "Scheduler.java": {
       "symbols": [
-        { "name": "Runnable", "kind": "interface", "doc": true },
-        { "name": "start", "parent": "Runnable", "kind": "method", "doc": true },
-        { "name": "depth", "parent": "Runnable", "kind": "method" },
-        { "name": "JobSpec", "kind": "record", "exported": false, "doc": true },
-        { "name": "Outcome", "kind": "enum", "exported": false, "doc": true },
-        { "name": "TIMEOUT", "parent": "Outcome", "kind": "enum-member" },
-        { "name": "REJECTED", "parent": "Outcome", "kind": "enum-member" },
-        { "name": "Scheduler", "kind": "class", "doc": true },
-        { "name": "MAX_ATTEMPTS", "parent": "Scheduler", "kind": "field", "doc": true },
-        { "name": "pending", "parent": "Scheduler", "kind": "field", "exported": false },
-        { "name": "start", "parent": "Scheduler", "kind": "method", "doc": true },
+        {
+          "name": "Runnable",
+          "kind": "interface",
+          "doc": true
+        },
+        {
+          "name": "start",
+          "parent": "Runnable",
+          "kind": "method",
+          "doc": true
+        },
+        {
+          "name": "depth",
+          "parent": "Runnable",
+          "kind": "method"
+        },
+        {
+          "name": "JobSpec",
+          "kind": "record",
+          "exported": false,
+          "doc": true
+        },
+        {
+          "name": "name",
+          "parent": "JobSpec",
+          "kind": "field"
+        },
+        {
+          "name": "attempts",
+          "parent": "JobSpec",
+          "kind": "field"
+        },
+        {
+          "name": "Outcome",
+          "kind": "enum",
+          "exported": false,
+          "doc": true
+        },
+        {
+          "name": "TIMEOUT",
+          "parent": "Outcome",
+          "kind": "enum-member"
+        },
+        {
+          "name": "REJECTED",
+          "parent": "Outcome",
+          "kind": "enum-member"
+        },
+        {
+          "name": "Scheduler",
+          "kind": "class",
+          "doc": true
+        },
+        {
+          "name": "MAX_ATTEMPTS",
+          "parent": "Scheduler",
+          "kind": "field",
+          "doc": true
+        },
+        {
+          "name": "pending",
+          "parent": "Scheduler",
+          "kind": "field",
+          "exported": false
+        },
+        {
+          "name": "start",
+          "parent": "Scheduler",
+          "kind": "method",
+          "doc": true
+        },
         {
           "name": "dispatch",
           "parent": "Scheduler",
@@ -21,13 +81,34 @@
           "doc": true,
           "sig": "int maxAttempts"
         },
-        { "name": "reset", "parent": "Scheduler", "kind": "method", "exported": false },
-        { "name": "depth", "parent": "Scheduler", "kind": "method" }
+        {
+          "name": "reset",
+          "parent": "Scheduler",
+          "kind": "method",
+          "exported": false
+        },
+        {
+          "name": "depth",
+          "parent": "Scheduler",
+          "kind": "method"
+        }
       ],
-      "calls": ["clear", "dispatch", "size"],
+      "calls": [
+        "clear",
+        "dispatch",
+        "size"
+      ],
       "relations": [
-        { "kind": "extends", "from": "Scheduler", "to": "BaseWorker" },
-        { "kind": "implements", "from": "Scheduler", "to": "Runnable" }
+        {
+          "kind": "extends",
+          "from": "Scheduler",
+          "to": "BaseWorker"
+        },
+        {
+          "kind": "implements",
+          "from": "Scheduler",
+          "to": "Runnable"
+        }
       ]
     }
   }

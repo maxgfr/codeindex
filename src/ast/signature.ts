@@ -45,7 +45,6 @@ const BODY_TYPES = new Set([
   // Solidity, Kotlin.
   "contract_body",
   "enum_class_body",
-  "class_parameters",
 ]);
 
 const MAX_SIGNATURE = 400;

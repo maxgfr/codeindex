@@ -137,6 +137,16 @@ export interface LangSpec {
   privateMember?: (node: TSNode) => boolean;
 
   /**
+   * Force exported for a declaration whose visibility keyword is never written
+   * because the language implies it. A Java or C# RECORD component is a public
+   * accessor spelled `String name`, so the `public`-keyword heuristic reads it as
+   * private — the same problem PUBLIC_MEMBER_KINDS solves for interface members,
+   * but decided per NODE rather than by the owner's kind, since a record's other
+   * members really can be private.
+   */
+  publicMember?: (node: TSNode) => boolean;
+
+  /**
    * A mapped call node that is NOT a call site. Elixir needs this because its
    * declarations are macro calls: the inner `start(queue)` of `def start(queue)`
    * is the signature, and a module attribute (`@max_attempts 5`) is a call too.
@@ -488,10 +498,28 @@ export const SPECS: Record<string, LangSpec> = {
       constructor_declaration: "constructor",
       field_declaration: "field",
     },
-    containers: new Set(["class_body", "interface_body", "enum_body", "enum_body_declarations", "annotation_type_body", "program"]),
+    containers: new Set([
+      "class_body",
+      "interface_body",
+      "enum_body",
+      "enum_body_declarations",
+      "annotation_type_body",
+      "program",
+      // A record's components ARE its public accessors.
+      "formal_parameters",
+    ]),
     exported: byPublicKeyword,
     imports: { import_declaration: "path" },
     calls: { method_invocation: "function", object_creation_expression: "constructor" },
+    kindFrom: {
+      // A RECORD's components are its public accessors and belong in the index; a
+      // method's or constructor's parameters are arguments and do not. Both are
+      // `formal_parameter` under `formal_parameters`, so only the grandparent
+      // distinguishes them.
+      formal_parameter: (node) => (node.parent?.parent?.type === "record_declaration" ? "field" : undefined),
+    },
+    publicMember: (node) => node.parent?.parent?.type === "record_declaration",
+
     nameFrom: {
       // `private final List<JobSpec> pending = …` — the generic reader's last
       // resort would return the TYPE (`List`); the name is on the declarator.
@@ -589,9 +617,18 @@ export const SPECS: Record<string, LangSpec> = {
       "compilation_unit",
       "file_scoped_namespace_declaration",
       "enum_member_declaration_list",
+      // A positional record's parameters ARE its public properties.
+      "parameter_list",
     ]),
     exported: byPublicKeyword,
     calls: { invocation_expression: "function", object_creation_expression: "constructor" },
+    kindFrom: {
+      // Same rule as Java: a positional RECORD's parameters are its properties,
+      // while a delegate's or a method's are arguments.
+      parameter: (node) => (node.parent?.parent?.type === "record_declaration" ? "field" : undefined),
+    },
+    publicMember: (node) => node.parent?.parent?.type === "record_declaration",
+
     nameFrom: {
       // C# wraps a field's declarator one level deeper than Java's, inside a
       // `variable_declaration` — same problem, same fix.
@@ -744,8 +781,20 @@ export const SPECS: Record<string, LangSpec> = {
     },
     // package_clause carries braced-package bodies (`package com.acme { … }`);
     // template_body is every class/object/trait body.
-    containers: new Set(["compilation_unit", "package_clause", "template_body"]),
+    containers: new Set(["compilation_unit", "package_clause", "template_body", "class_parameters", "parameters"]),
     exported: byNotPrivate,
+    kindFrom: {
+      // `class Scheduler(val queue: String)` declares a public accessor;
+      // `class Scheduler(queue: String)` declares a private constructor
+      // parameter. Only the first is a member of the type — and a `case class`
+      // makes every parameter one.
+      class_parameter: (node) => {
+        if (/^\s*(?:val|var)\b/.test(node.text)) return /^\s*var\b/.test(node.text) ? "var" : "val";
+        return node.parent?.parent?.type === "class_definition" && /\bcase\s+class\b/.test(node.parent.parent.text.slice(0, 80))
+          ? "val"
+          : undefined;
+      },
+    },
     // Qualified calls are call_expression → field_expression (value/field);
     // `new Widget(...)` is an instance_expression with a bare type child.
     calls: { call_expression: "function", instance_expression: "constructor" },
@@ -782,13 +831,31 @@ export const SPECS: Record<string, LangSpec> = {
       property_declaration: "property",
       enum_entry: "enum-member",
       type_alias: "type",
+      class_parameter: "property",
     },
-    containers: new Set(["source_file", "class_body", "enum_class_body", "companion_object", "object_declaration"]),
+    containers: new Set([
+      "source_file",
+      "class_body",
+      "enum_class_body",
+      "companion_object",
+      "object_declaration",
+      // `class Worker(val queue: String)` — a val/var primary-constructor
+      // parameter is a property of the class, not just an argument.
+      "primary_constructor",
+      "class_parameters",
+    ]),
     // Kotlin is public by default; `internal` is module-wide, which still counts
     // as reachable from outside the file.
     exported: byNotPrivate,
     calls: { call_expression: "function" },
     kindFrom: {
+      // A bare `(queue: String)` parameter is an argument, not a property; only
+      // `val`/`var` (or a `data class`, where every parameter is one) declares a member.
+      class_parameter: (node) =>
+        /^\s*(?:val|var)\b/.test(node.text) ||
+        /\bdata\s+class\b/.test(node.parent?.parent?.parent?.text.slice(0, 80) ?? "")
+          ? "property"
+          : undefined,
       // One node type covers class, interface, enum class and annotation class —
       // only the leading keyword tells them apart.
       class_declaration: (node) => {

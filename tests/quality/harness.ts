@@ -20,6 +20,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CodeSymbol } from "../../src/types.js";
 import { extractCode } from "../../src/extract/code.js";
+import { extractTags } from "../../src/ast/tags.js";
 import { byStr } from "../../src/sort.js";
 
 // Where the labelled fixtures live. Under tests/fixtures/ so tsconfig's
@@ -245,6 +246,53 @@ export function scoreLang(lang: string): LangReport {
     missingDoc: missingDoc.sort(byStr),
     missingSig: missingSig.sort(byStr),
   };
+}
+
+/**
+ * The recall NET: definitions the grammar's own `tags.scm` captures that our walk
+ * did not emit, across every labelled fixture.
+ *
+ * This is the check a hand-written spec table cannot perform on itself. It is
+ * reported, not ratcheted: a tags query and this engine legitimately disagree
+ * about some things, so the output is a list to ADJUDICATE and every remaining
+ * entry needs a reason.
+ *
+ * It has already paid for itself once — it is how record components, Scala
+ * case-class parameters and `val` constructor parameters (the DATA SHAPE of a
+ * type, which nothing else in the index exposed) were found to be missing.
+ *
+ * The three entries that remain are adjudicated as correct-to-omit:
+ *
+ *   php  `module Acme\Worker`      the `namespace` declaration. Recorded as
+ *   scala `module com.acme.worker`  FileRecord.pkg, which is what namespace→file
+ *                                   resolution reads; it is not a declaration
+ *                                   anyone looks up by name.
+ *   scala `variable attempt`        a `var` inside a method body. A local, and
+ *                                   the walk excludes locals on purpose — the
+ *                                   query has no notion of scope.
+ */
+export function auditTags(): { lang: string; file: string; kind: string; name: string; line: number }[] {
+  const out: { lang: string; file: string; kind: string; name: string; line: number }[] = [];
+  for (const lang of languages()) {
+    const dir = join(FIXTURES_DIR, lang);
+    const expected = JSON.parse(readFileSync(join(dir, "expected.json"), "utf8")) as ExpectedSet;
+    for (const rel of Object.keys(expected.files).sort(byStr)) {
+      const content = readFileSync(join(dir, rel), "utf8");
+      const ext = rel.slice(rel.lastIndexOf("."));
+      const tags = extractTags(ext, content);
+      if (!tags.length) continue;
+      // Matched by NAME alone: a tags query and the walk often anchor a
+      // declaration on different lines (the query captures the identifier, the
+      // walk the whole declaration), so a line comparison would report every
+      // symbol as missing.
+      const found = new Set(extractCode(rel, ext, content).symbols.map((s) => s.name));
+      for (const tag of tags) {
+        if (found.has(tag.name)) continue;
+        out.push({ lang, file: rel, kind: tag.kind, name: tag.name, line: tag.line });
+      }
+    }
+  }
+  return out.sort((a, b) => byStr(a.lang, b.lang) || byStr(a.file, b.file) || a.line - b.line || byStr(a.name, b.name));
 }
 
 /** Every labelled language, in directory order. */

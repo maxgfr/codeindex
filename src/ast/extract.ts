@@ -319,6 +319,7 @@ export function extractAst(
     const visibilityOf = (node: TSNode, header: string, name: string, ctx: WalkCtx): boolean => {
       if (ctx.inFunctionBody) return false;
       if (spec.privateMember?.(node) === true) return false;
+      if (spec.publicMember?.(node) === true) return true;
       if (!ctx.sectionPublic) return false;
       if (ctx.forcePublic) return true;
       return ctx.exported || spec.exported(header, name);

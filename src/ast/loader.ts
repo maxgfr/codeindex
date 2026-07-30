@@ -198,6 +198,13 @@ export function grammarReady(key: string): boolean {
   return loaded.has(key);
 }
 
+// The loaded Language object for a grammar key, or undefined when it is not
+// loaded. Needed to COMPILE a query against the same grammar that parsed the
+// tree (src/ast/tags.ts); extraction itself never needs it.
+export function languageFor(key: string): Language | undefined {
+  return loaded.get(key);
+}
+
 // The shared parser, with `key`'s grammar selected. Returns null when the grammar
 // is not loaded (caller uses the regex extractor). Sync — parse happens after.
 export function parserFor(key: string): Parser | null {

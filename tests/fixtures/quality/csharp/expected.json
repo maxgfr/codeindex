@@ -3,20 +3,92 @@
   "files": {
     "Scheduler.cs": {
       "symbols": [
-        { "name": "IRunnable", "kind": "interface", "doc": true },
-        { "name": "Start", "parent": "IRunnable", "kind": "method", "doc": true },
-        { "name": "Depth", "parent": "IRunnable", "kind": "property" },
-        { "name": "Outcome", "kind": "enum", "doc": true },
-        { "name": "Timeout", "parent": "Outcome", "kind": "enum-member" },
-        { "name": "Rejected", "parent": "Outcome", "kind": "enum-member" },
-        { "name": "AttemptHandler", "kind": "delegate", "doc": true },
-        { "name": "JobSpec", "kind": "record", "doc": true },
-        { "name": "Scheduler", "kind": "class", "doc": true },
-        { "name": "MaxAttempts", "parent": "Scheduler", "kind": "field", "doc": true },
-        { "name": "pending", "parent": "Scheduler", "kind": "field", "exported": false },
-        { "name": "Attempted", "parent": "Scheduler", "kind": "event", "doc": true },
-        { "name": "Depth", "parent": "Scheduler", "kind": "property", "doc": true },
-        { "name": "Start", "parent": "Scheduler", "kind": "method", "doc": true },
+        {
+          "name": "IRunnable",
+          "kind": "interface",
+          "doc": true
+        },
+        {
+          "name": "Start",
+          "parent": "IRunnable",
+          "kind": "method",
+          "doc": true
+        },
+        {
+          "name": "Depth",
+          "parent": "IRunnable",
+          "kind": "property"
+        },
+        {
+          "name": "Outcome",
+          "kind": "enum",
+          "doc": true
+        },
+        {
+          "name": "Timeout",
+          "parent": "Outcome",
+          "kind": "enum-member"
+        },
+        {
+          "name": "Rejected",
+          "parent": "Outcome",
+          "kind": "enum-member"
+        },
+        {
+          "name": "AttemptHandler",
+          "kind": "delegate",
+          "doc": true
+        },
+        {
+          "name": "JobSpec",
+          "kind": "record",
+          "doc": true
+        },
+        {
+          "name": "Name",
+          "parent": "JobSpec",
+          "kind": "field"
+        },
+        {
+          "name": "Attempts",
+          "parent": "JobSpec",
+          "kind": "field"
+        },
+        {
+          "name": "Scheduler",
+          "kind": "class",
+          "doc": true
+        },
+        {
+          "name": "MaxAttempts",
+          "parent": "Scheduler",
+          "kind": "field",
+          "doc": true
+        },
+        {
+          "name": "pending",
+          "parent": "Scheduler",
+          "kind": "field",
+          "exported": false
+        },
+        {
+          "name": "Attempted",
+          "parent": "Scheduler",
+          "kind": "event",
+          "doc": true
+        },
+        {
+          "name": "Depth",
+          "parent": "Scheduler",
+          "kind": "property",
+          "doc": true
+        },
+        {
+          "name": "Start",
+          "parent": "Scheduler",
+          "kind": "method",
+          "doc": true
+        },
         {
           "name": "Dispatch",
           "parent": "Scheduler",
@@ -24,12 +96,28 @@
           "doc": true,
           "sig": "int maxAttempts"
         },
-        { "name": "Reset", "parent": "Scheduler", "kind": "method", "exported": false }
+        {
+          "name": "Reset",
+          "parent": "Scheduler",
+          "kind": "method",
+          "exported": false
+        }
       ],
-      "calls": ["Clear", "Dispatch"],
+      "calls": [
+        "Clear",
+        "Dispatch"
+      ],
       "relations": [
-        { "kind": "extends", "from": "Scheduler", "to": "BaseWorker" },
-        { "kind": "implements", "from": "Scheduler", "to": "IRunnable" }
+        {
+          "kind": "extends",
+          "from": "Scheduler",
+          "to": "BaseWorker"
+        },
+        {
+          "kind": "implements",
+          "from": "Scheduler",
+          "to": "IRunnable"
+        }
       ]
     }
   }

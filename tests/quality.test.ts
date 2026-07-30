@@ -13,6 +13,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import {
+  auditTags,
   BASELINE_PATH,
   baselineOf,
   formatReport,
@@ -68,6 +69,11 @@ if (PRINT) {
     for (const d of r.missingDoc) lines.push(`  NODOC      ${d}`);
     for (const g of r.missingSig) lines.push(`  BADSIG     ${g}`);
   }
+  // The independent recall net: what each grammar's OWN tags.scm sees and we
+  // did not. Reported, never ratcheted — see auditTags.
+  const audit = auditTags();
+  lines.push("", `=== tags.scm audit: ${audit.length} definition(s) the official queries see and the walk did not ===`);
+  for (const a of audit) lines.push(`  ${a.lang}  ${a.file}:${a.line}  ${a.kind} ${a.name}`);
   process.stdout.write(lines.join("\n") + "\n");
 }
 

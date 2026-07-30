@@ -22,7 +22,7 @@
 // consumer's checkout for a benefit only some of them can use; without a pull
 // they are simply absent, and the engine falls back to the regex tier exactly as
 // it does today for any language with no grammar.
-import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -91,16 +91,38 @@ function copyInto(name, rel) {
   return statSync(dst).size;
 }
 
+// The grammar's OFFICIAL `queries/tags.scm`, when it publishes one. These are the
+// same patterns GitHub uses for code navigation, and they are the independent
+// check on our hand-written LangSpecs: anything a tags query captures as a
+// definition that our walk did not emit is a measured recall gap
+// (src/ast/tags.ts, and the audit in tests/quality). A few KB of text each, so
+// they ride along with the wasm rather than needing a tier of their own.
+function copyTags(key, rel) {
+  const pkg = rel.slice(0, rel.indexOf("/", rel.startsWith("@") ? rel.indexOf("/") + 1 : 0));
+  const src = join(nm, pkg, "queries", "tags.scm");
+  if (!existsSync(src)) return 0;
+  const dst = join(targetDir, `${key}.tags.scm`);
+  copyFileSync(src, dst);
+  return statSync(dst).size;
+}
+
 // Rebuild the dir from scratch so a removed grammar never lingers.
 rmSync(targetDir, { recursive: true, force: true });
 mkdirSync(targetDir, { recursive: true });
 
 let total = 0;
 const rows = [];
+let tagsCount = 0;
 for (const [key, rel] of Object.entries(grammars)) {
   const size = copyInto(`${key}.wasm`, rel);
   total += size;
   rows.push([`${key}.wasm`, size]);
+  const tagsSize = copyTags(key, rel);
+  if (tagsSize) {
+    total += tagsSize;
+    tagsCount++;
+    rows.push([`${key}.tags.scm`, tagsSize]);
+  }
 }
 // The runtime ships with the COMMITTED tier only: the extended tarball is
 // extracted into the same cache dir, where the core runtime already sits, and a
@@ -115,7 +137,8 @@ process.stdout.write(`${extended ? "EXTENDED (pull-only)" : "CORE (committed)"}\
 for (const [name, size] of rows) {
   process.stdout.write(`${name.padEnd(34)} ${(size / 1024).toFixed(0).padStart(6)} KiB\n`);
 }
-process.stdout.write(`${"TOTAL".padEnd(34)} ${(total / 1048576).toFixed(2).padStart(6)} MiB\n`);
+process.stdout.write(`${"TOTAL".padEnd(34)} ${(total / 1048576).toFixed(2).padStart(6)} MiB`);
+process.stdout.write(`  (${tagsCount} tags.scm)\n`);
 
 // Sanity: exactly the expected file count, nothing stray.
 const written = readdirSync(targetDir).filter((f) => f.endsWith(".wasm"));
