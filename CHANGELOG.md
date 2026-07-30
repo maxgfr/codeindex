@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.21.0](https://github.com/maxgfr/codeindex/compare/v2.20.1...v2.21.0) (2026-07-30)
+
+
+### Features
+
+* **ast:** audit against each grammar's own tags.scm, and index record components ([bb4c52a](https://github.com/maxgfr/codeindex/commit/bb4c52aae1b0905f016d4db0bdd3011a90ca9859))
+* **ast:** index type members, qualify parents, attach docs and full signatures ([1f764fa](https://github.com/maxgfr/codeindex/commit/1f764fac62a00f5cff05d100798998b35180d229))
+* **grammars:** add a pull-only extended tier — Kotlin, Elixir, Zig, Solidity, HCL ([e70fcea](https://github.com/maxgfr/codeindex/commit/e70fceab1d9525d1cb5ef6aa8ba9619acfc20195))
+* **graph:** resolve inheritance into edges, a type hierarchy and a symbol graph ([35fced5](https://github.com/maxgfr/codeindex/commit/35fced5fb3bca22abe187ac4cd93de16d4da7e3a))
+* **search:** BM25F over six fields, prose indexing and a stem fallback ([2e9abf7](https://github.com/maxgfr/codeindex/commit/2e9abf7a52f74226d16c3577749adff2494ce56e))
+
 ## [2.20.1](https://github.com/maxgfr/codeindex/compare/v2.20.0...v2.20.1) (2026-07-25)
 
 

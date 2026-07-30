@@ -1,4 +1,4 @@
-declare const ENGINE_VERSION = "2.20.1";
+declare const ENGINE_VERSION = "2.21.0";
 declare const SCHEMA_VERSION = 5;
 declare const EXTRACTOR_VERSION = 11;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
@@ -369,7 +369,7 @@ declare function extractAst(rel: string, ext: string, content: string, opts?: {
     maxSymbols?: number;
 }): AstResult | undefined;
 
-declare const DEFAULT_GRAMMARS_URL = "https://github.com/maxgfr/codeindex/releases/download/v2.20.1/grammars-2.20.1.tar.gz";
+declare const DEFAULT_GRAMMARS_URL = "https://github.com/maxgfr/codeindex/releases/download/v2.21.0/grammars-2.21.0.tar.gz";
 interface GrammarsPullTarget {
     url: string;
     sha256Url?: string;
