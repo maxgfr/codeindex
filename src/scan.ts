@@ -129,6 +129,7 @@ export function buildCodeRecord(
     record.idents = code.idents;
     record.calls = code.calls;
     record.importedNames = code.importedNames;
+    record.truncated = code.truncated;
   } else {
     record.title = basename(rel);
   }
@@ -325,6 +326,7 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
         record.idents = code.idents;
         record.calls = code.calls;
         record.importedNames = code.importedNames;
+        record.truncated = code.truncated;
       } else {
         record.title = basename(f.rel);
       }

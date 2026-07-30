@@ -2,10 +2,19 @@ import type { CodeSymbol, RawRef } from "../types.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
 import { extractReexports } from "../lang/common.js";
+import { isBanner, isDirective } from "./doc-text.js";
+
+// Per-file symbol ceiling. Raised from 400: a real 3000-line generated client or
+// a large `.d.ts` has more than 400 declarations, and dropping the tail silently
+// meant the index claimed completeness it did not have. The cap still exists as a
+// runaway guard, but crossing it now sets `truncated`.
+const MAX_FILE_SYMBOLS = 2000;
 
 export interface CodeInfo {
   symbols: CodeSymbol[];
   summary?: string;
+  // A cap truncated `symbols` — propagated onto the FileRecord.
+  truncated?: true;
   refs: RawRef[]; // import refs (raw specifiers, unresolved)
   pkg?: string; // Java: the file's own `package x.y.z;` — used to derive source roots
   idents?: string[]; // distinctive identifiers referenced (AST path) — feeds `use` edges
@@ -18,26 +27,6 @@ export interface CodeInfo {
 const JS_TS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 const PY = new Set([".py", ".pyi"]);
 const C_CPP = new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);
-
-// Tooling pragmas and boilerplate that are technically the first comment but say
-// nothing about what the file does — never use them as a summary.
-const DIRECTIVE_RE =
-  /^(eslint\b|eslint-|prettier\b|prettier-|tslint\b|jshint\b|jslint\b|globals?\b|istanbul\b|c8\s|v8\s|@ts-|ts-|@flow\b|@jsx\b|@jsxRuntime\b|@jest-environment\b|@vitest-environment\b|@license\b|@preserve\b|@copyright\b|copyright\b|spdx-|<reference\b|use strict|biome-|deno-lint|noqa\b|type:\s*ignore|pylint:|flake8:|mypy:|coding[:=])/i;
-
-function isDirective(line: string): boolean {
-  return DIRECTIVE_RE.test(line.trim());
-}
-
-// License / banner boilerplate common in minified-library preambles (the `/*!`
-// "preserve" banner of Express, jQuery, Bootstrap, Lodash, moment, …): a license
-// name or a "released under"/URL line, not a description of what the file does.
-// "Copyright" and "@license" are already caught by DIRECTIVE_RE.
-const BANNER_RE =
-  /^((?:mit|isc|bsd|apache|gnu|gpl|mpl|lgpl|agpl)\s+licen[sc]ed?\b|licen[sc]ed\b|(?:released|distributed)\s+under\b|all rights reserved\b|https?:\/\/|www\.)/i;
-
-function isBanner(line: string): boolean {
-  return BANNER_RE.test(line.trim());
-}
 
 // The leading comment block of a file, turned into one summary line. Handles
 // `//`, `#`, and `/* … */` / `""" … """` openers. Stops at the first code line.
@@ -364,12 +353,14 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // computed by a full extra tree traversal and then discarded right below, in
   // favour of the regex results. Public `extractAst` still computes them.
   const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile, imports: false });
-  const symbols = (ast ? ast.symbols : extractSymbols(rel, ext, content)).slice(0, 400);
+  const raw = ast ? ast.symbols : extractSymbols(rel, ext, content);
+  const symbols = raw.slice(0, MAX_FILE_SYMBOLS);
   // Add barrel re-exports the local def didn't already cover.
   const known = new Set(symbols.map((s) => s.name));
   const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
   return {
     symbols: [...symbols, ...reexports],
+    ...(ast?.truncated || raw.length > symbols.length ? { truncated: true as const } : {}),
     summary: topDocComment(content),
     refs: extractImports(ext, content),
     // pkg anchors namespace→source-root resolution: Java's `package`, C#'s

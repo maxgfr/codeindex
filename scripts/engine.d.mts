@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "2.20.1";
 declare const SCHEMA_VERSION = 4;
-declare const EXTRACTOR_VERSION = 10;
+declare const EXTRACTOR_VERSION = 11;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "use" | "mention";
 type Tier = 0 | 1 | 2;
@@ -11,7 +11,9 @@ interface CodeSymbol {
     line: number;
     endLine?: number;
     parent?: string;
+    parentPath?: string;
     signature?: string;
+    doc?: string;
     exported: boolean;
     lang: string;
 }
@@ -40,6 +42,7 @@ interface FileRecord {
         receiver?: string;
     }[];
     importedNames?: string[];
+    truncated?: true;
 }
 interface FileNode {
     id: string;
@@ -289,6 +292,7 @@ declare function languageOf(ext: string): string;
 interface CodeInfo {
     symbols: CodeSymbol[];
     summary?: string;
+    truncated?: true;
     refs: RawRef[];
     pkg?: string;
     idents?: string[];
@@ -341,10 +345,12 @@ interface AstResult {
         receiver?: string;
     }[];
     importedNames: string[];
+    truncated?: true;
 }
 declare function extractAst(rel: string, ext: string, content: string, opts?: {
     maxCalls?: number;
     imports?: boolean;
+    maxSymbols?: number;
 }): AstResult | undefined;
 
 declare const DEFAULT_GRAMMARS_URL = "https://github.com/maxgfr/codeindex/releases/download/v2.20.1/grammars-2.20.1.tar.gz";

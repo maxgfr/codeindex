@@ -40,8 +40,21 @@ export const SCHEMA_VERSION = 4;
 // (ultradoc) that use file:line as evidence; v10 stops the regex tier
 // emitting a spurious exported class symbol named "extends" for
 // `export default class extends Base {}` (issue #11) — the file-stem
-// default symbol is unchanged.
-export const EXTRACTOR_VERSION = 10;
+// default symbol is unchanged; v11 raises AST extraction fidelity across
+// every grammar — type MEMBERS that no `defs` entry covered (TypeScript
+// interface members, class fields and every `declare`/`.d.ts` declaration,
+// Rust trait method signatures and struct fields, Go interface method sets
+// and struct fields, Java/C#/PHP fields and class constants, enum members
+// everywhere), qualified parents for Rust `impl` blocks and Go method
+// receivers (which previously surfaced their methods as unparented top-level
+// symbols), declarations nested inside function bodies, `CodeSymbol.doc` (the
+// declaration's own doc comment) and `parentPath`, `signature` widened from
+// the first physical line to the COMPLETE declaration header, and the
+// visibility fixes that follow from it (an annotated Java method is no longer
+// read as private, PHP honours `private`, C++ honours `private:` sections,
+// TypeScript honours `private`/`protected` members, and a local declared
+// inside a function body is never reported as exported).
+export const EXTRACTOR_VERSION = 11;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
@@ -68,7 +81,19 @@ export interface CodeSymbol {
   line: number; // 1-based
   endLine?: number; // 1-based end of the declaration node (AST extractor only)
   parent?: string; // enclosing symbol name for a nested member (AST extractor only)
+  // Full ancestor path ("Scheduler/dispatch") for a symbol nested two or more
+  // levels deep — a closure inside a method. Absent when it would only repeat
+  // `parent`, so a plain type member carries no redundant field.
+  parentPath?: string;
+  // The COMPLETE declaration header (parameters, defaults, return type),
+  // whitespace-collapsed and capped — not the first physical line, which any
+  // formatter's line wrap reduced to `async send(`. AST extractor only; the
+  // regex tier still reports the matched line.
   signature?: string;
+  // The declaration's own doc comment, reduced to one sentence: JSDoc, `///`
+  // rustdoc, godoc, javadoc, C# XML docs, or a Python docstring. Absent when
+  // the declaration is undocumented. AST extractor only.
+  doc?: string;
   exported: boolean;
   lang: string;
 }
@@ -109,6 +134,9 @@ export interface FileRecord {
   // JS/TS named-import bindings (cap 256, deduped, sorted) — feeds the JS/TS
   // import-evidence gate in call resolution.
   importedNames?: string[];
+  // A per-file extraction cap truncated this record's symbols. Same doctrine as
+  // the walk's `capped`: a bounded result says so instead of looking complete.
+  truncated?: true;
 }
 
 // A node in the link-graph. Files and modules are both nodes.

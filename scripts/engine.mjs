@@ -16,7 +16,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.20.1";
     SCHEMA_VERSION = 4;
-    EXTRACTOR_VERSION = 10;
+    EXTRACTOR_VERSION = 11;
   }
 });
 
@@ -5662,34 +5662,32 @@ var init_loader = __esm({
   }
 });
 
-// src/ast/extract.ts
-function firstLine(node, src) {
-  const start2 = node.startIndex;
-  const end = node.endIndex;
-  const nl = src.indexOf("\n", start2);
-  const stop2 = nl === -1 || nl > end ? end : nl;
-  return src.slice(start2, stop2).trim().slice(0, 200);
+// src/ast/node.ts
+function findFirst(node, pred) {
+  for (const c2 of node.namedChildren) {
+    if (pred(c2)) return c2;
+    const deep = findFirst(c2, pred);
+    if (deep) return deep;
+  }
+  return void 0;
 }
 function nameOf(node) {
   const named = node.childForFieldName("name");
   if (named?.text) return named.text;
   let decl = node.childForFieldName("declarator");
   while (decl) {
+    const inner = decl.childForFieldName("name");
+    if (inner?.text) return inner.text;
     if (decl.namedChildren.length === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
     const next = decl.childForFieldName("declarator");
     if (!next || next === decl) break;
     decl = next;
   }
+  const varDecl = findFirst(node, (n) => n.type === "variable_declarator");
+  const varName = varDecl?.childForFieldName("name");
+  if (varName?.text) return varName.text;
   for (const c2 of node.namedChildren) {
     if (/(^|_)(identifier|name|constant)$/.test(c2.type)) return c2.text;
-  }
-  return void 0;
-}
-function findFirst(node, pred) {
-  for (const c2 of node.namedChildren) {
-    if (pred(c2)) return c2;
-    const deep = findFirst(c2, pred);
-    if (deep) return deep;
   }
   return void 0;
 }
@@ -5712,6 +5710,597 @@ function readReceiver(node) {
   const name2 = obj ? readName(obj) : void 0;
   return name2 && /^[A-Za-z_]\w*$/.test(name2) ? name2 : void 0;
 }
+function readTypeName(node) {
+  if (!node) return void 0;
+  const base = node.childForFieldName("type") ?? node.childForFieldName("name");
+  if (base && /generic|qualified|scoped|nested/.test(node.type)) return readTypeName(base);
+  if (node.namedChildren.length === 0) return IDENT_LEAF.test(node.type) || /identifier/.test(node.type) ? node.text : void 0;
+  let last;
+  const visit = (n) => {
+    if (n.namedChildren.length === 0) {
+      if (/identifier|(^|_)name$/.test(n.type)) last = n.text;
+      return;
+    }
+    if (/arguments|parameters/.test(n.type)) return;
+    for (const c2 of n.namedChildren) visit(c2);
+  };
+  visit(node);
+  return last;
+}
+var IDENT_LEAF;
+var init_node = __esm({
+  "src/ast/node.ts"() {
+    "use strict";
+    IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
+  }
+});
+
+// src/ast/specs.ts
+var PUBLIC_MEMBER_KINDS, FUNCTION_KINDS, FUNCTION_VALUE_TYPES, byPublicKeyword, byNotPrivate, byNotLocal, byPub, byCapital, byPyConvention, always, neverExport, hasFunctionDeclarator, TS_SPEC, SPECS;
+var init_specs = __esm({
+  "src/ast/specs.ts"() {
+    "use strict";
+    init_node();
+    PUBLIC_MEMBER_KINDS = /* @__PURE__ */ new Set(["interface", "trait", "enum", "protocol"]);
+    FUNCTION_KINDS = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator"]);
+    FUNCTION_VALUE_TYPES = /* @__PURE__ */ new Set([
+      "function",
+      "function_expression",
+      "arrow_function",
+      "generator_function",
+      "class",
+      "function_definition",
+      "lambda"
+    ]);
+    byPublicKeyword = (line) => /\b(public|internal)\b/.test(line);
+    byNotPrivate = (line) => !/\b(private|protected)\b/.test(line);
+    byNotLocal = (line) => !/^local\b/.test(line);
+    byPub = (line) => /\bpub\b/.test(line);
+    byCapital = (_l, name2) => /^[A-Z]/.test(name2);
+    byPyConvention = (_l, name2) => !name2.startsWith("_") || /^__\w+__$/.test(name2);
+    always = () => true;
+    neverExport = () => false;
+    hasFunctionDeclarator = (node) => findFirst(node, (n) => n.type === "function_declarator") !== void 0;
+    TS_SPEC = {
+      lang: "typescript",
+      defs: {
+        function_declaration: "function",
+        generator_function_declaration: "function",
+        // `declare function f(): void` and an overload signature — the ENTIRE
+        // content of a typical `.d.ts`, previously indexed as nothing.
+        function_signature: "function",
+        class_declaration: "class",
+        abstract_class_declaration: "class",
+        interface_declaration: "interface",
+        type_alias_declaration: "type",
+        enum_declaration: "enum",
+        enum_assignment: "enum-member",
+        method_definition: "method",
+        method_signature: "method",
+        abstract_method_signature: "method",
+        // Interface members and class fields — the shape of the data, and the half
+        // of a TypeScript API that an index of declarations alone never showed.
+        property_signature: "property",
+        public_field_definition: "property",
+        // `namespace X {}` / `module X {}`
+        internal_module: "namespace",
+        module: "namespace",
+        variable_declarator: "const"
+      },
+      containers: /* @__PURE__ */ new Set([
+        "class_body",
+        "export_statement",
+        "ambient_declaration",
+        "program",
+        "lexical_declaration",
+        "variable_declaration",
+        // Interface/enum bodies, and function bodies (for nested declarations —
+        // route handlers, hooks, helper closures).
+        "interface_body",
+        "object_type",
+        "enum_body",
+        "statement_block"
+      ]),
+      exported: neverExport,
+      // export is tracked structurally; see LangSpec.exportMarkers
+      exportMarkers: /* @__PURE__ */ new Set(["export_statement", "ambient_declaration"]),
+      bareMembers: { enum_body: "enum-member" },
+      privateMember: (node) => {
+        for (const c2 of node.namedChildren) {
+          if (c2.type === "accessibility_modifier" && /^(private|protected)/.test(c2.text)) return true;
+          if (c2.type === "private_property_identifier") return true;
+        }
+        return false;
+      },
+      imports: { import_statement: "string" },
+      calls: { call_expression: "function", new_expression: "constructor" },
+      assignments: true
+    };
+    SPECS = {
+      typescript: TS_SPEC,
+      tsx: { ...TS_SPEC, lang: "typescript" },
+      javascript: {
+        ...TS_SPEC,
+        lang: "javascript",
+        defs: {
+          function_declaration: "function",
+          generator_function_declaration: "function",
+          class_declaration: "class",
+          method_definition: "method",
+          field_definition: "property",
+          variable_declarator: "const"
+        }
+      },
+      python: {
+        lang: "python",
+        defs: { function_definition: "function", class_definition: "class" },
+        containers: /* @__PURE__ */ new Set(["block", "decorated_definition", "module"]),
+        exported: byPyConvention,
+        imports: { import_statement: "path", import_from_statement: "path" },
+        calls: { call: "function" },
+        docstring: true,
+        // Python declares constants and dataclass fields by ASSIGNING them; there is
+        // no declaration node to map. `X = 1` at module scope is a constant, the same
+        // shape inside a class body is a field, and inside a function it is a local
+        // (excluded via ctx.inFunctionBody).
+        extraMembers: (node, ctx) => {
+          if (ctx.inFunctionBody || node.type !== "expression_statement") return [];
+          const assign = node.namedChildren[0];
+          if (!assign || assign.type !== "assignment") return [];
+          const left = assign.childForFieldName("left");
+          if (!left || left.type !== "identifier") return [];
+          return [{ name: left.text, kind: ctx.ownerKind === "class" ? "field" : "const" }];
+        }
+      },
+      go: {
+        lang: "go",
+        defs: {
+          function_declaration: "function",
+          method_declaration: "method",
+          type_spec: "type",
+          const_spec: "const",
+          var_spec: "var",
+          field_declaration: "field",
+          // Interface method sets: `method_spec` through grammar 0.22, renamed
+          // `method_elem` in 0.23 — both listed so a grammar bump cannot silently
+          // drop every interface method from the index.
+          method_spec: "method",
+          method_elem: "method"
+        },
+        containers: /* @__PURE__ */ new Set([
+          "type_declaration",
+          "const_declaration",
+          "var_declaration",
+          "source_file",
+          // A struct/interface body hangs one level below its type_spec.
+          "struct_type",
+          "interface_type",
+          "field_declaration_list"
+        ]),
+        exported: byCapital,
+        imports: { import_declaration: "string" },
+        calls: { call_expression: "function" },
+        // A method's receiver is what it belongs to: `func (s *Scheduler) Start()`
+        // is Scheduler.Start, not a free function named Start.
+        parentFrom: {
+          method_declaration: (node) => readTypeName(node.childForFieldName("receiver"))
+        },
+        nameFrom: {
+          // An EMBEDDED field (`struct { Scheduler }`) has a type and no name. The
+          // generic reader would return the type as the field name; returning
+          // undefined skips it, and relations.ts records the embedding instead.
+          field_declaration: (node) => node.childForFieldName("name")?.text
+        }
+      },
+      ruby: {
+        lang: "ruby",
+        defs: { method: "def", singleton_method: "def", class: "class", module: "module" },
+        containers: /* @__PURE__ */ new Set(["class", "module", "body_statement", "program"]),
+        exported: always,
+        // Ruby models every invocation — dotted, parenthesized, or bare command form
+        // (`puts "x"`) — as a `call` node whose callee is the `method` field.
+        calls: { call: "function" },
+        // A bare `private` switches every following definition in the body to
+        // private. It is a method call, not a keyword, so nothing but position says so.
+        sectionVisibility: (node) => (node.type === "identifier" || node.type === "call") && /^(private|protected)$/.test(node.text) ? false : node.type === "identifier" && node.text === "public" ? true : void 0,
+        extraMembers: (node, ctx) => {
+          if (ctx.inFunctionBody) return [];
+          if (node.type === "assignment") {
+            const left = node.childForFieldName("left");
+            return left?.type === "constant" ? [{ name: left.text, kind: "const" }] : [];
+          }
+          if (node.type === "call") {
+            const method = node.childForFieldName("method");
+            if (!method || !/^attr_(reader|writer|accessor)$/.test(method.text)) return [];
+            const args2 = node.childForFieldName("arguments");
+            const out2 = [];
+            for (const a of args2?.namedChildren ?? []) {
+              if (a.type === "simple_symbol") out2.push({ name: a.text.replace(/^:/, ""), kind: "attr" });
+            }
+            return out2;
+          }
+          return [];
+        }
+      },
+      java: {
+        lang: "java",
+        defs: {
+          class_declaration: "class",
+          interface_declaration: "interface",
+          annotation_type_declaration: "annotation",
+          enum_declaration: "enum",
+          enum_constant: "enum-member",
+          record_declaration: "record",
+          method_declaration: "method",
+          constructor_declaration: "constructor",
+          field_declaration: "field"
+        },
+        containers: /* @__PURE__ */ new Set(["class_body", "interface_body", "enum_body", "enum_body_declarations", "annotation_type_body", "program"]),
+        exported: byPublicKeyword,
+        imports: { import_declaration: "path" },
+        calls: { method_invocation: "function", object_creation_expression: "constructor" },
+        nameFrom: {
+          // `private final List<JobSpec> pending = …` — the generic reader's last
+          // resort would return the TYPE (`List`); the name is on the declarator.
+          field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text
+        }
+      },
+      rust: {
+        lang: "rust",
+        defs: {
+          function_item: "function",
+          // A trait's method declarations have no body and are a different node.
+          function_signature_item: "function",
+          struct_item: "struct",
+          enum_item: "enum",
+          enum_variant: "enum-member",
+          field_declaration: "field",
+          trait_item: "trait",
+          type_item: "type",
+          associated_type: "type",
+          mod_item: "mod",
+          const_item: "const",
+          static_item: "static",
+          union_item: "union",
+          macro_definition: "macro"
+        },
+        containers: /* @__PURE__ */ new Set(["impl_item", "declaration_list", "source_file", "field_declaration_list", "enum_variant_list"]),
+        exported: byPub,
+        calls: { call_expression: "function" },
+        parentFrom: {
+          // `impl Scheduler` / `impl Display for Scheduler` — the members belong to
+          // the TYPE in both forms (the trait is recorded as a relation, not a parent).
+          impl_item: (node) => readTypeName(node.childForFieldName("type"))
+        },
+        publicMembersIn: {
+          // A trait implementation's methods are callable by anyone holding the
+          // trait, so `pub` is neither required nor allowed on them.
+          impl_item: (node) => node.childForFieldName("trait") !== null
+        }
+      },
+      c_sharp: {
+        lang: "csharp",
+        defs: {
+          class_declaration: "class",
+          interface_declaration: "interface",
+          struct_declaration: "struct",
+          enum_declaration: "enum",
+          enum_member_declaration: "enum-member",
+          record_declaration: "record",
+          delegate_declaration: "delegate",
+          method_declaration: "method",
+          constructor_declaration: "constructor",
+          property_declaration: "property",
+          indexer_declaration: "indexer",
+          operator_declaration: "operator",
+          field_declaration: "field",
+          event_declaration: "event",
+          event_field_declaration: "event"
+        },
+        containers: /* @__PURE__ */ new Set([
+          "namespace_declaration",
+          "declaration_list",
+          "compilation_unit",
+          "file_scoped_namespace_declaration",
+          "enum_member_declaration_list"
+        ]),
+        exported: byPublicKeyword,
+        calls: { invocation_expression: "function", object_creation_expression: "constructor" },
+        nameFrom: {
+          // C# wraps a field's declarator one level deeper than Java's, inside a
+          // `variable_declaration` — same problem, same fix.
+          field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
+          event_field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text
+        }
+      },
+      php: {
+        lang: "php",
+        defs: {
+          function_definition: "function",
+          class_declaration: "class",
+          interface_declaration: "interface",
+          trait_declaration: "trait",
+          enum_declaration: "enum",
+          enum_case: "enum-member",
+          method_declaration: "method",
+          property_declaration: "property",
+          const_declaration: "const"
+        },
+        containers: /* @__PURE__ */ new Set(["declaration_list", "enum_declaration_list", "program"]),
+        // PHP has real visibility keywords, so `always` was throwing away a fact the
+        // source states outright — a `private function` read as part of the API.
+        exported: byNotPrivate,
+        calls: {
+          function_call_expression: "function",
+          member_call_expression: "member",
+          object_creation_expression: "constructor"
+        },
+        nameFrom: {
+          property_declaration: (node) => findFirst(node, (n) => n.type === "variable_name")?.text.replace(/^\$/, ""),
+          const_declaration: (node) => findFirst(node, (n) => n.type === "const_element")?.namedChildren[0]?.text
+        }
+      },
+      c: {
+        lang: "c",
+        defs: {
+          function_definition: "function",
+          struct_specifier: "struct",
+          enum_specifier: "enum",
+          enumerator: "enum-member",
+          union_specifier: "union",
+          type_definition: "type",
+          field_declaration: "field"
+        },
+        // C has no visibility keyword — headers are the interface, so everything
+        // counts as exported (same stance as the regex extractor).
+        containers: /* @__PURE__ */ new Set([
+          "translation_unit",
+          "declaration_list",
+          "field_declaration_list",
+          "enumerator_list",
+          "linkage_specification",
+          "preproc_ifdef",
+          "preproc_if"
+        ]),
+        exported: always,
+        calls: { call_expression: "function" },
+        kindFrom: {
+          // In a struct body a `field_declaration` is a data member; with a
+          // function_declarator it is a function-pointer member.
+          field_declaration: (node) => hasFunctionDeclarator(node) ? "method" : "field"
+        }
+      },
+      cpp: {
+        lang: "cpp",
+        defs: {
+          function_definition: "function",
+          class_specifier: "class",
+          struct_specifier: "struct",
+          enum_specifier: "enum",
+          enumerator: "enum-member",
+          union_specifier: "union",
+          type_definition: "type",
+          alias_declaration: "type",
+          concept_definition: "concept",
+          namespace_definition: "namespace",
+          field_declaration: "field",
+          declaration: "const"
+        },
+        containers: /* @__PURE__ */ new Set([
+          "translation_unit",
+          "declaration_list",
+          "field_declaration_list",
+          "enumerator_list",
+          "template_declaration",
+          "linkage_specification",
+          "preproc_ifdef",
+          "preproc_if"
+        ]),
+        exported: always,
+        calls: { call_expression: "function", new_expression: "constructor" },
+        kindFrom: {
+          // C++ spells a member FUNCTION declaration and a data member with the same
+          // node; only a function_declarator inside tells them apart. Likewise a
+          // namespace-scope `declaration` is a constant or a free function.
+          field_declaration: (node) => hasFunctionDeclarator(node) ? "method" : "field",
+          declaration: (node) => hasFunctionDeclarator(node) ? "function" : "const"
+        },
+        sectionVisibility: (node) => node.type === "access_specifier" ? !/^(private|protected)/.test(node.text) : void 0
+      },
+      scala: {
+        lang: "scala",
+        defs: {
+          class_definition: "class",
+          object_definition: "object",
+          trait_definition: "trait",
+          enum_definition: "enum",
+          function_definition: "def",
+          function_declaration: "def",
+          val_definition: "val",
+          val_declaration: "val",
+          var_definition: "var",
+          type_definition: "type",
+          given_definition: "given"
+        },
+        // package_clause carries braced-package bodies (`package com.acme { … }`);
+        // template_body is every class/object/trait body.
+        containers: /* @__PURE__ */ new Set(["compilation_unit", "package_clause", "template_body"]),
+        exported: byNotPrivate,
+        // Qualified calls are call_expression → field_expression (value/field);
+        // `new Widget(...)` is an instance_expression with a bare type child.
+        calls: { call_expression: "function", instance_expression: "constructor" }
+      },
+      bash: {
+        lang: "shell",
+        defs: { function_definition: "function" },
+        // if/compound bodies carry guarded definitions (`if …; then f() { … }; fi`).
+        containers: /* @__PURE__ */ new Set(["program", "if_statement", "compound_statement"]),
+        // Shell has no visibility — every function is callable from outside.
+        exported: always,
+        // Every invocation is a `command` whose `name` field is a command_name
+        // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
+        calls: { command: "function" }
+      },
+      lua: {
+        lang: "lua",
+        defs: { function_declaration: "function" },
+        // variable_declaration wraps `local x = function()` assignment statements.
+        containers: /* @__PURE__ */ new Set(["chunk", "variable_declaration"]),
+        exported: byNotLocal,
+        // function_call's `name` is an identifier, a dot_index_expression
+        // (table/field) or a method_index_expression (table/method) — the receiver
+        // is the `table` field in both qualified forms.
+        calls: { function_call: "function" },
+        assignments: true
+        // `M.alias = function(z) … end` (assignment_statement shape)
+      }
+    };
+  }
+});
+
+// src/ast/signature.ts
+function bodyStart(node) {
+  const byField = node.childForFieldName("body");
+  let best = byField && byField.startIndex > node.startIndex ? byField.startIndex : void 0;
+  const consider = (n) => {
+    if (BODY_TYPES.has(n.type) && n.startIndex > node.startIndex && (best === void 0 || n.startIndex < best)) {
+      best = n.startIndex;
+    }
+  };
+  for (const c2 of node.namedChildren) {
+    consider(c2);
+    for (const g of c2.namedChildren) consider(g);
+  }
+  return best;
+}
+function declHeader(node, src) {
+  const end = bodyStart(node) ?? node.endIndex;
+  return src.slice(node.startIndex, end).replace(/\s+/g, " ").trim().replace(/\s*(?:\{|=>|=)$/, "").trim().slice(0, MAX_SIGNATURE);
+}
+var BODY_TYPES, MAX_SIGNATURE;
+var init_signature = __esm({
+  "src/ast/signature.ts"() {
+    "use strict";
+    BODY_TYPES = /* @__PURE__ */ new Set([
+      "block",
+      "statement_block",
+      "class_body",
+      "declaration_list",
+      "field_declaration_list",
+      "template_body",
+      "compound_statement",
+      "body_statement",
+      "enum_body",
+      "enum_body_declarations",
+      "enum_variant_list",
+      "enum_member_declaration_list",
+      "enumerator_list",
+      "interface_body",
+      "object_type",
+      "do_block"
+    ]);
+    MAX_SIGNATURE = 400;
+  }
+});
+
+// src/extract/doc-text.ts
+function isDirective(line) {
+  return DIRECTIVE_RE.test(line.trim());
+}
+function isBanner(line) {
+  return BANNER_RE.test(line.trim());
+}
+function stripCommentMarkers(raw) {
+  return raw.replace(/\*+\/\s*$/, "").replace(/^\s*\/\*+!?/, "").replace(/^\s*\/\/[/!]?/, "").replace(/^\s*--+/, "").replace(/^\s*#+/, "").replace(/^\s*\*+/, "").replace(/^\s*(?:"""|''')/, "").replace(/(?:"""|''')\s*$/, "").replace(/[-=~_]{3,}/g, " ").trim();
+}
+function stripDocMarkup(text) {
+  return text.replace(/<\/?[A-Za-z][^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+function summarizeDocLines(lines, maxLen = MAX_DOC) {
+  const kept = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t || isDirective(t) || isBanner(t)) continue;
+    if (/^@[a-z]/i.test(t)) break;
+    kept.push(t);
+  }
+  const text = stripDocMarkup(kept.join(" "));
+  if (text.length < 3) return void 0;
+  const sentence = /^(.*?[.!?])(\s|$)/.exec(text);
+  return (sentence ? sentence[1] : text).slice(0, maxLen);
+}
+var DIRECTIVE_RE, BANNER_RE, MAX_DOC;
+var init_doc_text = __esm({
+  "src/extract/doc-text.ts"() {
+    "use strict";
+    DIRECTIVE_RE = /^(eslint\b|eslint-|prettier\b|prettier-|tslint\b|jshint\b|jslint\b|globals?\b|istanbul\b|c8\s|v8\s|@ts-|ts-|@flow\b|@jsx\b|@jsxRuntime\b|@jest-environment\b|@vitest-environment\b|@license\b|@preserve\b|@copyright\b|copyright\b|spdx-|<reference\b|use strict|biome-|deno-lint|noqa\b|type:\s*ignore|pylint:|flake8:|mypy:|coding[:=])/i;
+    BANNER_RE = /^((?:mit|isc|bsd|apache|gnu|gpl|mpl|lgpl|agpl)\s+licen[sc]ed?\b|licen[sc]ed\b|(?:released|distributed)\s+under\b|all rights reserved\b|https?:\/\/|www\.)/i;
+    MAX_DOC = 300;
+  }
+});
+
+// src/ast/doc.ts
+function commentLinesAbove(node) {
+  const blocks = [];
+  let prev = node.previousNamedSibling;
+  let nextRow = node.startPosition.row;
+  while (prev && COMMENT_TYPE.test(prev.type)) {
+    if (nextRow - prev.endPosition.row > 1) break;
+    blocks.push(prev);
+    nextRow = prev.startPosition.row;
+    prev = prev.previousNamedSibling;
+  }
+  if (!blocks.length) return [];
+  blocks.reverse();
+  const lines = [];
+  for (const b of blocks) for (const l of b.text.split(/\r?\n/)) lines.push(stripCommentMarkers(l));
+  return lines;
+}
+function docCommentFor(node) {
+  let anchor = node;
+  while (anchor) {
+    const lines = commentLinesAbove(anchor);
+    if (lines.length) {
+      const doc = summarizeDocLines(lines);
+      if (doc) return doc;
+    }
+    const parent = anchor.parent;
+    if (!parent || !DOC_WRAPPERS.has(parent.type)) return void 0;
+    anchor = parent;
+  }
+  return void 0;
+}
+function docstringFor(node) {
+  const body2 = node.childForFieldName("body");
+  const first = body2?.namedChildren[0];
+  if (!first) return void 0;
+  const str2 = first.type === "string" ? first : first.type === "expression_statement" ? first.namedChildren[0] : void 0;
+  if (!str2 || str2.type !== "string") return void 0;
+  return summarizeDocLines(str2.text.split(/\r?\n/).map(stripCommentMarkers));
+}
+var COMMENT_TYPE, DOC_WRAPPERS;
+var init_doc = __esm({
+  "src/ast/doc.ts"() {
+    "use strict";
+    init_doc_text();
+    COMMENT_TYPE = /(^|_)comment$/;
+    DOC_WRAPPERS = /* @__PURE__ */ new Set([
+      "export_statement",
+      "ambient_declaration",
+      "decorated_definition",
+      "template_declaration",
+      "labeled_statement",
+      "lexical_declaration",
+      "variable_declaration",
+      "type_declaration",
+      "const_declaration",
+      "var_declaration",
+      "body_statement"
+    ]);
+  }
+});
+
+// src/ast/extract.ts
 function collectAll(root, spec, defNames, maxCalls, wantImports) {
   const identsFound = /* @__PURE__ */ new Set();
   const wantCalls = spec.calls !== void 0;
@@ -5805,18 +6394,81 @@ function extractAst(rel, ext, content, opts = {}) {
   try {
     tree = parser2.parse(content);
     if (!tree) return void 0;
+    const maxSymbols = opts.maxSymbols ?? MAX_SYMBOLS;
     const symbols = [];
     const root = tree.rootNode;
     const stem = (rel.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
     const exportedNames = /* @__PURE__ */ new Set();
-    const walk2 = (node, parent, exported) => {
-      const nowExported = exported || node.type === "export_statement";
-      if (node.type === "export_statement") {
+    const emit2 = (s) => {
+      if (symbols.length < maxSymbols) symbols.push(s);
+    };
+    const visibilityOf = (node, header, name2, ctx) => {
+      if (ctx.inFunctionBody) return false;
+      if (spec.privateMember?.(node) === true) return false;
+      if (!ctx.sectionPublic) return false;
+      if (ctx.forcePublic) return true;
+      return ctx.exported || spec.exported(header, name2);
+    };
+    const docOf = (node) => (spec.docstring ? docstringFor(node) : void 0) ?? docCommentFor(node);
+    const walkChildren = (container, ctx) => {
+      let sectionPublic = ctx.sectionPublic;
+      const bareKind = spec.bareMembers?.[container.type];
+      for (const c2 of container.namedChildren) {
+        if (spec.sectionVisibility) {
+          const flip = spec.sectionVisibility(c2);
+          if (flip !== void 0) {
+            sectionPublic = flip;
+            continue;
+          }
+        }
+        const childCtx = sectionPublic === ctx.sectionPublic ? ctx : { ...ctx, sectionPublic };
+        if (bareKind && c2.namedChildren.length === 0 && IDENT_LEAF.test(c2.type)) {
+          emit2({
+            name: c2.text,
+            kind: bareKind,
+            file: rel,
+            line: c2.startPosition.row + 1,
+            endLine: c2.endPosition.row + 1,
+            ...childCtx.parent ? { parent: childCtx.parent } : {},
+            exported: childCtx.forcePublic || childCtx.exported,
+            lang: spec.lang
+          });
+          continue;
+        }
+        for (const extra of spec.extraMembers?.(c2, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody }) ?? []) {
+          const header = declHeader(c2, content);
+          const doc = docCommentFor(c2);
+          emit2({
+            name: extra.name,
+            kind: extra.kind,
+            file: rel,
+            line: c2.startPosition.row + 1,
+            endLine: c2.endPosition.row + 1,
+            ...childCtx.parent ? { parent: childCtx.parent } : {},
+            ...childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {},
+            signature: header,
+            ...doc ? { doc } : {},
+            exported: visibilityOf(c2, header, extra.name, childCtx),
+            lang: spec.lang
+          });
+        }
+        walk2(c2, childCtx);
+      }
+    };
+    const walkBody = (node, ctx) => {
+      for (const c2 of node.namedChildren) if (spec.containers.has(c2.type)) walkChildren(c2, ctx);
+    };
+    const walk2 = (node, ctx) => {
+      if (ctx.funcDepth > MAX_FUNC_DEPTH) return;
+      const type = node.type;
+      const isExportMarker = spec.exportMarkers?.has(type) === true;
+      const nowExported = ctx.exported || isExportMarker;
+      if (type === "export_statement") {
         for (const c2 of node.namedChildren) {
           if (c2.type === "identifier") exportedNames.add(c2.text);
           else if (c2.type === "export_clause") {
-            for (const spec2 of c2.namedChildren) {
-              const nm = spec2.childForFieldName("name") ?? spec2.namedChildren[0];
+            for (const clause of c2.namedChildren) {
+              const nm = clause.childForFieldName("name") ?? clause.namedChildren[0];
               if (nm?.text) exportedNames.add(nm.text);
             }
           }
@@ -5826,13 +6478,15 @@ function extractAst(rel, ext, content, opts = {}) {
             const fnLike = ANON_DEFAULT_FN.has(c2.type);
             const classLike = ANON_DEFAULT_CLASS.has(c2.type);
             if ((fnLike || classLike) && !c2.childForFieldName("name")) {
-              symbols.push({
+              const doc = docCommentFor(node);
+              emit2({
                 name: stem,
                 kind: classLike ? "class" : "function",
                 file: rel,
                 line: node.startPosition.row + 1,
                 endLine: node.endPosition.row + 1,
-                signature: firstLine(node, content),
+                signature: declHeader(node, content),
+                ...doc ? { doc } : {},
                 exported: true,
                 lang: spec.lang
               });
@@ -5841,7 +6495,7 @@ function extractAst(rel, ext, content, opts = {}) {
           }
         }
       }
-      if (spec.assignments && node.type === "expression_statement") {
+      if (spec.assignments && type === "expression_statement") {
         const expr = node.namedChildren[0];
         if (expr?.type === "assignment_expression") {
           const left = expr.childForFieldName("left");
@@ -5864,7 +6518,7 @@ function extractAst(rel, ext, content, opts = {}) {
               return;
             }
           }
-          const funcy = right && ["function_expression", "function", "generator_function", "arrow_function", "class"].includes(right.type);
+          const funcy = right && FUNCTION_VALUE_TYPES.has(right.type);
           if (left && right && funcy) {
             let name2;
             let exportedAssign = false;
@@ -5879,15 +6533,17 @@ function extractAst(rel, ext, content, opts = {}) {
               name2 = left.text;
             }
             if (name2) {
-              symbols.push({
+              const doc = docCommentFor(node);
+              emit2({
                 name: name2,
                 kind: right.type === "class" ? "class" : "function",
                 file: rel,
                 line: expr.startPosition.row + 1,
                 endLine: expr.endPosition.row + 1,
-                ...parent ? { parent } : {},
-                signature: firstLine(expr, content),
-                exported: nowExported || exportedAssign,
+                ...ctx.parent ? { parent: ctx.parent } : {},
+                signature: declHeader(expr, content),
+                ...doc ? { doc } : {},
+                exported: !ctx.inFunctionBody && (nowExported || exportedAssign),
                 lang: spec.lang
               });
               return;
@@ -5899,14 +6555,14 @@ function extractAst(rel, ext, content, opts = {}) {
               if (obj === "exports" || obj === "module.exports") {
                 if (right.type === "identifier") exportedNames.add(right.text);
                 if (right.type !== "identifier" || right.text !== prop.text) {
-                  symbols.push({
+                  emit2({
                     name: prop.text,
                     kind: "const",
                     file: rel,
                     line: expr.startPosition.row + 1,
                     endLine: expr.endPosition.row + 1,
-                    ...parent ? { parent } : {},
-                    signature: firstLine(expr, content),
+                    ...ctx.parent ? { parent: ctx.parent } : {},
+                    signature: declHeader(expr, content),
                     exported: true,
                     lang: spec.lang
                   });
@@ -5917,7 +6573,7 @@ function extractAst(rel, ext, content, opts = {}) {
           }
         }
       }
-      if (spec.assignments && node.type === "assignment_statement") {
+      if (spec.assignments && type === "assignment_statement") {
         const vars = node.children.find((c2) => c2.type === "variable_list");
         const vals = node.children.find((c2) => c2.type === "expression_list");
         const targets = vars?.namedChildren ?? [];
@@ -5927,51 +6583,78 @@ function extractAst(rel, ext, content, opts = {}) {
           const target = targets[i2];
           const value = values[i2];
           if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
-          const line = firstLine(node, content);
-          symbols.push({
+          const header = declHeader(node, content);
+          const doc = docCommentFor(node);
+          emit2({
             name: target.text,
             kind: "function",
             file: rel,
             line: node.startPosition.row + 1,
             endLine: node.endPosition.row + 1,
-            ...parent ? { parent } : {},
-            signature: line,
-            exported: nowExported || spec.exported(line, target.text),
+            ...ctx.parent ? { parent: ctx.parent } : {},
+            signature: header,
+            ...doc ? { doc } : {},
+            exported: visibilityOf(node, header, target.text, { ...ctx, exported: nowExported }),
             lang: spec.lang
           });
         }
         return;
       }
-      const kind = spec.defs[node.type];
+      const qualifier = spec.parentFrom?.[type]?.(node);
+      const kind = spec.kindFrom?.[type]?.(node) ?? spec.defs[type];
       if (kind) {
-        const name2 = nameOf(node);
-        if (name2) {
-          const line = firstLine(node, content);
-          symbols.push({
+        const reader = spec.nameFrom?.[type];
+        const name2 = reader ? reader(node) : nameOf(node);
+        const declaresFunction = FUNCTION_KINDS.has(kind) || kind === "class" || FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
+        if (name2 && (!ctx.inFunctionBody || declaresFunction)) {
+          const header = declHeader(node, content);
+          const doc = docOf(node);
+          const parent = qualifier ?? ctx.parent;
+          const parentPath = qualifier ?? ctx.parentPath;
+          emit2({
             name: name2,
             kind,
             file: rel,
             line: node.startPosition.row + 1,
             endLine: node.endPosition.row + 1,
             ...parent ? { parent } : {},
-            signature: line,
-            exported: nowExported || spec.exported(line, name2),
+            ...parentPath && parentPath !== parent ? { parentPath } : {},
+            signature: header,
+            ...doc ? { doc } : {},
+            exported: visibilityOf(node, header, name2, { ...ctx, exported: nowExported }),
             lang: spec.lang
           });
-          for (const c2 of node.namedChildren) walkBody(c2, name2, nowExported);
+          const entersFunction = FUNCTION_KINDS.has(kind);
+          walkBody(node, {
+            parent: name2,
+            parentPath: parentPath ? `${parentPath}/${name2}` : name2,
+            ownerKind: kind,
+            exported: nowExported,
+            forcePublic: PUBLIC_MEMBER_KINDS.has(kind),
+            inFunctionBody: ctx.inFunctionBody || entersFunction,
+            funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
+            sectionPublic: true
+          });
           return;
         }
       }
-      if (spec.containers.has(node.type)) {
-        for (const c2 of node.namedChildren) walk2(c2, parent, nowExported);
+      if (spec.containers.has(type)) {
+        const forcePublic = ctx.forcePublic || spec.publicMembersIn?.[type]?.(node) === true;
+        walkChildren(node, {
+          ...ctx,
+          exported: nowExported,
+          forcePublic,
+          ...qualifier ? { parent: qualifier, parentPath: qualifier, ownerKind: "type" } : {}
+        });
       }
     };
-    const walkBody = (node, parent, exported) => {
-      if (spec.containers.has(node.type)) {
-        for (const c2 of node.namedChildren) walk2(c2, parent, exported);
-      }
-    };
-    walk2(root, void 0, false);
+    walkChildren(root, {
+      exported: false,
+      forcePublic: false,
+      inFunctionBody: false,
+      funcDepth: 0,
+      sectionPublic: true
+    });
     if (exportedNames.size) {
       for (const s of symbols) if (!s.exported && exportedNames.has(s.name)) s.exported = true;
     }
@@ -5988,22 +6671,36 @@ function extractAst(rel, ext, content, opts = {}) {
       const p = findFirst(root, (n) => n.type === "package_declaration");
       if (p) pkg = p.text.replace(/^package\s+/, "").replace(/;.*$/, "").trim();
     }
-    return { symbols, refs, pkg, idents, calls, importedNames };
+    return {
+      symbols,
+      refs,
+      pkg,
+      idents,
+      calls,
+      importedNames,
+      ...symbols.length >= maxSymbols ? { truncated: true } : {}
+    };
   } catch {
     return void 0;
   } finally {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, byPublicKeyword, byNotPrivate, byNotLocal, byPub, byCapital, byPyConvention, always, neverExport, TS_SPEC, SPECS, IDENT_LEAF;
+var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_FUNC_DEPTH, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
     init_sort();
     init_loader();
-    MAX_REF_IDENTS = 256;
+    init_node();
+    init_specs();
+    init_signature();
+    init_doc();
+    MAX_REF_IDENTS = 512;
     MAX_CALLS = 512;
     MAX_IMPORTED_NAMES = 256;
+    MAX_SYMBOLS = 2e3;
+    MAX_FUNC_DEPTH = 2;
     ANON_DEFAULT_FN = /* @__PURE__ */ new Set([
       "function",
       "function_expression",
@@ -6015,238 +6712,10 @@ var init_extract = __esm({
     ANON_DEFAULT_CLASS = /* @__PURE__ */ new Set(["class", "class_declaration", "abstract_class_declaration"]);
     REF_IDENT_TYPE = /identifier|constant|(^|_)name$/;
     REF_IDENT_TEXT = /^[A-Za-z_]\w{4,}$/;
-    byPublicKeyword = (line) => /\b(public|internal)\b/.test(line);
-    byNotPrivate = (line) => !/\b(private|protected)\b/.test(line);
-    byNotLocal = (line) => !/^local\b/.test(line);
-    byPub = (line) => /\bpub\b/.test(line);
-    byCapital = (_l, name2) => /^[A-Z]/.test(name2);
-    byPyConvention = (_l, name2) => !name2.startsWith("_") || /^__\w+__$/.test(name2);
-    always = () => true;
-    neverExport = () => false;
-    TS_SPEC = {
-      lang: "typescript",
-      defs: {
-        function_declaration: "function",
-        generator_function_declaration: "function",
-        class_declaration: "class",
-        abstract_class_declaration: "class",
-        interface_declaration: "interface",
-        type_alias_declaration: "type",
-        enum_declaration: "enum",
-        method_definition: "method",
-        variable_declarator: "const"
-      },
-      containers: /* @__PURE__ */ new Set(["class_body", "export_statement", "program", "lexical_declaration", "variable_declaration"]),
-      exported: neverExport,
-      // export is tracked structurally via export_statement; see walk
-      imports: { import_statement: "string" },
-      calls: { call_expression: "function", new_expression: "constructor" },
-      assignments: true
-    };
-    SPECS = {
-      typescript: TS_SPEC,
-      tsx: { ...TS_SPEC, lang: "typescript" },
-      javascript: {
-        ...TS_SPEC,
-        lang: "javascript",
-        defs: {
-          function_declaration: "function",
-          generator_function_declaration: "function",
-          class_declaration: "class",
-          method_definition: "method",
-          variable_declarator: "const"
-        }
-      },
-      python: {
-        lang: "python",
-        defs: { function_definition: "function", class_definition: "class" },
-        containers: /* @__PURE__ */ new Set(["block", "decorated_definition", "module"]),
-        exported: byPyConvention,
-        imports: { import_statement: "path", import_from_statement: "path" },
-        calls: { call: "function" }
-      },
-      go: {
-        lang: "go",
-        defs: {
-          function_declaration: "function",
-          method_declaration: "method",
-          type_spec: "type",
-          const_spec: "const",
-          var_spec: "var"
-        },
-        containers: /* @__PURE__ */ new Set(["type_declaration", "const_declaration", "var_declaration", "source_file"]),
-        exported: byCapital,
-        imports: { import_declaration: "string" },
-        calls: { call_expression: "function" }
-      },
-      ruby: {
-        lang: "ruby",
-        defs: { method: "def", singleton_method: "def", class: "class", module: "module" },
-        containers: /* @__PURE__ */ new Set(["class", "module", "body_statement", "program"]),
-        exported: always,
-        // Ruby models every invocation — dotted, parenthesized, or bare command form
-        // (`puts "x"`) — as a `call` node whose callee is the `method` field.
-        calls: { call: "function" }
-      },
-      java: {
-        lang: "java",
-        defs: {
-          class_declaration: "class",
-          interface_declaration: "interface",
-          enum_declaration: "enum",
-          record_declaration: "record",
-          method_declaration: "method",
-          constructor_declaration: "constructor"
-        },
-        containers: /* @__PURE__ */ new Set(["class_body", "interface_body", "enum_body", "program"]),
-        exported: byPublicKeyword,
-        imports: { import_declaration: "path" },
-        calls: { method_invocation: "function", object_creation_expression: "constructor" }
-      },
-      rust: {
-        lang: "rust",
-        defs: {
-          function_item: "function",
-          struct_item: "struct",
-          enum_item: "enum",
-          trait_item: "trait",
-          type_item: "type",
-          mod_item: "mod",
-          const_item: "const",
-          static_item: "static",
-          union_item: "union",
-          macro_definition: "macro"
-        },
-        containers: /* @__PURE__ */ new Set(["impl_item", "declaration_list", "source_file"]),
-        exported: byPub,
-        calls: { call_expression: "function" }
-      },
-      c_sharp: {
-        lang: "csharp",
-        defs: {
-          class_declaration: "class",
-          interface_declaration: "interface",
-          struct_declaration: "struct",
-          enum_declaration: "enum",
-          record_declaration: "record",
-          method_declaration: "method",
-          constructor_declaration: "constructor",
-          property_declaration: "property"
-        },
-        containers: /* @__PURE__ */ new Set(["namespace_declaration", "declaration_list", "compilation_unit", "file_scoped_namespace_declaration"]),
-        exported: byPublicKeyword,
-        calls: { invocation_expression: "function", object_creation_expression: "constructor" }
-      },
-      php: {
-        lang: "php",
-        defs: {
-          function_definition: "function",
-          class_declaration: "class",
-          interface_declaration: "interface",
-          trait_declaration: "trait",
-          enum_declaration: "enum",
-          method_declaration: "method"
-        },
-        containers: /* @__PURE__ */ new Set(["declaration_list", "program"]),
-        exported: always,
-        calls: { function_call_expression: "function", member_call_expression: "member", object_creation_expression: "constructor" }
-      },
-      c: {
-        lang: "c",
-        defs: {
-          function_definition: "function",
-          struct_specifier: "struct",
-          enum_specifier: "enum",
-          union_specifier: "union",
-          type_definition: "type"
-        },
-        // C has no visibility keyword — headers are the interface, so everything
-        // counts as exported (same stance as the regex extractor).
-        containers: /* @__PURE__ */ new Set(["translation_unit", "declaration_list", "linkage_specification", "preproc_ifdef", "preproc_if"]),
-        exported: always,
-        calls: { call_expression: "function" }
-      },
-      cpp: {
-        lang: "cpp",
-        defs: {
-          function_definition: "function",
-          class_specifier: "class",
-          struct_specifier: "struct",
-          enum_specifier: "enum",
-          union_specifier: "union",
-          type_definition: "type",
-          namespace_definition: "namespace"
-        },
-        containers: /* @__PURE__ */ new Set([
-          "translation_unit",
-          "declaration_list",
-          "field_declaration_list",
-          "template_declaration",
-          "linkage_specification",
-          "preproc_ifdef",
-          "preproc_if"
-        ]),
-        exported: always,
-        calls: { call_expression: "function", new_expression: "constructor" }
-      },
-      scala: {
-        lang: "scala",
-        defs: {
-          class_definition: "class",
-          object_definition: "object",
-          trait_definition: "trait",
-          enum_definition: "enum",
-          function_definition: "def",
-          function_declaration: "def",
-          val_definition: "val",
-          var_definition: "var",
-          type_definition: "type",
-          given_definition: "given"
-        },
-        // package_clause carries braced-package bodies (`package com.acme { … }`);
-        // template_body is every class/object/trait body.
-        containers: /* @__PURE__ */ new Set(["compilation_unit", "package_clause", "template_body"]),
-        exported: byNotPrivate,
-        // Qualified calls are call_expression → field_expression (value/field);
-        // `new Widget(...)` is an instance_expression with a bare type child.
-        calls: { call_expression: "function", instance_expression: "constructor" }
-      },
-      bash: {
-        lang: "shell",
-        defs: { function_definition: "function" },
-        // if/compound bodies carry guarded definitions (`if …; then f() { … }; fi`).
-        containers: /* @__PURE__ */ new Set(["program", "if_statement", "compound_statement"]),
-        // Shell has no visibility — every function is callable from outside.
-        exported: always,
-        // Every invocation is a `command` whose `name` field is a command_name
-        // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
-        calls: { command: "function" }
-      },
-      lua: {
-        lang: "lua",
-        defs: { function_declaration: "function" },
-        // variable_declaration wraps `local x = function()` assignment statements.
-        containers: /* @__PURE__ */ new Set(["chunk", "variable_declaration"]),
-        exported: byNotLocal,
-        // function_call's `name` is an identifier, a dot_index_expression
-        // (table/field) or a method_index_expression (table/method) — the receiver
-        // is the `table` field in both qualified forms.
-        calls: { function_call: "function" },
-        assignments: true
-        // `M.alias = function(z) … end` (assignment_statement shape)
-      }
-    };
-    IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
   }
 });
 
 // src/extract/code.ts
-function isDirective(line) {
-  return DIRECTIVE_RE.test(line.trim());
-}
-function isBanner(line) {
-  return BANNER_RE.test(line.trim());
-}
 function topDocComment(content) {
   const lines = content.split(/\r?\n/);
   const collected = [];
@@ -6458,11 +6927,13 @@ function collectCallsRegex(content, symbols = [], maxCalls = 512) {
 }
 function extractCode(rel, ext, content, opts = {}) {
   const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile, imports: false });
-  const symbols = (ast ? ast.symbols : extractSymbols(rel, ext, content)).slice(0, 400);
+  const raw = ast ? ast.symbols : extractSymbols(rel, ext, content);
+  const symbols = raw.slice(0, MAX_FILE_SYMBOLS);
   const known = new Set(symbols.map((s) => s.name));
   const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
   return {
     symbols: [...symbols, ...reexports],
+    ...ast?.truncated || raw.length > symbols.length ? { truncated: true } : {},
     summary: topDocComment(content),
     refs: extractImports(ext, content),
     // pkg anchors namespace→source-root resolution: Java's `package`, C#'s
@@ -6477,18 +6948,18 @@ function extractCode(rel, ext, content, opts = {}) {
     importedNames: ast?.importedNames
   };
 }
-var JS_TS, PY, C_CPP, DIRECTIVE_RE, BANNER_RE, MAX_USE_EXPANSION, CALL_KEYWORDS, DEF_INTRODUCERS;
+var MAX_FILE_SYMBOLS, JS_TS, PY, C_CPP, MAX_USE_EXPANSION, CALL_KEYWORDS, DEF_INTRODUCERS;
 var init_code = __esm({
   "src/extract/code.ts"() {
     "use strict";
     init_registry();
     init_extract();
     init_common();
+    init_doc_text();
+    MAX_FILE_SYMBOLS = 2e3;
     JS_TS = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
     PY = /* @__PURE__ */ new Set([".py", ".pyi"]);
     C_CPP = /* @__PURE__ */ new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);
-    DIRECTIVE_RE = /^(eslint\b|eslint-|prettier\b|prettier-|tslint\b|jshint\b|jslint\b|globals?\b|istanbul\b|c8\s|v8\s|@ts-|ts-|@flow\b|@jsx\b|@jsxRuntime\b|@jest-environment\b|@vitest-environment\b|@license\b|@preserve\b|@copyright\b|copyright\b|spdx-|<reference\b|use strict|biome-|deno-lint|noqa\b|type:\s*ignore|pylint:|flake8:|mypy:|coding[:=])/i;
-    BANNER_RE = /^((?:mit|isc|bsd|apache|gnu|gpl|mpl|lgpl|agpl)\s+licen[sc]ed?\b|licen[sc]ed\b|(?:released|distributed)\s+under\b|all rights reserved\b|https?:\/\/|www\.)/i;
     MAX_USE_EXPANSION = 16;
     CALL_KEYWORDS = /* @__PURE__ */ new Set([
       "if",
@@ -6561,6 +7032,7 @@ function buildCodeRecord(rel, ext, size, content, hash, lang, opts = {}) {
     record.idents = code.idents;
     record.calls = code.calls;
     record.importedNames = code.importedNames;
+    record.truncated = code.truncated;
   } else {
     record.title = basename(rel);
   }
@@ -6670,6 +7142,7 @@ function scanRepo(root, opts = {}) {
         record.idents = code.idents;
         record.calls = code.calls;
         record.importedNames = code.importedNames;
+        record.truncated = code.truncated;
       } else {
         record.title = basename(f.rel);
       }

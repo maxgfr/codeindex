@@ -90,6 +90,8 @@ export interface LangReport {
   missing: string[];
   spurious: string[];
   wrongKind: string[];
+  missingDoc: string[];
+  missingSig: string[];
 }
 
 const ZERO: Score = { expected: 0, found: 0, matched: 0, precision: 1, recall: 1, f1: 1 };
@@ -181,6 +183,8 @@ export function scoreLang(lang: string): LangReport {
   let sigOk = 0;
   let sigTotal = 0;
   const wrongKind: string[] = [];
+  const missingDoc: string[] = [];
+  const missingSig: string[] = [];
 
   for (const rel of Object.keys(expected.files).sort(byStr)) {
     const spec = expected.files[rel]!;
@@ -199,10 +203,12 @@ export function scoreLang(lang: string): LangReport {
       if (e.doc) {
         docTotal++;
         if (hit && typeof (hit as CodeSymbol & { doc?: string }).doc === "string") docOk++;
+        else missingDoc.push(`${rel}:${id}`);
       }
       if (e.sig) {
         sigTotal++;
         if (hit && fullSignature(hit).includes(e.sig)) sigOk++;
+        else missingSig.push(`${rel}:${id} → ${JSON.stringify(hit ? fullSignature(hit) : "")}`);
       }
       if (!hit) continue;
       kindTotal++;
@@ -236,6 +242,8 @@ export function scoreLang(lang: string): LangReport {
     missing,
     spurious,
     wrongKind: wrongKind.sort(byStr),
+    missingDoc: missingDoc.sort(byStr),
+    missingSig: missingSig.sort(byStr),
   };
 }
 

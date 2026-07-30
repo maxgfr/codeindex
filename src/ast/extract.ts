@@ -1,25 +1,10 @@
 import type { CodeSymbol, RawRef } from "../types.js";
 import { byStr } from "../sort.js";
 import { grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
-
-// A tree-sitter Node — typed structurally so we don't depend on web-tree-sitter's
-// exported types leaking through the bundle. Only the members we use.
-interface TSNode {
-  type: string;
-  text: string;
-  startIndex: number;
-  endIndex: number;
-  startPosition: { row: number; column: number };
-  endPosition: { row: number; column: number };
-  namedChildCount: number;
-  namedChild(i: number): TSNode | null;
-  childForFieldName(name: string): TSNode | null;
-  children: TSNode[];
-  // ONE marshal + ONE wasm call for the whole child list, memoized on the node —
-  // versus `namedChildCount` plus a `namedChild(i)` round-trip per index. Every
-  // traversal below reads children through this, never by index.
-  namedChildren: TSNode[];
-}
+import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
+import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, type LangSpec } from "./specs.js";
+import { declHeader } from "./signature.js";
+import { docCommentFor, docstringFor } from "./doc.js";
 
 export interface AstResult {
   symbols: CodeSymbol[];
@@ -36,11 +21,21 @@ export interface AstResult {
   calls: { name: string; line: number; receiver?: string }[];
   // JS/TS named-import bindings — always present (empty for non-JS/TS).
   importedNames: string[];
+  // True when a per-file cap truncated the result — never silent, same doctrine
+  // as the walk's `capped` flag.
+  truncated?: true;
 }
 
-const MAX_REF_IDENTS = 256;
+const MAX_REF_IDENTS = 512;
 const MAX_CALLS = 512;
 const MAX_IMPORTED_NAMES = 256;
+const MAX_SYMBOLS = 2000;
+
+// How many nested FUNCTION bodies deep we keep looking for declarations. Depth 1
+// finds a route handler or a helper closure inside an exported function; depth 2
+// finds one nested inside that. Beyond it the yield is noise, and a generated
+// bundle could otherwise walk arbitrarily deep.
+const MAX_FUNC_DEPTH = 2;
 
 // JS/TS node types an anonymous `export default` can wrap ("function" and
 // "class" are the expression forms; the _declaration forms cover grammars that
@@ -54,321 +49,6 @@ const ANON_DEFAULT_CLASS = new Set(["class", "class_declaration", "abstract_clas
 const REF_IDENT_TYPE = /identifier|constant|(^|_)name$/;
 const REF_IDENT_TEXT = /^[A-Za-z_]\w{4,}$/;
 
-// How one grammar's declarations map to symbols. `defs` maps a node type to a
-// symbol kind; `containers` are nodes whose body we recurse into for nested
-// members (methods, namespace/impl bodies); `exported` decides visibility from
-// the declaration's first line or name.
-interface LangSpec {
-  lang: string;
-  defs: Record<string, string>;
-  containers: Set<string>;
-  exported: (firstLine: string, name: string) => boolean;
-  imports?: Record<string, "string" | "path">; // node type → how to read the specifier
-  // Call-expression node type → how to read the callee name. "function": read the
-  // callee/function field, descending to the rightmost segment of a member/
-  // attribute/selector/scoped callee. "member": a dedicated member-call node —
-  // read its `name` field. "constructor": a new/object-creation node — read the
-  // constructed type identifier.
-  calls?: Record<string, "function" | "member" | "constructor">;
-  // Also surface top-level ASSIGNMENTS of function/class expressions —
-  // `res.sendStatus = function sendStatus() {}`, `Foo.prototype.bar = () => {}`,
-  // `exports.helper = function () {}` — the CommonJS definition style that
-  // declaration-node walks miss entirely (express, connect, older Node code).
-  // Two grammar shapes are handled: JS/TS expression_statement>assignment_
-  // expression and lua assignment_statement (variable_list = expression_list).
-  assignments?: boolean;
-}
-
-const byPublicKeyword = (line: string): boolean => /\b(public|internal)\b/.test(line);
-// Scala is public by default; `private`/`protected` modifiers sit on the
-// declaration's first line (same stance as the regex tier).
-const byNotPrivate = (line: string): boolean => !/\b(private|protected)\b/.test(line);
-// Lua: `local function f` is file-local by construction. Assignment-style
-// `local f = function()` stays exported — regex-tier parity (its rule marks
-// those exported), and the `local` keyword lives on the wrapping
-// variable_declaration, outside the assignment node this line is read from.
-const byNotLocal = (line: string): boolean => !/^local\b/.test(line);
-const byPub = (line: string): boolean => /\bpub\b/.test(line);
-const byCapital = (_l: string, name: string): boolean => /^[A-Z]/.test(name);
-const byPyConvention = (_l: string, name: string): boolean => !name.startsWith("_") || /^__\w+__$/.test(name);
-const always = (): boolean => true;
-// JS/TS export is structural (an `export` statement wraps the declaration); a
-// bare declaration is module-private, so the name/line heuristic never marks it.
-const neverExport = (): boolean => false;
-
-// TypeScript is the base for tsx and javascript, so it is a named const rather
-// than indexed back out of SPECS (which noUncheckedIndexedAccess would widen to
-// `LangSpec | undefined`, breaking the derived spreads below).
-const TS_SPEC: LangSpec = {
-  lang: "typescript",
-  defs: {
-    function_declaration: "function", generator_function_declaration: "function",
-    class_declaration: "class", abstract_class_declaration: "class",
-    interface_declaration: "interface", type_alias_declaration: "type",
-    enum_declaration: "enum", method_definition: "method", variable_declarator: "const",
-  },
-  containers: new Set(["class_body", "export_statement", "program", "lexical_declaration", "variable_declaration"]),
-  exported: neverExport, // export is tracked structurally via export_statement; see walk
-  imports: { import_statement: "string" },
-  calls: { call_expression: "function", new_expression: "constructor" },
-  assignments: true,
-};
-
-const SPECS: Record<string, LangSpec> = {
-  typescript: TS_SPEC,
-  tsx: { ...TS_SPEC, lang: "typescript" },
-  javascript: {
-    ...TS_SPEC,
-    lang: "javascript",
-    defs: {
-      function_declaration: "function", generator_function_declaration: "function",
-      class_declaration: "class", method_definition: "method", variable_declarator: "const",
-    },
-  },
-  python: {
-    lang: "python",
-    defs: { function_definition: "function", class_definition: "class" },
-    containers: new Set(["block", "decorated_definition", "module"]),
-    exported: byPyConvention,
-    imports: { import_statement: "path", import_from_statement: "path" },
-    calls: { call: "function" },
-  },
-  go: {
-    lang: "go",
-    defs: {
-      function_declaration: "function", method_declaration: "method",
-      type_spec: "type", const_spec: "const", var_spec: "var",
-    },
-    containers: new Set(["type_declaration", "const_declaration", "var_declaration", "source_file"]),
-    exported: byCapital,
-    imports: { import_declaration: "string" },
-    calls: { call_expression: "function" },
-  },
-  ruby: {
-    lang: "ruby",
-    defs: { method: "def", singleton_method: "def", class: "class", module: "module" },
-    containers: new Set(["class", "module", "body_statement", "program"]),
-    exported: always,
-    // Ruby models every invocation — dotted, parenthesized, or bare command form
-    // (`puts "x"`) — as a `call` node whose callee is the `method` field.
-    calls: { call: "function" },
-  },
-  java: {
-    lang: "java",
-    defs: {
-      class_declaration: "class", interface_declaration: "interface",
-      enum_declaration: "enum", record_declaration: "record",
-      method_declaration: "method", constructor_declaration: "constructor",
-    },
-    containers: new Set(["class_body", "interface_body", "enum_body", "program"]),
-    exported: byPublicKeyword,
-    imports: { import_declaration: "path" },
-    calls: { method_invocation: "function", object_creation_expression: "constructor" },
-  },
-  rust: {
-    lang: "rust",
-    defs: {
-      function_item: "function", struct_item: "struct", enum_item: "enum",
-      trait_item: "trait", type_item: "type", mod_item: "mod",
-      const_item: "const", static_item: "static", union_item: "union", macro_definition: "macro",
-    },
-    containers: new Set(["impl_item", "declaration_list", "source_file"]),
-    exported: byPub,
-    calls: { call_expression: "function" },
-  },
-  c_sharp: {
-    lang: "csharp",
-    defs: {
-      class_declaration: "class", interface_declaration: "interface",
-      struct_declaration: "struct", enum_declaration: "enum", record_declaration: "record",
-      method_declaration: "method", constructor_declaration: "constructor", property_declaration: "property",
-    },
-    containers: new Set(["namespace_declaration", "declaration_list", "compilation_unit", "file_scoped_namespace_declaration"]),
-    exported: byPublicKeyword,
-    calls: { invocation_expression: "function", object_creation_expression: "constructor" },
-  },
-  php: {
-    lang: "php",
-    defs: {
-      function_definition: "function", class_declaration: "class",
-      interface_declaration: "interface", trait_declaration: "trait",
-      enum_declaration: "enum", method_declaration: "method",
-    },
-    containers: new Set(["declaration_list", "program"]),
-    exported: always,
-    calls: { function_call_expression: "function", member_call_expression: "member", object_creation_expression: "constructor" },
-  },
-  c: {
-    lang: "c",
-    defs: {
-      function_definition: "function", struct_specifier: "struct",
-      enum_specifier: "enum", union_specifier: "union", type_definition: "type",
-    },
-    // C has no visibility keyword — headers are the interface, so everything
-    // counts as exported (same stance as the regex extractor).
-    containers: new Set(["translation_unit", "declaration_list", "linkage_specification", "preproc_ifdef", "preproc_if"]),
-    exported: always,
-    calls: { call_expression: "function" },
-  },
-  cpp: {
-    lang: "cpp",
-    defs: {
-      function_definition: "function", class_specifier: "class", struct_specifier: "struct",
-      enum_specifier: "enum", union_specifier: "union", type_definition: "type",
-      namespace_definition: "namespace",
-    },
-    containers: new Set([
-      "translation_unit", "declaration_list", "field_declaration_list",
-      "template_declaration", "linkage_specification", "preproc_ifdef", "preproc_if",
-    ]),
-    exported: always,
-    calls: { call_expression: "function", new_expression: "constructor" },
-  },
-  scala: {
-    lang: "scala",
-    defs: {
-      class_definition: "class", object_definition: "object", trait_definition: "trait",
-      enum_definition: "enum", function_definition: "def", function_declaration: "def",
-      val_definition: "val", var_definition: "var", type_definition: "type", given_definition: "given",
-    },
-    // package_clause carries braced-package bodies (`package com.acme { … }`);
-    // template_body is every class/object/trait body.
-    containers: new Set(["compilation_unit", "package_clause", "template_body"]),
-    exported: byNotPrivate,
-    // Qualified calls are call_expression → field_expression (value/field);
-    // `new Widget(...)` is an instance_expression with a bare type child.
-    calls: { call_expression: "function", instance_expression: "constructor" },
-  },
-  bash: {
-    lang: "shell",
-    defs: { function_definition: "function" },
-    // if/compound bodies carry guarded definitions (`if …; then f() { … }; fi`).
-    containers: new Set(["program", "if_statement", "compound_statement"]),
-    // Shell has no visibility — every function is callable from outside.
-    exported: always,
-    // Every invocation is a `command` whose `name` field is a command_name
-    // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
-    calls: { command: "function" },
-  },
-  lua: {
-    lang: "lua",
-    defs: { function_declaration: "function" },
-    // variable_declaration wraps `local x = function()` assignment statements.
-    containers: new Set(["chunk", "variable_declaration"]),
-    exported: byNotLocal,
-    // function_call's `name` is an identifier, a dot_index_expression
-    // (table/field) or a method_index_expression (table/method) — the receiver
-    // is the `table` field in both qualified forms.
-    calls: { function_call: "function" },
-    assignments: true, // `M.alias = function(z) … end` (assignment_statement shape)
-  },
-};
-
-// The node's first line, read straight out of the source instead of through
-// `node.text` — that getter materialises the node's ENTIRE text across the wasm
-// boundary, so a 2000-line class allocated the whole class twice per symbol.
-// Slicing [startIndex, first newline) from `src` is the same string by
-// construction (node.text === src.slice(startIndex, endIndex)).
-function firstLine(node: TSNode, src: string): string {
-  const start = node.startIndex;
-  const end = node.endIndex;
-  const nl = src.indexOf("\n", start);
-  const stop = nl === -1 || nl > end ? end : nl;
-  return src.slice(start, stop).trim().slice(0, 200);
-}
-
-function nameOf(node: TSNode): string | undefined {
-  const named = node.childForFieldName("name");
-  if (named?.text) return named.text;
-  // C/C++: the name hides inside a declarator chain (function_definition →
-  // [pointer_]declarator → function_declarator → identifier). Follow the
-  // `declarator` field down to the identifier leaf.
-  let decl = node.childForFieldName("declarator");
-  while (decl) {
-    if (decl.namedChildren.length === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
-    const next = decl.childForFieldName("declarator");
-    if (!next || next === decl) break;
-    decl = next;
-  }
-  // Fall back to the first identifier-like named child (covers grammars that do
-  // not expose a `name` field on a given node).
-  for (const c of node.namedChildren) {
-    if (/(^|_)(identifier|name|constant)$/.test(c.type)) return c.text;
-  }
-  return undefined;
-}
-
-function findFirst(node: TSNode, pred: (n: TSNode) => boolean): TSNode | undefined {
-  for (const c of node.namedChildren) {
-    if (pred(c)) return c;
-    const deep = findFirst(c, pred);
-    if (deep) return deep;
-  }
-  return undefined;
-}
-
-// True for a leaf node that IS an identifier-ish name (identifier,
-// property_identifier, type_identifier, field_identifier, constant, php's
-// `name`, or bash's `word` — the leaf inside a command_name). The rightmost
-// such leaf of a callee is the called name. End-anchored, so python/ruby
-// keyword_* node types (keyword_argument, keyword_pattern, …) never match.
-const IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
-
-// Read the callee's simple name from a (possibly qualified) callee node: a bare
-// identifier returns itself; a member/attribute/selector/scoped access returns its
-// final segment via the field name that grammar uses (falling back to the last
-// named child). Returns undefined for a computed/complex callee we can't name.
-function readName(node: TSNode | null): string | undefined {
-  if (!node) return undefined;
-  const kids = node.namedChildren;
-  if (kids.length === 0) return IDENT_LEAF.test(node.type) ? node.text : undefined;
-  const seg =
-    node.childForFieldName("name") ??
-    node.childForFieldName("property") ??
-    node.childForFieldName("attribute") ??
-    node.childForFieldName("field") ??
-    // Callee wrappers that point at the real callee via a `function` field:
-    // scala's generic_function (`foo[Int](x)`) and a curried/chained
-    // call_expression callee (`curried(a)(b)`) — descend to the inner name
-    // instead of tripping over type_arguments/arguments as the last child.
-    node.childForFieldName("function");
-  if (seg) return readName(seg);
-  const last = kids[kids.length - 1];
-  return last && last !== node ? readName(last) : undefined;
-}
-
-// The IMMEDIATE receiver of a qualified call: the rightmost name segment of the
-// object the callee is read from (`axios.get(...)` → "axios"; `a.b.c(...)` →
-// "b"). Grammars name the object field differently — `object` (JS/TS
-// member_expression, python attribute, java method_invocation, php member call),
-// go selector_expression's `operand`, rust field_expression's `value` and
-// scoped_identifier's `path`, c# member_access_expression's `expression`, c/c++
-// field_expression's `argument`, ruby call's `receiver`, lua dot/method_index_
-// expression's `table` (scala's field_expression reuses `value`). Undefined for a
-// bare callee or a computed/complex receiver (`fetch().then(...)`, `arr[0].map(...)`).
-function readReceiver(node: TSNode | null): string | undefined {
-  if (!node || node.namedChildren.length === 0) return undefined;
-  const obj =
-    node.childForFieldName("object") ??
-    node.childForFieldName("operand") ??
-    node.childForFieldName("value") ??
-    node.childForFieldName("path") ??
-    node.childForFieldName("expression") ??
-    node.childForFieldName("argument") ??
-    node.childForFieldName("receiver") ??
-    node.childForFieldName("table");
-  const name = obj ? readName(obj) : undefined;
-  return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
-}
-
-// Collect callee names for every call-expression node the grammar maps. "function"
-// reads the callee/function field (grammars that name it differently — Java's
-// `method_invocation` — expose the callee under `name`); "member" reads the
-// dedicated member-call node's `name`; "constructor" reads the constructed type.
-// A qualified call also carries the immediate `receiver` name (see readReceiver).
-// Names are filtered to plausible identifiers (≥ 2 chars), deduped by name+line,
-// sorted, and capped (default MAX_CALLS; overridable via maxCalls), so the set
-// stays small and deterministic.
 // Everything the post-declaration passes need, gathered in ONE pre-order walk.
 //
 // These four collections used to be four independent full-tree traversals, each
@@ -504,9 +184,31 @@ function collectAll(
   };
 }
 
+// What the walk knows about where it currently is. Threaded rather than stored,
+// so the walk stays a pure function of the tree and two builds agree byte for byte.
+interface WalkCtx {
+  /** Immediate enclosing symbol name. */
+  parent?: string;
+  /** Full ancestor path ("Scheduler/dispatch"), for symbols nested 2+ deep. */
+  parentPath?: string;
+  /** Kind of the enclosing declaration — decides whether members are locals or fields. */
+  ownerKind?: string;
+  /** An enclosing `export`/`declare` marks everything inside it as public. */
+  exported: boolean;
+  /** Inside an interface/trait/enum, or a trait implementation: members are public. */
+  forcePublic: boolean;
+  /** Inside executable code: whatever is declared here is a local, not API. */
+  inFunctionBody: boolean;
+  /** How many function bodies deep, against MAX_FUNC_DEPTH. */
+  funcDepth: number;
+  /** Current visibility section (C++ `private:`, Ruby bare `private`). */
+  sectionPublic: boolean;
+}
+
 // Extract declared symbols from one file via its committed grammar. Returns
 // undefined when no grammar is loaded for the extension (caller falls back to the
-// regex extractor). Walks top-level declarations plus one level of nested members.
+// regex extractor). Walks top-level declarations, type members, and declarations
+// nested up to MAX_FUNC_DEPTH function bodies deep.
 // `opts.maxCalls` overrides the per-file call-site cap (default MAX_CALLS).
 // `opts.imports` (default true) computes `refs`/`pkg`; extractCode passes false
 // because it recomputes both with regex and discards these — see collectAll.
@@ -514,7 +216,7 @@ export function extractAst(
   rel: string,
   ext: string,
   content: string,
-  opts: { maxCalls?: number; imports?: boolean } = {},
+  opts: { maxCalls?: number; imports?: boolean; maxSymbols?: number } = {},
 ): AstResult | undefined {
   const key = grammarKeyForExt(ext);
   if (!key || !grammarReady(key)) return undefined;
@@ -527,6 +229,7 @@ export function extractAst(
   try {
     tree = parser.parse(content) as unknown as { rootNode: TSNode; delete(): void };
     if (!tree) return undefined;
+    const maxSymbols = opts.maxSymbols ?? MAX_SYMBOLS;
     const symbols: CodeSymbol[] = [];
     const root = tree.rootNode;
     // The file stem names an anonymous `export default` (Button.tsx → "Button").
@@ -536,15 +239,98 @@ export function extractAst(
     // exported after the walk (the declaration node itself is not wrapped).
     const exportedNames = new Set<string>();
 
-    const walk = (node: TSNode, parent: string | undefined, exported: boolean): void => {
-      // `export …` / `export default …` (JS/TS) marks the wrapped declaration.
-      const nowExported = exported || node.type === "export_statement";
-      if (node.type === "export_statement") {
+    const emit = (s: CodeSymbol): void => {
+      if (symbols.length < maxSymbols) symbols.push(s);
+    };
+
+    // Visibility of one declaration, in precedence order. A local always loses,
+    // an explicit `private` beats an enclosing `export`, and an interface/trait
+    // member wins over a missing keyword it is not allowed to write.
+    const visibilityOf = (node: TSNode, header: string, name: string, ctx: WalkCtx): boolean => {
+      if (ctx.inFunctionBody) return false;
+      if (spec.privateMember?.(node) === true) return false;
+      if (!ctx.sectionPublic) return false;
+      if (ctx.forcePublic) return true;
+      return ctx.exported || spec.exported(header, name);
+    };
+
+    const docOf = (node: TSNode): string | undefined =>
+      (spec.docstring ? docstringFor(node) : undefined) ?? docCommentFor(node);
+
+    // Iterate a container's children, tracking the visibility section its
+    // markers set. The section is LOCAL to this container: a `private:` in one
+    // class body must not leak into the next.
+    const walkChildren = (container: TSNode, ctx: WalkCtx): void => {
+      let sectionPublic = ctx.sectionPublic;
+      const bareKind = spec.bareMembers?.[container.type];
+      for (const c of container.namedChildren) {
+        if (spec.sectionVisibility) {
+          const flip = spec.sectionVisibility(c);
+          if (flip !== undefined) {
+            sectionPublic = flip;
+            continue;
+          }
+        }
+        const childCtx = sectionPublic === ctx.sectionPublic ? ctx : { ...ctx, sectionPublic };
+
+        // Enum members written without an initialiser are a bare identifier
+        // leaf, not a declaration node any table can key on.
+        if (bareKind && c.namedChildren.length === 0 && IDENT_LEAF.test(c.type)) {
+          emit({
+            name: c.text,
+            kind: bareKind,
+            file: rel,
+            line: c.startPosition.row + 1,
+            endLine: c.endPosition.row + 1,
+            ...(childCtx.parent ? { parent: childCtx.parent } : {}),
+            exported: childCtx.forcePublic || childCtx.exported,
+            lang: spec.lang,
+          });
+          continue;
+        }
+
+        for (const extra of spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody }) ?? []) {
+          const header = declHeader(c, content);
+          const doc = docCommentFor(c);
+          emit({
+            name: extra.name,
+            kind: extra.kind,
+            file: rel,
+            line: c.startPosition.row + 1,
+            endLine: c.endPosition.row + 1,
+            ...(childCtx.parent ? { parent: childCtx.parent } : {}),
+            ...(childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {}),
+            signature: header,
+            ...(doc ? { doc } : {}),
+            exported: visibilityOf(c, header, extra.name, childCtx),
+            lang: spec.lang,
+          });
+        }
+
+        walk(c, childCtx);
+      }
+    };
+
+    // Descend into a declaration's body: only container children yield more
+    // members, exactly as before — what changed is that a function body is now
+    // among the containers, bounded by MAX_FUNC_DEPTH.
+    const walkBody = (node: TSNode, ctx: WalkCtx): void => {
+      for (const c of node.namedChildren) if (spec.containers.has(c.type)) walkChildren(c, ctx);
+    };
+
+    const walk = (node: TSNode, ctx: WalkCtx): void => {
+      if (ctx.funcDepth > MAX_FUNC_DEPTH) return;
+      const type = node.type;
+
+      // `export …` / `declare …` marks everything it wraps as public.
+      const isExportMarker = spec.exportMarkers?.has(type) === true;
+      const nowExported = ctx.exported || isExportMarker;
+      if (type === "export_statement") {
         for (const c of node.namedChildren) {
           if (c.type === "identifier") exportedNames.add(c.text);
           else if (c.type === "export_clause") {
-            for (const spec of c.namedChildren) {
-              const nm = spec.childForFieldName("name") ?? spec.namedChildren[0];
+            for (const clause of c.namedChildren) {
+              const nm = clause.childForFieldName("name") ?? clause.namedChildren[0];
               if (nm?.text) exportedNames.add(nm.text);
             }
           }
@@ -557,13 +343,15 @@ export function extractAst(
             const fnLike = ANON_DEFAULT_FN.has(c.type);
             const classLike = ANON_DEFAULT_CLASS.has(c.type);
             if ((fnLike || classLike) && !c.childForFieldName("name")) {
-              symbols.push({
+              const doc = docCommentFor(node);
+              emit({
                 name: stem,
                 kind: classLike ? "class" : "function",
                 file: rel,
                 line: node.startPosition.row + 1,
                 endLine: node.endPosition.row + 1,
-                signature: firstLine(node, content),
+                signature: declHeader(node, content),
+                ...(doc ? { doc } : {}),
                 exported: true,
                 lang: spec.lang,
               });
@@ -572,11 +360,12 @@ export function extractAst(
           }
         }
       }
+
       // CommonJS-style definition: a top-level `<target> = <function|class>`
       // expression. Named after the assigned property (or identifier); only
       // `exports.*` / `module.exports.*` targets count as exported — augmenting
       // a local object (res.*, Foo.prototype.*) is not a module export.
-      if (spec.assignments && node.type === "expression_statement") {
+      if (spec.assignments && type === "expression_statement") {
         const expr = node.namedChildren[0];
         if (expr?.type === "assignment_expression") {
           const left = expr.childForFieldName("left");
@@ -603,7 +392,7 @@ export function extractAst(
               return;
             }
           }
-          const funcy = right && ["function_expression", "function", "generator_function", "arrow_function", "class"].includes(right.type);
+          const funcy = right && FUNCTION_VALUE_TYPES.has(right.type);
           if (left && right && funcy) {
             let name: string | undefined;
             let exportedAssign = false;
@@ -618,15 +407,17 @@ export function extractAst(
               name = left.text;
             }
             if (name) {
-              symbols.push({
+              const doc = docCommentFor(node);
+              emit({
                 name,
                 kind: right.type === "class" ? "class" : "function",
                 file: rel,
                 line: expr.startPosition.row + 1,
                 endLine: expr.endPosition.row + 1,
-                ...(parent ? { parent } : {}),
-                signature: firstLine(expr, content),
-                exported: nowExported || exportedAssign,
+                ...(ctx.parent ? { parent: ctx.parent } : {}),
+                signature: declHeader(expr, content),
+                ...(doc ? { doc } : {}),
+                exported: !ctx.inFunctionBody && (nowExported || exportedAssign),
                 lang: spec.lang,
               });
               return;
@@ -642,14 +433,14 @@ export function extractAst(
               if (obj === "exports" || obj === "module.exports") {
                 if (right.type === "identifier") exportedNames.add(right.text);
                 if (right.type !== "identifier" || right.text !== prop.text) {
-                  symbols.push({
+                  emit({
                     name: prop.text,
                     kind: "const",
                     file: rel,
                     line: expr.startPosition.row + 1,
                     endLine: expr.endPosition.row + 1,
-                    ...(parent ? { parent } : {}),
-                    signature: firstLine(expr, content),
+                    ...(ctx.parent ? { parent: ctx.parent } : {}),
+                    signature: declHeader(expr, content),
                     exported: true,
                     lang: spec.lang,
                   });
@@ -660,13 +451,14 @@ export function extractAst(
           }
         }
       }
+
       // Lua-flavored assignment definitions: `M.alias = function(z) … end` /
       // `local alias = function(y) … end` — an assignment_statement pairs a
       // `variable_list` of targets with an `expression_list` of values (fields
       // name/value, index-aligned). Only function-valued targets become
       // symbols, named after the full target text (dotted/colon names stay
       // whole — regex-tier parity).
-      if (spec.assignments && node.type === "assignment_statement") {
+      if (spec.assignments && type === "assignment_statement") {
         const vars = node.children.find((c) => c.type === "variable_list");
         const vals = node.children.find((c) => c.type === "expression_list");
         const targets = vars?.namedChildren ?? [];
@@ -676,57 +468,95 @@ export function extractAst(
           const target = targets[i]!;
           const value = values[i]!;
           if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
-          const line = firstLine(node, content);
-          symbols.push({
+          const header = declHeader(node, content);
+          const doc = docCommentFor(node);
+          emit({
             name: target.text,
             kind: "function",
             file: rel,
             line: node.startPosition.row + 1,
             endLine: node.endPosition.row + 1,
-            ...(parent ? { parent } : {}),
-            signature: line,
-            exported: nowExported || spec.exported(line, target.text),
+            ...(ctx.parent ? { parent: ctx.parent } : {}),
+            signature: header,
+            ...(doc ? { doc } : {}),
+            exported: visibilityOf(node, header, target.text, { ...ctx, exported: nowExported }),
             lang: spec.lang,
           });
         }
         return;
       }
-      const kind = spec.defs[node.type];
+
+      // A node type that qualifies what it holds with a type name: Rust's
+      // `impl Scheduler`, and Go's method receiver.
+      const qualifier = spec.parentFrom?.[type]?.(node);
+
+      const kind = spec.kindFrom?.[type]?.(node) ?? spec.defs[type];
       if (kind) {
-        const name = nameOf(node);
-        if (name) {
-          const line = firstLine(node, content);
-          symbols.push({
+        // A registered reader is AUTHORITATIVE: returning undefined means "this
+        // node declares no name, skip it" — Go's embedded struct fields. Falling
+        // back to the generic reader here would resurrect exactly the symbol the
+        // override exists to suppress (`struct { Scheduler }` → a field named
+        // Scheduler, colliding with the type it embeds).
+        const reader = spec.nameFrom?.[type];
+        const name = reader ? reader(node) : nameOf(node);
+        // Inside executable code, only FUNCTION-like declarations are worth
+        // indexing: emitting every `const x = 1` in every function body would
+        // bury the API surface in locals.
+        const declaresFunction =
+          FUNCTION_KINDS.has(kind) ||
+          kind === "class" ||
+          FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
+        if (name && (!ctx.inFunctionBody || declaresFunction)) {
+          const header = declHeader(node, content);
+          const doc = docOf(node);
+          const parent = qualifier ?? ctx.parent;
+          const parentPath = qualifier ?? ctx.parentPath;
+          emit({
             name,
             kind,
             file: rel,
             line: node.startPosition.row + 1,
             endLine: node.endPosition.row + 1,
             ...(parent ? { parent } : {}),
-            signature: line,
-            exported: nowExported || spec.exported(line, name),
+            ...(parentPath && parentPath !== parent ? { parentPath } : {}),
+            signature: header,
+            ...(doc ? { doc } : {}),
+            exported: visibilityOf(node, header, name, { ...ctx, exported: nowExported }),
             lang: spec.lang,
           });
-          // Recurse into this declaration's body for nested members (methods),
-          // scoping their parent to this symbol.
-          for (const c of node.namedChildren) walkBody(c, name, nowExported);
+          const entersFunction = FUNCTION_KINDS.has(kind);
+          walkBody(node, {
+            parent: name,
+            parentPath: parentPath ? `${parentPath}/${name}` : name,
+            ownerKind: kind,
+            exported: nowExported,
+            forcePublic: PUBLIC_MEMBER_KINDS.has(kind),
+            inFunctionBody: ctx.inFunctionBody || entersFunction,
+            funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
+            sectionPublic: true,
+          });
           return;
         }
       }
-      if (spec.containers.has(node.type)) {
-        for (const c of node.namedChildren) walk(c, parent, nowExported);
-      }
-    };
-    // Recurse a declaration body one level: only container-ish children yield more
-    // members, so nested functions inside a method body are not surfaced (matches
-    // the "top-level + one level" contract).
-    const walkBody = (node: TSNode, parent: string, exported: boolean): void => {
-      if (spec.containers.has(node.type)) {
-        for (const c of node.namedChildren) walk(c, parent, exported);
+
+      if (spec.containers.has(type)) {
+        const forcePublic = ctx.forcePublic || spec.publicMembersIn?.[type]?.(node) === true;
+        walkChildren(node, {
+          ...ctx,
+          exported: nowExported,
+          forcePublic,
+          ...(qualifier ? { parent: qualifier, parentPath: qualifier, ownerKind: "type" } : {}),
+        });
       }
     };
 
-    walk(root, undefined, false);
+    walkChildren(root, {
+      exported: false,
+      forcePublic: false,
+      inFunctionBody: false,
+      funcDepth: 0,
+      sectionPublic: true,
+    });
     if (exportedNames.size) {
       for (const s of symbols) if (!s.exported && exportedNames.has(s.name)) s.exported = true;
     }
@@ -744,7 +574,15 @@ export function extractAst(
       const p = findFirst(root, (n) => n.type === "package_declaration");
       if (p) pkg = p.text.replace(/^package\s+/, "").replace(/;.*$/, "").trim();
     }
-    return { symbols, refs, pkg, idents, calls, importedNames };
+    return {
+      symbols,
+      refs,
+      pkg,
+      idents,
+      calls,
+      importedNames,
+      ...(symbols.length >= maxSymbols ? { truncated: true as const } : {}),
+    };
   } catch {
     return undefined; // any parse/walk failure → regex fallback
   } finally {

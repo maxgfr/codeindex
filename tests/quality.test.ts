@@ -59,11 +59,14 @@ if (PRINT) {
     "",
   ];
   for (const r of reports) {
-    if (!r.missing.length && !r.spurious.length && !r.wrongKind.length) continue;
+    const any = r.missing.length + r.spurious.length + r.wrongKind.length + r.missingDoc.length + r.missingSig.length;
+    if (!any) continue;
     lines.push(`--- ${r.lang} ---`);
-    for (const m of r.missing) lines.push(`  MISSING   ${m}`);
-    for (const s of r.spurious) lines.push(`  SPURIOUS  ${s}`);
-    for (const w of r.wrongKind) lines.push(`  WRONGKIND ${w}`);
+    for (const m of r.missing) lines.push(`  MISSING    ${m}`);
+    for (const s of r.spurious) lines.push(`  SPURIOUS   ${s}`);
+    for (const w of r.wrongKind) lines.push(`  WRONGKIND  ${w}`);
+    for (const d of r.missingDoc) lines.push(`  NODOC      ${d}`);
+    for (const g of r.missingSig) lines.push(`  BADSIG     ${g}`);
   }
   process.stdout.write(lines.join("\n") + "\n");
 }
