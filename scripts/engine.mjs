@@ -108,6 +108,32 @@ function rrf(lists, keyOf2, k = 60) {
   }
   return score;
 }
+function subtokens(raw) {
+  const folded = foldText(raw).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (t) => {
+    if (t.length < 2 || seen.has(t)) return;
+    seen.add(t);
+    out2.push(t);
+  };
+  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
+  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
+  return out2;
+}
+function stemOf(term) {
+  if (term.length < 4) return term;
+  let t = term;
+  if (t.endsWith("ies") && t.length > 4) t = t.slice(0, -3) + "y";
+  else if (t.endsWith("sses")) t = t.slice(0, -2);
+  else if (t.endsWith("ses") && t.length > 4) t = t.slice(0, -1);
+  else if (t.endsWith("s") && !t.endsWith("ss") && !t.endsWith("us") && !t.endsWith("is")) t = t.slice(0, -1);
+  if (t.endsWith("ying") && t.length > 5) t = t.slice(0, -4) + "y";
+  else if (t.endsWith("ing") && t.length > 5) t = t.slice(0, -3);
+  else if (t.endsWith("ed") && t.length > 4) t = t.slice(0, -2);
+  if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
+  return t;
+}
 var whichCache, STOPWORDS;
 var init_util = __esm({
   "src/util.ts"() {
@@ -860,7 +886,7 @@ var init_common = __esm({
 });
 
 // src/lang/js-ts.ts
-function stemOf(rel2) {
+function stemOf2(rel2) {
   return (rel2.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
 }
 function applyExportLists(content, symbols) {
@@ -942,7 +968,7 @@ var init_js_ts = __esm({
           const line = lines[i2];
           if (ANON_DEFAULT_RE.test(line) && !NAMED_DEFAULT_RE.test(line)) {
             symbols.push({
-              name: stemOf(rel2),
+              name: stemOf2(rel2),
               kind: "default",
               file: rel2,
               line: i2 + 1,
@@ -6441,6 +6467,14 @@ function collectAll(root, spec, defNames, maxCalls, wantImports) {
     callSeen.add(key);
     calls.push(receiver ? { name: name2, line, receiver } : { name: name2, line });
   };
+  const termsFound = /* @__PURE__ */ new Set();
+  const addTerms2 = (text) => {
+    if (termsFound.size >= MAX_TERMS) return;
+    for (const t of subtokens(text)) {
+      if (termsFound.size >= MAX_TERMS) return;
+      termsFound.add(t);
+    }
+  };
   const wantNames = spec.imports?.import_statement !== void 0;
   const namesFound = /* @__PURE__ */ new Set();
   const wantRefs = wantImports && spec.imports !== void 0;
@@ -6459,6 +6493,11 @@ function collectAll(root, spec, defNames, maxCalls, wantImports) {
     if (kids.length === 0 && REF_IDENT_TYPE.test(type)) {
       const text = node.text;
       if (REF_IDENT_TEXT.test(text) && !defNames.has(text)) identsFound.add(text);
+    }
+    if (COMMENT_NODE.test(type)) {
+      for (const line of node.text.split(/\r?\n/)) addTerms2(stripCommentMarkers(line));
+    } else if (kids.length === 0 && STRING_NODE.test(type) && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
+      addTerms2(node.text.replace(/^['"`]+|['"`]+$/g, ""));
     }
     if (wantCalls) {
       const how = spec.calls[type];
@@ -6507,7 +6546,8 @@ function collectAll(root, spec, defNames, maxCalls, wantImports) {
     refs,
     idents: [...identsFound].sort().slice(0, MAX_REF_IDENTS),
     calls: calls.slice(0, maxCalls),
-    importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES)
+    importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
+    terms: [...termsFound].sort(byStr)
   };
 }
 function extractAst(rel2, ext, content, opts = {}) {
@@ -6801,7 +6841,7 @@ function extractAst(rel2, ext, content, opts = {}) {
       for (const s of symbols) if (!s.exported && exportedNames.has(s.name)) s.exported = true;
     }
     const wantImports = opts.imports !== false;
-    const { refs, idents, calls, importedNames } = collectAll(
+    const { refs, idents, calls, importedNames, terms } = collectAll(
       root,
       spec,
       new Set(symbols.map((s) => s.name)),
@@ -6822,6 +6862,7 @@ function extractAst(rel2, ext, content, opts = {}) {
       calls,
       importedNames,
       relations,
+      terms,
       ...symbols.length >= maxSymbols ? { truncated: true } : {}
     };
   } catch {
@@ -6830,7 +6871,7 @@ function extractAst(rel2, ext, content, opts = {}) {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_FUNC_DEPTH, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT;
+var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_TERMS, MAX_LITERAL_LEN, MAX_FUNC_DEPTH, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, COMMENT_NODE, STRING_NODE;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
@@ -6840,11 +6881,15 @@ var init_extract = __esm({
     init_specs();
     init_signature();
     init_doc();
+    init_doc_text();
+    init_util();
     MAX_REF_IDENTS = 512;
     MAX_CALLS = 512;
     MAX_IMPORTED_NAMES = 256;
     MAX_SYMBOLS = 2e3;
     MAX_RELATIONS = 256;
+    MAX_TERMS = 512;
+    MAX_LITERAL_LEN = 80;
     MAX_FUNC_DEPTH = 2;
     ANON_DEFAULT_FN = /* @__PURE__ */ new Set([
       "function",
@@ -6857,6 +6902,8 @@ var init_extract = __esm({
     ANON_DEFAULT_CLASS = /* @__PURE__ */ new Set(["class", "class_declaration", "abstract_class_declaration"]);
     REF_IDENT_TYPE = /identifier|constant|(^|_)name$/;
     REF_IDENT_TEXT = /^[A-Za-z_]\w{4,}$/;
+    COMMENT_NODE = /(^|_)comment$/;
+    STRING_NODE = /(^|_)string(_literal)?$/;
   }
 });
 
@@ -7070,6 +7117,47 @@ function collectCallsRegex(content, symbols = [], maxCalls = 512) {
   }
   return [...out2.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line);
 }
+function collectTermsRegex(content) {
+  const found = /* @__PURE__ */ new Set();
+  const add = (text) => {
+    if (found.size >= MAX_TERMS2) return;
+    for (const t of subtokens(text)) {
+      if (found.size >= MAX_TERMS2) return;
+      found.add(t);
+    }
+  };
+  let inBlock = false;
+  for (const raw of content.split("\n")) {
+    if (found.size >= MAX_TERMS2) break;
+    let line = raw;
+    if (inBlock) {
+      const close = line.indexOf("*/");
+      add(stripCommentMarkers(close === -1 ? line : line.slice(0, close)));
+      if (close === -1) continue;
+      inBlock = false;
+      line = line.slice(close + 2);
+    }
+    const open = line.indexOf("/*");
+    if (open !== -1) {
+      const close = line.indexOf("*/", open + 2);
+      add(stripCommentMarkers(line.slice(open, close === -1 ? void 0 : close)));
+      if (close === -1) {
+        inBlock = true;
+        line = line.slice(0, open);
+      } else line = line.slice(0, open) + line.slice(close + 2);
+    }
+    const lineComment = /(^|\s)(\/\/|#|--)(.*)$/.exec(line);
+    if (lineComment) {
+      add(stripCommentMarkers(lineComment[2] + lineComment[3]));
+      line = line.slice(0, lineComment.index);
+    }
+    for (const m of line.matchAll(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+      const body2 = m[2];
+      if (body2.length && body2.length <= MAX_LITERAL_LEN2) add(body2);
+    }
+  }
+  return [...found].sort();
+}
 function extractCode(rel2, ext, content, opts = {}) {
   const ast = extractAst(rel2, ext, content, { maxCalls: opts.maxCallsPerFile, imports: false });
   const raw = ast ? ast.symbols : extractSymbols(rel2, ext, content);
@@ -7091,10 +7179,14 @@ function extractCode(rel2, ext, content, opts = {}) {
     // exclude a definition's own name+line from its call candidates.
     calls: ast ? ast.calls : collectCallsRegex(content, symbols, opts.maxCallsPerFile),
     importedNames: ast?.importedNames,
-    relations: ast?.relations?.length ? ast.relations : void 0
+    relations: ast?.relations?.length ? ast.relations : void 0,
+    // The AST tier reads comments and literals structurally; without a grammar
+    // the line scanner above still supplies a vocabulary, so search quality does
+    // not silently collapse for a language with no wasm.
+    terms: ast ? ast.terms : collectTermsRegex(content)
   };
 }
-var MAX_FILE_SYMBOLS, JS_TS, PY, C_CPP, MAX_USE_EXPANSION, CALL_KEYWORDS, DEF_INTRODUCERS;
+var MAX_FILE_SYMBOLS, JS_TS, PY, C_CPP, MAX_USE_EXPANSION, CALL_KEYWORDS, DEF_INTRODUCERS, MAX_TERMS2, MAX_LITERAL_LEN2;
 var init_code = __esm({
   "src/extract/code.ts"() {
     "use strict";
@@ -7102,6 +7194,7 @@ var init_code = __esm({
     init_extract();
     init_common();
     init_doc_text();
+    init_util();
     MAX_FILE_SYMBOLS = 2e3;
     JS_TS = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
     PY = /* @__PURE__ */ new Set([".py", ".pyi"]);
@@ -7144,6 +7237,8 @@ var init_code = __esm({
       "loop"
     ]);
     DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bmacro|\bproc)\s*[*]?\s*$/;
+    MAX_TERMS2 = 512;
+    MAX_LITERAL_LEN2 = 80;
   }
 });
 
@@ -7180,6 +7275,7 @@ function buildCodeRecord(rel2, ext, size, content, hash, lang, opts = {}) {
     record.importedNames = code.importedNames;
     record.truncated = code.truncated;
     record.relations = code.relations;
+    record.terms = code.terms;
   } else {
     record.title = basename(rel2);
   }
@@ -7291,6 +7387,7 @@ function scanRepo(root, opts = {}) {
         record.importedNames = code.importedNames;
         record.truncated = code.truncated;
         record.relations = code.relations;
+        record.terms = code.terms;
       } else {
         record.title = basename(f.rel);
       }
@@ -8761,41 +8858,122 @@ var init_symbolgraph = __esm({
   }
 });
 
-// src/bm25.ts
-function subtokens(raw) {
-  const folded = foldText(raw).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
-  const out2 = [];
-  const seen = /* @__PURE__ */ new Set();
-  const push = (t) => {
-    if (t.length < 2 || seen.has(t)) return;
-    seen.add(t);
-    out2.push(t);
-  };
-  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
-  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
-  return out2;
+// src/tests-map.ts
+function isTestPath(rel2) {
+  if (TEST_DIR.test(rel2)) return true;
+  if (isTestFile(rel2)) return true;
+  const base = rel2.split("/").pop();
+  return BASENAME_PATTERNS.some((p) => p.test(base));
 }
-function addTerms(doc, text) {
-  for (const t of subtokens(text)) {
-    doc.tf.set(t, (doc.tf.get(t) ?? 0) + 1);
-    doc.len++;
+function computeTestMap(graph) {
+  const testFiles = /* @__PURE__ */ new Set();
+  const moduleOf = /* @__PURE__ */ new Map();
+  for (const f of graph.files) {
+    moduleOf.set(f.rel, f.module);
+    if (f.fileKind === "code" && isTestPath(f.rel)) testFiles.add(f.rel);
   }
+  const byFile = /* @__PURE__ */ new Map();
+  const byModule = /* @__PURE__ */ new Map();
+  for (const e of graph.fileEdges) {
+    if (e.dangling) continue;
+    if (e.kind !== "import" && e.kind !== "use" && e.kind !== "call") continue;
+    if (!testFiles.has(e.from) || testFiles.has(e.to)) continue;
+    let set = byFile.get(e.to);
+    if (!set) byFile.set(e.to, set = /* @__PURE__ */ new Set());
+    set.add(e.from);
+    const slug = moduleOf.get(e.to);
+    if (slug !== void 0) {
+      let mset = byModule.get(slug);
+      if (!mset) byModule.set(slug, mset = /* @__PURE__ */ new Set());
+      mset.add(e.from);
+    }
+  }
+  const sortSets = (m) => {
+    const out2 = /* @__PURE__ */ new Map();
+    for (const key of [...m.keys()].sort(byStr)) out2.set(key, [...m.get(key)].sort(byStr));
+    return out2;
+  };
+  return { testFiles, testedByFile: sortSets(byFile), testedByModule: sortSets(byModule) };
+}
+function testsForModule(graph, slug) {
+  const m = graph.modules.find((x) => x.slug === slug);
+  if (m?.testedBy) return m.testedBy;
+  return computeTestMap(graph).testedByModule.get(slug) ?? [];
+}
+function untestedModules(graph) {
+  const tm = computeTestMap(graph);
+  const codeMembers = /* @__PURE__ */ new Map();
+  for (const f of graph.files) {
+    if (f.fileKind !== "code" || tm.testFiles.has(f.rel)) continue;
+    codeMembers.set(f.module, (codeMembers.get(f.module) ?? 0) + 1);
+  }
+  return graph.modules.filter(
+    (m) => m.tier <= 1 && m.symbols > 0 && (codeMembers.get(m.slug) ?? 0) > 0 && !tm.testedByModule.has(m.slug)
+  );
+}
+var BASENAME_PATTERNS, TEST_DIR;
+var init_tests_map = __esm({
+  "src/tests-map.ts"() {
+    "use strict";
+    init_modules();
+    init_sort();
+    BASENAME_PATTERNS = [
+      /^test_.*\.py$/i,
+      /_test\.py$/i,
+      /_test\.go$/,
+      /(Test|Tests|IT)\.java$/,
+      /(Test|Tests)\.kt$/,
+      /_spec\.rb$/,
+      /_test\.rb$/,
+      /Test\.php$/,
+      /(Test|Tests)\.cs$/,
+      /_test\.exs$/
+    ];
+    TEST_DIR = /(^|\/)(tests?|__tests?__|spec|specs|e2e)(\/|$)/i;
+  }
+});
+
+// src/bm25.ts
+function addTerms(doc, field, text) {
+  const f = doc.fields[field];
+  for (const t of subtokens(text)) {
+    f.tf.set(t, (f.tf.get(t) ?? 0) + 1);
+    f.len++;
+    doc.all.add(t);
+  }
+}
+function emptyFields() {
+  const out2 = {};
+  for (const f of FIELDS) out2[f] = { tf: /* @__PURE__ */ new Map(), len: 0 };
+  return out2;
 }
 function buildDocs(scan2) {
   const docs = [];
   for (const f of scan2.files) {
-    const doc = { file: f.rel, tf: /* @__PURE__ */ new Map(), len: 0, symbols: [] };
+    const doc = {
+      file: f.rel,
+      fields: emptyFields(),
+      all: /* @__PURE__ */ new Set(),
+      symbols: [],
+      decls: [],
+      exactNames: /* @__PURE__ */ new Set(),
+      isTest: isTestPath(f.rel)
+    };
     const seenSym = /* @__PURE__ */ new Set();
     for (const s of f.symbols) {
-      addTerms(doc, s.name);
+      addTerms(doc, "name", s.name);
+      if (s.doc) addTerms(doc, "doc", s.doc);
+      doc.exactNames.add(foldText(s.name).toLowerCase());
       if (!seenSym.has(s.name)) {
         seenSym.add(s.name);
         doc.symbols.push(s.name);
+        doc.decls.push({ name: s.name, kind: s.kind, line: s.line });
       }
     }
-    for (const seg of f.rel.split("/")) addTerms(doc, seg);
-    for (const h of f.headings) addTerms(doc, h);
-    if (f.summary) addTerms(doc, f.summary);
+    for (const seg of f.rel.split("/")) addTerms(doc, "path", seg);
+    for (const h of f.headings) addTerms(doc, "heading", h);
+    if (f.summary) addTerms(doc, "summary", f.summary);
+    for (const t of f.terms ?? []) addTerms(doc, "body", t);
     docs.push(doc);
   }
   return docs;
@@ -8812,10 +8990,27 @@ function diceCoefficient(a, b) {
   for (const g of a) if (b.has(g)) inter++;
   return 2 * inter / (a.size + b.size);
 }
+function buildStemIndex(docs) {
+  const seen = /* @__PURE__ */ new Set();
+  const index = /* @__PURE__ */ new Map();
+  for (const d of docs) {
+    for (const term of d.all) {
+      if (seen.has(term)) continue;
+      seen.add(term);
+      const stem = stemOf(term);
+      if (stem === term) continue;
+      let arr = index.get(stem);
+      if (!arr) index.set(stem, arr = []);
+      arr.push(term);
+    }
+  }
+  for (const arr of index.values()) arr.sort(byStr);
+  return index;
+}
 function buildTrigramIndex(docs) {
   const index = /* @__PURE__ */ new Map();
   for (const d of docs) {
-    for (const term of d.tf.keys()) {
+    for (const term of d.all) {
       if (!index.has(term)) index.set(term, charTrigrams(term));
     }
   }
@@ -8832,16 +9027,20 @@ function searchIndex(scan2, query, opts = {}) {
     }
   }
   if (!terms.length) return [];
+  const queryWantsTests = terms.some((t) => TEST_INTENT.test(t));
   const docs = bm25DocsFor(scan2);
   const n = docs.length;
   if (!n) return [];
-  let totalLen = 0;
-  for (const d of docs) totalLen += d.len;
-  const avgLen = totalLen / n || 1;
+  const avgLen = {};
+  for (const f of FIELDS) {
+    let total = 0;
+    for (const d of docs) total += d.fields[f].len;
+    avgLen[f] = total / n || 1;
+  }
   const df = /* @__PURE__ */ new Map();
   for (const t of terms) {
     let count = 0;
-    for (const d of docs) if (d.tf.has(t)) count++;
+    for (const d of docs) if (d.all.has(t)) count++;
     df.set(t, count);
   }
   const fuzzyEnabled = opts.fuzzy ?? true;
@@ -8849,16 +9048,29 @@ function searchIndex(scan2, query, opts = {}) {
   if (fuzzyEnabled) {
     const unmatched = terms.filter((t) => df.get(t) === 0);
     if (unmatched.length) {
-      const trigramIndex = bm25TrigramsFor(scan2);
+      const stemIndex = bm25StemsFor(scan2);
+      const stillUnmatched = [];
       for (const t of unmatched) {
-        const grams = charTrigrams(t);
-        const candidates = [];
-        for (const [vocabTerm, vocabGrams] of trigramIndex) {
-          const dice = diceCoefficient(grams, vocabGrams);
-          if (dice >= FUZZY_DICE_THRESHOLD) candidates.push({ term: vocabTerm, dice });
+        const viaStem = (stemIndex.get(stemOf(t)) ?? []).filter((v) => v !== t);
+        if (viaStem.length) {
+          fuzzyCandidates.set(
+            t,
+            viaStem.slice(0, FUZZY_CAP).map((term) => ({ term, dice: STEM_WEIGHT }))
+          );
+        } else stillUnmatched.push(t);
+      }
+      if (stillUnmatched.length) {
+        const trigramIndex = bm25TrigramsFor(scan2);
+        for (const t of stillUnmatched) {
+          const grams = charTrigrams(t);
+          const candidates = [];
+          for (const [vocabTerm, vocabGrams] of trigramIndex) {
+            const dice = diceCoefficient(grams, vocabGrams);
+            if (dice >= FUZZY_DICE_THRESHOLD) candidates.push({ term: vocabTerm, dice });
+          }
+          candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
+          fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
         }
-        candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
-        fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
       }
     }
   }
@@ -8867,70 +9079,217 @@ function searchIndex(scan2, query, opts = {}) {
     const known = df.get(term) ?? vocabDf.get(term);
     if (known !== void 0) return known;
     let count = 0;
-    for (const d of docs) if (d.tf.has(term)) count++;
+    for (const d of docs) if (d.all.has(term)) count++;
     vocabDf.set(term, count);
     return count;
   };
+  const idfOf = (docFreq) => Math.log(1 + (n - docFreq + 0.5) / (docFreq + 0.5));
+  const prior = opts.rank === "graph" ? importPagerankFor(scan2) : void 0;
   const results = [];
   for (const d of docs) {
     let score = 0;
     const matched = [];
+    const matchedFields = /* @__PURE__ */ new Set();
     const symbolTerms = /* @__PURE__ */ new Set();
     const fuzzyHit = /* @__PURE__ */ new Set();
+    let exact = false;
+    const weightedTf = (term) => {
+      let wtf = 0;
+      for (const f of FIELDS) {
+        const fd = d.fields[f];
+        const tf = fd.tf.get(term);
+        if (!tf) continue;
+        matchedFields.add(f);
+        const b = FIELD_B[f];
+        wtf += FIELD_WEIGHT[f] * tf / (1 - b + b * fd.len / avgLen[f]);
+      }
+      return wtf;
+    };
     for (const t of terms) {
-      const tf = d.tf.get(t);
-      if (tf) {
+      const wtf = weightedTf(t);
+      if (wtf > 0) {
         matched.push(t);
         symbolTerms.add(t);
-        const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
-        score += idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * d.len / avgLen));
+        if (d.exactNames.has(t)) exact = true;
+        score += idfOf(df.get(t)) * (wtf / (K1 + wtf));
         continue;
       }
-      const candidates = fuzzyCandidates.get(t);
-      if (!candidates) continue;
-      for (const cand of candidates) {
-        const ctf = d.tf.get(cand.term);
-        if (!ctf) continue;
-        const cdf = dfOfVocabTerm(cand.term);
-        const idf = Math.log(1 + (n - cdf + 0.5) / (cdf + 0.5));
-        const contribution = idf * (ctf * (K1 + 1)) / (ctf + K1 * (1 - B + B * d.len / avgLen));
-        score += contribution * cand.dice;
+      for (const cand of fuzzyCandidates.get(t) ?? []) {
+        const cwtf = weightedTf(cand.term);
+        if (!cwtf) continue;
+        score += idfOf(dfOfVocabTerm(cand.term)) * (cwtf / (K1 + cwtf)) * cand.dice;
         symbolTerms.add(cand.term);
         fuzzyHit.add(t);
       }
     }
     if (!matched.length && !fuzzyHit.size) continue;
-    const scored = d.symbols.map((name2) => {
-      const toks = new Set(subtokens(name2));
-      let hits = 0;
-      for (const t of symbolTerms) if (toks.has(t)) hits++;
-      return { name: name2, hits };
-    }).filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits || byStr(a.name, b.name));
+    if (exact) score *= EXACT_NAME_BOOST;
+    if (d.isTest && !queryWantsTests) score *= TEST_DEMOTION;
+    if (prior) {
+      score *= 1 + 0.35 * Math.log1p(prior.get(d.file) ?? 0);
+    }
+    const scored = d.decls.map((decl) => {
+      const toks = new Set(subtokens(decl.name));
+      let hits2 = 0;
+      for (const t of symbolTerms) if (toks.has(t)) hits2++;
+      return { decl, hits: hits2 };
+    }).filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits || byStr(a.decl.name, b.decl.name));
+    const hits = scored.slice(0, TOP_SYMBOLS).map((s) => s.decl);
     const result = {
       file: d.file,
       score: Number(score.toFixed(4)),
       matchedTerms: matched.sort(byStr),
-      topSymbols: scored.slice(0, TOP_SYMBOLS).map((s) => s.name)
+      topSymbols: hits.map((h) => h.name)
     };
+    if (matchedFields.size) result.matchedFields = FIELDS.filter((f) => matchedFields.has(f));
+    if (hits.length) {
+      result.symbolHits = hits;
+      result.line = Math.min(...hits.map((h) => h.line));
+    }
     if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
     results.push(result);
   }
   results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
   return results.slice(0, opts.limit ?? DEFAULT_LIMIT);
 }
-var K1, B, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP;
+var K1, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP, STEM_WEIGHT, FIELDS, FIELD_WEIGHT, FIELD_B, EXACT_NAME_BOOST, TEST_DEMOTION, TEST_INTENT;
 var init_bm25 = __esm({
   "src/bm25.ts"() {
     "use strict";
     init_derived();
     init_util();
+    init_tests_map();
     init_sort();
     K1 = 1.2;
-    B = 0.75;
     DEFAULT_LIMIT = 20;
     TOP_SYMBOLS = 5;
     FUZZY_DICE_THRESHOLD = 0.6;
     FUZZY_CAP = 3;
+    STEM_WEIGHT = 0.9;
+    FIELDS = ["name", "path", "heading", "summary", "doc", "body"];
+    FIELD_WEIGHT = { name: 3, path: 2, heading: 1.5, summary: 1.5, doc: 1.6, body: 0.7 };
+    FIELD_B = { name: 0.75, path: 0.75, heading: 0.75, summary: 0.75, doc: 0.75, body: 0.4 };
+    EXACT_NAME_BOOST = 1.35;
+    TEST_DEMOTION = 0.65;
+    TEST_INTENT = /^(test|tests|spec|specs|fixture|fixtures|mock|mocks|stub|stubs)$/;
+  }
+});
+
+// src/centrality.ts
+function pagerankOf(ids, edges, damping = DAMPING) {
+  const out2 = /* @__PURE__ */ new Map();
+  const n = ids.length;
+  if (n === 0) return out2;
+  const idx = new Map(ids.map((s, i2) => [s, i2]));
+  const adj = Array.from({ length: n }, () => []);
+  const outW = new Array(n).fill(0);
+  for (const e of edges) {
+    if (e.dangling) continue;
+    const a = idx.get(e.from);
+    const b = idx.get(e.to);
+    if (a === void 0 || b === void 0 || a === b) continue;
+    adj[a].push([b, e.weight]);
+    outW[a] += e.weight;
+  }
+  let pr = new Array(n).fill(1 / n);
+  for (let iter = 0; iter < MAX_ITERS; iter++) {
+    let dangling = 0;
+    for (let i2 = 0; i2 < n; i2++) if (outW[i2] === 0) dangling += pr[i2];
+    const base = (1 - damping) / n + damping * dangling / n;
+    const next = new Array(n).fill(base);
+    for (let i2 = 0; i2 < n; i2++) {
+      if (outW[i2] === 0) continue;
+      const share = damping * pr[i2] / outW[i2];
+      for (const [j, w] of adj[i2]) next[j] += share * w;
+    }
+    let delta = 0;
+    for (let i2 = 0; i2 < n; i2++) delta += Math.abs(next[i2] - pr[i2]);
+    pr = next;
+    if (delta < CONVERGENCE) break;
+  }
+  ids.forEach((s, i2) => out2.set(s, pr[i2]));
+  return out2;
+}
+function betweennessOf(ids, edges) {
+  const out2 = /* @__PURE__ */ new Map();
+  for (const s of ids) out2.set(s, 0);
+  const n = ids.length;
+  if (n < 3) return out2;
+  const idx = new Map(ids.map((s, i2) => [s, i2]));
+  const nbSets = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
+  for (const e of edges) {
+    if (e.dangling) continue;
+    const a = idx.get(e.from);
+    const b = idx.get(e.to);
+    if (a === void 0 || b === void 0 || a === b) continue;
+    nbSets[a].add(b);
+    nbSets[b].add(a);
+  }
+  const adj = nbSets.map((s) => [...s].sort((x, y) => x - y));
+  const cb = new Array(n).fill(0);
+  for (let s = 0; s < n; s++) {
+    const stack = [];
+    const pred = Array.from({ length: n }, () => []);
+    const sigma = new Array(n).fill(0);
+    const dist = new Array(n).fill(-1);
+    sigma[s] = 1;
+    dist[s] = 0;
+    const queue = [s];
+    for (let qi = 0; qi < queue.length; qi++) {
+      const v = queue[qi];
+      stack.push(v);
+      for (const w of adj[v]) {
+        if (dist[w] < 0) {
+          dist[w] = dist[v] + 1;
+          queue.push(w);
+        }
+        if (dist[w] === dist[v] + 1) {
+          sigma[w] += sigma[v];
+          pred[w].push(v);
+        }
+      }
+    }
+    const delta = new Array(n).fill(0);
+    for (let si = stack.length - 1; si >= 0; si--) {
+      const w = stack[si];
+      for (const v of pred[w]) delta[v] += sigma[v] / sigma[w] * (1 + delta[w]);
+      if (w !== s) cb[w] += delta[w];
+    }
+  }
+  const norm2 = (n - 1) * (n - 2) / 2;
+  ids.forEach((id, i2) => out2.set(id, cb[i2] / 2 / norm2));
+  return out2;
+}
+function applyCentrality(graph) {
+  const notes = [];
+  const nM = graph.modules.length;
+  if (nM > 0) {
+    const mIds = graph.modules.map((m) => m.id);
+    const mPr = pagerankOf(mIds, graph.moduleEdges);
+    for (const m of graph.modules) m.pagerank = Number(((mPr.get(m.id) ?? 0) * nM).toFixed(4));
+    if (nM > BETWEENNESS_MAX_NODES) {
+      notes.push(`betweenness skipped (${nM} modules > ${BETWEENNESS_MAX_NODES})`);
+    } else {
+      const bt = betweennessOf(mIds, graph.moduleEdges);
+      for (const m of graph.modules) m.betweenness = Number((bt.get(m.id) ?? 0).toFixed(6));
+    }
+  }
+  const nF = graph.files.length;
+  if (nF > 0) {
+    const fIds = graph.files.map((f) => f.id);
+    const fPr = pagerankOf(fIds, graph.fileEdges);
+    for (const f of graph.files) f.pagerank = Number(((fPr.get(f.id) ?? 0) * nF).toFixed(4));
+  }
+  return notes;
+}
+var DAMPING, MAX_ITERS, CONVERGENCE, BETWEENNESS_MAX_NODES;
+var init_centrality = __esm({
+  "src/centrality.ts"() {
+    "use strict";
+    DAMPING = 0.85;
+    MAX_ITERS = 100;
+    CONVERGENCE = 1e-10;
+    BETWEENNESS_MAX_NODES = 3e3;
   }
 });
 
@@ -9040,6 +9399,24 @@ function bm25TrigramsFor(scan2) {
   const bm25 = c2.bm25 ??= { docs: buildDocs(scan2) };
   return bm25.trigrams ??= buildTrigramIndex(bm25.docs);
 }
+function importPagerankFor(scan2) {
+  const c2 = cacheFor(scan2);
+  if (!c2.importPagerank) {
+    const ids = scan2.files.map((f) => f.rel);
+    const edges = [];
+    for (const pair of importPairsFor(scan2)) {
+      const sep3 = pair.indexOf("|");
+      edges.push({ from: pair.slice(0, sep3), to: pair.slice(sep3 + 1), kind: "import", weight: 1 });
+    }
+    c2.importPagerank = pagerankOf(ids, edges);
+  }
+  return c2.importPagerank;
+}
+function bm25StemsFor(scan2) {
+  const c2 = cacheFor(scan2);
+  const bm25 = c2.bm25 ??= { docs: buildDocs(scan2) };
+  return bm25.stems ??= buildStemIndex(bm25.docs);
+}
 function fileComplexityFor(scan2) {
   const c2 = cacheFor(scan2);
   if (!c2.fileComplexity) {
@@ -9063,6 +9440,7 @@ var init_derived = __esm({
     init_relations();
     init_symbolgraph();
     init_bm25();
+    init_centrality();
     init_complexity();
     init_walk();
     caches = /* @__PURE__ */ new WeakMap();
@@ -10052,124 +10430,6 @@ var init_workspaces = __esm({
   }
 });
 
-// src/centrality.ts
-function pagerankOf(ids, edges, damping = DAMPING) {
-  const out2 = /* @__PURE__ */ new Map();
-  const n = ids.length;
-  if (n === 0) return out2;
-  const idx = new Map(ids.map((s, i2) => [s, i2]));
-  const adj = Array.from({ length: n }, () => []);
-  const outW = new Array(n).fill(0);
-  for (const e of edges) {
-    if (e.dangling) continue;
-    const a = idx.get(e.from);
-    const b = idx.get(e.to);
-    if (a === void 0 || b === void 0 || a === b) continue;
-    adj[a].push([b, e.weight]);
-    outW[a] += e.weight;
-  }
-  let pr = new Array(n).fill(1 / n);
-  for (let iter = 0; iter < MAX_ITERS; iter++) {
-    let dangling = 0;
-    for (let i2 = 0; i2 < n; i2++) if (outW[i2] === 0) dangling += pr[i2];
-    const base = (1 - damping) / n + damping * dangling / n;
-    const next = new Array(n).fill(base);
-    for (let i2 = 0; i2 < n; i2++) {
-      if (outW[i2] === 0) continue;
-      const share = damping * pr[i2] / outW[i2];
-      for (const [j, w] of adj[i2]) next[j] += share * w;
-    }
-    let delta = 0;
-    for (let i2 = 0; i2 < n; i2++) delta += Math.abs(next[i2] - pr[i2]);
-    pr = next;
-    if (delta < CONVERGENCE) break;
-  }
-  ids.forEach((s, i2) => out2.set(s, pr[i2]));
-  return out2;
-}
-function betweennessOf(ids, edges) {
-  const out2 = /* @__PURE__ */ new Map();
-  for (const s of ids) out2.set(s, 0);
-  const n = ids.length;
-  if (n < 3) return out2;
-  const idx = new Map(ids.map((s, i2) => [s, i2]));
-  const nbSets = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
-  for (const e of edges) {
-    if (e.dangling) continue;
-    const a = idx.get(e.from);
-    const b = idx.get(e.to);
-    if (a === void 0 || b === void 0 || a === b) continue;
-    nbSets[a].add(b);
-    nbSets[b].add(a);
-  }
-  const adj = nbSets.map((s) => [...s].sort((x, y) => x - y));
-  const cb = new Array(n).fill(0);
-  for (let s = 0; s < n; s++) {
-    const stack = [];
-    const pred = Array.from({ length: n }, () => []);
-    const sigma = new Array(n).fill(0);
-    const dist = new Array(n).fill(-1);
-    sigma[s] = 1;
-    dist[s] = 0;
-    const queue = [s];
-    for (let qi = 0; qi < queue.length; qi++) {
-      const v = queue[qi];
-      stack.push(v);
-      for (const w of adj[v]) {
-        if (dist[w] < 0) {
-          dist[w] = dist[v] + 1;
-          queue.push(w);
-        }
-        if (dist[w] === dist[v] + 1) {
-          sigma[w] += sigma[v];
-          pred[w].push(v);
-        }
-      }
-    }
-    const delta = new Array(n).fill(0);
-    for (let si = stack.length - 1; si >= 0; si--) {
-      const w = stack[si];
-      for (const v of pred[w]) delta[v] += sigma[v] / sigma[w] * (1 + delta[w]);
-      if (w !== s) cb[w] += delta[w];
-    }
-  }
-  const norm2 = (n - 1) * (n - 2) / 2;
-  ids.forEach((id, i2) => out2.set(id, cb[i2] / 2 / norm2));
-  return out2;
-}
-function applyCentrality(graph) {
-  const notes = [];
-  const nM = graph.modules.length;
-  if (nM > 0) {
-    const mIds = graph.modules.map((m) => m.id);
-    const mPr = pagerankOf(mIds, graph.moduleEdges);
-    for (const m of graph.modules) m.pagerank = Number(((mPr.get(m.id) ?? 0) * nM).toFixed(4));
-    if (nM > BETWEENNESS_MAX_NODES) {
-      notes.push(`betweenness skipped (${nM} modules > ${BETWEENNESS_MAX_NODES})`);
-    } else {
-      const bt = betweennessOf(mIds, graph.moduleEdges);
-      for (const m of graph.modules) m.betweenness = Number((bt.get(m.id) ?? 0).toFixed(6));
-    }
-  }
-  const nF = graph.files.length;
-  if (nF > 0) {
-    const fIds = graph.files.map((f) => f.id);
-    const fPr = pagerankOf(fIds, graph.fileEdges);
-    for (const f of graph.files) f.pagerank = Number(((fPr.get(f.id) ?? 0) * nF).toFixed(4));
-  }
-  return notes;
-}
-var DAMPING, MAX_ITERS, CONVERGENCE, BETWEENNESS_MAX_NODES;
-var init_centrality = __esm({
-  "src/centrality.ts"() {
-    "use strict";
-    DAMPING = 0.85;
-    MAX_ITERS = 100;
-    CONVERGENCE = 1e-10;
-    BETWEENNESS_MAX_NODES = 3e3;
-  }
-});
-
 // src/community.ts
 function communityOf(graph, slug) {
   return graph.modules.find((m) => m.slug === slug)?.community;
@@ -10391,81 +10651,6 @@ var init_community = __esm({
     EPS = 1e-12;
     OVERSIZE_FRACTION = 0.25;
     OVERSIZE_MIN = 10;
-  }
-});
-
-// src/tests-map.ts
-function isTestPath(rel2) {
-  if (TEST_DIR.test(rel2)) return true;
-  if (isTestFile(rel2)) return true;
-  const base = rel2.split("/").pop();
-  return BASENAME_PATTERNS.some((p) => p.test(base));
-}
-function computeTestMap(graph) {
-  const testFiles = /* @__PURE__ */ new Set();
-  const moduleOf = /* @__PURE__ */ new Map();
-  for (const f of graph.files) {
-    moduleOf.set(f.rel, f.module);
-    if (f.fileKind === "code" && isTestPath(f.rel)) testFiles.add(f.rel);
-  }
-  const byFile = /* @__PURE__ */ new Map();
-  const byModule = /* @__PURE__ */ new Map();
-  for (const e of graph.fileEdges) {
-    if (e.dangling) continue;
-    if (e.kind !== "import" && e.kind !== "use" && e.kind !== "call") continue;
-    if (!testFiles.has(e.from) || testFiles.has(e.to)) continue;
-    let set = byFile.get(e.to);
-    if (!set) byFile.set(e.to, set = /* @__PURE__ */ new Set());
-    set.add(e.from);
-    const slug = moduleOf.get(e.to);
-    if (slug !== void 0) {
-      let mset = byModule.get(slug);
-      if (!mset) byModule.set(slug, mset = /* @__PURE__ */ new Set());
-      mset.add(e.from);
-    }
-  }
-  const sortSets = (m) => {
-    const out2 = /* @__PURE__ */ new Map();
-    for (const key of [...m.keys()].sort(byStr)) out2.set(key, [...m.get(key)].sort(byStr));
-    return out2;
-  };
-  return { testFiles, testedByFile: sortSets(byFile), testedByModule: sortSets(byModule) };
-}
-function testsForModule(graph, slug) {
-  const m = graph.modules.find((x) => x.slug === slug);
-  if (m?.testedBy) return m.testedBy;
-  return computeTestMap(graph).testedByModule.get(slug) ?? [];
-}
-function untestedModules(graph) {
-  const tm = computeTestMap(graph);
-  const codeMembers = /* @__PURE__ */ new Map();
-  for (const f of graph.files) {
-    if (f.fileKind !== "code" || tm.testFiles.has(f.rel)) continue;
-    codeMembers.set(f.module, (codeMembers.get(f.module) ?? 0) + 1);
-  }
-  return graph.modules.filter(
-    (m) => m.tier <= 1 && m.symbols > 0 && (codeMembers.get(m.slug) ?? 0) > 0 && !tm.testedByModule.has(m.slug)
-  );
-}
-var BASENAME_PATTERNS, TEST_DIR;
-var init_tests_map = __esm({
-  "src/tests-map.ts"() {
-    "use strict";
-    init_modules();
-    init_sort();
-    BASENAME_PATTERNS = [
-      /^test_.*\.py$/i,
-      /_test\.py$/i,
-      /_test\.go$/,
-      /(Test|Tests|IT)\.java$/,
-      /(Test|Tests)\.kt$/,
-      /_spec\.rb$/,
-      /_test\.rb$/,
-      /Test\.php$/,
-      /(Test|Tests)\.cs$/,
-      /_test\.exs$/
-    ];
-    TEST_DIR = /(^|\/)(tests?|__tests?__|spec|specs|e2e)(\/|$)/i;
   }
 });
 
@@ -11789,7 +11974,7 @@ var init_tools = __esm({
       },
       {
         name: "search",
-        description: 'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse an embedding tier (HTTP endpoint, else a local static model) with lexical \u2014 the response then wraps the ranked list as `{ results, tier, degradedReason? }`, `tier` being "endpoint"/"static" when fusion happened or "lexical" (with `degradedReason`) when it did not (see embed_status). Without `semantic`, the response is the bare ranked array, unchanged.',
+        description: 'Natural-language-ish lexical search: BM25F ranking over SIX weighted fields \u2014 symbol names (camelCase/snake_case subtokens), path segments, markdown headings, the file summary, per-symbol DOC COMMENTS, and the prose body (comment + short-literal words). The last two are why "where is rate limiting handled" works: the phrase lives in a comment, not in a name. Results carry `matchedFields`, a `line` anchor and `symbolHits` (name/kind/line). NOT embeddings by default \u2014 deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse an embedding tier (HTTP endpoint, else a local static model) with lexical \u2014 the response then wraps the ranked list as `{ results, tier, degradedReason? }`, `tier` being "endpoint"/"static" when fusion happened or "lexical" (with `degradedReason`) when it did not (see embed_status). Without `semantic`, the response is the bare ranked array, unchanged.',
         inputSchema: {
           type: "object",
           properties: {
@@ -11799,7 +11984,11 @@ var init_tools = __esm({
             limit: { type: "number", description: "Max results (default 20)" },
             fuzzy: {
               type: "boolean",
-              description: "Trigram fuzzy fallback for query terms with zero document frequency (default true)"
+              description: 'Fallback for query terms with zero document frequency: a morphological stem match first ("caching" finds "cache"), then trigram similarity for typos (default true)'
+            },
+            rank: {
+              type: "string",
+              description: `Structural prior: "graph" multiplies the lexical score by the file's PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus \u2014 see SearchOptions.rank.`
             },
             semantic: {
               type: "boolean",
@@ -12194,6 +12383,8 @@ async function callTool(name2, args2, defaultRepo) {
   const repo = str(args2.repo) ?? defaultRepo;
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
+  const rankArg = str(args2.rank);
+  const rankOpt = rankArg === "graph" || rankArg === "lexical" ? { rank: rankArg } : {};
   let walked;
   if (!SCANLESS_TOOLS.has(name2)) {
     walked = walk(repo, {});
@@ -12349,7 +12540,7 @@ async function callTool(name2, args2, defaultRepo) {
           const results2 = searchSemantic(scan2, query, index, { queryVec, limit, fuzzy });
           return JSON.stringify({ results: results2, tier: "endpoint" }, null, 2);
         } catch (e) {
-          const results2 = searchIndex(scan2, query, { limit, fuzzy });
+          const results2 = searchIndex(scan2, query, { limit, fuzzy, ...rankOpt });
           return JSON.stringify(
             { results: results2, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
             null,
@@ -12367,14 +12558,14 @@ async function callTool(name2, args2, defaultRepo) {
         const results2 = searchSemantic(scan2, query, index, { model, limit, fuzzy });
         return JSON.stringify({ results: results2, tier: "static" }, null, 2);
       }
-      const results = searchIndex(scan2, query, { limit, fuzzy });
+      const results = searchIndex(scan2, query, { limit, fuzzy, ...rankOpt });
       return JSON.stringify(
         { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured \u2014 see embed_status" },
         null,
         2
       );
     }
-    return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy }), null, 2);
+    return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy, ...rankOpt }), null, 2);
   }
   if (name2 === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
@@ -14072,7 +14263,11 @@ function parseFlags(args2) {
     else if (a === "--staged") flags2.staged = true;
     else if (a === "--depth") flags2.depth = num2();
     else if (a === "--kind") flags2.kind = next();
-    else if (a === "--direction") {
+    else if (a === "--rank") {
+      const v = next();
+      if (v !== "graph" && v !== "lexical") throw new Error(`--rank expects graph|lexical, got "${v}"`);
+      flags2.rank = v;
+    } else if (a === "--direction") {
       const v = next();
       if (v !== "out" && v !== "in" && v !== "both") throw new Error(`--direction expects out|in|both, got "${v}"`);
       flags2.direction = v;
@@ -14380,7 +14575,7 @@ async function runCli(rawArgv) {
     if (flags2.semantic) {
       const endpoint = resolveEmbedEndpoint();
       const lexical = () => {
-        const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
+        const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy, ...flags2.rank ? { rank: flags2.rank } : {} });
         emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
       };
       if (endpoint) {
@@ -14411,7 +14606,7 @@ async function runCli(rawArgv) {
         }
       }
     } else {
-      const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy });
+      const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy, ...flags2.rank ? { rank: flags2.rank } : {} });
       emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
     }
   } else if (cmd === "embed") {

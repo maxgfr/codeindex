@@ -29,7 +29,7 @@ import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
-import { searchIndex } from "./bm25.js";
+import { searchIndex, type RankMode } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
@@ -130,6 +130,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   const repo = str(args.repo) ?? defaultRepo;
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
+  // `search`'s optional structural prior; anything else falls back to the default.
+  const rankArg = str(args.rank);
+  const rankOpt: { rank?: RankMode } = rankArg === "graph" || rankArg === "lexical" ? { rank: rankArg } : {};
   // Scan-needing tools warm the present-language grammars (re-derived per call)
   // before any scan so extraction takes the AST tier; scan-less tools skip it.
   // ONE walk feeds both the warm and the scan below — see warmGrammarsForWalk.
@@ -313,7 +316,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
           const results = searchSemantic(scan, query, index, { queryVec, limit, fuzzy });
           return JSON.stringify({ results, tier: "endpoint" }, null, 2);
         } catch (e) {
-          const results = searchIndex(scan, query, { limit, fuzzy });
+          const results = searchIndex(scan, query, { limit, fuzzy, ...rankOpt });
           return JSON.stringify(
             { results, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
             null,
@@ -333,14 +336,14 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       }
       // Opt-in tier not activated (no endpoint, no model asset) — degrade to
       // lexical with a reason instead of failing silently.
-      const results = searchIndex(scan, query, { limit, fuzzy });
+      const results = searchIndex(scan, query, { limit, fuzzy, ...rankOpt });
       return JSON.stringify(
         { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured — see embed_status" },
         null,
         2,
       );
     }
-    return JSON.stringify(searchIndex(scan, query, { limit, fuzzy }), null, 2);
+    return JSON.stringify(searchIndex(scan, query, { limit, fuzzy, ...rankOpt }), null, 2);
   }
   if (name === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);

@@ -28,6 +28,7 @@
 // only (no module-evaluation-time cross-calls), which Node ESM and esbuild
 // resolve safely.
 import { join } from "node:path";
+import type { Edge } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { buildResolveContext, resolveImport, type ResolveContext } from "./resolve.js";
 import { uniqueSymbolDefs } from "./graph.js";
@@ -35,7 +36,8 @@ import { computeSymbolRefs } from "./render/symbols-json.js";
 import { buildCallerIndex, type CallerIndex } from "./callers.js";
 import { buildTypeHierarchy, type TypeHierarchyEntry } from "./relations.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbolgraph.js";
-import { buildDocs, buildTrigramIndex, type Doc } from "./bm25.js";
+import { buildDocs, buildStemIndex, buildTrigramIndex, type Doc } from "./bm25.js";
+import { pagerankOf } from "./centrality.js";
 import { complexityOfSource } from "./complexity.js";
 import { readText } from "./walk.js";
 
@@ -45,10 +47,11 @@ interface DerivedCache {
   uniqueDefs?: Map<string, string>; // uniqueSymbolDefs(scan)
   symbolRefs?: Map<string, Set<string>>; // computeSymbolRefs(scan)
   callerIndex?: CallerIndex; // DEFAULT precision opts only — never recall mode
-  bm25?: { docs: Doc[]; trigrams?: Map<string, Set<string>> };
+  bm25?: { docs: Doc[]; trigrams?: Map<string, Set<string>>; stems?: Map<string, string[]> };
   hierarchy?: Map<string, TypeHierarchyEntry>;
   symbolGraph?: SymbolGraph;
   fileComplexity?: Map<string, number>; // rel → whole-file branch count + 1 (code files)
+  importPagerank?: Map<string, number>; // rel → PageRank over the resolved import graph
 }
 
 const caches = new WeakMap<RepoScan, DerivedCache>();
@@ -145,6 +148,35 @@ export function bm25TrigramsFor(scan: RepoScan): Map<string, Set<string>> {
   const c = cacheFor(scan);
   const bm25 = (c.bm25 ??= { docs: buildDocs(scan) });
   return (bm25.trigrams ??= buildTrigramIndex(bm25.docs));
+}
+
+// A file's PageRank over the resolved IMPORT graph — search's structural prior.
+//
+// Not the graph builder's pagerank: that one needs the full link-graph (calls,
+// use, mention, communities, centrality), which is far more work than a ranking
+// prior justifies. This runs the same `pagerankOf` over the import pairs the
+// resolve context already produced, so a session that has asked for callers or
+// dead code pays nothing extra.
+export function importPagerankFor(scan: RepoScan): Map<string, number> {
+  const c = cacheFor(scan);
+  if (!c.importPagerank) {
+    const ids = scan.files.map((f) => f.rel);
+    const edges: Edge[] = [];
+    for (const pair of importPairsFor(scan)) {
+      const sep = pair.indexOf("|");
+      edges.push({ from: pair.slice(0, sep), to: pair.slice(sep + 1), kind: "import", weight: 1 });
+    }
+    c.importPagerank = pagerankOf(ids, edges);
+  }
+  return c.importPagerank;
+}
+
+// Corpus vocabulary grouped by morphological stem. LAZY for the same reason the
+// trigram index is: a query whose every term already matches never builds it.
+export function bm25StemsFor(scan: RepoScan): Map<string, string[]> {
+  const c = cacheFor(scan);
+  const bm25 = (c.bm25 ??= { docs: buildDocs(scan) });
+  return (bm25.stems ??= buildStemIndex(bm25.docs));
 }
 
 // Whole-file branch counts for every code file (riskHotspots' per-file

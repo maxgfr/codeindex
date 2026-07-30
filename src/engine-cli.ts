@@ -194,6 +194,7 @@ interface CliFlags {
   depth?: number; // delta/impact/neighbors: traversal hops
   kind?: string; // neighbors: comma-separated edge kinds to traverse
   direction?: "out" | "in" | "both"; // callgraph: which way to walk
+  rank?: "graph" | "lexical"; // search: structural prior (default lexical)
   json?: boolean; // delta: emit JSON instead of the human panel
   positional?: string; // e.g. the grep pattern or search query
 }
@@ -250,6 +251,11 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--staged") flags.staged = true;
     else if (a === "--depth") flags.depth = num();
     else if (a === "--kind") flags.kind = next();
+    else if (a === "--rank") {
+      const v = next();
+      if (v !== "graph" && v !== "lexical") throw new Error(`--rank expects graph|lexical, got "${v}"`);
+      flags.rank = v;
+    }
     else if (a === "--direction") {
       const v = next();
       if (v !== "out" && v !== "in" && v !== "both") throw new Error(`--direction expects out|in|both, got "${v}"`);
@@ -691,7 +697,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (flags.semantic) {
       const endpoint = resolveEmbedEndpoint();
       const lexical = (): void => {
-        const results = searchIndex(scan, flags.positional!, { limit: flags.limit, fuzzy: flags.fuzzy });
+        const results = searchIndex(scan, flags.positional!, { limit: flags.limit, fuzzy: flags.fuzzy, ...(flags.rank ? { rank: flags.rank } : {}) });
         emit(JSON.stringify(results, null, 2) + "\n", flags.out);
       };
       if (endpoint) {
@@ -727,7 +733,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         }
       }
     } else {
-      const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy });
+      const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy, ...(flags.rank ? { rank: flags.rank } : {}) });
       emit(JSON.stringify(results, null, 2) + "\n", flags.out);
     }
   } else if (cmd === "embed") {

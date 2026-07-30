@@ -2,7 +2,8 @@ import type { CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
 import { extractReexports } from "../lang/common.js";
-import { isBanner, isDirective } from "./doc-text.js";
+import { isBanner, isDirective, stripCommentMarkers } from "./doc-text.js";
+import { subtokens } from "../util.js";
 
 // Per-file symbol ceiling. Raised from 400: a real 3000-line generated client or
 // a large `.d.ts` has more than 400 declarations, and dropping the tail silently
@@ -22,6 +23,9 @@ export interface CodeInfo {
   // call edges and receiver-gated sink catalogs.
   calls?: { name: string; line: number; receiver?: string }[];
   importedNames?: string[]; // JS/TS named-import bindings (AST path) — feeds the call gate
+  // Prose vocabulary — comment and short-string-literal words, subtokenized,
+  // deduped, capped and sorted. Feeds search's `body` field.
+  terms?: string[];
   // Inheritance stated by this file's declarations (AST path) — feeds the
   // extends/implements edges and the type hierarchy.
   relations?: RawRelation[];
@@ -343,6 +347,59 @@ export function collectCallsRegex(
   return [...out.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line));
 }
 
+const MAX_TERMS = 512;
+const MAX_LITERAL_LEN = 80;
+
+// Prose vocabulary for files the AST tier cannot parse: comment text and short
+// string literals, line by line. Deliberately cruder than the AST collector (a
+// `//` inside a string will contribute its tail) — a stray word costs a little
+// precision on one field, while having NO prose vocabulary costs the ability to
+// answer "where is X handled" at all for that language.
+//
+// Collected in SOURCE order and truncated at the tail, then sorted: truncating a
+// sorted list would cut every large file's vocabulary off mid-alphabet.
+export function collectTermsRegex(content: string): string[] {
+  const found = new Set<string>();
+  const add = (text: string): void => {
+    if (found.size >= MAX_TERMS) return;
+    for (const t of subtokens(text)) {
+      if (found.size >= MAX_TERMS) return;
+      found.add(t);
+    }
+  };
+  let inBlock = false;
+  for (const raw of content.split("\n")) {
+    if (found.size >= MAX_TERMS) break;
+    let line = raw;
+    if (inBlock) {
+      const close = line.indexOf("*/");
+      add(stripCommentMarkers(close === -1 ? line : line.slice(0, close)));
+      if (close === -1) continue;
+      inBlock = false;
+      line = line.slice(close + 2);
+    }
+    const open = line.indexOf("/*");
+    if (open !== -1) {
+      const close = line.indexOf("*/", open + 2);
+      add(stripCommentMarkers(line.slice(open, close === -1 ? undefined : close)));
+      if (close === -1) {
+        inBlock = true;
+        line = line.slice(0, open);
+      } else line = line.slice(0, open) + line.slice(close + 2);
+    }
+    const lineComment = /(^|\s)(\/\/|#|--)(.*)$/.exec(line);
+    if (lineComment) {
+      add(stripCommentMarkers(lineComment[2]! + lineComment[3]!));
+      line = line.slice(0, lineComment.index);
+    }
+    for (const m of line.matchAll(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+      const body = m[2]!;
+      if (body.length && body.length <= MAX_LITERAL_LEN) add(body);
+    }
+  }
+  return [...found].sort();
+}
+
 // `opts.maxCallsPerFile` overrides the per-file call-site cap (default 512) on
 // BOTH extraction tiers — AST and regex — so recall-oriented consumers can raise
 // it. Dedup/sort semantics are unchanged; absent, output is byte-identical.
@@ -382,5 +439,9 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
     calls: ast ? ast.calls : collectCallsRegex(content, symbols, opts.maxCallsPerFile),
     importedNames: ast?.importedNames,
     relations: ast?.relations?.length ? ast.relations : undefined,
+    // The AST tier reads comments and literals structurally; without a grammar
+    // the line scanner above still supplies a vocabulary, so search quality does
+    // not silently collapse for a language with no wasm.
+    terms: ast ? ast.terms : collectTermsRegex(content),
   };
 }

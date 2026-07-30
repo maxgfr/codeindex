@@ -21,7 +21,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanRepo } from "../../src/scan.js";
-import { searchIndex } from "../../src/bm25.js";
+import { searchIndex, type RankMode } from "../../src/bm25.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const SEARCH_CASES_PATH = join(HERE, "search-cases.json");
@@ -73,7 +73,11 @@ export function scoreSearch(): SearchReport {
   const misses: string[] = [];
 
   for (const c of spec.cases) {
-    const results = searchIndex(scan, c.query, { limit: K });
+    // CODEINDEX_QUALITY_RANK exists so the structural prior can be A/B'd against
+    // the judged corpus instead of taken on faith; the baseline always records
+    // the shipped default.
+    const rank = process.env.CODEINDEX_QUALITY_RANK as RankMode | undefined;
+    const results = searchIndex(scan, c.query, { limit: K, ...(rank ? { rank } : {}) });
     const ranked = results.map((r) => r.file);
     const relevant = new Set(c.relevant);
 

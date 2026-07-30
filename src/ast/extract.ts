@@ -5,6 +5,8 @@ import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } fr
 import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, type LangSpec } from "./specs.js";
 import { declHeader } from "./signature.js";
 import { docCommentFor, docstringFor } from "./doc.js";
+import { stripCommentMarkers } from "../extract/doc-text.js";
+import { subtokens } from "../util.js";
 
 export interface AstResult {
   symbols: CodeSymbol[];
@@ -24,6 +26,11 @@ export interface AstResult {
   // Inheritance stated by this file's declarations, deduped and sorted. Always
   // present (empty when the grammar has no `relationsFrom` mapping).
   relations: RawRelation[];
+  // PROSE vocabulary of the file: words from its comments and its short string
+  // literals, subtokenized, deduped, capped and sorted. This is what makes
+  // "where is rate limiting handled" answerable — the phrase lives in a comment,
+  // and an index built only from declaration names cannot see it.
+  terms: string[];
   // True when a per-file cap truncated the result — never silent, same doctrine
   // as the walk's `capped` flag.
   truncated?: true;
@@ -34,6 +41,13 @@ const MAX_CALLS = 512;
 const MAX_IMPORTED_NAMES = 256;
 const MAX_SYMBOLS = 2000;
 const MAX_RELATIONS = 256;
+// Prose-term ceiling. Collected in SOURCE order and truncated at the tail, then
+// sorted for storage: truncating the sorted list instead would cut the alphabet
+// off at "m" and bias every large file's vocabulary toward early letters.
+const MAX_TERMS = 512;
+// Longest string literal treated as prose. A route path, an error message or a
+// config key is worth indexing; a base64 blob or an embedded template is not.
+const MAX_LITERAL_LEN = 80;
 
 // How many nested FUNCTION bodies deep we keep looking for declarations. Depth 1
 // finds a route handler or a helper closure inside an exported function; depth 2
@@ -70,7 +84,11 @@ interface Collected {
   idents: string[];
   calls: { name: string; line: number; receiver?: string }[];
   importedNames: string[];
+  terms: string[];
 }
+
+const COMMENT_NODE = /(^|_)comment$/;
+const STRING_NODE = /(^|_)string(_literal)?$/;
 
 function collectAll(
   root: TSNode,
@@ -91,6 +109,16 @@ function collectAll(
     if (callSeen.has(key)) return;
     callSeen.add(key);
     calls.push(receiver ? { name, line, receiver } : { name, line });
+  };
+
+  // Prose vocabulary, in source order (see MAX_TERMS on why order matters).
+  const termsFound = new Set<string>();
+  const addTerms = (text: string): void => {
+    if (termsFound.size >= MAX_TERMS) return;
+    for (const t of subtokens(text)) {
+      if (termsFound.size >= MAX_TERMS) return;
+      termsFound.add(t);
+    }
   };
 
   const wantNames = spec.imports?.import_statement !== undefined;
@@ -115,6 +143,13 @@ function collectAll(
     if (kids.length === 0 && REF_IDENT_TYPE.test(type)) {
       const text = node.text;
       if (REF_IDENT_TEXT.test(text) && !defNames.has(text)) identsFound.add(text);
+    }
+
+    // --- prose: comments and short string literals ---
+    if (COMMENT_NODE.test(type)) {
+      for (const line of node.text.split(/\r?\n/)) addTerms(stripCommentMarkers(line));
+    } else if (kids.length === 0 && STRING_NODE.test(type) && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
+      addTerms(node.text.replace(/^['"`]+|['"`]+$/g, ""));
     }
 
     // --- call sites ---
@@ -185,6 +220,7 @@ function collectAll(
     idents: [...identsFound].sort().slice(0, MAX_REF_IDENTS),
     calls: calls.slice(0, maxCalls),
     importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
+    terms: [...termsFound].sort(byStr),
   };
 }
 
@@ -587,7 +623,7 @@ export function extractAst(
     }
 
     const wantImports = opts.imports !== false;
-    const { refs, idents, calls, importedNames } = collectAll(
+    const { refs, idents, calls, importedNames, terms } = collectAll(
       root,
       spec,
       new Set(symbols.map((s) => s.name)),
@@ -608,6 +644,7 @@ export function extractAst(
       calls,
       importedNames,
       relations,
+      terms,
       ...(symbols.length >= maxSymbols ? { truncated: true as const } : {}),
     };
   } catch {

@@ -257,7 +257,7 @@ export const TOOLS = [
   {
     name: "search",
     description:
-      'Natural-language-ish lexical search: BM25 ranking (k1=1.2, b=0.75) over symbol names (camelCase/snake_case subtokens), file path segments, markdown headings and summary lines. NOT embeddings by default — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse an embedding tier (HTTP endpoint, else a local static model) with lexical — the response then wraps the ranked list as `{ results, tier, degradedReason? }`, `tier` being "endpoint"/"static" when fusion happened or "lexical" (with `degradedReason`) when it did not (see embed_status). Without `semantic`, the response is the bare ranked array, unchanged.',
+      'Natural-language-ish lexical search: BM25F ranking over SIX weighted fields — symbol names (camelCase/snake_case subtokens), path segments, markdown headings, the file summary, per-symbol DOC COMMENTS, and the prose body (comment + short-literal words). The last two are why "where is rate limiting handled" works: the phrase lives in a comment, not in a name. Results carry `matchedFields`, a `line` anchor and `symbolHits` (name/kind/line). NOT embeddings by default — deterministic, diacritic-folded, zero API keys. Answers "where is auth handled?"-style queries with ranked files, matched terms and top symbols. Query terms with zero document frequency get a deterministic trigram-fuzzy fallback (typo-tolerant) unless `fuzzy: false`. Set `semantic: true` to RRF-fuse an embedding tier (HTTP endpoint, else a local static model) with lexical — the response then wraps the ranked list as `{ results, tier, degradedReason? }`, `tier` being "endpoint"/"static" when fusion happened or "lexical" (with `degradedReason`) when it did not (see embed_status). Without `semantic`, the response is the bare ranked array, unchanged.',
     inputSchema: {
       type: "object",
       properties: {
@@ -268,7 +268,12 @@ export const TOOLS = [
         fuzzy: {
           type: "boolean",
           description:
-            "Trigram fuzzy fallback for query terms with zero document frequency (default true)",
+            "Fallback for query terms with zero document frequency: a morphological stem match first (\"caching\" finds \"cache\"), then trigram similarity for typos (default true)",
+        },
+        rank: {
+          type: "string",
+          description:
+            'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus — see SearchOptions.rank.',
         },
         semantic: {
           type: "boolean",

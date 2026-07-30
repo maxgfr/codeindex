@@ -167,3 +167,57 @@ export function rrf<T>(
   }
   return score;
 }
+
+// Split an identifier/phrase into lowercase, diacritic-folded subtokens:
+// camelCase and ACRONYMWord boundaries become spaces, then any non-alphanumeric
+// run splits (snake_case, kebab-case, dots, prose whitespace). The ORIGINAL
+// token (lowercased) is kept alongside its parts so an exact identifier query
+// ("HttpClient") still matches a compound definition. 1-char fragments are
+// dropped as noise; letter↔digit runs stay together ("sha1", "bm25").
+export function subtokens(raw: string): string[] {
+  const folded = foldText(raw)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (t: string): void => {
+    if (t.length < 2 || seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+  // The whole identifier (lowercased) is a term of its own — but only for
+  // single tokens: gluing a prose heading into one mega-token would index junk.
+  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
+  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
+  return out;
+}
+
+// A deliberately CONSERVATIVE morphological stem, used only to rescue a query
+// term that matches nothing (see bm25.ts). Its whole job is to map inflected
+// forms of one word onto a single canonical string, so "caching", "cached" and
+// "cache" meet — a class of miss no amount of character-similarity fixes,
+// because "caching" vs "cache" is a suffix change, not a typo.
+//
+// This is Porter step 1 reduced to the rules that cannot mangle an identifier,
+// followed by dropping a trailing "e" so the -ing/-ed forms and the bare verb
+// converge on the same stem:
+//
+//   caching → cach   cached → cach   cache → cach
+//   retries → retry  retrying → retry
+//   tokens  → token  indexes → index  rates → rat / rate → rat
+//
+// Short tokens are left alone: a 3-character identifier has no inflection worth
+// guessing at, and stripping from one would collide with unrelated names.
+export function stemOf(term: string): string {
+  if (term.length < 4) return term;
+  let t = term;
+  if (t.endsWith("ies") && t.length > 4) t = t.slice(0, -3) + "y";
+  else if (t.endsWith("sses")) t = t.slice(0, -2);
+  else if (t.endsWith("ses") && t.length > 4) t = t.slice(0, -1);
+  else if (t.endsWith("s") && !t.endsWith("ss") && !t.endsWith("us") && !t.endsWith("is")) t = t.slice(0, -1);
+  if (t.endsWith("ying") && t.length > 5) t = t.slice(0, -4) + "y";
+  else if (t.endsWith("ing") && t.length > 5) t = t.slice(0, -3);
+  else if (t.endsWith("ed") && t.length > 4) t = t.slice(0, -2);
+  if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
+  return t;
+}

@@ -50,6 +50,7 @@ interface FileRecord {
     importedNames?: string[];
     truncated?: true;
     relations?: RawRelation[];
+    terms?: string[];
 }
 interface FileNode {
     id: string;
@@ -309,6 +310,7 @@ interface CodeInfo {
         receiver?: string;
     }[];
     importedNames?: string[];
+    terms?: string[];
     relations?: RawRelation[];
 }
 declare function extractCode(rel: string, ext: string, content: string, opts?: {
@@ -354,6 +356,7 @@ interface AstResult {
     }[];
     importedNames: string[];
     relations: RawRelation[];
+    terms: string[];
     truncated?: true;
 }
 declare function extractAst(rel: string, ext: string, content: string, opts?: {
@@ -781,18 +784,59 @@ interface GrepOptions {
 }
 declare function grepRepo(root: string, pattern: string, opts?: GrepOptions): SearchHit[];
 
+interface ShResult {
+    ok: boolean;
+    status: number | null;
+    stdout: string;
+    stderr: string;
+    missing: boolean;
+}
+declare function sh(cmd: string, args: string[], opts?: {
+    cwd?: string;
+    input?: string;
+    timeoutMs?: number;
+    env?: Record<string, string | undefined>;
+}): ShResult;
+declare function have(cmd: string): boolean;
+declare function slugify(input: string): string;
+declare function clip(s: string, max: number): string;
+declare function clipInline(s: string, max: number): string;
+declare function escapeRegExp(s: string): string;
+declare function foldText(s: string): string;
+declare function keywords(question: string): string[];
+declare function rankedKeywords(question: string): string[];
+declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): Map<string, number>;
+declare function subtokens(raw: string): string[];
+
+declare const FIELDS: readonly ["name", "path", "heading", "summary", "doc", "body"];
+type Field = (typeof FIELDS)[number];
+type RankMode = "graph" | "lexical";
 interface SearchOptions {
     limit?: number;
     fuzzy?: boolean;
+    rank?: RankMode;
+}
+/** A specific declaration a result matched, so a caller can jump straight to it. */
+interface SymbolHit {
+    name: string;
+    kind: string;
+    line: number;
 }
 interface SearchResult {
     file: string;
     score: number;
     matchedTerms: string[];
     topSymbols: string[];
+    matchedFields?: Field[];
+    line?: number;
+    symbolHits?: SymbolHit[];
     fuzzyTerms?: string[];
 }
-declare function subtokens(raw: string): string[];
+/**
+ * Rank the scanned files against a natural-language (or identifier) query.
+ * Pure and deterministic: same scan + query + options → the same results,
+ * byte-for-byte.
+ */
 declare function searchIndex(scan: RepoScan, query: string, opts?: SearchOptions): SearchResult[];
 
 declare const EMBED_VERSION = 1;
@@ -1123,29 +1167,6 @@ declare function shortHash(s: string, n?: number): string;
 
 declare function byStr(a: string, b: string): number;
 declare function byKey<T>(keyOf: (x: T) => string): (a: T, b: T) => number;
-
-interface ShResult {
-    ok: boolean;
-    status: number | null;
-    stdout: string;
-    stderr: string;
-    missing: boolean;
-}
-declare function sh(cmd: string, args: string[], opts?: {
-    cwd?: string;
-    input?: string;
-    timeoutMs?: number;
-    env?: Record<string, string | undefined>;
-}): ShResult;
-declare function have(cmd: string): boolean;
-declare function slugify(input: string): string;
-declare function clip(s: string, max: number): string;
-declare function clipInline(s: string, max: number): string;
-declare function escapeRegExp(s: string): string;
-declare function foldText(s: string): string;
-declare function keywords(question: string): string[];
-declare function rankedKeywords(question: string): string[];
-declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): Map<string, number>;
 
 declare function runCli(rawArgv: string[]): Promise<void>;
 

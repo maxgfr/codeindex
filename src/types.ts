@@ -158,6 +158,11 @@ export interface FileRecord {
   // Inheritance stated by declarations in this file (cap 256, deduped, sorted).
   // Resolved into `extends`/`implements` edges by the graph builder.
   relations?: RawRelation[];
+  // Prose vocabulary: words from this file's comments and short string literals,
+  // subtokenized, deduped, capped at 512 and sorted. Persisted with the record
+  // so search's `body` field rides the incremental cache instead of re-reading
+  // and re-tokenizing every file on every query.
+  terms?: string[];
 }
 
 // A node in the link-graph. Files and modules are both nodes.
