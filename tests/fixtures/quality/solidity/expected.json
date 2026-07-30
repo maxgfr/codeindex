@@ -8,6 +8,7 @@
         { "name": "Outcome", "kind": "enum", "doc": true },
         { "name": "Timeout", "parent": "Outcome", "kind": "enum-member" },
         { "name": "Rejected", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "TOP_PRIORITY", "kind": "const", "doc": true, "sig": "uint256 constant TOP_PRIORITY = 1;" },
         { "name": "Scheduler", "kind": "contract", "doc": true },
         { "name": "MAX_ATTEMPTS", "parent": "Scheduler", "kind": "field", "doc": true },
         { "name": "owner", "parent": "Scheduler", "kind": "field", "exported": false },

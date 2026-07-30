@@ -38,6 +38,13 @@ class Scheduler(val queue: String) extends BaseWorker with Runnable {
   def depth: Int = pending.size
 }
 
+/** Adds queue helpers to plain strings. */
+extension (queue: String) {
+
+  /** The form used in log lines. */
+  def shout: String = queue.toUpperCase
+}
+
 /** Factory helpers. */
 object SchedulerFactory {
 

@@ -101,6 +101,20 @@
           "parent": "Scheduler",
           "kind": "method",
           "exported": false
+        },
+        {
+          "name": "JobSpec",
+          "parent": "Scheduler",
+          "kind": "operator",
+          "doc": true,
+          "sig": "operator JobSpec(Scheduler scheduler)"
+        },
+        {
+          "name": "Scheduler",
+          "parent": "Scheduler",
+          "kind": "destructor",
+          "exported": false,
+          "doc": true
         }
       ],
       "calls": [

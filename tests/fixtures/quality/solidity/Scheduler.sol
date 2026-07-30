@@ -10,6 +10,9 @@ interface IRunnable {
 /// What can go wrong while dispatching.
 enum Outcome { Timeout, Rejected }
 
+/// Highest priority a job may claim.
+uint256 constant TOP_PRIORITY = 1;
+
 /// Runs jobs with exponential backoff between retries.
 contract Scheduler is BaseWorker, IRunnable {
     /// Bounds how often a job is retried.

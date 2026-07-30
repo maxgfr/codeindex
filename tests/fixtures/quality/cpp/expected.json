@@ -4,6 +4,15 @@
     "service.hpp": {
       "symbols": [
         { "name": "worker", "kind": "namespace" },
+        { "name": "detail", "parent": "worker", "kind": "namespace" },
+        { "name": "backoff_ms", "parent": "detail", "kind": "function", "doc": true },
+        {
+          "name": "retry",
+          "parent": "worker",
+          "kind": "namespace",
+          "doc": true,
+          "sig": "namespace retry = detail;"
+        },
         { "name": "kMaxAttempts", "parent": "worker", "kind": "const", "doc": true },
         { "name": "Outcome", "parent": "worker", "kind": "enum", "doc": true },
         { "name": "Timeout", "parent": "Outcome", "kind": "enum-member" },
@@ -14,7 +23,16 @@
         { "name": "Runnable", "parent": "worker", "kind": "class", "doc": true },
         { "name": "start", "parent": "Runnable", "kind": "method" },
         { "name": "depth", "parent": "Runnable", "kind": "method" },
+        { "name": "backoff", "parent": "Runnable", "kind": "method", "exported": false, "doc": true },
         { "name": "Scheduler", "parent": "worker", "kind": "class", "doc": true },
+        {
+          "name": "Runnable::backoff",
+          "parent": "Scheduler",
+          "kind": "using",
+          "doc": true,
+          "sig": "using Runnable::backoff;"
+        },
+        { "name": "Inspector", "parent": "Scheduler", "kind": "friend", "doc": true },
         { "name": "start", "parent": "Scheduler", "kind": "method", "doc": true },
         {
           "name": "dispatch",

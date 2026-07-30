@@ -1,0 +1,297 @@
+{
+  "schemaVersion": 1,
+  "engineVersion": "2.21.1",
+  "base": {
+    "languages": 17,
+    "files": 18,
+    "symbols": 264,
+    "calls": 47,
+    "relations": 21,
+    "docLabels": 147,
+    "sigLabels": 29
+  },
+  "extraction": [
+    {
+      "lang": "bash",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "c",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "cpp",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "csharp",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "elixir",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "go",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "java",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "kotlin",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "php",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "python",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "ruby",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "rust",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "scala",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "solidity",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "terraform",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "typescript",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "zig",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    }
+  ],
+  "search": {
+    "mrr": 0.9375,
+    "ndcg10": 0.8599,
+    "recall5": 0.8438,
+    "cases": 16,
+    "misses": 1
+  },
+  "oracles": [
+    {
+      "id": "grammar-vocabulary",
+      "label": "Grammar vocabulary",
+      "authority": "each tree-sitter grammar's own declared node types, read at runtime from the parser",
+      "value": "21 grammars, 208 declaration-ish types unhandled",
+      "scope": "Names every construct a grammar declares that no extraction rule covers. The denominator is the grammar's, not ours — which is what makes it able to find what nobody thought to label."
+    },
+    {
+      "id": "official-tags-queries",
+      "label": "Official tags.scm queries",
+      "authority": "the code-navigation queries each grammar's own authors publish and maintain",
+      "value": "1 adjudicated difference(s)",
+      "scope": "Covers 14 of 17 languages: kotlin, terraform and zig publish no query, so nothing independent checks them here. The queries are also thinner than our rules, so agreement is a floor, not a ceiling."
+    },
+    {
+      "id": "typescript-compiler",
+      "label": "TypeScript compiler index",
+      "authority": "an index built by the real TypeScript compiler — authoritative where every other check here is syntactic",
+      "value": "100.0% of its 93 declarations found",
+      "scope": "Scoped to named declarations on one pinned repository, with 0 symbols left unread. It also calibrates the ctags oracle: ctags covered 94.6% of the same compiler-confirmed declarations."
+    },
+    {
+      "id": "universal-ctags",
+      "label": "universal-ctags differential",
+      "authority": "an independent, mature indexer (Universal Ctags 6.2.1) covering ~40 languages",
+      "value": "recall up to 98.0% over 6 real repositories",
+      "scope": "Compares declaration names per file over real code, not fixtures. ctags also reports function-body locals, which a declaration index omits on purpose — so its extra hits are not our misses."
+    }
+  ],
+  "blindSpots": [
+    "No published tags.scm exists for kotlin, terraform, zig, so those languages have no third-party query checking them — only the grammar-vocabulary and structural oracles.",
+    "Doc comments and full signatures cannot be checked against the external indexers at all: both report declarations only, and the persisted symbol index drops those two fields. They are covered by hand-labelled ground truth alone.",
+    "The compiler-based oracle covers TypeScript on one repository. Every other language is checked by ctags, which is itself syntactic — a shared blind spot would be invisible to both.",
+    "Search relevance is judged on 16 queries over one fixture service. It measures whether prose-only phrasing is findable, not general retrieval quality.",
+    "One query still returns nothing relevant: asking for \"authentication\" against a file that never writes the word. No lexical index can answer that; it is what the opt-in semantic tier is for."
+  ]
+}

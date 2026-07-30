@@ -42,6 +42,7 @@ const BODY_TYPES = new Set([
   "enum_declaration",
   "union_declaration",
   "error_set_declaration",
+  "opaque_declaration",
   // Solidity, Kotlin.
   "contract_body",
   "enum_class_body",

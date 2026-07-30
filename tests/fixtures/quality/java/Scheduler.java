@@ -11,8 +11,24 @@ public interface Runnable {
   int depth();
 }
 
+/** Tunables every scheduler reads at startup. */
+interface Cfg {
+  /** Bounds how often a job is retried. */
+  int MAX = 5;
+}
+
+/** Marks a handler the scheduler discovers by reflection. */
+@interface Marker {
+  String value();
+}
+
 /** A unit of deferred work. */
-record JobSpec(String name, int attempts) {}
+record JobSpec(String name, int attempts) {
+  /** Rejects a job with no name. */
+  JobSpec {
+    name = name.trim();
+  }
+}
 
 /** What can go wrong while dispatching. */
 enum Outcome {

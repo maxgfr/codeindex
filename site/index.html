@@ -40,7 +40,7 @@
 <title>codeindex — zero-install repo indexing engine</title>
 <meta
   name="description"
-  content="codeindex: a zero-install, deterministic repo-indexing engine. One vendorable file, a TypeScript/JS library, a CLI, and 26 MCP tools. Byte-identical outputs, keyless BM25 + trigram fuzzy + deterministic semantic search, SCIP export, and measured benchmarks against universal-ctags, Serena and Graphify."
+  content="codeindex: a zero-install, deterministic repo-indexing engine. One vendorable file, a TypeScript/JS library, a CLI, and 29 MCP tools. Byte-identical outputs, keyless BM25 + trigram fuzzy + deterministic semantic search, SCIP export, and measured benchmarks against universal-ctags, Serena and Graphify."
 />
 <link
   rel="icon"
@@ -933,6 +933,7 @@
     <nav class="primary" aria-label="Primary">
       <div class="nav-links">
         <a href="#benchmarks">Benchmarks</a>
+        <a href="#quality">Quality</a>
         <a href="#features">Features</a>
         <a href="#quickstart">Quickstart</a>
         <a href="#compare">Compare</a>
@@ -964,7 +965,7 @@
         <h1>codeindex</h1>
         <p class="pitch">
           Zero-install, deterministic repo-indexing engine — one vendorable
-          file, a library, a CLI, and 26 MCP tools.
+          file, a library, a CLI, and 29 MCP tools.
         </p>
         <p class="lede">
           Walks a repo, extracts symbols and imports across 15 languages,
@@ -979,7 +980,7 @@
             href="https://github.com/maxgfr/codeindex/blob/main/LICENSE"
             ><span class="dot" aria-hidden="true"></span>MIT license</a
           >
-          <span class="pill">v2.15.0</span>
+          <span class="pill">v2.21.1</span>
           <span class="pill">Node ≥ 18</span>
           <a class="pill" href="https://www.npmjs.com/package/@maxgfr/codeindex"
             >npm · @maxgfr/codeindex</a
@@ -1113,7 +1114,7 @@
           <code>vercel/next.js</code> in around a second, and roughly twice that
           for one touched file; far fewer tokens than a raw grep dump for a
           single-symbol lookup; 15 languages; 0 runtime dependencies;
-          byte-identical rebuilds on 7/7 measured repos; 26 MCP tools.
+          byte-identical rebuilds on 7/7 measured repos; 29 MCP tools.
         </p>
       </noscript>
     </div>
@@ -1204,11 +1205,68 @@
     </div>
   </section>
 
+  <!-- ============ MEASURED QUALITY ============ -->
+  <!-- Deliberately shows the SCORE AND ITS BASE. Every extraction metric below
+       reads 100%, and published bare that invites the wrong inference — that the
+       engine is known to extract everything. What it means is narrower and worth
+       stating: 100% of a corpus this project labelled itself. The denominator row
+       and the blind-spot list are what turn a misleading number into an
+       informative one, so they are not optional decoration; they are the point.
+       All figures come from the embedded quality-data island, which is written by
+       `pnpm quality` and guarded byte-for-byte by tests/site-quality.test.ts. -->
+  <section id="quality" aria-labelledby="quality-heading">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Fig. 02 — how much of a repo it actually finds</p>
+        <h2 id="quality-heading">Measured quality</h2>
+        <p>
+          Speed is easy to measure and easy to trust. Extraction quality is
+          neither, so it is measured against hand-labelled ground truth and
+          enforced as a ratchet in both directions: losing quality fails CI, and
+          <em>gaining</em> it fails too until the recorded baseline is refreshed
+          in the same commit. Every number here is reproducible with
+          <code>pnpm quality:report</code>.
+        </p>
+        <p>
+          The scores are shown with the corpus they are measured on, because a
+          bare percentage hides the thing a reader most needs in order to judge
+          it. Independent oracles — the grammars' own declared vocabulary, a
+          third-party indexer, label-free structural invariants — check the parts
+          that hand-written labels cannot, and the blind spots are listed rather
+          than left implicit.
+        </p>
+      </div>
+
+      <div id="quality-base" class="stat-grid">
+        <!-- denominator tiles, filled by JS from the embedded payload -->
+      </div>
+
+      <div id="quality-tables">
+        <!-- per-language table + oracle table, filled by JS -->
+      </div>
+
+      <div id="quality-blindspots">
+        <!-- what none of the above covers, filled by JS -->
+      </div>
+
+      <noscript>
+        <p class="chart-caption">
+          The quality tables render from the embedded dataset so no number is
+          retyped by hand. Read the same data directly in
+          <a href="https://github.com/maxgfr/codeindex/blob/main/site/quality.json"
+            >site/quality.json</a
+          >
+          or regenerate it with <code>pnpm quality:report</code>.
+        </p>
+      </noscript>
+    </div>
+  </section>
+
   <!-- ============ FEATURES ============ -->
   <section id="features" aria-labelledby="features-heading">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Fig. 02 — capabilities</p>
+        <p class="eyebrow">Fig. 03 — capabilities</p>
         <h2 id="features-heading">Features</h2>
         <p>
           Everything below ships in the same zero-dependency bundle — no
@@ -1323,7 +1381,7 @@
   <section id="quickstart" aria-labelledby="quickstart-heading">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Fig. 03 — usage</p>
+        <p class="eyebrow">Fig. 04 — usage</p>
         <h2 id="quickstart-heading">Quickstart</h2>
         <p>Five ways in — pick the one matching your integration.</p>
       </div>
@@ -1373,7 +1431,7 @@ codeindex search  <span class="comment">"http client retry"</span> --repo .</cod
 
         <div class="quickstart-panel" role="tabpanel" id="qs-panel-mcp" aria-labelledby="qs-tab-mcp" hidden>
           <p>
-            Serves the engine over stdio: 26 tools, including
+            Serves the engine over stdio: 29 tools, including
             <code>scan_summary</code>, <code>graph</code>,
             <code>symbols</code>, <code>find_symbol</code>,
             <code>find_references</code>, <code>callers</code>,
@@ -1433,7 +1491,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           </p>
           <div class="code">
             <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="vendor-cmd">copy</button></div>
-            <pre><code id="vendor-cmd">node scripts/sync-engine.mjs --ref v2.15.0</code></pre>
+            <pre><code id="vendor-cmd">node scripts/sync-engine.mjs --ref v2.21.1</code></pre>
           </div>
           <p class="qs-link">
             Full steps and version-constant semantics:
@@ -1450,7 +1508,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
   <section id="compare" aria-labelledby="compare-heading">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Fig. 04 — what each tool is</p>
+        <p class="eyebrow">Fig. 05 — what each tool is</p>
         <h2 id="compare-heading">How it compares</h2>
         <p>
           The axis-by-axis scoreboard sits with the
@@ -4370,6 +4428,310 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
 }
 </script>
 
+<!-- Measured extraction + search quality, WITH its denominators. Written by
+     `pnpm quality`, embedded here by scripts/bench/sync-site.mjs, and guarded
+     byte-for-byte by tests/site-quality.test.ts. Carries no timestamp on
+     purpose: quality is a property of the committed code, not a measurement at
+     a moment, so an unchanged repo must re-render identically. -->
+<script id="quality-data" type="application/json">{
+  "schemaVersion": 1,
+  "engineVersion": "2.21.1",
+  "base": {
+    "languages": 17,
+    "files": 18,
+    "symbols": 264,
+    "calls": 47,
+    "relations": 21,
+    "docLabels": 147,
+    "sigLabels": 29
+  },
+  "extraction": [
+    {
+      "lang": "bash",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "c",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "cpp",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "csharp",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "elixir",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "go",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "java",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "kotlin",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "php",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "python",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "ruby",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "rust",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "scala",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "solidity",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "terraform",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "typescript",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    },
+    {
+      "lang": "zig",
+      "metrics": {
+        "symbolsPrecision": 1,
+        "symbolsRecall": 1,
+        "symbolsF1": 1,
+        "kindAccuracy": 1,
+        "exportedAccuracy": 1,
+        "docCoverage": 1,
+        "sigCoverage": 1,
+        "callsF1": 1,
+        "relationsF1": 1
+      }
+    }
+  ],
+  "search": {
+    "mrr": 0.9375,
+    "ndcg10": 0.8599,
+    "recall5": 0.8438,
+    "cases": 16,
+    "misses": 1
+  },
+  "oracles": [
+    {
+      "id": "grammar-vocabulary",
+      "label": "Grammar vocabulary",
+      "authority": "each tree-sitter grammar's own declared node types, read at runtime from the parser",
+      "value": "21 grammars, 208 declaration-ish types unhandled",
+      "scope": "Names every construct a grammar declares that no extraction rule covers. The denominator is the grammar's, not ours — which is what makes it able to find what nobody thought to label."
+    },
+    {
+      "id": "official-tags-queries",
+      "label": "Official tags.scm queries",
+      "authority": "the code-navigation queries each grammar's own authors publish and maintain",
+      "value": "1 adjudicated difference(s)",
+      "scope": "Covers 14 of 17 languages: kotlin, terraform and zig publish no query, so nothing independent checks them here. The queries are also thinner than our rules, so agreement is a floor, not a ceiling."
+    },
+    {
+      "id": "typescript-compiler",
+      "label": "TypeScript compiler index",
+      "authority": "an index built by the real TypeScript compiler — authoritative where every other check here is syntactic",
+      "value": "100.0% of its 93 declarations found",
+      "scope": "Scoped to named declarations on one pinned repository, with 0 symbols left unread. It also calibrates the ctags oracle: ctags covered 94.6% of the same compiler-confirmed declarations."
+    },
+    {
+      "id": "universal-ctags",
+      "label": "universal-ctags differential",
+      "authority": "an independent, mature indexer (Universal Ctags 6.2.1) covering ~40 languages",
+      "value": "recall up to 98.0% over 6 real repositories",
+      "scope": "Compares declaration names per file over real code, not fixtures. ctags also reports function-body locals, which a declaration index omits on purpose — so its extra hits are not our misses."
+    }
+  ],
+  "blindSpots": [
+    "No published tags.scm exists for kotlin, terraform, zig, so those languages have no third-party query checking them — only the grammar-vocabulary and structural oracles.",
+    "Doc comments and full signatures cannot be checked against the external indexers at all: both report declarations only, and the persisted symbol index drops those two fields. They are covered by hand-labelled ground truth alone.",
+    "The compiler-based oracle covers TypeScript on one repository. Every other language is checked by ctags, which is itself syntactic — a shared blind spot would be invisible to both.",
+    "Search relevance is judged on 16 queries over one fixture service. It measures whether prose-only phrasing is findable, not general retrieval quality.",
+    "One query still returns nothing relevant: asking for \"authentication\" against a file that never writes the word. No lexical index can answer that; it is what the opt-in semantic tier is for."
+  ]
+}
+</script>
+
 <script>
   (function () {
     "use strict";
@@ -4720,6 +5082,147 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         "</p>";
       statGrid.appendChild(el);
     });
+
+    /* ----- measured quality: scores, the base they rest on, and the blind spots -----
+       Reads the quality-data island. Renders nothing at all when the payload is
+       absent or its schema is unrecognised, rather than drawing a half-table or a
+       row of NaN: a quality section that misreports itself would be worse than no
+       quality section. */
+    (function renderQuality() {
+      var node = document.getElementById("quality-data");
+      if (!node) return;
+      var q;
+      try { q = JSON.parse(node.textContent || "{}"); } catch (e) { return; }
+      if (!q || q.schemaVersion !== 1 || !q.extraction || !q.extraction.length) return;
+
+      function pct(v) { return (v * 100).toFixed(1) + "%"; }
+
+      /* The denominators, as tiles — the numbers that make the percentages
+         readable. Deliberately first: a reader meets the base before the score. */
+      var baseHost = document.getElementById("quality-base");
+      if (baseHost && q.base) {
+        [
+          { label: "Languages labelled", value: String(q.base.languages), context: "hand-labelled ground truth, one fixture set per language" },
+          { label: "Declarations labelled", value: String(q.base.symbols), context: "across " + q.base.files + " fixture files — the denominator of every score below" },
+          { label: "Call sites / relations", value: q.base.calls + " / " + q.base.relations, context: "labelled call edges and inheritance relations" },
+          { label: "Search queries judged", value: String(q.search.cases), context: q.search.misses + " still return nothing relevant in the top 10" }
+        ].forEach(function (s) {
+          var el = document.createElement("div");
+          el.className = "stat";
+          el.innerHTML =
+            '<p class="stat-label">' + s.label + '</p>' +
+            '<p class="stat-value">' + s.value + '</p>' +
+            '<p class="stat-context">' + s.context + '</p>';
+          baseHost.appendChild(el);
+        });
+      }
+
+      var host = document.getElementById("quality-tables");
+      if (!host) return;
+
+      /* Shared table builder, same shape as renderTable so both sections look
+         like one system: div.table-wrap > table > caption > span.cap-note. */
+      function table(title, note, headers, rows) {
+        var wrap = document.createElement("div");
+        wrap.className = "table-wrap";
+        var t = document.createElement("table");
+        var cap = document.createElement("caption");
+        cap.textContent = title;
+        var cn = document.createElement("span");
+        cn.className = "cap-note";
+        cn.textContent = note;
+        cap.appendChild(cn);
+        t.appendChild(cap);
+        var thead = document.createElement("thead");
+        var htr = document.createElement("tr");
+        headers.forEach(function (h) {
+          var th = document.createElement("th");
+          th.scope = "col";
+          th.textContent = h;
+          htr.appendChild(th);
+        });
+        thead.appendChild(htr);
+        t.appendChild(thead);
+        var tbody = document.createElement("tbody");
+        rows.forEach(function (row) {
+          var tr = document.createElement("tr");
+          row.forEach(function (cell) {
+            var td = document.createElement("td");
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        t.appendChild(tbody);
+        wrap.appendChild(t);
+        return wrap;
+      }
+
+      host.appendChild(
+        table(
+          "Extraction quality, per language",
+          "Precision and recall of declarations found, plus whether each is described right. Scored against " +
+            q.base.symbols + " hand-labelled declarations.",
+          ["Language", "Precision", "Recall", "Kind", "Visibility", "Doc", "Signature", "Calls", "Relations"],
+          q.extraction.map(function (e) {
+            var m = e.metrics;
+            return [
+              e.lang,
+              pct(m.symbolsPrecision),
+              pct(m.symbolsRecall),
+              pct(m.kindAccuracy),
+              pct(m.exportedAccuracy),
+              pct(m.docCoverage),
+              pct(m.sigCoverage),
+              pct(m.callsF1),
+              pct(m.relationsF1)
+            ];
+          })
+        )
+      );
+
+      host.appendChild(
+        table(
+          "Search relevance",
+          "Over " + q.search.cases + " relevance-judged queries whose terms live only in prose — the case a name-only index cannot answer.",
+          ["Metric", "Value", "What it measures"],
+          [
+            ["MRR", pct(q.search.mrr), "is the right file the first hit"],
+            ["nDCG@10", pct(q.search.ndcg10), "graded gain, discounted by rank"],
+            ["recall@5", pct(q.search.recall5), "share of relevant files reaching the top 5"]
+          ]
+        )
+      );
+
+      if (q.oracles && q.oracles.length) {
+        host.appendChild(
+          table(
+            "Independent oracles",
+            "Checks whose authority comes from outside this project, so a construct nobody here thought to label cannot hide.",
+            ["Oracle", "Result", "Why it is independent", "Scope and limits"],
+            q.oracles.map(function (o) { return [o.label, o.value, o.authority, o.scope]; })
+          )
+        );
+      }
+
+      /* The blind spots. Listed, never implied: a report that hides its gaps is
+         worth no more than the bare 100% it is trying to qualify. */
+      var spots = document.getElementById("quality-blindspots");
+      if (spots && q.blindSpots && q.blindSpots.length) {
+        var head = document.createElement("p");
+        head.className = "chart-caption";
+        head.innerHTML = "<strong>What these numbers do not cover.</strong>";
+        spots.appendChild(head);
+        var ul = document.createElement("ul");
+        ul.className = "chart-caption";
+        q.blindSpots.forEach(function (text) {
+          var li = document.createElement("li");
+          li.textContent = text;
+          ul.appendChild(li);
+        });
+        spots.appendChild(ul);
+      }
+    })();
 
     /* ----- cold code-du-travail + warm reindex bar charts ----- */
     (function renderBarCharts() {

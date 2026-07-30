@@ -16,5 +16,26 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # universal-ctags is the breadth oracle: an independent, mature indexer whose
+      # symbol set we diff against ours over real repositories. Present in the
+      # ubuntu-latest image's apt repos; the oracle SKIPS cleanly when it is
+      # absent, so this step failing degrades the run rather than reddening it.
+      - name: Install universal-ctags
+        run: sudo apt-get update && sudo apt-get install -y universal-ctags
+        continue-on-error: true
+
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:e2e
+
+      # The oracles that need a cloned corpus and an external binary — too slow
+      # and too environment-dependent for `pnpm test`, which is why they live here
+      # rather than gating every push. The tags.scm audit and the oracle roll-up
+      # print here too: before this they existed but ran in NO automated context
+      # at all, only when someone typed the env var by hand.
+      - name: Independent oracles (ctags differential, invariants, tier diff)
+        env:
+          CODEINDEX_ORACLE: "1"
+        run: |
+          npx vitest run tests/oracles-external-diff.test.ts
+          npx vitest run tests/oracles-invariants.test.ts tests/oracles-tier-diff.test.ts
+          pnpm quality:report

@@ -65,4 +65,13 @@ public class Scheduler : BaseWorker, IRunnable
     {
         pending.Clear();
     }
+
+    /// <summary>The job at the head of the queue.</summary>
+    public static explicit operator JobSpec(Scheduler scheduler) => scheduler.pending[0];
+
+    /// <summary>Drops the queue when the runtime collects us.</summary>
+    ~Scheduler()
+    {
+        pending.Clear();
+    }
 }

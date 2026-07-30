@@ -55,6 +55,10 @@ const MAX_LITERAL_LEN = 80;
 // bundle could otherwise walk arbitrarily deep.
 const MAX_FUNC_DEPTH = 2;
 
+// Declaration kinds that stay worth indexing inside a function body. A `const`
+// there is a local; a `struct` there is a type someone can name.
+const NESTED_TYPE_KINDS = new Set(["class", "struct", "enum", "interface", "trait", "type", "record", "union"]);
+
 // JS/TS node types an anonymous `export default` can wrap ("function" and
 // "class" are the expression forms; the _declaration forms cover grammars that
 // keep the declaration node but omit the name).
@@ -236,6 +240,30 @@ function collectAll(
     importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
     terms: [...termsFound].sort(byStr),
   };
+}
+
+
+// Every identifier a destructuring pattern BINDS, in source order. Recurses so
+// nested and defaulted patterns (`const { a: { b }, c = 1 } = …`) yield `b` and
+// `c` rather than the pattern's text.
+function boundNames(pattern: TSNode): string[] {
+  const out: string[] = [];
+  const visit = (n: TSNode): void => {
+    if (/^(shorthand_property_identifier_pattern|identifier)$/.test(n.type)) {
+      if (!out.includes(n.text)) out.push(n.text);
+      return;
+    }
+    // A `pair_pattern`'s KEY is the source property, not a binding; only its
+    // value side binds a name.
+    if (n.type === "pair_pattern") {
+      const v = n.childForFieldName("value");
+      if (v) visit(v);
+      return;
+    }
+    for (const c of n.namedChildren) visit(c);
+  };
+  for (const c of pattern.namedChildren) visit(c);
+  return out;
 }
 
 // What the walk knows about where it currently is. Threaded rather than stored,
@@ -586,12 +614,43 @@ export function extractAst(
         // Scheduler, colliding with the type it embeds).
         const reader = spec.nameFrom?.[type];
         const name = reader ? reader(node) : nameOf(node);
+
+        // A DESTRUCTURING declaration binds several names at once
+        // (`const { useTRPC, TRPCProvider } = …`, `const [a, b] = …`). The
+        // generic reader returns the whole pattern's TEXT, so the index grew a
+        // symbol literally named "{ useTRPC, TRPCProvider }" — worse than the
+        // miss, because it is unsearchable and cites a name no source contains.
+        // Emit each BOUND name instead. Found by the universal-ctags differential.
+        const pattern = node.namedChildren.find((c) => c.type === "object_pattern" || c.type === "array_pattern");
+        if (pattern && !ctx.inFunctionBody) {
+          const header = declHeader(node, content);
+          const doc = docOf(node);
+          for (const bound of boundNames(pattern)) {
+            emit({
+              name: bound,
+              kind,
+              file: rel,
+              line: node.startPosition.row + 1,
+              endLine: node.endPosition.row + 1,
+              ...(ctx.parent ? { parent: ctx.parent } : {}),
+              signature: header,
+              ...(doc ? { doc } : {}),
+              exported: visibilityOf(node, header, bound, { ...ctx, exported: nowExported }),
+              lang: spec.lang,
+            });
+          }
+          return;
+        }
         // Inside executable code, only FUNCTION-like declarations are worth
         // indexing: emitting every `const x = 1` in every function body would
         // bury the API surface in locals.
+        // A TYPE declared inside a function body is a declaration, not a local:
+        // Rust's `fn outer() { struct Nested; }` and TypeScript's in-function
+        // `interface`/`type` are real, referencable declarations. Only VALUE
+        // bindings are locals, which is what this filter is for.
         const declaresFunction =
           FUNCTION_KINDS.has(kind) ||
-          kind === "class" ||
+          NESTED_TYPE_KINDS.has(kind) ||
           FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
         if (name && (!ctx.inFunctionBody || declaresFunction)) {
           const header = declHeader(node, content);
@@ -633,10 +692,18 @@ export function extractAst(
 
       if (spec.containers.has(type)) {
         const forcePublic = ctx.forcePublic || spec.publicMembersIn?.[type]?.(node) === true;
+        // A container can itself BE a function body without being a declaration:
+        // an arrow or function expression passed as a callback. Crossing into one
+        // must set the same context a named function's body does, or everything
+        // declared inside a callback would inherit the enclosing `export` and read
+        // as module API.
+        const entersFunction = FUNCTION_VALUE_TYPES.has(type);
         walkChildren(node, {
           ...ctx,
           exported: nowExported,
           forcePublic,
+          inFunctionBody: ctx.inFunctionBody || entersFunction,
+          funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
           ...(qualifier ? { parent: qualifier, parentPath: qualifier, ownerKind: "type" } : {}),
         });
       }

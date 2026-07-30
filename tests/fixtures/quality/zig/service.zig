@@ -6,6 +6,14 @@ pub const MAX_ATTEMPTS: u32 = 5;
 /// What can go wrong while dispatching.
 pub const Outcome = enum { timeout, rejected };
 
+/// A queue handle whose layout the C side owns.
+pub const Handle = opaque {
+    /// Release the handle.
+    pub fn close(self: *Handle) void {
+        _ = self;
+    }
+};
+
 /// Runs jobs with exponential backoff between retries.
 pub const Scheduler = struct {
     /// Identifies the queue.

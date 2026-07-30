@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanRepo } from "../src/scan.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SRC = join(ROOT, "src");
+const TESTS = join(ROOT, "tests");
 
 function tsFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
@@ -24,7 +25,14 @@ function tsFiles(dir: string): string[] {
 // rather than for that one file.
 describe("the engine's own sources stay indexable", () => {
   it("contains no literal NUL byte", () => {
-    const offenders = tsFiles(SRC)
+    // Scans tests/ as well as src/, because the defect RECURRED there while this
+    // guard was watching only src/: two engine modules and one test-oracle module
+    // each grew a literal NUL as a Map-key separator. A guard whose scope is
+    // narrower than the mistake is not a guard, and a `tests/` file read as
+    // binary is just as invisible to git, grep and this engine as a `src/` one.
+    // tests/fixtures/ is DATA, not source: a fixture is allowed to be exotic on
+    // purpose (that is what makes it a fixture), so it is out of scope here.
+    const offenders = [...tsFiles(SRC), ...tsFiles(TESTS).filter((f) => !f.includes(`${sep}fixtures${sep}`))]
       .filter((f) => readFileSync(f).includes(0))
       .map((f) => f.slice(ROOT.length));
     expect(offenders).toEqual([]);

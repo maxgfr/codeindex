@@ -762,6 +762,44 @@ function scan(rel2, content, lang, rules) {
 function extToLang(ext) {
   return EXT_LANG[ext] ?? "other";
 }
+function blankComments(src) {
+  const out2 = src.split("");
+  let i2 = 0;
+  const n = src.length;
+  while (i2 < n) {
+    const c2 = src[i2];
+    const next = src[i2 + 1];
+    if (c2 === "/" && next === "/") {
+      while (i2 < n && src[i2] !== "\n") {
+        out2[i2] = " ";
+        i2++;
+      }
+      continue;
+    }
+    if (c2 === "/" && next === "*") {
+      while (i2 < n && !(src[i2] === "*" && src[i2 + 1] === "/")) {
+        if (src[i2] !== "\n") out2[i2] = " ";
+        i2++;
+      }
+      if (i2 < n) out2[i2] = " ";
+      if (i2 + 1 < n) out2[i2 + 1] = " ";
+      i2 += 2;
+      continue;
+    }
+    if (c2 === '"' || c2 === "'" || c2 === "`") {
+      const quote = c2;
+      i2++;
+      while (i2 < n && src[i2] !== quote) {
+        if (src[i2] === "\\") i2++;
+        i2++;
+      }
+      i2++;
+      continue;
+    }
+    i2++;
+  }
+  return out2.join("");
+}
 function extractReexports(rel2, content, localSymbols) {
   if (!REEXPORT_EXTS.has(rel2.slice(rel2.lastIndexOf(".")))) return [];
   const lang = /\.(ts|tsx|mts|cts)$/.test(rel2) ? "typescript" : "javascript";
@@ -770,11 +808,16 @@ function extractReexports(rel2, content, localSymbols) {
   const lineAt = (idx) => content.slice(0, idx).split(/\r?\n/).length;
   const localDeclOf = /* @__PURE__ */ new Map();
   for (const s of localSymbols) if (!localDeclOf.has(s.name)) localDeclOf.set(s.name, s);
+  const scanned = blankComments(content);
   const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
   let m;
-  while ((m = named.exec(content)) && out2.length < 60) {
+  while ((m = named.exec(scanned)) && out2.length < MAX_REEXPORTS) {
     const from = m[2];
+    const listAt = m.index + m[0].indexOf("{") + 1;
+    let cursor = 0;
     for (const part of m[1].split(",")) {
+      const partAt = listAt + cursor;
+      cursor += part.length + 1;
       const p = part.trim().replace(/^type\s+/, "");
       const as = /^(\S+)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(p);
       const orig = as ? as[1] : p;
@@ -786,7 +829,7 @@ function extractReexports(rel2, content, localSymbols) {
         name: name2,
         kind: decl?.kind ?? "reexport",
         file: rel2,
-        line: decl ? decl.line : lineAt(m.index),
+        line: decl ? decl.line : lineAt(partAt),
         ...decl?.endLine !== void 0 ? { endLine: decl.endLine } : {},
         signature: from ? `export { ${name2} } from "${from}"` : `export { ${name2} }`,
         exported: true,
@@ -795,7 +838,7 @@ function extractReexports(rel2, content, localSymbols) {
     }
   }
   const star = /export\s*\*\s*(?:as\s+([A-Za-z_$][\w$]*)\s+)?from\s*['"]([^'"]+)['"]/g;
-  while ((m = star.exec(content)) && out2.length < 60) {
+  while ((m = star.exec(scanned)) && out2.length < MAX_REEXPORTS) {
     const ns = m[1];
     const from = m[2];
     const key = "*" + (ns ?? from);
@@ -813,7 +856,7 @@ function extractReexports(rel2, content, localSymbols) {
   }
   return out2;
 }
-var EXT_LANG, REEXPORT_EXTS;
+var EXT_LANG, REEXPORT_EXTS, MAX_REEXPORTS;
 var init_common = __esm({
   "src/lang/common.ts"() {
     "use strict";
@@ -882,6 +925,7 @@ var init_common = __esm({
       ".astro": "astro"
     };
     REEXPORT_EXTS = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+    MAX_REEXPORTS = 400;
   }
 });
 
@@ -5883,7 +5927,7 @@ var init_specs = __esm({
       to,
       line: node.startPosition.row + 1
     });
-    PUBLIC_MEMBER_KINDS = /* @__PURE__ */ new Set(["interface", "trait", "enum", "protocol"]);
+    PUBLIC_MEMBER_KINDS = /* @__PURE__ */ new Set(["interface", "trait", "enum", "protocol", "annotation"]);
     FUNCTION_KINDS = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator"]);
     FUNCTION_VALUE_TYPES = /* @__PURE__ */ new Set([
       "function",
@@ -5960,6 +6004,13 @@ var init_specs = __esm({
         // of a TypeScript API that an index of declarations alone never showed.
         property_signature: "property",
         public_field_definition: "property",
+        // The three ANONYMOUS interface members. `property_signature` and
+        // `method_signature` were already mapped, so these were the one remaining
+        // part of a `.d.ts` still invisible: a callable interface, a constructor
+        // type, an index signature. They carry no name node — see nameFrom.
+        call_signature: "call-signature",
+        construct_signature: "construct-signature",
+        index_signature: "index-signature",
         // `namespace X {}` / `module X {}`
         internal_module: "namespace",
         module: "namespace",
@@ -5972,17 +6023,66 @@ var init_specs = __esm({
         "program",
         "lexical_declaration",
         "variable_declaration",
-        // Interface/enum bodies, and function bodies (for nested declarations —
-        // route handlers, hooks, helper closures).
         "interface_body",
         "object_type",
         "enum_body",
-        "statement_block"
+        // Function bodies, for nested declarations — route handlers, hooks, helper
+        // closures.
+        //
+        // `statement_block` alone was NOT enough, and the gap was measured: the walk
+        // descends into a non-declaration node only when THAT node's own type is a
+        // container, so listing the block without the statements that OWN one stops
+        // the descent exactly one node short. Same declaration, one block apart, one
+        // indexed and one not:
+        //
+        //   function f() { function a() {} }      → found
+        //   try { function a() {} } catch {}      → lost
+        //   if (x) { function a() {} }            → lost
+        //   app.get("/x", (req, res) => { … })    → lost
+        //
+        // That last one is the case this comment already claimed to support. The
+        // AST-vs-regex differential found 91 such declarations in THIS repo alone,
+        // including every closure `src/ast/extract.ts` is built from — `walk`,
+        // `emit`, `walkChildren`, `walkBody`, `docOf` — all declared inside a `try`,
+        // so codeindex could not find its own AST walk by name.
+        "statement_block",
+        "try_statement",
+        "catch_clause",
+        "finally_clause",
+        "if_statement",
+        "else_clause",
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+        "switch_body",
+        "switch_case",
+        "switch_default",
+        "labeled_statement",
+        "return_statement",
+        // A callback passed as an argument: expression_statement → call_expression →
+        // arguments → arrow_function → statement_block. Every link has to be walkable
+        // or the chain breaks at the first missing one.
+        "expression_statement",
+        "call_expression",
+        "arguments",
+        "arrow_function",
+        "function_expression",
+        "function"
       ]),
       exported: neverExport,
       // export is tracked structurally; see LangSpec.exportMarkers
       exportMarkers: /* @__PURE__ */ new Set(["export_statement", "ambient_declaration"]),
       bareMembers: { enum_body: "enum-member" },
+      nameFrom: {
+        // Anonymous by construction: an interface's call/construct/index signature
+        // has no identifier to read. Naming them after the FORM they take keeps them
+        // addressable and stable instead of dropping them for want of a name.
+        call_signature: () => "(call)",
+        construct_signature: () => "(construct)",
+        index_signature: (node) => `[${node.namedChildren.find((c2) => c2.type === "identifier")?.text ?? "key"}]`
+      },
       privateMember: (node) => {
         for (const c2 of node.namedChildren) {
           if (c2.type === "accessibility_modifier" && /^(private|protected)/.test(c2.text)) return true;
@@ -6059,6 +6159,12 @@ var init_specs = __esm({
           "type_declaration",
           "const_declaration",
           "var_declaration",
+          // A GROUPED `var ( … )` nests its specs in a var_spec_list; the ungrouped
+          // form hangs them off var_declaration directly. Only the grouped shape has
+          // this extra level, which is why grouped `const ( … )` worked and grouped
+          // `var ( … )` did not — 14 exported names per file in gin, found by the
+          // universal-ctags differential.
+          "var_spec_list",
           "source_file",
           // A struct/interface body hangs one level below its type_spec.
           "struct_type",
@@ -6149,7 +6255,15 @@ var init_specs = __esm({
           record_declaration: "record",
           method_declaration: "method",
           constructor_declaration: "constructor",
-          field_declaration: "field"
+          compact_constructor_declaration: "constructor",
+          field_declaration: "field",
+          // `interface Cfg { int MAX = 5; }` — an interface constant is its OWN node,
+          // not a field_declaration, so interface constants were invisible.
+          constant_declaration: "field",
+          // `@interface Marker { String value(); }` — the annotation type was mapped
+          // and its body was a container, but its ELEMENTS had no entry, so every
+          // `@interface` in a repo indexed as an empty shell.
+          annotation_type_element_declaration: "method"
         },
         containers: /* @__PURE__ */ new Set([
           "class_body",
@@ -6175,7 +6289,9 @@ var init_specs = __esm({
         nameFrom: {
           // `private final List<JobSpec> pending = …` — the generic reader's last
           // resort would return the TYPE (`List`); the name is on the declarator.
-          field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text
+          field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
+          // Same declarator shape as a field.
+          constant_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text
         },
         relationsFrom: {
           class_declaration: (node, ctx) => {
@@ -6220,7 +6336,22 @@ var init_specs = __esm({
           union_item: "union",
           macro_definition: "macro"
         },
-        containers: /* @__PURE__ */ new Set(["impl_item", "declaration_list", "source_file", "field_declaration_list", "enum_variant_list"]),
+        containers: /* @__PURE__ */ new Set([
+          "impl_item",
+          "declaration_list",
+          "source_file",
+          "field_declaration_list",
+          "enum_variant_list",
+          // `extern "C" { fn … }` — an FFI block's items sit in a declaration_list
+          // under this node, so without it a crate's whole foreign interface was
+          // unreachable by the walk.
+          "foreign_mod_item",
+          // A `fn` or `struct` declared inside a function body. The AST-vs-regex
+          // differential found 21 of these in ripgrep that the AST tier missed and
+          // the regex tier caught — the cheapest oracle in the repo pointing
+          // straight at a hole.
+          "block"
+        ]),
         exported: byPub,
         calls: { call_expression: "function" },
         parentFrom: {
@@ -6257,7 +6388,12 @@ var init_specs = __esm({
           operator_declaration: "operator",
           field_declaration: "field",
           event_declaration: "event",
-          event_field_declaration: "event"
+          event_field_declaration: "event",
+          // `property_declaration` and `operator_declaration` were mapped; a
+          // user-defined conversion and a finalizer were not, and both are part of
+          // the type's surface.
+          conversion_operator_declaration: "operator",
+          destructor_declaration: "destructor"
         },
         containers: /* @__PURE__ */ new Set([
           "namespace_declaration",
@@ -6280,7 +6416,12 @@ var init_specs = __esm({
           // C# wraps a field's declarator one level deeper than Java's, inside a
           // `variable_declaration` — same problem, same fix.
           field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
-          event_field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text
+          event_field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
+          // `operator int(...)` names its TARGET type, and for a predefined target
+          // (`int`, `bool`, `string` — the common case) that is a `predefined_type`
+          // node the identifier-ish reader skips, so the declaration vanished. Only a
+          // user-defined target happened to work.
+          conversion_operator_declaration: (node) => node.childForFieldName("type")?.text
         },
         relationsFrom: {
           class_declaration: (node, ctx) => ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : [],
@@ -6300,7 +6441,8 @@ var init_specs = __esm({
           enum_case: "enum-member",
           method_declaration: "method",
           property_declaration: "property",
-          const_declaration: "const"
+          const_declaration: "const",
+          namespace_definition: "namespace"
         },
         containers: /* @__PURE__ */ new Set(["declaration_list", "enum_declaration_list", "program"]),
         // PHP has real visibility keywords, so `always` was throwing away a fact the
@@ -6336,7 +6478,13 @@ var init_specs = __esm({
           enumerator: "enum-member",
           union_specifier: "union",
           type_definition: "type",
-          field_declaration: "field"
+          field_declaration: "field",
+          // A prototype (`int foo(int);`) or an `extern` global. C++ has mapped this
+          // all along and C did not, so a header of prototypes — the entire public
+          // interface of a C library — indexed to NOTHING, while the byte-identical
+          // file read as C++ indexed fully. A same-family asymmetry is a miss, not a
+          // stance. Found by the grammar-vocabulary oracle.
+          declaration: "const"
         },
         // C has no visibility keyword — headers are the interface, so everything
         // counts as exported (same stance as the regex extractor).
@@ -6354,7 +6502,9 @@ var init_specs = __esm({
         kindFrom: {
           // In a struct body a `field_declaration` is a data member; with a
           // function_declarator it is a function-pointer member.
-          field_declaration: (node) => hasFunctionDeclarator(node) ? "method" : "field"
+          field_declaration: (node) => hasFunctionDeclarator(node) ? "method" : "field",
+          // Same split as C++: a `declaration` is a prototype or a variable.
+          declaration: (node) => hasFunctionDeclarator(node) ? "function" : "const"
         }
       },
       cpp: {
@@ -6370,8 +6520,14 @@ var init_specs = __esm({
           alias_declaration: "type",
           concept_definition: "concept",
           namespace_definition: "namespace",
+          namespace_alias_definition: "namespace",
           field_declaration: "field",
-          declaration: "const"
+          declaration: "const",
+          // `using Base::f;` re-exports a base member into this class, a real part of
+          // the type's surface. `alias_declaration` (`using X = Y`) was mapped; this
+          // form was not.
+          using_declaration: "using",
+          friend_declaration: "friend"
         },
         containers: /* @__PURE__ */ new Set([
           "translation_unit",
@@ -6393,6 +6549,13 @@ var init_specs = __esm({
           declaration: (node) => hasFunctionDeclarator(node) ? "function" : "const"
         },
         sectionVisibility: (node) => node.type === "access_specifier" ? !/^(private|protected)/.test(node.text) : void 0,
+        nameFrom: {
+          // `friend class X;` works through the last-resort reader (its type_identifier
+          // is a direct child), but `friend void g();` wraps the name in a nested
+          // `declaration` the reader will not cross — so the function form emitted
+          // nothing. Descend one level when the direct read fails.
+          friend_declaration: (node) => nameOf(node) ?? (node.namedChildren[0] ? nameOf(node.namedChildren[0]) : void 0)
+        },
         relationsFrom: {
           // C++ has no interfaces — a pure-virtual base is still `extends`.
           class_specifier: (node, ctx) => ctx.self ? heritageTargets(childOfType(node, "base_class_clause")).map((to) => rel("extends", ctx.self, to, node)) : [],
@@ -6412,11 +6575,34 @@ var init_specs = __esm({
           val_declaration: "val",
           var_definition: "var",
           type_definition: "type",
-          given_definition: "given"
+          given_definition: "given",
+          // NOTE: `extension_definition` is deliberately NOT a def. The node is
+          // anonymous — its children are the receiver `parameters` and the `def`s —
+          // so there is no name to emit. It qualifies its members instead; see
+          // parentFrom below.
+          // The `package` clause, which the grammar's own tags.scm reports as a
+          // definition and we did not. Same reasoning as PHP's `namespace_definition`:
+          // "where is this package declared" is a real navigation question, and the
+          // clause is already walked as a container either way.
+          package_clause: "package"
         },
         // package_clause carries braced-package bodies (`package com.acme { … }`);
         // template_body is every class/object/trait body.
-        containers: /* @__PURE__ */ new Set(["compilation_unit", "package_clause", "template_body", "class_parameters", "parameters"]),
+        containers: /* @__PURE__ */ new Set([
+          "compilation_unit",
+          "package_clause",
+          "template_body",
+          "class_parameters",
+          "parameters",
+          // The `def`s an `extension` block introduces hang directly off it.
+          "extension_definition"
+        ]),
+        parentFrom: {
+          // `extension (queue: String) def shout` adds `shout` TO String. Without
+          // this the def surfaced unparented, reading as a top-level `shout` — the
+          // same collision the Rust `impl` fix removed.
+          extension_definition: (node) => readTypeName(childOfType(node, "parameters")?.namedChildren[0]?.childForFieldName("type") ?? null)
+        },
         exported: byNotPrivate,
         kindFrom: {
           // `class Scheduler(val queue: String)` declares a public accessor;
@@ -6441,14 +6627,23 @@ var init_specs = __esm({
       },
       bash: {
         lang: "shell",
-        defs: { function_definition: "function" },
+        // `declaration_command` is `declare`/`readonly`/`export` — the only way a
+        // shell script states a named constant. Without it bash indexed functions and
+        // nothing else, so a config script of `export` lines came back empty.
+        defs: { function_definition: "function", declaration_command: "const" },
         // if/compound bodies carry guarded definitions (`if …; then f() { … }; fi`).
         containers: /* @__PURE__ */ new Set(["program", "if_statement", "compound_statement"]),
         // Shell has no visibility — every function is callable from outside.
         exported: always,
         // Every invocation is a `command` whose `name` field is a command_name
         // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
-        calls: { command: "function" }
+        calls: { command: "function" },
+        nameFrom: {
+          // The name is on the ASSIGNMENT, not the command: `declare -r RO=1` leads
+          // with its flag word, which the generic reader would return as the name.
+          // `local` is function-scoped, so it declares nothing about the script.
+          declaration_command: (node) => /^\s*local\b/.test(node.text) ? void 0 : findFirst(node, (n) => n.type === "variable_name")?.text
+        }
       },
       // --- EXTENDED TIER (pull-only; see scripts/fetch-grammars.mjs) --------------
       kotlin: {
@@ -6573,6 +6768,7 @@ var init_specs = __esm({
           "enum_declaration",
           "union_declaration",
           "error_set_declaration",
+          "opaque_declaration",
           "block"
         ]),
         exported: byPub,
@@ -6587,6 +6783,7 @@ var init_specs = __esm({
               if (c2.type === "enum_declaration") return "enum";
               if (c2.type === "union_declaration") return "union";
               if (c2.type === "error_set_declaration") return "error";
+              if (c2.type === "opaque_declaration") return "opaque";
             }
             return /^\s*(?:pub\s+)?var\b/.test(node.text.slice(0, 24)) ? "var" : "const";
           },
@@ -6611,7 +6808,12 @@ var init_specs = __esm({
           enum_declaration: "enum",
           enum_value: "enum-member",
           state_variable_declaration: "field",
-          user_defined_type_definition: "type"
+          constant_variable_declaration: "const",
+          user_defined_type_definition: "type",
+          // `fallback()` / `receive()` are a distinct node from `function_definition`
+          // and are part of the contract's ABI — arguably its most
+          // security-relevant part.
+          fallback_receive_definition: "function"
         },
         containers: /* @__PURE__ */ new Set(["source_file", "contract_body", "struct_declaration", "enum_declaration", "enum_body"]),
         // Solidity states visibility on every member; `public`/`external` is the
@@ -6622,6 +6824,11 @@ var init_specs = __esm({
           // `uint256 public constant MAX = 5` leads with its TYPE, and `type_name`
           // ends in "name", so the generic reader's last resort would return the type.
           state_variable_declaration: (node) => node.namedChildren.find((c2) => c2.type === "identifier")?.text,
+          // `fallback()` / `receive()` carry NO identifier child at all — the keyword
+          // IS the name — so the generic reader returned undefined and the node was
+          // skipped, making the `defs` entry unreachable. The name comes from which
+          // keyword opens the declaration.
+          fallback_receive_definition: (node) => /^\s*receive\b/.test(node.text) ? "receive" : "fallback",
           // An enum member is a LEAF whose own text is the name — it has no
           // identifier child for the generic reader to find.
           enum_value: (node) => node.text
@@ -6699,6 +6906,7 @@ var init_signature = __esm({
       "enum_declaration",
       "union_declaration",
       "error_set_declaration",
+      "opaque_declaration",
       // Solidity, Kotlin.
       "contract_body",
       "enum_class_body"
@@ -6906,6 +7114,23 @@ function collectAll(root, spec, defNames, maxCalls, wantImports) {
     importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
     terms: [...termsFound].sort(byStr)
   };
+}
+function boundNames(pattern) {
+  const out2 = [];
+  const visit = (n) => {
+    if (/^(shorthand_property_identifier_pattern|identifier)$/.test(n.type)) {
+      if (!out2.includes(n.text)) out2.push(n.text);
+      return;
+    }
+    if (n.type === "pair_pattern") {
+      const v = n.childForFieldName("value");
+      if (v) visit(v);
+      return;
+    }
+    for (const c2 of n.namedChildren) visit(c2);
+  };
+  for (const c2 of pattern.namedChildren) visit(c2);
+  return out2;
 }
 function extractAst(rel2, ext, content, opts = {}) {
   const key = grammarKeyForExt(ext);
@@ -7150,7 +7375,27 @@ function extractAst(rel2, ext, content, opts = {}) {
       if (kind) {
         const reader = spec.nameFrom?.[type];
         const name2 = reader ? reader(node) : nameOf(node);
-        const declaresFunction = FUNCTION_KINDS.has(kind) || kind === "class" || FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
+        const pattern = node.namedChildren.find((c2) => c2.type === "object_pattern" || c2.type === "array_pattern");
+        if (pattern && !ctx.inFunctionBody) {
+          const header = declHeader(node, content);
+          const doc = docOf(node);
+          for (const bound of boundNames(pattern)) {
+            emit2({
+              name: bound,
+              kind,
+              file: rel2,
+              line: node.startPosition.row + 1,
+              endLine: node.endPosition.row + 1,
+              ...ctx.parent ? { parent: ctx.parent } : {},
+              signature: header,
+              ...doc ? { doc } : {},
+              exported: visibilityOf(node, header, bound, { ...ctx, exported: nowExported }),
+              lang: spec.lang
+            });
+          }
+          return;
+        }
+        const declaresFunction = FUNCTION_KINDS.has(kind) || NESTED_TYPE_KINDS.has(kind) || FUNCTION_VALUE_TYPES.has(node.childForFieldName("value")?.type ?? "");
         if (name2 && (!ctx.inFunctionBody || declaresFunction)) {
           const header = declHeader(node, content);
           const doc = docOf(node);
@@ -7187,10 +7432,13 @@ function extractAst(rel2, ext, content, opts = {}) {
       collectRelations(node, qualifier ?? ctx.parent);
       if (spec.containers.has(type)) {
         const forcePublic = ctx.forcePublic || spec.publicMembersIn?.[type]?.(node) === true;
+        const entersFunction = FUNCTION_VALUE_TYPES.has(type);
         walkChildren(node, {
           ...ctx,
           exported: nowExported,
           forcePublic,
+          inFunctionBody: ctx.inFunctionBody || entersFunction,
+          funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
           ...qualifier ? { parent: qualifier, parentPath: qualifier, ownerKind: "type" } : {}
         });
       }
@@ -7236,7 +7484,7 @@ function extractAst(rel2, ext, content, opts = {}) {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_TERMS, MAX_LITERAL_LEN, MAX_FUNC_DEPTH, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, COMMENT_NODE, STRING_NODE;
+var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_TERMS, MAX_LITERAL_LEN, MAX_FUNC_DEPTH, NESTED_TYPE_KINDS, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, COMMENT_NODE, STRING_NODE;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
@@ -7256,6 +7504,7 @@ var init_extract = __esm({
     MAX_TERMS = 512;
     MAX_LITERAL_LEN = 80;
     MAX_FUNC_DEPTH = 2;
+    NESTED_TYPE_KINDS = /* @__PURE__ */ new Set(["class", "struct", "enum", "interface", "trait", "type", "record", "union"]);
     ANON_DEFAULT_FN = /* @__PURE__ */ new Set([
       "function",
       "function_expression",
@@ -7531,7 +7780,10 @@ function extractCode(rel2, ext, content, opts = {}) {
   const reexports = extractReexports(rel2, content, symbols).filter((s) => !known.has(s.name));
   return {
     symbols: [...symbols, ...reexports],
-    ...ast?.truncated || raw.length > symbols.length ? { truncated: true } : {},
+    // A re-export list that hit its own ceiling is truncated too — a barrel that
+    // looks complete while hiding names is the failure the walk's `capped` flag
+    // exists to prevent.
+    ...ast?.truncated || raw.length > symbols.length || reexports.length >= MAX_REEXPORTS ? { truncated: true } : {},
     summary: topDocComment(content),
     refs: extractImports(ext, content),
     // pkg anchors namespace→source-root resolution: Java's `package`, C#'s

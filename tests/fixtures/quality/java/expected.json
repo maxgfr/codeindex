@@ -20,6 +20,31 @@
           "kind": "method"
         },
         {
+          "name": "Cfg",
+          "kind": "interface",
+          "exported": false,
+          "doc": true
+        },
+        {
+          "name": "MAX",
+          "parent": "Cfg",
+          "kind": "field",
+          "doc": true,
+          "sig": "int MAX = 5;"
+        },
+        {
+          "name": "Marker",
+          "kind": "annotation",
+          "exported": false,
+          "doc": true
+        },
+        {
+          "name": "value",
+          "parent": "Marker",
+          "kind": "method",
+          "sig": "String value();"
+        },
+        {
           "name": "JobSpec",
           "kind": "record",
           "exported": false,
@@ -34,6 +59,12 @@
           "name": "attempts",
           "parent": "JobSpec",
           "kind": "field"
+        },
+        {
+          "name": "JobSpec",
+          "parent": "JobSpec",
+          "kind": "constructor",
+          "doc": true
         },
         {
           "name": "Outcome",
@@ -96,7 +127,8 @@
       "calls": [
         "clear",
         "dispatch",
-        "size"
+        "size",
+        "trim"
       ],
       "relations": [
         {

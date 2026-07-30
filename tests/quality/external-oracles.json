@@ -1,0 +1,32 @@
+{
+  "comment": "Results of the oracles that need an external tool and a cloned corpus, so they cannot run in `pnpm test`. Refreshed by `CODEINDEX_ORACLE=1 vitest run tests/oracles-external-diff.test.ts` and by the scheduled e2e workflow. Committed WITH provenance because the site publishes these numbers: a figure with no tool version, corpus or date is not a measurement, it is a claim.",
+  "measuredAt": "2026-07-30",
+  "tools": {
+    "ctags": "Universal Ctags 6.2.1",
+    "typescriptCompilerIndexer": "scip-typescript 0.4.0"
+  },
+  "ctags": {
+    "corpus": "the 6 pinned real repos (tests/e2e-real-repos.ts)",
+    "perRepo": [
+      { "repo": "BurntSushi/ripgrep", "files": 107, "ours": 3211, "theirs": 3229, "recall": 0.9799 },
+      { "repo": "pallets/flask", "files": 86, "ours": 1482, "theirs": 1614, "recall": 0.9145 },
+      { "repo": "gin-gonic/gin", "files": 100, "ours": 1873, "theirs": 2039, "recall": 0.9127 },
+      { "repo": "t3-oss/create-t3-turbo", "files": 54, "ours": 111, "theirs": 127, "recall": 0.7244 },
+      { "repo": "nrwl/nx-examples", "files": 87, "ours": 114, "theirs": 125, "recall": 0.688 },
+      { "repo": "socialgouv/code-du-travail-numerique", "files": 1429, "ours": 5528, "theirs": 5930, "recall": 0.6086 }
+    ],
+    "note": "The lower TypeScript figures are largely ctags SURPLUS rather than gaps of ours: it tags function-body locals and quoted config keys, which a declaration index deliberately omits."
+  },
+  "typescriptCompiler": {
+    "corpus": "t3-oss/create-t3-turbo, the 53 files all three tools indexed",
+    "theirDeclarations": 93,
+    "recall": 1.0,
+    "unparsedSymbols": 0,
+    "note": "Recall against an index built by the real TypeScript compiler — authoritative on TypeScript where both ctags and this engine are syntactic. Scoped to NAMED declarations: the indexer also emits a synthetic descriptor per object-literal key, which is not a declaration and is excluded."
+  },
+  "calibration": {
+    "compilerDeclarationsCtagsMissed": 5,
+    "ctagsCoverageOfCompilerDeclarations": 0.946,
+    "note": "How far ctags can be trusted as an oracle on the 39 languages the compiler-based one cannot check. All 5 misses are one construct: string-literal declaration names (module augmentations, quoted interface keys)."
+  }
+}

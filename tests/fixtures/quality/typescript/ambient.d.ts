@@ -5,6 +5,14 @@ declare namespace Webhooks {
   const VERSION: string;
 }
 
+/** Signs payloads, and builds signers bound to a secret. */
+declare interface Signer {
+  /** Sign one payload. */
+  (payload: string): string;
+  new (secret: string): Signer;
+  [header: string]: unknown;
+}
+
 /** A signed, ready-to-send delivery envelope. */
 declare class Envelope {
   readonly id: string;

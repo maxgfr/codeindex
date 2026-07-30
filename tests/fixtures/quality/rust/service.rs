@@ -2,6 +2,12 @@
 
 use std::fmt;
 
+extern "C" {
+    /// Retry budget the host process enforces.
+    fn c_max_attempts(queue: *const u8) -> i32;
+    static C_DEFAULT_QUEUE: i32;
+}
+
 /// Bounds how often a job is retried.
 pub const MAX_ATTEMPTS: u32 = 5;
 
@@ -48,8 +54,13 @@ impl Scheduler {
         &mut self,
         spec: &mut JobSpec,
     ) -> Result<(), Error> {
+        /// Milliseconds to wait before attempt `n`.
+        fn backoff(n: u32) -> u32 {
+            1 << n
+        }
         while spec.attempts < MAX_ATTEMPTS {
             spec.attempts += 1;
+            let _ = backoff(spec.attempts);
         }
         Ok(())
     }

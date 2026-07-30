@@ -46,6 +46,15 @@
         { "name": "Webhooks", "kind": "namespace", "doc": true },
         { "name": "createDispatcher", "parent": "Webhooks", "kind": "function", "doc": true },
         { "name": "VERSION", "parent": "Webhooks", "kind": "const" },
+        { "name": "Signer", "kind": "interface", "doc": true },
+        { "name": "(call)", "parent": "Signer", "kind": "call-signature", "doc": true, "sig": "(payload: string): string" },
+        {
+          "name": "(construct)",
+          "parent": "Signer",
+          "kind": "construct-signature",
+          "sig": "new (secret: string): Signer"
+        },
+        { "name": "[header]", "parent": "Signer", "kind": "index-signature", "sig": "[header: string]: unknown" },
         { "name": "Envelope", "kind": "class", "doc": true },
         { "name": "id", "parent": "Envelope", "kind": "property" },
         { "name": "sign", "parent": "Envelope", "kind": "method" },

@@ -4,6 +4,10 @@
     "Scheduler.scala": {
       "symbols": [
         {
+          "name": "com.acme.worker",
+          "kind": "package"
+        },
+        {
           "name": "Runnable",
           "kind": "trait",
           "doc": true
@@ -79,6 +83,13 @@
           "name": "depth",
           "parent": "Scheduler",
           "kind": "def"
+        },
+        {
+          "name": "shout",
+          "kind": "def",
+          "doc": true,
+          "sig": "def shout: String",
+          "parent": "String"
         },
         {
           "name": "SchedulerFactory",

@@ -1,0 +1,27 @@
+{
+  "lang": "bash",
+  "files": {
+    "deploy.sh": {
+      "symbols": [
+        {
+          "name": "MAX_ATTEMPTS",
+          "kind": "const",
+          "doc": true,
+          "sig": "declare -r MAX_ATTEMPTS=3"
+        },
+        { "name": "BUCKET", "kind": "const" },
+        { "name": "DEPLOY_ENV", "kind": "const" },
+        {
+          "name": "MIRRORS",
+          "kind": "const",
+          "doc": true,
+          "sig": "declare -a MIRRORS=( \"acme-releases-eu\" \"acme-releases-us\" )"
+        },
+        { "name": "upload", "kind": "function", "doc": true, "sig": "upload()" },
+        { "name": "main", "kind": "function", "doc": true }
+      ],
+      "calls": ["main", "put_object", "set", "upload"],
+      "relations": []
+    }
+  }
+}

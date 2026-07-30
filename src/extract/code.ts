@@ -1,7 +1,7 @@
 import type { CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
-import { extractReexports } from "../lang/common.js";
+import { extractReexports, MAX_REEXPORTS } from "../lang/common.js";
 import { isBanner, isDirective, stripCommentMarkers } from "./doc-text.js";
 import { subtokens } from "../util.js";
 
@@ -420,7 +420,12 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
   return {
     symbols: [...symbols, ...reexports],
-    ...(ast?.truncated || raw.length > symbols.length ? { truncated: true as const } : {}),
+    // A re-export list that hit its own ceiling is truncated too — a barrel that
+    // looks complete while hiding names is the failure the walk's `capped` flag
+    // exists to prevent.
+    ...(ast?.truncated || raw.length > symbols.length || reexports.length >= MAX_REEXPORTS
+      ? { truncated: true as const }
+      : {}),
     summary: topDocComment(content),
     refs: extractImports(ext, content),
     // pkg anchors namespace→source-root resolution: Java's `package`, C#'s

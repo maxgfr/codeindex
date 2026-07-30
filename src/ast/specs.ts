@@ -12,7 +12,7 @@
 // each is documented with which.
 import type { RawRelation } from "../types.js";
 import type { TSNode } from "./node.js";
-import { findFirst, readTypeName } from "./node.js";
+import { findFirst, nameOf, readTypeName } from "./node.js";
 
 /** Type names an inheritance clause lists, skipping type-argument noise. */
 function heritageTargets(clause: TSNode | null | undefined): string[] {
@@ -185,7 +185,7 @@ export interface LangSpec {
  * C# interface members and Java enum constants all read as private, because the
  * `public` keyword they inherit is never written.
  */
-export const PUBLIC_MEMBER_KINDS = new Set(["interface", "trait", "enum", "protocol"]);
+export const PUBLIC_MEMBER_KINDS = new Set(["interface", "trait", "enum", "protocol", "annotation"]);
 
 /** Kinds whose body is executable code, so members found inside are locals, not API. */
 export const FUNCTION_KINDS = new Set(["function", "method", "def", "constructor", "operator"]);
@@ -292,6 +292,13 @@ const TS_SPEC: LangSpec = {
     // of a TypeScript API that an index of declarations alone never showed.
     property_signature: "property",
     public_field_definition: "property",
+    // The three ANONYMOUS interface members. `property_signature` and
+    // `method_signature` were already mapped, so these were the one remaining
+    // part of a `.d.ts` still invisible: a callable interface, a constructor
+    // type, an index signature. They carry no name node — see nameFrom.
+    call_signature: "call-signature",
+    construct_signature: "construct-signature",
+    index_signature: "index-signature",
     // `namespace X {}` / `module X {}`
     internal_module: "namespace",
     module: "namespace",
@@ -304,16 +311,65 @@ const TS_SPEC: LangSpec = {
     "program",
     "lexical_declaration",
     "variable_declaration",
-    // Interface/enum bodies, and function bodies (for nested declarations —
-    // route handlers, hooks, helper closures).
     "interface_body",
     "object_type",
     "enum_body",
+    // Function bodies, for nested declarations — route handlers, hooks, helper
+    // closures.
+    //
+    // `statement_block` alone was NOT enough, and the gap was measured: the walk
+    // descends into a non-declaration node only when THAT node's own type is a
+    // container, so listing the block without the statements that OWN one stops
+    // the descent exactly one node short. Same declaration, one block apart, one
+    // indexed and one not:
+    //
+    //   function f() { function a() {} }      → found
+    //   try { function a() {} } catch {}      → lost
+    //   if (x) { function a() {} }            → lost
+    //   app.get("/x", (req, res) => { … })    → lost
+    //
+    // That last one is the case this comment already claimed to support. The
+    // AST-vs-regex differential found 91 such declarations in THIS repo alone,
+    // including every closure `src/ast/extract.ts` is built from — `walk`,
+    // `emit`, `walkChildren`, `walkBody`, `docOf` — all declared inside a `try`,
+    // so codeindex could not find its own AST walk by name.
     "statement_block",
+    "try_statement",
+    "catch_clause",
+    "finally_clause",
+    "if_statement",
+    "else_clause",
+    "for_statement",
+    "for_in_statement",
+    "while_statement",
+    "do_statement",
+    "switch_statement",
+    "switch_body",
+    "switch_case",
+    "switch_default",
+    "labeled_statement",
+    "return_statement",
+    // A callback passed as an argument: expression_statement → call_expression →
+    // arguments → arrow_function → statement_block. Every link has to be walkable
+    // or the chain breaks at the first missing one.
+    "expression_statement",
+    "call_expression",
+    "arguments",
+    "arrow_function",
+    "function_expression",
+    "function",
   ]),
   exported: neverExport, // export is tracked structurally; see LangSpec.exportMarkers
   exportMarkers: new Set(["export_statement", "ambient_declaration"]),
   bareMembers: { enum_body: "enum-member" },
+  nameFrom: {
+    // Anonymous by construction: an interface's call/construct/index signature
+    // has no identifier to read. Naming them after the FORM they take keeps them
+    // addressable and stable instead of dropping them for want of a name.
+    call_signature: () => "(call)",
+    construct_signature: () => "(construct)",
+    index_signature: (node) => `[${node.namedChildren.find((c) => c.type === "identifier")?.text ?? "key"}]`,
+  },
   privateMember: (node) => {
     for (const c of node.namedChildren) {
       if (c.type === "accessibility_modifier" && /^(private|protected)/.test(c.text)) return true;
@@ -398,6 +454,12 @@ export const SPECS: Record<string, LangSpec> = {
       "type_declaration",
       "const_declaration",
       "var_declaration",
+      // A GROUPED `var ( … )` nests its specs in a var_spec_list; the ungrouped
+      // form hangs them off var_declaration directly. Only the grouped shape has
+      // this extra level, which is why grouped `const ( … )` worked and grouped
+      // `var ( … )` did not — 14 exported names per file in gin, found by the
+      // universal-ctags differential.
+      "var_spec_list",
       "source_file",
       // A struct/interface body hangs one level below its type_spec.
       "struct_type",
@@ -496,7 +558,15 @@ export const SPECS: Record<string, LangSpec> = {
       record_declaration: "record",
       method_declaration: "method",
       constructor_declaration: "constructor",
+      compact_constructor_declaration: "constructor",
       field_declaration: "field",
+      // `interface Cfg { int MAX = 5; }` — an interface constant is its OWN node,
+      // not a field_declaration, so interface constants were invisible.
+      constant_declaration: "field",
+      // `@interface Marker { String value(); }` — the annotation type was mapped
+      // and its body was a container, but its ELEMENTS had no entry, so every
+      // `@interface` in a repo indexed as an empty shell.
+      annotation_type_element_declaration: "method",
     },
     containers: new Set([
       "class_body",
@@ -524,6 +594,8 @@ export const SPECS: Record<string, LangSpec> = {
       // `private final List<JobSpec> pending = …` — the generic reader's last
       // resort would return the TYPE (`List`); the name is on the declarator.
       field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
+      // Same declarator shape as a field.
+      constant_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
     },
     relationsFrom: {
       class_declaration: (node, ctx) => {
@@ -572,7 +644,22 @@ export const SPECS: Record<string, LangSpec> = {
       union_item: "union",
       macro_definition: "macro",
     },
-    containers: new Set(["impl_item", "declaration_list", "source_file", "field_declaration_list", "enum_variant_list"]),
+    containers: new Set([
+      "impl_item",
+      "declaration_list",
+      "source_file",
+      "field_declaration_list",
+      "enum_variant_list",
+      // `extern "C" { fn … }` — an FFI block's items sit in a declaration_list
+      // under this node, so without it a crate's whole foreign interface was
+      // unreachable by the walk.
+      "foreign_mod_item",
+      // A `fn` or `struct` declared inside a function body. The AST-vs-regex
+      // differential found 21 of these in ripgrep that the AST tier missed and
+      // the regex tier caught — the cheapest oracle in the repo pointing
+      // straight at a hole.
+      "block",
+    ]),
     exported: byPub,
     calls: { call_expression: "function" },
     parentFrom: {
@@ -610,6 +697,11 @@ export const SPECS: Record<string, LangSpec> = {
       field_declaration: "field",
       event_declaration: "event",
       event_field_declaration: "event",
+      // `property_declaration` and `operator_declaration` were mapped; a
+      // user-defined conversion and a finalizer were not, and both are part of
+      // the type's surface.
+      conversion_operator_declaration: "operator",
+      destructor_declaration: "destructor",
     },
     containers: new Set([
       "namespace_declaration",
@@ -628,13 +720,17 @@ export const SPECS: Record<string, LangSpec> = {
       parameter: (node) => (node.parent?.parent?.type === "record_declaration" ? "field" : undefined),
     },
     publicMember: (node) => node.parent?.parent?.type === "record_declaration",
-
     nameFrom: {
       // C# wraps a field's declarator one level deeper than Java's, inside a
       // `variable_declaration` — same problem, same fix.
       field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
       event_field_declaration: (node) =>
         findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
+      // `operator int(...)` names its TARGET type, and for a predefined target
+      // (`int`, `bool`, `string` — the common case) that is a `predefined_type`
+      // node the identifier-ish reader skips, so the declaration vanished. Only a
+      // user-defined target happened to work.
+      conversion_operator_declaration: (node) => node.childForFieldName("type")?.text,
     },
     relationsFrom: {
       class_declaration: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : []),
@@ -658,6 +754,7 @@ export const SPECS: Record<string, LangSpec> = {
       method_declaration: "method",
       property_declaration: "property",
       const_declaration: "const",
+      namespace_definition: "namespace",
     },
     containers: new Set(["declaration_list", "enum_declaration_list", "program"]),
     // PHP has real visibility keywords, so `always` was throwing away a fact the
@@ -695,6 +792,12 @@ export const SPECS: Record<string, LangSpec> = {
       union_specifier: "union",
       type_definition: "type",
       field_declaration: "field",
+      // A prototype (`int foo(int);`) or an `extern` global. C++ has mapped this
+      // all along and C did not, so a header of prototypes — the entire public
+      // interface of a C library — indexed to NOTHING, while the byte-identical
+      // file read as C++ indexed fully. A same-family asymmetry is a miss, not a
+      // stance. Found by the grammar-vocabulary oracle.
+      declaration: "const",
     },
     // C has no visibility keyword — headers are the interface, so everything
     // counts as exported (same stance as the regex extractor).
@@ -713,6 +816,8 @@ export const SPECS: Record<string, LangSpec> = {
       // In a struct body a `field_declaration` is a data member; with a
       // function_declarator it is a function-pointer member.
       field_declaration: (node) => (hasFunctionDeclarator(node) ? "method" : "field"),
+      // Same split as C++: a `declaration` is a prototype or a variable.
+      declaration: (node) => (hasFunctionDeclarator(node) ? "function" : "const"),
     },
   },
   cpp: {
@@ -728,8 +833,14 @@ export const SPECS: Record<string, LangSpec> = {
       alias_declaration: "type",
       concept_definition: "concept",
       namespace_definition: "namespace",
+      namespace_alias_definition: "namespace",
       field_declaration: "field",
       declaration: "const",
+      // `using Base::f;` re-exports a base member into this class, a real part of
+      // the type's surface. `alias_declaration` (`using X = Y`) was mapped; this
+      // form was not.
+      using_declaration: "using",
+      friend_declaration: "friend",
     },
     containers: new Set([
       "translation_unit",
@@ -752,6 +863,13 @@ export const SPECS: Record<string, LangSpec> = {
     },
     sectionVisibility: (node) =>
       node.type === "access_specifier" ? !/^(private|protected)/.test(node.text) : undefined,
+    nameFrom: {
+      // `friend class X;` works through the last-resort reader (its type_identifier
+      // is a direct child), but `friend void g();` wraps the name in a nested
+      // `declaration` the reader will not cross — so the function form emitted
+      // nothing. Descend one level when the direct read fails.
+      friend_declaration: (node) => nameOf(node) ?? (node.namedChildren[0] ? nameOf(node.namedChildren[0]) : undefined),
+    },
     relationsFrom: {
       // C++ has no interfaces — a pure-virtual base is still `extends`.
       class_specifier: (node, ctx) =>
@@ -778,10 +896,34 @@ export const SPECS: Record<string, LangSpec> = {
       var_definition: "var",
       type_definition: "type",
       given_definition: "given",
+      // NOTE: `extension_definition` is deliberately NOT a def. The node is
+      // anonymous — its children are the receiver `parameters` and the `def`s —
+      // so there is no name to emit. It qualifies its members instead; see
+      // parentFrom below.
+      // The `package` clause, which the grammar's own tags.scm reports as a
+      // definition and we did not. Same reasoning as PHP's `namespace_definition`:
+      // "where is this package declared" is a real navigation question, and the
+      // clause is already walked as a container either way.
+      package_clause: "package",
     },
     // package_clause carries braced-package bodies (`package com.acme { … }`);
     // template_body is every class/object/trait body.
-    containers: new Set(["compilation_unit", "package_clause", "template_body", "class_parameters", "parameters"]),
+    containers: new Set([
+      "compilation_unit",
+      "package_clause",
+      "template_body",
+      "class_parameters",
+      "parameters",
+      // The `def`s an `extension` block introduces hang directly off it.
+      "extension_definition",
+    ]),
+    parentFrom: {
+      // `extension (queue: String) def shout` adds `shout` TO String. Without
+      // this the def surfaced unparented, reading as a top-level `shout` — the
+      // same collision the Rust `impl` fix removed.
+      extension_definition: (node) =>
+        readTypeName(childOfType(node, "parameters")?.namedChildren[0]?.childForFieldName("type") ?? null),
+    },
     exported: byNotPrivate,
     kindFrom: {
       // `class Scheduler(val queue: String)` declares a public accessor;
@@ -811,7 +953,10 @@ export const SPECS: Record<string, LangSpec> = {
   },
   bash: {
     lang: "shell",
-    defs: { function_definition: "function" },
+    // `declaration_command` is `declare`/`readonly`/`export` — the only way a
+    // shell script states a named constant. Without it bash indexed functions and
+    // nothing else, so a config script of `export` lines came back empty.
+    defs: { function_definition: "function", declaration_command: "const" },
     // if/compound bodies carry guarded definitions (`if …; then f() { … }; fi`).
     containers: new Set(["program", "if_statement", "compound_statement"]),
     // Shell has no visibility — every function is callable from outside.
@@ -819,6 +964,13 @@ export const SPECS: Record<string, LangSpec> = {
     // Every invocation is a `command` whose `name` field is a command_name
     // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
     calls: { command: "function" },
+    nameFrom: {
+      // The name is on the ASSIGNMENT, not the command: `declare -r RO=1` leads
+      // with its flag word, which the generic reader would return as the name.
+      // `local` is function-scoped, so it declares nothing about the script.
+      declaration_command: (node) =>
+        /^\s*local\b/.test(node.text) ? undefined : findFirst(node, (n) => n.type === "variable_name")?.text,
+    },
   },
   // --- EXTENDED TIER (pull-only; see scripts/fetch-grammars.mjs) --------------
 
@@ -959,6 +1111,7 @@ export const SPECS: Record<string, LangSpec> = {
       "enum_declaration",
       "union_declaration",
       "error_set_declaration",
+      "opaque_declaration",
       "block",
     ]),
     exported: byPub,
@@ -976,6 +1129,7 @@ export const SPECS: Record<string, LangSpec> = {
           if (c.type === "enum_declaration") return "enum";
           if (c.type === "union_declaration") return "union";
           if (c.type === "error_set_declaration") return "error";
+          if (c.type === "opaque_declaration") return "opaque";
         }
         return /^\s*(?:pub\s+)?var\b/.test(node.text.slice(0, 24)) ? "var" : "const";
       },
@@ -1001,7 +1155,12 @@ export const SPECS: Record<string, LangSpec> = {
       enum_declaration: "enum",
       enum_value: "enum-member",
       state_variable_declaration: "field",
+      constant_variable_declaration: "const",
       user_defined_type_definition: "type",
+      // `fallback()` / `receive()` are a distinct node from `function_definition`
+      // and are part of the contract's ABI — arguably its most
+      // security-relevant part.
+      fallback_receive_definition: "function",
     },
     containers: new Set(["source_file", "contract_body", "struct_declaration", "enum_declaration", "enum_body"]),
     // Solidity states visibility on every member; `public`/`external` is the
@@ -1012,6 +1171,11 @@ export const SPECS: Record<string, LangSpec> = {
       // `uint256 public constant MAX = 5` leads with its TYPE, and `type_name`
       // ends in "name", so the generic reader's last resort would return the type.
       state_variable_declaration: (node) => node.namedChildren.find((c) => c.type === "identifier")?.text,
+      // `fallback()` / `receive()` carry NO identifier child at all — the keyword
+      // IS the name — so the generic reader returned undefined and the node was
+      // skipped, making the `defs` entry unreachable. The name comes from which
+      // keyword opens the declaration.
+      fallback_receive_definition: (node) => (/^\s*receive\b/.test(node.text) ? "receive" : "fallback"),
       // An enum member is a LEAF whose own text is the name — it has no
       // identifier child for the generic reader to find.
       enum_value: (node) => node.text,

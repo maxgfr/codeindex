@@ -7,6 +7,8 @@
         { "name": "Outcome", "kind": "enum", "doc": true },
         { "name": "timeout", "parent": "Outcome", "kind": "enum-member" },
         { "name": "rejected", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "Handle", "kind": "opaque", "doc": true, "sig": "pub const Handle" },
+        { "name": "close", "parent": "Handle", "kind": "function", "doc": true },
         { "name": "Scheduler", "kind": "struct", "doc": true },
         { "name": "queue", "parent": "Scheduler", "kind": "field", "exported": false, "doc": true },
         { "name": "pending", "parent": "Scheduler", "kind": "field", "exported": false },

@@ -12,6 +12,7 @@
 // instead of something a reader has to take on faith.
 import { describe, it, expect } from "vitest";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   auditTags,
   BASELINE_PATH,
@@ -23,6 +24,9 @@ import {
   type LangBaseline,
   type LangReport,
 } from "./quality/harness.js";
+import { blindSpots, collectOracleSummaries } from "./quality/oracles.js";
+import { buildQualityPayload, renderQualityJson } from "./quality/site-data.js";
+import { ENGINE_VERSION } from "../src/types.js";
 import {
   formatSearchReport,
   RATCHETED_SEARCH_METRICS,
@@ -74,12 +78,39 @@ if (PRINT) {
   const audit = auditTags();
   lines.push("", `=== tags.scm audit: ${audit.length} definition(s) the official queries see and the walk did not ===`);
   for (const a of audit) lines.push(`  ${a.lang}  ${a.file}:${a.line}  ${a.kind} ${a.name}`);
+
+  // The independent-oracle roll-up: the checks whose authority is not ours.
+  lines.push("", "=== independent oracles ===");
+  for (const o of collectOracleSummaries()) lines.push(`  ${o.label.padEnd(30)} ${o.value}`);
+  lines.push("", "=== blind spots (what none of the above covers) ===");
+  for (const b of blindSpots()) lines.push(`  · ${b}`);
   process.stdout.write(lines.join("\n") + "\n");
 }
 
 if (WRITE) {
   writeFileSync(BASELINE_PATH, JSON.stringify(currentBaseline(), null, 2) + "\n");
   process.stdout.write(`baseline written → ${BASELINE_PATH}\n`);
+
+  // ONE producer for the published numbers. The site could have had its own
+  // generator, and then the page and the ratchet could have disagreed about what
+  // the engine scores — the exact drift tests/site-quality.test.ts exists to
+  // catch. Deriving both from this run makes that impossible by construction.
+  const sitePath = fileURLToPath(new URL("../site/quality.json", import.meta.url));
+  writeFileSync(
+    sitePath,
+    renderQualityJson(
+      buildQualityPayload({
+        engineVersion: ENGINE_VERSION,
+        extraction: currentBaseline().extraction,
+        search: searchBaselineOf(search),
+        searchCases: search.cases,
+        searchMisses: search.misses.length,
+        oracles: collectOracleSummaries(),
+        blindSpots: blindSpots(),
+      }),
+    ),
+  );
+  process.stdout.write(`site payload written → ${sitePath}\n`);
 }
 
 describe("quality ratchet", () => {

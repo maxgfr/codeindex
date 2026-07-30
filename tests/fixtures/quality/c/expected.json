@@ -1,0 +1,36 @@
+{
+  "lang": "c",
+  "files": {
+    "scheduler.h": {
+      "symbols": [
+        {
+          "name": "acme_max_attempts",
+          "kind": "const",
+          "doc": true,
+          "sig": "extern const int acme_max_attempts;"
+        },
+        { "name": "acme_outcome", "kind": "enum", "doc": true },
+        { "name": "ACME_TIMEOUT", "parent": "acme_outcome", "kind": "enum-member" },
+        { "name": "ACME_REJECTED", "parent": "acme_outcome", "kind": "enum-member" },
+        { "name": "acme_job", "kind": "struct", "doc": true },
+        { "name": "name", "parent": "acme_job", "kind": "field", "doc": true },
+        { "name": "attempts", "parent": "acme_job", "kind": "field" },
+        { "name": "acme_result", "kind": "union", "doc": true },
+        { "name": "job", "parent": "acme_result", "kind": "field" },
+        { "name": "outcome", "parent": "acme_result", "kind": "field" },
+        { "name": "acme_scheduler_t", "kind": "type", "doc": true },
+        { "name": "acme_start", "kind": "function", "doc": true },
+        {
+          "name": "acme_dispatch",
+          "kind": "function",
+          "doc": true,
+          "sig": "int max_attempts"
+        },
+        { "name": "acme_pending_count", "kind": "function" },
+        { "name": "acme_depth", "kind": "function", "doc": true }
+      ],
+      "calls": ["acme_pending_count"],
+      "relations": []
+    }
+  }
+}

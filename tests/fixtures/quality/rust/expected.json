@@ -3,6 +3,14 @@
   "files": {
     "service.rs": {
       "symbols": [
+        {
+          "name": "c_max_attempts",
+          "kind": "function",
+          "exported": false,
+          "doc": true,
+          "sig": "fn c_max_attempts(queue: *const u8) -> i32;"
+        },
+        { "name": "C_DEFAULT_QUEUE", "kind": "static", "exported": false },
         { "name": "MAX_ATTEMPTS", "kind": "const", "doc": true },
         { "name": "DEFAULT_QUEUE", "kind": "static", "exported": false },
         { "name": "Runnable", "kind": "trait", "doc": true },
@@ -25,11 +33,12 @@
           "doc": true,
           "sig": "spec: &mut JobSpec"
         },
+        { "name": "backoff", "parent": "dispatch", "kind": "function", "exported": false, "doc": true },
         { "name": "reset", "parent": "Scheduler", "kind": "function", "exported": false },
         { "name": "start", "parent": "Scheduler", "kind": "function" },
         { "name": "fmt", "parent": "Error", "kind": "function" }
       ],
-      "calls": ["Ok", "clear", "new", "reset"],
+      "calls": ["Ok", "backoff", "clear", "new", "reset"],
       "relations": [
         { "kind": "implements", "from": "Scheduler", "to": "Runnable" },
         { "kind": "implements", "from": "Error", "to": "Display" }

@@ -69,6 +69,65 @@ export function extToLang(ext: string): string {
 
 const REEXPORT_EXTS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 
+// Blank out comments while PRESERVING every byte offset and line break, so a
+// scan that runs over the result can still report real line numbers.
+//
+// WHY: the barrel scan below is a regex over raw text. `src/lang/common.ts` used
+// to index its OWN doc comment — the line that documents the feature contains
+// `export { A, B as C } from './x'`, so the engine emitted symbols named `A` and
+// `C` from its own prose. Found by the label-free invariant "a symbol's span must
+// actually contain its name".
+//
+// String-aware, because `const s = "// not a comment"` must not be blanked.
+// Template literals are treated as plain strings: an `${…}` expression cannot
+// legally contain an unterminated comment, so nesting adds nothing here.
+export function blankComments(src: string): string {
+  const out = src.split("");
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i]!;
+    const next = src[i + 1];
+    if (c === "/" && next === "/") {
+      while (i < n && src[i] !== "\n") {
+        out[i] = " ";
+        i++;
+      }
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] !== "\n") out[i] = " ";
+        i++;
+      }
+      // Blank the closing delimiter too, or `*/` would read as code.
+      if (i < n) out[i] = " ";
+      if (i + 1 < n) out[i + 1] = " ";
+      i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      i++;
+      while (i < n && src[i] !== quote) {
+        if (src[i] === "\\") i++; // skip the escaped char
+        i++;
+      }
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+
+// Per-file re-export ceiling. Raised from 60: this engine's own public barrel
+// (src/engine.ts) declares ~200 names, so 60 hid two thirds of its API — and it
+// hid them SILENTLY, which is the one thing the walk's `capped` doctrine forbids.
+// Crossing it now sets FileRecord.truncated (see extract/code.ts).
+export const MAX_REEXPORTS = 400;
+
+
 // Barrel re-exports (`export { A, B as C } from './x'`, `export * from './y'`).
 // The line-based lang extractor can't capture multi-name lists, but these ARE
 // the public facade of a module — so list them as exported symbols here.
@@ -101,11 +160,22 @@ export function extractReexports(rel: string, content: string, localSymbols: Cod
   const localDeclOf = new Map<string, CodeSymbol>();
   for (const s of localSymbols) if (!localDeclOf.has(s.name)) localDeclOf.set(s.name, s);
 
+  // Scanned over comment-blanked text, so the engine cannot index prose that
+  // merely QUOTES an export statement. Offsets are preserved, so `lineAt` below
+  // still reports real lines.
+  const scanned = blankComments(content);
   const named = /export\s*\{([\s\S]*?)\}\s*(?:from\s*['"]([^'"]+)['"])?\s*;?/g;
   let m: RegExpExecArray | null;
-  while ((m = named.exec(content)) && out.length < 60) {
+  while ((m = named.exec(scanned)) && out.length < MAX_REEXPORTS) {
     const from = m[2];
+    // Offset of the name list inside `content`, so each name can cite ITS OWN
+    // line. A formatter-wrapped 20-name barrel used to pin every one of them to
+    // the `export {` line, sending jump-to-definition to the wrong place.
+    const listAt = m.index + m[0].indexOf("{") + 1;
+    let cursor = 0;
     for (const part of m[1]!.split(",")) {
+      const partAt = listAt + cursor;
+      cursor += part.length + 1; // +1 for the comma the split consumed
       const p = part.trim().replace(/^type\s+/, "");
       const as = /^(\S+)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(p);
       const orig = as ? as[1]! : p;
@@ -118,7 +188,7 @@ export function extractReexports(rel: string, content: string, localSymbols: Cod
       // local declaration to point at, so it keeps lineAt(m.index) below.
       const decl = !from ? localDeclOf.get(orig) : undefined;
       out.push({
-        name, kind: decl?.kind ?? "reexport", file: rel, line: decl ? decl.line : lineAt(m.index),
+        name, kind: decl?.kind ?? "reexport", file: rel, line: decl ? decl.line : lineAt(partAt),
         ...(decl?.endLine !== undefined ? { endLine: decl.endLine } : {}),
         signature: from ? `export { ${name} } from "${from}"` : `export { ${name} }`,
         exported: true, lang,
@@ -127,7 +197,7 @@ export function extractReexports(rel: string, content: string, localSymbols: Cod
   }
 
   const star = /export\s*\*\s*(?:as\s+([A-Za-z_$][\w$]*)\s+)?from\s*['"]([^'"]+)['"]/g;
-  while ((m = star.exec(content)) && out.length < 60) {
+  while ((m = star.exec(scanned)) && out.length < MAX_REEXPORTS) {
     const ns = m[1];
     const from = m[2]!;
     const key = "*" + (ns ?? from);
