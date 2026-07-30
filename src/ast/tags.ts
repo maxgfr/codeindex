@@ -58,6 +58,28 @@ function queryFor(key: string, language: Language): Query | null {
   return compiled;
 }
 
+/** Whether a vendored query exists for a grammar, and whether it compiled. */
+export interface TagsQueryStatus {
+  /** A `<key>.tags.scm` was found next to the grammar. */
+  present: boolean;
+  /** It compiled against the loaded grammar. False means the two are out of step. */
+  compiled: boolean;
+}
+
+/**
+ * Report a grammar's query status. `extractTags` degrades to `[]` for a query
+ * that does not compile, which is right at runtime but makes a broken query
+ * indistinguishable from one that simply matched nothing — so the audit and its
+ * tests can check the difference here instead of guessing from an empty result.
+ */
+export function tagsQueryStatus(key: string): TagsQueryStatus {
+  const present = resolveGrammarsTier().dirs.some((d) => existsSync(join(d, `${key}.tags.scm`)));
+  if (!present) return { present: false, compiled: false };
+  const language = languageFor(key);
+  if (!language) return { present: true, compiled: false };
+  return { present: true, compiled: queryFor(key, language) !== null };
+}
+
 /**
  * Definitions the grammar's own `tags.scm` finds in this source, deduped and
  * sorted. Empty when the grammar publishes no query, when it fails to compile,

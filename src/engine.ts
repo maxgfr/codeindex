@@ -63,6 +63,8 @@ export type { MarkdownInfo } from "./extract/markdown.js";
 // AST tier (optional — a no-op without the grammar wasm sidecar).
 export { ensureGrammars, allGrammarKeys, grammarKeysForExts, grammarKeyForExt, grammarReady } from "./ast/loader.js";
 export { extractAst } from "./ast/extract.js";
+export { extractTags, tagsQueryStatus } from "./ast/tags.js";
+export type { TagDefinition, TagsQueryStatus } from "./ast/tags.js";
 // Grammars resolution + the slim pull/cache tier (v2.14.0): resolve the wasm
 // dir across bundle-adjacent → env → shared cache → none, and fetch the
 // committed wasms into the shared cache when none ship next to the bundle

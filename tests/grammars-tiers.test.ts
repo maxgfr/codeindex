@@ -14,6 +14,7 @@ import {
 import { extractAst } from "../src/ast/extract.js";
 import { extractCode } from "../src/extract/code.js";
 import { SPECS } from "../src/ast/specs.js";
+import { extractTags, tagsQueryStatus } from "../src/ast/tags.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CORE_DIR = join(ROOT, "scripts", "grammars");
@@ -179,5 +180,58 @@ describe("extended-tier extraction", () => {
     expect(info.symbols[0]!.doc).toBe("The fleet.");
     // `lifecycle` is configuration, not a declaration anyone looks up.
     expect(names).not.toContain("lifecycle");
+  });
+});
+
+// The official `tags.scm` view — an INDEPENDENT statement of what a file
+// declares, used by the quality audit to catch what a hand-written spec table
+// forgot. Public API, so it has to behave for a consumer too.
+describe("extractTags (official tags.scm queries)", () => {
+  it("reads definitions through the grammar's own query", () => {
+    // Deliberately probed with constructs TypeScript's OFFICIAL query covers —
+    // an interface and an ambient function. Its tags.scm does not match a plain
+    // `class Widget {}` at all, which is precisely why these queries are used as
+    // a cross-check and not as the extractor.
+    const src = ["interface Shape {", "  area(): number;", "}", "declare function build(): void;", ""].join("\n");
+    const tags = extractTags(".ts", src);
+    expect(tags.map((t) => t.name)).toEqual(expect.arrayContaining(["Shape", "area", "build"]));
+    // Kinds come from the `@definition.<kind>` capture name.
+    expect(tags.find((t) => t.name === "Shape")!.kind).toBe("interface");
+    expect(tags.every((t) => t.line >= 1)).toBe(true);
+  });
+
+  it("is deterministic and deduped", () => {
+    const src = "export interface Shape { area(): number }\n";
+    expect(extractTags(".ts", src)).toEqual(extractTags(".ts", src));
+  });
+
+  it("returns [] for a language with no grammar, and for a grammar with no query", () => {
+    // Swift has no wasm at all; bash has a wasm but publishes no tags.scm.
+    expect(extractTags(".swift", "func f() {}")).toEqual([]);
+    expect(extractTags(".sh", "f() { :; }")).toEqual([]);
+  });
+
+  it("never throws on unparseable input", () => {
+    expect(() => extractTags(".ts", "class {{{ <<< not valid")).not.toThrow();
+  });
+
+  it("every vendored query compiles against its grammar", () => {
+    // A query the installed grammar rejects degrades to [] silently, which would
+    // make the audit quietly stop auditing while still looking green. Checking
+    // COMPILATION rather than captures is what distinguishes "out of step with
+    // the wasm" from "this query legitimately matches nothing here".
+    const unusable: string[] = [];
+    for (const key of allGrammarKeys()) {
+      if (!grammarReady(key)) continue;
+      const status = tagsQueryStatus(key);
+      if (status.present && !status.compiled) unusable.push(key);
+    }
+    expect(unusable, "vendored tags.scm out of step with its grammar").toEqual([]);
+  });
+
+  it("reports query status honestly for a grammar that publishes none", () => {
+    // bash ships a wasm but no tags.scm; asking must say "absent", not "broken".
+    expect(tagsQueryStatus("bash")).toEqual({ present: false, compiled: false });
+    if (grammarReady("typescript")) expect(tagsQueryStatus("typescript")).toEqual({ present: true, compiled: true });
   });
 });
