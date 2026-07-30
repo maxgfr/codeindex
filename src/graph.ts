@@ -5,6 +5,7 @@ import type { RepoScan } from "./scan.js";
 import type { ModuleInfo } from "./modules.js";
 import { resolveDocLink, resolveImport, type ResolveContext } from "./resolve.js";
 import { resolveCallEdges } from "./calls.js";
+import { resolveRelationEdges } from "./relations.js";
 import { publishImportPairs, uniqueDefsFor } from "./derived.js";
 import { readText } from "./walk.js";
 import { byStr } from "./sort.js";
@@ -114,6 +115,15 @@ export function buildGraph(
     callPairs.add(`${e.from}|${e.to}`);
   }
 
+  // Inheritance edges: `class S extends BaseWorker` is a dependency no import
+  // list distinguishes from any other, and the strongest structural link a repo
+  // has after the import itself. Recorded as a pair set for the same reason
+  // calls are — a subtype relation outranks a bare `use` for the same pair.
+  for (const e of resolveRelationEdges(scan, importPairs)) {
+    collect(fileEdgeMap, e);
+    callPairs.add(`${e.from}|${e.to}`);
+  }
+
   // Every import in the repo is now resolved; hand the pair set to the derived
   // cache so the caller index / references / dead code do not resolve them all
   // over again (no-op when a consumer passed its own resolve context).
@@ -180,9 +190,19 @@ export function buildGraph(
   }
 
   // Lift resolved file edges to module edges (drop self-loops). Kind precedence:
-  // import > call > use > doc-link > mention, so a module pair's edge reflects its
-  // strongest link.
-  const KIND_RANK: Record<string, number> = { import: 5, call: 4, use: 3, "doc-link": 2, mention: 1, contains: 0 };
+  // import > extends > implements > call > use > doc-link > mention, so a module
+  // pair's edge reflects its strongest link. Inheritance sits just under import:
+  // a subtype is bound to its base far more tightly than a caller to a callee.
+  const KIND_RANK: Record<string, number> = {
+    import: 7,
+    extends: 6,
+    implements: 5,
+    call: 4,
+    use: 3,
+    "doc-link": 2,
+    mention: 1,
+    contains: 0,
+  };
   const modEdgeMap = new Map<EdgeKey, Edge>();
   for (const e of fileEdges) {
     if (e.dangling || !fileSet.has(e.to)) continue;

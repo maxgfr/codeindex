@@ -1,4 +1,4 @@
-import type { CodeSymbol, RawRef } from "../types.js";
+import type { CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { byStr } from "../sort.js";
 import { grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
 import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
@@ -21,6 +21,9 @@ export interface AstResult {
   calls: { name: string; line: number; receiver?: string }[];
   // JS/TS named-import bindings — always present (empty for non-JS/TS).
   importedNames: string[];
+  // Inheritance stated by this file's declarations, deduped and sorted. Always
+  // present (empty when the grammar has no `relationsFrom` mapping).
+  relations: RawRelation[];
   // True when a per-file cap truncated the result — never silent, same doctrine
   // as the walk's `capped` flag.
   truncated?: true;
@@ -30,6 +33,7 @@ const MAX_REF_IDENTS = 512;
 const MAX_CALLS = 512;
 const MAX_IMPORTED_NAMES = 256;
 const MAX_SYMBOLS = 2000;
+const MAX_RELATIONS = 256;
 
 // How many nested FUNCTION bodies deep we keep looking for declarations. Depth 1
 // finds a route handler or a helper closure inside an exported function; depth 2
@@ -241,6 +245,22 @@ export function extractAst(
 
     const emit = (s: CodeSymbol): void => {
       if (symbols.length < maxSymbols) symbols.push(s);
+    };
+
+    const relations: RawRelation[] = [];
+    const relSeen = new Set<string>();
+    // `self` is what the relation is ABOUT: a class's own name, Rust's impl
+    // target, or the enclosing class for a Ruby `include`.
+    const collectRelations = (node: TSNode, self: string | undefined): void => {
+      const reader = spec.relationsFrom?.[node.type];
+      if (!reader) return;
+      for (const r of reader(node, { self })) {
+        if (r.from === r.to) continue; // a type does not inherit from itself
+        const key = `${r.kind} ${r.from} ${r.to}`;
+        if (relSeen.has(key) || relations.length >= MAX_RELATIONS) continue;
+        relSeen.add(key);
+        relations.push(r);
+      }
     };
 
     // Visibility of one declaration, in precedence order. A local always loses,
@@ -524,6 +544,7 @@ export function extractAst(
             exported: visibilityOf(node, header, name, { ...ctx, exported: nowExported }),
             lang: spec.lang,
           });
+          collectRelations(node, name);
           const entersFunction = FUNCTION_KINDS.has(kind);
           walkBody(node, {
             parent: name,
@@ -538,6 +559,10 @@ export function extractAst(
           return;
         }
       }
+
+      // Not a named declaration: an `impl` block, a Ruby `include`, a Go
+      // embedded field. These state relations about their ENCLOSING type.
+      collectRelations(node, qualifier ?? ctx.parent);
 
       if (spec.containers.has(type)) {
         const forcePublic = ctx.forcePublic || spec.publicMembersIn?.[type]?.(node) === true;
@@ -574,6 +599,7 @@ export function extractAst(
       const p = findFirst(root, (n) => n.type === "package_declaration");
       if (p) pkg = p.text.replace(/^package\s+/, "").replace(/;.*$/, "").trim();
     }
+    relations.sort((a, b) => byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to));
     return {
       symbols,
       refs,
@@ -581,6 +607,7 @@ export function extractAst(
       idents,
       calls,
       importedNames,
+      relations,
       ...(symbols.length >= maxSymbols ? { truncated: true as const } : {}),
     };
   } catch {

@@ -1,4 +1,4 @@
-// The MCP tool catalogue: the 26 tool definitions, their display metadata, and
+// The MCP tool catalogue: the 29 tool definitions, their display metadata, and
 // the per-protocol-version view of the list a client actually receives.
 //
 // Split out of mcp.ts because it is pure data plus one projection function —
@@ -286,6 +286,41 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
   },
   {
+    name: "type_hierarchy",
+    description:
+      "How do types relate? For one type: the base classes it extends, the interfaces/traits it implements, and — the reverse direction, which no other tool answers — what extends or implements IT, plus any declared supertype with no definition in this repo. Omit `name` for the whole hierarchy.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, name: { type: "string", description: "Type name to look up" } },
+      required: ["repo"],
+    },
+  },
+  {
+    name: "implementations",
+    description:
+      "Who implements this interface (or extends this class)? Walks the hierarchy TRANSITIVELY, so a class implementing a sub-interface of the one asked about is included. The tool to reach for before changing an interface.",
+    inputSchema: {
+      type: "object",
+      properties: { ...repoProp, name: { type: "string", description: "Interface/trait/class name" } },
+      required: ["repo", "name"],
+    },
+  },
+  {
+    name: "call_graph",
+    description:
+      "What does this symbol reach, and what reaches it? A bounded symbol-to-symbol neighborhood around `symbol` — `depth` hops (default 2) following `calls`/`extends`/`implements` edges, `direction` out (callees) | in (callers) | both. Answers impact questions the one-hop `callers` tool cannot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        symbol: { type: "string", description: "Symbol name to centre on" },
+        depth: { type: "number", description: "Hops to follow (default 2, max 5)" },
+        direction: { type: "string", description: "out | in | both (default both)" },
+      },
+      required: ["repo", "symbol"],
+    },
+  },
+  {
     name: "check_rules",
     description:
       'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"} (module-level import cycles; edge-less code files). Returns deterministic violations with severity error|warn — a CI gate.',
@@ -333,6 +368,16 @@ const strArr = { type: "array", items: { type: "string" } };
 const anyObj = { type: "object" };
 
 export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
+  call_graph: {
+    type: "object",
+    properties: {
+      root: { type: "array", items: anyObj },
+      nodes: { type: "array", items: anyObj },
+      edges: { type: "array", items: anyObj },
+      truncated: { type: "boolean" },
+    },
+    required: ["root", "nodes", "edges"],
+  },
   scan_summary: {
     type: "object",
     properties: {
@@ -494,6 +539,9 @@ export const TOOL_META: Record<string, ToolMeta> = {
   grep: { title: "Grep file contents" },
   search: { title: "Lexical search", openWorld: true },
   embed_status: { title: "Embedding tier status", openWorld: true },
+  type_hierarchy: { title: "Type hierarchy" },
+  implementations: { title: "Implementations" },
+  call_graph: { title: "Call graph neighborhood" },
   check_rules: { title: "Check architecture rules" },
 };
 

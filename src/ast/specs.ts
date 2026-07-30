@@ -10,8 +10,51 @@
 // Everything after `assignments` is an escape hatch for a grammar shape the two
 // tables cannot express. Each one exists because a real language needs it, and
 // each is documented with which.
+import type { RawRelation } from "../types.js";
 import type { TSNode } from "./node.js";
 import { findFirst, readTypeName } from "./node.js";
+
+/** Type names an inheritance clause lists, skipping type-argument noise. */
+function heritageTargets(clause: TSNode | null | undefined): string[] {
+  if (!clause) return [];
+  const out: string[] = [];
+  for (const c of clause.namedChildren) {
+    // `class A extends B<C>` inherits from B, not from C.
+    if (/arguments|parameters/.test(c.type)) continue;
+    const n = readTypeName(c);
+    if (n) out.push(n);
+  }
+  return out;
+}
+
+const childOfType = (node: TSNode, type: string): TSNode | undefined => node.namedChildren.find((c) => c.type === type);
+
+const rel = (kind: RawRelation["kind"], from: string, to: string, node: TSNode): RawRelation => ({
+  kind,
+  from,
+  to,
+  line: node.startPosition.row + 1,
+});
+
+// JS/TS state both relations inside one `class_heritage` node.
+function tsHeritage(node: TSNode, ctx: { self?: string }): RawRelation[] {
+  if (!ctx.self) return [];
+  const heritage = childOfType(node, "class_heritage");
+  if (!heritage) return [];
+  const out: RawRelation[] = [];
+  for (const to of heritageTargets(childOfType(heritage, "extends_clause"))) out.push(rel("extends", ctx.self, to, node));
+  for (const to of heritageTargets(childOfType(heritage, "implements_clause"))) out.push(rel("implements", ctx.self, to, node));
+  return out;
+}
+
+// A base list the syntax does not split into "class" and "interfaces" (C#).
+// C# requires the base CLASS first when there is one, so the first entry is
+// `extends` and the rest are `implements`; graph resolution then corrects a
+// first entry that turns out to name an interface (see relations.ts).
+function firstIsBase(clause: TSNode | undefined, self: string, node: TSNode): RawRelation[] {
+  const targets = heritageTargets(clause);
+  return targets.map((to, i) => rel(i === 0 ? "extends" : "implements", self, to, node));
+}
 
 export interface LangSpec {
   lang: string;
@@ -96,6 +139,17 @@ export interface LangSpec {
    * `attr_reader :queue`).
    */
   extraMembers?: (node: TSNode, ctx: { ownerKind?: string; inFunctionBody: boolean }) => { name: string; kind: string }[];
+
+  /**
+   * Inheritance the declaration states: `extends` / `implements` targets, keyed
+   * by node type. `ctx.self` is the declaring symbol — the declaration's own name
+   * for a class/interface, the impl target for Rust, the enclosing class for a
+   * Ruby `include`.
+   *
+   * The graph had no way to express "B is a kind of A", so "who implements this
+   * interface" and "what overrides this method" were unanswerable from the index.
+   */
+  relationsFrom?: Record<string, (node: TSNode, ctx: { self?: string }) => RawRelation[]>;
 }
 
 /**
@@ -198,6 +252,14 @@ const TS_SPEC: LangSpec = {
   imports: { import_statement: "string" },
   calls: { call_expression: "function", new_expression: "constructor" },
   assignments: true,
+  relationsFrom: {
+    class_declaration: tsHeritage,
+    abstract_class_declaration: tsHeritage,
+    interface_declaration: (node, ctx) =>
+      ctx.self
+        ? heritageTargets(childOfType(node, "extends_type_clause")).map((to) => rel("extends", ctx.self!, to, node))
+        : [],
+  },
 };
 
 export const SPECS: Record<string, LangSpec> = {
@@ -223,6 +285,14 @@ export const SPECS: Record<string, LangSpec> = {
     imports: { import_statement: "path", import_from_statement: "path" },
     calls: { call: "function" },
     docstring: true,
+    // Python has no interfaces, so every base is an `extends`; graph resolution
+    // reclassifies one that turns out to name a Protocol.
+    relationsFrom: {
+      class_definition: (node, ctx) =>
+        ctx.self
+          ? heritageTargets(node.childForFieldName("superclasses")).map((to) => rel("extends", ctx.self!, to, node))
+          : [],
+    },
     // Python declares constants and dataclass fields by ASSIGNING them; there is
     // no declaration node to map. `X = 1` at module scope is a constant, the same
     // shape inside a class body is a field, and inside a function it is a local
@@ -272,8 +342,17 @@ export const SPECS: Record<string, LangSpec> = {
     nameFrom: {
       // An EMBEDDED field (`struct { Scheduler }`) has a type and no name. The
       // generic reader would return the type as the field name; returning
-      // undefined skips it, and relations.ts records the embedding instead.
+      // undefined skips it, and the relation below records the embedding instead.
       field_declaration: (node) => node.childForFieldName("name")?.text,
+    },
+    relationsFrom: {
+      // Embedding IS Go's inheritance: `type Audited struct { Scheduler }`
+      // promotes every Scheduler method onto Audited.
+      field_declaration: (node, ctx) => {
+        if (!ctx.self || node.childForFieldName("name")) return [];
+        const to = readTypeName(node.childForFieldName("type"));
+        return to ? [rel("extends", ctx.self, to, node)] : [];
+      },
     },
   },
   ruby: {
@@ -292,6 +371,25 @@ export const SPECS: Record<string, LangSpec> = {
         : node.type === "identifier" && node.text === "public"
           ? true
           : undefined,
+    relationsFrom: {
+      class: (node, ctx) => {
+        if (!ctx.self) return [];
+        const to = readTypeName(node.childForFieldName("superclass"));
+        return to ? [rel("extends", ctx.self, to, node)] : [];
+      },
+      // `include Runnable` mixes a module in — Ruby's only `implements`. It is a
+      // method call, so nothing but the callee name identifies it.
+      call: (node, ctx) => {
+        const method = node.childForFieldName("method");
+        if (!ctx.self || !method || !/^(include|prepend|extend)$/.test(method.text)) return [];
+        const out: RawRelation[] = [];
+        for (const a of node.childForFieldName("arguments")?.namedChildren ?? []) {
+          const to = readTypeName(a);
+          if (to) out.push(rel("implements", ctx.self, to, node));
+        }
+        return out;
+      },
+    },
     extraMembers: (node, ctx) => {
       if (ctx.inFunctionBody) return [];
       // `MAX_ATTEMPTS = 5` — a constant is an assignment to a `constant` node.
@@ -336,6 +434,33 @@ export const SPECS: Record<string, LangSpec> = {
       // resort would return the TYPE (`List`); the name is on the declarator.
       field_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
     },
+    relationsFrom: {
+      class_declaration: (node, ctx) => {
+        if (!ctx.self) return [];
+        const out: RawRelation[] = [];
+        for (const to of heritageTargets(node.childForFieldName("superclass"))) out.push(rel("extends", ctx.self, to, node));
+        const interfaces = node.childForFieldName("interfaces");
+        for (const to of heritageTargets(childOfType(interfaces ?? node, "type_list") ?? interfaces))
+          out.push(rel("implements", ctx.self, to, node));
+        return out;
+      },
+      interface_declaration: (node, ctx) => {
+        const extendsClause = node.childForFieldName("interfaces") ?? childOfType(node, "extends_interfaces");
+        return ctx.self
+          ? heritageTargets(childOfType(extendsClause ?? node, "type_list") ?? extendsClause).map((to) =>
+              rel("extends", ctx.self!, to, node),
+            )
+          : [];
+      },
+      record_declaration: (node, ctx) => {
+        const interfaces = node.childForFieldName("interfaces");
+        return ctx.self
+          ? heritageTargets(childOfType(interfaces ?? node, "type_list") ?? interfaces).map((to) =>
+              rel("implements", ctx.self!, to, node),
+            )
+          : [];
+      },
+    },
   },
   rust: {
     lang: "rust",
@@ -368,6 +493,12 @@ export const SPECS: Record<string, LangSpec> = {
       // A trait implementation's methods are callable by anyone holding the
       // trait, so `pub` is neither required nor allowed on them.
       impl_item: (node) => node.childForFieldName("trait") !== null,
+    },
+    relationsFrom: {
+      impl_item: (node, ctx) => {
+        const to = readTypeName(node.childForFieldName("trait"));
+        return ctx.self && to ? [rel("implements", ctx.self, to, node)] : [];
+      },
     },
   },
   c_sharp: {
@@ -405,6 +536,15 @@ export const SPECS: Record<string, LangSpec> = {
       event_field_declaration: (node) =>
         findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
     },
+    relationsFrom: {
+      class_declaration: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : []),
+      struct_declaration: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : []),
+      record_declaration: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : []),
+      interface_declaration: (node, ctx) =>
+        ctx.self
+          ? heritageTargets(childOfType(node, "base_list")).map((to) => rel("extends", ctx.self!, to, node))
+          : [],
+    },
   },
   php: {
     lang: "php",
@@ -431,6 +571,18 @@ export const SPECS: Record<string, LangSpec> = {
     nameFrom: {
       property_declaration: (node) => findFirst(node, (n) => n.type === "variable_name")?.text.replace(/^\$/, ""),
       const_declaration: (node) => findFirst(node, (n) => n.type === "const_element")?.namedChildren[0]?.text,
+    },
+    relationsFrom: {
+      class_declaration: (node, ctx) => {
+        if (!ctx.self) return [];
+        const out: RawRelation[] = [];
+        for (const to of heritageTargets(childOfType(node, "base_clause"))) out.push(rel("extends", ctx.self, to, node));
+        for (const to of heritageTargets(childOfType(node, "class_interface_clause")))
+          out.push(rel("implements", ctx.self, to, node));
+        return out;
+      },
+      interface_declaration: (node, ctx) =>
+        ctx.self ? heritageTargets(childOfType(node, "base_clause")).map((to) => rel("extends", ctx.self!, to, node)) : [],
     },
   },
   c: {
@@ -500,6 +652,17 @@ export const SPECS: Record<string, LangSpec> = {
     },
     sectionVisibility: (node) =>
       node.type === "access_specifier" ? !/^(private|protected)/.test(node.text) : undefined,
+    relationsFrom: {
+      // C++ has no interfaces — a pure-virtual base is still `extends`.
+      class_specifier: (node, ctx) =>
+        ctx.self
+          ? heritageTargets(childOfType(node, "base_class_clause")).map((to) => rel("extends", ctx.self!, to, node))
+          : [],
+      struct_specifier: (node, ctx) =>
+        ctx.self
+          ? heritageTargets(childOfType(node, "base_class_clause")).map((to) => rel("extends", ctx.self!, to, node))
+          : [],
+    },
   },
   scala: {
     lang: "scala",
@@ -523,6 +686,16 @@ export const SPECS: Record<string, LangSpec> = {
     // Qualified calls are call_expression → field_expression (value/field);
     // `new Widget(...)` is an instance_expression with a bare type child.
     calls: { call_expression: "function", instance_expression: "constructor" },
+    relationsFrom: {
+      // `extends Base with A with B` — the first parent is the superclass, the
+      // `with` mixins are traits, i.e. Scala's `implements`.
+      class_definition: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "extends_clause"), ctx.self, node) : []),
+      object_definition: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "extends_clause"), ctx.self, node) : []),
+      trait_definition: (node, ctx) =>
+        ctx.self
+          ? heritageTargets(childOfType(node, "extends_clause")).map((to) => rel("extends", ctx.self!, to, node))
+          : [],
+    },
   },
   bash: {
     lang: "shell",

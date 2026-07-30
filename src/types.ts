@@ -10,8 +10,10 @@ export const ENGINE_VERSION = "2.20.1";
 // per-symbol parent/endLine, and the extraction cache; v3 added the `call` edge
 // kind, `Edge.confidence`, and `ModuleNode.community`; v4 added node centrality
 // (`pagerank`/`betweenness`), the tests→code fields (`FileNode.testFile`/
-// `ModuleNode.testedBy`), and symbols.json `endLine`.
-export const SCHEMA_VERSION = 4;
+// `ModuleNode.testedBy`), and symbols.json `endLine`; v5 added the
+// `extends`/`implements` edge kinds (resolved inheritance) — additive, so a
+// reader that switches on `kind` sees new kinds but no changed ones.
+export const SCHEMA_VERSION = 5;
 
 // Identifies the extraction engine's output shape independently of the artifact
 // schema. Incremental caches key reused FileRecords on (content hash,
@@ -63,10 +65,12 @@ export type FileKind = "code" | "doc" | "config" | "asset" | "other";
 // Edge kinds in the link-graph. `contains` is the module→member hierarchy;
 // `doc-link` a markdown link; `import` a resolved local code import; `call` a
 // resolved cross-file function/method/constructor call (a global second pass over
-// collected call sites); `use` a code file referencing another file's unique
-// exported symbol (AST-derived, suppressed when an `import` or `call` edge already
-// covers the same pair); `mention` a doc naming an exported symbol.
-export type EdgeKind = "contains" | "doc-link" | "import" | "call" | "use" | "mention";
+// collected call sites); `extends`/`implements` a resolved inheritance relation
+// (a subclass to its base, a type to the interface/trait it provides); `use` a
+// code file referencing another file's unique exported symbol (AST-derived,
+// suppressed when an `import` or `call` edge already covers the same pair);
+// `mention` a doc naming an exported symbol.
+export type EdgeKind = "contains" | "doc-link" | "import" | "call" | "extends" | "implements" | "use" | "mention";
 
 // Dependency tier: 0 = foundations (types, utils, config), 1 = features,
 // 2 = tail (tests, docs, examples, scripts).
@@ -106,6 +110,20 @@ export interface RawRef {
   spec: string; // the target/specifier exactly as written
 }
 
+// An inheritance relation stated by a declaration, with both ends as bare type
+// NAMES — resolution to files happens later (src/relations.ts), where the
+// repo-wide symbol table lives. `extends` is a superclass or a supertrait/
+// superinterface; `implements` is a trait/interface/mixin the type provides.
+// Languages whose syntax does not distinguish the two (C#, Scala's `with`,
+// Go embedding) report their best syntactic reading, which resolution corrects
+// against the target's actual kind.
+export interface RawRelation {
+  kind: "extends" | "implements";
+  from: string; // the declaring type's name
+  to: string; // the base/interface name as written (last qualified segment)
+  line: number; // 1-based line of the declaration stating it
+}
+
 // Everything extracted from one file in a single pass. The unit the graph and
 // renderers consume; nothing here requires the model.
 export interface FileRecord {
@@ -137,6 +155,9 @@ export interface FileRecord {
   // A per-file extraction cap truncated this record's symbols. Same doctrine as
   // the walk's `capped`: a bounded result says so instead of looking complete.
   truncated?: true;
+  // Inheritance stated by declarations in this file (cap 256, deduped, sorted).
+  // Resolved into `extends`/`implements` edges by the graph builder.
+  relations?: RawRelation[];
 }
 
 // A node in the link-graph. Files and modules are both nodes.

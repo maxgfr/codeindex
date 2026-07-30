@@ -1,4 +1,4 @@
-import type { CodeSymbol, RawRef } from "../types.js";
+import type { CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
 import { extractReexports } from "../lang/common.js";
@@ -22,6 +22,9 @@ export interface CodeInfo {
   // call edges and receiver-gated sink catalogs.
   calls?: { name: string; line: number; receiver?: string }[];
   importedNames?: string[]; // JS/TS named-import bindings (AST path) — feeds the call gate
+  // Inheritance stated by this file's declarations (AST path) — feeds the
+  // extends/implements edges and the type hierarchy.
+  relations?: RawRelation[];
 }
 
 const JS_TS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -378,5 +381,6 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
     // exclude a definition's own name+line from its call candidates.
     calls: ast ? ast.calls : collectCallsRegex(content, symbols, opts.maxCallsPerFile),
     importedNames: ast?.importedNames,
+    relations: ast?.relations?.length ? ast.relations : undefined,
   };
 }

@@ -13,6 +13,9 @@ import { scanRepo, scanSummary, type RepoScan } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
 import { preloadSession, INDEX_DIR } from "./preload.js";
 import { walk, type WalkResult } from "./walk.js";
+import { buildTypeHierarchy, implementationsOf } from "./relations.js";
+import { computeImportPairs } from "./callers.js";
+import { buildSymbolGraph, neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
@@ -50,6 +53,9 @@ Commands:
   scip        SCIP code-intelligence index (protobuf bytes) into --out
               (default index.scip; --out - writes to stdout)
   callers     Per-symbol caller index (JSON)
+  hierarchy   Type hierarchy: extends/implements, and what extends/implements it
+  implementations  Everything implementing/extending a type (transitively)
+  callgraph   Bounded symbol-to-symbol neighborhood (--depth, --direction)
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
@@ -187,6 +193,7 @@ interface CliFlags {
   staged?: boolean; // delta: diff the index instead of the merge-base
   depth?: number; // delta/impact/neighbors: traversal hops
   kind?: string; // neighbors: comma-separated edge kinds to traverse
+  direction?: "out" | "in" | "both"; // callgraph: which way to walk
   json?: boolean; // delta: emit JSON instead of the human panel
   positional?: string; // e.g. the grep pattern or search query
 }
@@ -243,6 +250,11 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--staged") flags.staged = true;
     else if (a === "--depth") flags.depth = num();
     else if (a === "--kind") flags.kind = next();
+    else if (a === "--direction") {
+      const v = next();
+      if (v !== "out" && v !== "in" && v !== "both") throw new Error(`--direction expects out|in|both, got "${v}"`);
+      flags.direction = v;
+    }
     else if (a === "--json") flags.json = true;
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
@@ -642,6 +654,37 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const obj: Record<string, unknown> = {};
     for (const [name, entry] of index) obj[name] = entry;
     emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
+  } else if (cmd === "hierarchy") {
+    const scan = readScan();
+    const hierarchy = buildTypeHierarchy(scan, computeImportPairs(scan));
+    if (flags.positional) {
+      const entry = hierarchy.get(flags.positional);
+      if (!entry) throw new Error(`no type named ${flags.positional}`);
+      emit(JSON.stringify(entry, null, 2) + "\n", flags.out);
+    } else {
+      const obj: Record<string, unknown> = {};
+      for (const [key, entry] of hierarchy) obj[key] = entry;
+      emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
+    }
+  } else if (cmd === "implementations") {
+    if (!flags.positional) throw new Error("implementations needs a type name: cli.mjs implementations <Name> --repo <dir>");
+    const scan = readScan();
+    const hierarchy = buildTypeHierarchy(scan, computeImportPairs(scan));
+    if (!hierarchy.has(flags.positional)) throw new Error(`no type named ${flags.positional}`);
+    emit(
+      JSON.stringify({ name: flags.positional, implementations: implementationsOf(hierarchy, flags.positional) }, null, 2) + "\n",
+      flags.out,
+    );
+  } else if (cmd === "callgraph") {
+    if (!flags.positional) throw new Error("callgraph needs a symbol: cli.mjs callgraph <Symbol> --repo <dir>");
+    const scan = readScan();
+    const graph = buildSymbolGraph(scan, computeImportPairs(scan));
+    const result = neighborhood(graph, flags.positional, {
+      ...(flags.depth !== undefined ? { depth: flags.depth } : {}),
+      ...(flags.direction ? { direction: flags.direction } : {}),
+    });
+    if (!result.root.length) throw new Error(`no symbol named ${flags.positional}`);
+    emit(JSON.stringify(result, null, 2) + "\n", flags.out);
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan = readScan();

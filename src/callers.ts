@@ -167,8 +167,10 @@ export function enclosingSymbol(scan: RepoScan, file: string, line: number): Cod
 // Shared innermost-declaration search, factored out of enclosingSymbol() so
 // buildRawCallerIndex can pre-filter/sort a file's symbols ONCE per file and
 // reuse this scan per call site, instead of paying enclosingSymbol()'s
-// `scan.files.find` (O(files)) on every single call site.
-function enclosingAmong(symbols: CodeSymbol[], line: number): CodeSymbol | undefined {
+// `scan.files.find` (O(files)) on every single call site. Exported for
+// src/symbolgraph.ts, which needs the same per-file reuse for every call site
+// in the repo.
+export function enclosingAmong(symbols: CodeSymbol[], line: number): CodeSymbol | undefined {
   let best: CodeSymbol | undefined;
   for (const s of symbols) {
     if (REFERENCE_KINDS.has(s.kind)) continue;

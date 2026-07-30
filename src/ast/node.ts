@@ -125,6 +125,12 @@ export function readReceiver(node: TSNode | null): string | undefined {
   return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
 }
 
+// A leaf that can NAME a type. Ruby writes one as a `constant`, every other
+// grammar here as some `*identifier`. Both branches of readTypeName must agree
+// on this set — they disagreed once, and Ruby's `class X < Base` silently
+// produced no inheritance at all.
+const TYPE_LEAF = /identifier|constant|(^|_)name$/;
+
 // The rightmost segment of a possibly-qualified TYPE reference
 // (`fmt::Display` → "Display", `java.util.List` → "List", `Foo<Bar>` → "Foo").
 // Used for inheritance targets and for reading a receiver's declared type.
@@ -133,12 +139,12 @@ export function readTypeName(node: TSNode | null): string | undefined {
   // A generic application names the CONSTRUCTOR, not its arguments.
   const base = node.childForFieldName("type") ?? node.childForFieldName("name");
   if (base && /generic|qualified|scoped|nested/.test(node.type)) return readTypeName(base);
-  if (node.namedChildren.length === 0) return IDENT_LEAF.test(node.type) || /identifier/.test(node.type) ? node.text : undefined;
+  if (node.namedChildren.length === 0) return TYPE_LEAF.test(node.type) ? node.text : undefined;
   // Qualified paths: take the LAST identifier-ish leaf.
   let last: string | undefined;
   const visit = (n: TSNode): void => {
     if (n.namedChildren.length === 0) {
-      if (/identifier|(^|_)name$/.test(n.type)) last = n.text;
+      if (TYPE_LEAF.test(n.type)) last = n.text;
       return;
     }
     // Never descend into type ARGUMENTS — `Vec<JobSpec>` is a Vec.

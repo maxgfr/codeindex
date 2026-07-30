@@ -15,7 +15,9 @@ import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { buildCallerIndex } from "./callers.js";
-import { callerIndexFor } from "./derived.js";
+import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
+import { implementationsOf } from "./relations.js";
+import { neighborhood, type Direction } from "./symbolgraph.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
@@ -355,6 +357,37 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     };
     if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
     return JSON.stringify(status, null, 2);
+  }
+  if (name === "type_hierarchy") {
+    const hierarchy = hierarchyFor(getScan(repo, scanOpts, walked));
+    const wanted = str(args.name);
+    if (!wanted) {
+      const obj: Record<string, unknown> = {};
+      for (const [key, entry] of hierarchy) obj[key] = entry;
+      return JSON.stringify(obj, null, 2);
+    }
+    const entry = hierarchy.get(wanted);
+    if (!entry) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
+    return JSON.stringify(entry, null, 2);
+  }
+  if (name === "implementations") {
+    const wanted = str(args.name);
+    if (!wanted) throw new Error("`name` is required");
+    const hierarchy = hierarchyFor(getScan(repo, scanOpts, walked));
+    if (!hierarchy.has(wanted)) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
+    return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted) }, null, 2);
+  }
+  if (name === "call_graph") {
+    const symbol = str(args.symbol);
+    if (!symbol) throw new Error("`symbol` is required");
+    const direction = str(args.direction);
+    const dir: Direction = direction === "out" || direction === "in" ? direction : "both";
+    const result = neighborhood(symbolGraphFor(getScan(repo, scanOpts, walked)), symbol, {
+      ...(typeof args.depth === "number" ? { depth: args.depth } : {}),
+      direction: dir,
+    });
+    if (!result.root.length) return JSON.stringify({ error: `no symbol named ${symbol}` }, null, 2);
+    return JSON.stringify(result, null, 2);
   }
   if (name === "check_rules") {
     // Inline `rules` stays the primary form; `configPath` is the CLI's --config,

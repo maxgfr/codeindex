@@ -40,7 +40,15 @@ export function computeSymbolRefs(scan: RepoScan): Map<string, Set<string>> {
 // symbol by name; `refs` (files that USE a name) is filled by the graph's
 // use/mention pass and merged in here. Ordering is fully deterministic so
 // symbols.json is byte-stable across rebuilds.
-export function buildSymbolIndex(scan: RepoScan, refs: Map<string, Set<string>> = new Map()): SymbolIndex {
+export function buildSymbolIndex(
+  scan: RepoScan,
+  refs: Map<string, Set<string>> = new Map(),
+  // `schemaVersion` mirrors buildGraph's `meta.schemaVersion`: a consumer that
+  // persists these artifacts under its OWN schema lineage (ultraindex) must be
+  // able to stamp both files, not just graph.json. Without it the two artifacts
+  // of one build could disagree about which schema they follow.
+  schemaVersion: number = SCHEMA_VERSION,
+): SymbolIndex {
   const defsByName = new Map<string, SymbolIndex["defs"][string]>();
   for (const f of scan.files) {
     for (const s of f.symbols) {
@@ -72,7 +80,7 @@ export function buildSymbolIndex(scan: RepoScan, refs: Map<string, Set<string>> 
     if (files.length) refsOut[name] = files;
   }
 
-  return { schemaVersion: SCHEMA_VERSION, defs, refs: refsOut };
+  return { schemaVersion, defs, refs: refsOut };
 }
 
 export function renderSymbolsJson(index: SymbolIndex): string {

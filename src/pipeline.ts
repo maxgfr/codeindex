@@ -10,8 +10,8 @@ import { computeSurprises } from "./surprise.js";
 import { buildSymbolIndex } from "./render/symbols-json.js";
 
 export interface BuildIndexOptions extends ScanOptions {
-  // Stamped into the graph a consumer persists — lets it carry its own
-  // version/schema instead of the engine's (see buildGraph).
+  // Stamped into BOTH artifacts a consumer persists — lets it carry its own
+  // version/schema instead of the engine's (see buildGraph, buildSymbolIndex).
   meta?: { version?: string; schemaVersion?: number };
   // Community ids from a previous build (manifest `communities` shape), so an
   // unchanged partition keeps stable ids across rebuilds.
@@ -65,6 +65,6 @@ export function buildArtifactsFromScan(scan: RepoScan, opts: BuildIndexOptions =
   const surprises = computeSurprises(graph);
   if (surprises.length) graph.surprises = surprises;
 
-  const symbols = buildSymbolIndex(scan, symbolRefsFor(scan));
+  const symbols = buildSymbolIndex(scan, symbolRefsFor(scan), opts.meta?.schemaVersion);
   return { scan, graph, symbols };
 }

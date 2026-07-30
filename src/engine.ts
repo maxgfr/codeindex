@@ -16,6 +16,7 @@ export type {
   Tier,
   CodeSymbol,
   RawRef,
+  RawRelation,
   FileRecord,
   FileNode,
   ModuleNode,
@@ -91,6 +92,16 @@ export { buildModules, isTestFile, tierForPath } from "./modules.js";
 export type { ModuleInfo } from "./modules.js";
 export { buildGraph, uniqueSymbolDefs } from "./graph.js";
 export { resolveCallEdges } from "./calls.js";
+export {
+  resolveRelations,
+  resolveRelationEdges,
+  buildTypeHierarchy,
+  implementationsOf,
+  typeEntry,
+} from "./relations.js";
+export type { ResolvedRelation, TypeHierarchyEntry, HierarchyRef } from "./relations.js";
+export { buildSymbolGraph, neighborhood, symbolId } from "./symbolgraph.js";
+export type { SymbolGraph, SymbolNode, SymbolEdge, SymbolEdgeKind, Neighborhood, Direction } from "./symbolgraph.js";
 export { buildCallerIndex, buildRawCallerIndex, enclosingSymbol, computeImportPairs } from "./callers.js";
 export { symbolsOverview, findSymbol, findReferences } from "./query.js";
 export { resolveUniqueSymbol, replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";

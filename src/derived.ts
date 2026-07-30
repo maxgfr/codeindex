@@ -33,6 +33,8 @@ import { buildResolveContext, resolveImport, type ResolveContext } from "./resol
 import { uniqueSymbolDefs } from "./graph.js";
 import { computeSymbolRefs } from "./render/symbols-json.js";
 import { buildCallerIndex, type CallerIndex } from "./callers.js";
+import { buildTypeHierarchy, type TypeHierarchyEntry } from "./relations.js";
+import { buildSymbolGraph, type SymbolGraph } from "./symbolgraph.js";
 import { buildDocs, buildTrigramIndex, type Doc } from "./bm25.js";
 import { complexityOfSource } from "./complexity.js";
 import { readText } from "./walk.js";
@@ -44,6 +46,8 @@ interface DerivedCache {
   symbolRefs?: Map<string, Set<string>>; // computeSymbolRefs(scan)
   callerIndex?: CallerIndex; // DEFAULT precision opts only — never recall mode
   bm25?: { docs: Doc[]; trigrams?: Map<string, Set<string>> };
+  hierarchy?: Map<string, TypeHierarchyEntry>;
+  symbolGraph?: SymbolGraph;
   fileComplexity?: Map<string, number>; // rel → whole-file branch count + 1 (code files)
 }
 
@@ -112,6 +116,21 @@ export function symbolRefsFor(scan: RepoScan): Map<string, Set<string>> {
 export function callerIndexFor(scan: RepoScan): CallerIndex {
   const c = cacheFor(scan);
   return (c.callerIndex ??= buildCallerIndex(scan, importPairsFor(scan)));
+}
+
+// The repo-wide type hierarchy. Resolving it walks every relation against the
+// symbol table, so `type_hierarchy` and `implementations` in the same session
+// share one build.
+export function hierarchyFor(scan: RepoScan): Map<string, TypeHierarchyEntry> {
+  const c = cacheFor(scan);
+  return (c.hierarchy ??= buildTypeHierarchy(scan, importPairsFor(scan)));
+}
+
+// The symbol-level call/inheritance graph. Built once per scan: a session asking
+// for several neighborhoods pays for the graph once.
+export function symbolGraphFor(scan: RepoScan): SymbolGraph {
+  const c = cacheFor(scan);
+  return (c.symbolGraph ??= buildSymbolGraph(scan, importPairsFor(scan)));
 }
 
 export function bm25DocsFor(scan: RepoScan): Doc[] {

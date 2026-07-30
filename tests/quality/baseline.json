@@ -9,7 +9,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "csharp": {
       "symbolsPrecision": 1,
@@ -20,7 +20,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "go": {
       "symbolsPrecision": 1,
@@ -31,7 +31,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "java": {
       "symbolsPrecision": 1,
@@ -42,7 +42,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "php": {
       "symbolsPrecision": 1,
@@ -53,7 +53,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "python": {
       "symbolsPrecision": 1,
@@ -64,7 +64,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "ruby": {
       "symbolsPrecision": 1,
@@ -75,7 +75,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "rust": {
       "symbolsPrecision": 1,
@@ -86,7 +86,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "scala": {
       "symbolsPrecision": 1,
@@ -97,7 +97,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     },
     "typescript": {
       "symbolsPrecision": 1,
@@ -108,7 +108,7 @@
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
-      "relationsF1": 0
+      "relationsF1": 1
     }
   },
   "search": {
