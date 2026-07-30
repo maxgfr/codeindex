@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.21.1](https://github.com/maxgfr/codeindex/compare/v2.21.0...v2.21.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **grammars:** ship tags.scm in the pull asset, and surface query status ([dab65b7](https://github.com/maxgfr/codeindex/commit/dab65b708e512865a9cfd70cfe148b99bff1162c))
+
 # [2.21.0](https://github.com/maxgfr/codeindex/compare/v2.20.1...v2.21.0) (2026-07-30)
 
 
