@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.22.0](https://github.com/maxgfr/codeindex/compare/v2.21.1...v2.22.0) (2026-07-30)
+
+
+### Features
+
+* **ast:** close the three recall gaps the ctags differential named ([dea75aa](https://github.com/maxgfr/codeindex/commit/dea75aad445634bc590e3ce148e06673c512a92b))
+
 ## [2.21.1](https://github.com/maxgfr/codeindex/compare/v2.21.0...v2.21.1) (2026-07-30)
 
 
