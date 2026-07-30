@@ -283,7 +283,7 @@
       "id": "universal-ctags",
       "label": "universal-ctags differential",
       "authority": "an independent, mature indexer (Universal Ctags 6.2.1) covering ~40 languages",
-      "value": "recall up to 98.0% over 6 real repositories",
+      "value": "recall up to 98.8% over 6 real repositories",
       "scope": "Compares declaration names per file over real code, not fixtures. ctags also reports function-body locals, which a declaration index omits on purpose — so its extra hits are not our misses."
     }
   ],
