@@ -1311,6 +1311,44 @@ var init_scala = __esm({
   }
 });
 
+// src/lang/dart.ts
+var vis3, RULES16, dart;
+var init_dart = __esm({
+  "src/lang/dart.ts"() {
+    "use strict";
+    init_common();
+    vis3 = (m) => !(m.groups?.name ?? "").startsWith("_");
+    RULES16 = [
+      {
+        re: /^\s*(?:abstract\s+|base\s+|final\s+|sealed\s+|interface\s+)*class\s+(?<name>\w+)/,
+        kind: "class",
+        exported: vis3
+      },
+      { re: /^\s*mixin\s+(?<name>\w+)/, kind: "mixin", exported: vis3 },
+      { re: /^\s*extension\s+(?<name>\w+)/, kind: "extension", exported: vis3 },
+      { re: /^\s*enum\s+(?<name>\w+)/, kind: "enum", exported: vis3 },
+      { re: /^\s*typedef\s+(?<name>\w+)/, kind: "type", exported: vis3 },
+      // A method or function: a return type (or `void`/`Future<…>`) then a name and
+      // an argument list. `get`/`set` accessors are matched by their own rule below
+      // so the accessor keyword does not read as the name.
+      {
+        re: /^\s*(?:@\w+\s+)*(?:static\s+|final\s+|const\s+|external\s+|abstract\s+)*(?:[\w<>,?\[\]. ]+\s+)?(?<name>\w+)\s*\([^)]*\)\s*(?:async\s*\*?\s*)?(?:=>|\{|;)/,
+        kind: "function",
+        exported: vis3
+      },
+      { re: /^\s*(?:static\s+)?[\w<>,?\[\]. ]+\s+get\s+(?<name>\w+)/, kind: "getter", exported: vis3 },
+      { re: /^\s*(?:static\s+)?set\s+(?<name>\w+)\s*\(/, kind: "setter", exported: vis3 }
+    ];
+    dart = {
+      lang: "dart",
+      exts: [".dart"],
+      extract(rel2, content) {
+        return scan(rel2, content, "dart", RULES16);
+      }
+    };
+  }
+});
+
 // src/lang/registry.ts
 function extractSymbols(rel2, ext, content) {
   const extractor = BY_EXT.get(ext);
@@ -1350,6 +1388,7 @@ var init_registry = __esm({
     init_shell();
     init_elixir();
     init_scala();
+    init_dart();
     EXTRACTORS = [
       jsTs,
       python,
@@ -1365,7 +1404,8 @@ var init_registry = __esm({
       lua,
       shell,
       elixir,
-      scala
+      scala,
+      dart
     ];
     BY_EXT = /* @__PURE__ */ new Map();
     for (const e of EXTRACTORS) for (const ext of e.exts) BY_EXT.set(ext, e);
@@ -5581,8 +5621,14 @@ function sharedGrammarsCacheDir() {
 }
 function resolveGrammarsTier(opts = {}) {
   const cacheDir = sharedGrammarsCacheDir();
+  const withDirs = (tier, dir) => ({
+    tier,
+    dir,
+    cacheDir,
+    dirs: [dir, ...existsSync(join2(dir, "..", EXTENDED_DIR)) ? [join2(dir, "..", EXTENDED_DIR)] : []]
+  });
   const legacy = process.env.CODEINDEX_GRAMMAR_DIR ?? process.env.ULTRAINDEX_GRAMMAR_DIR;
-  if (legacy && legacy.trim() && existsSync(legacy)) return { tier: "env", dir: legacy, cacheDir };
+  if (legacy && legacy.trim() && existsSync(legacy)) return withDirs("env", legacy);
   const here = opts.moduleDir ?? dirname(fileURLToPath(import.meta.url));
   const adjacent = [
     join2(here, "grammars"),
@@ -5591,29 +5637,36 @@ function resolveGrammarsTier(opts = {}) {
     // dev: src/ast → <repo>/scripts/grammars
     join2(here, "..", "scripts", "grammars")
   ];
-  for (const c2 of adjacent) if (existsSync(c2)) return { tier: "adjacent", dir: c2, cacheDir };
+  for (const c2 of adjacent) if (existsSync(c2)) return withDirs("adjacent", c2);
   const env = process.env.CODEINDEX_GRAMMARS_DIR;
-  if (env && env.trim() && existsSync(env)) return { tier: "env", dir: env, cacheDir };
-  if (existsSync(cacheDir)) return { tier: "cache", dir: cacheDir, cacheDir };
-  return { tier: "none", cacheDir };
+  if (env && env.trim() && existsSync(env)) return withDirs("env", env);
+  if (existsSync(cacheDir)) return withDirs("cache", cacheDir);
+  return { tier: "none", cacheDir, dirs: [] };
 }
 function resolveGrammarsDir(opts) {
   return resolveGrammarsTier(opts).dir;
 }
 async function ensureGrammars(keys) {
-  const dir = resolveGrammarsDir();
-  if (!dir) return;
+  const { dirs } = resolveGrammarsTier();
+  if (!dirs.length) return;
+  const firstIn = (name2) => {
+    for (const d of dirs) {
+      const p = join2(d, name2);
+      if (existsSync(p)) return p;
+    }
+    return void 0;
+  };
   if (!runtimeReady) {
-    const runtime = join2(dir, "web-tree-sitter.wasm");
-    if (!existsSync(runtime)) return;
+    const runtime = firstIn("web-tree-sitter.wasm");
+    if (!runtime) return;
     await Parser.init({ wasmBinary: readFileSync2(runtime) });
     runtimeReady = true;
     parser = new Parser();
   }
   for (const key of new Set(keys)) {
     if (loaded.has(key) || failed.has(key)) continue;
-    const wasm = join2(dir, `${key}.wasm`);
-    if (!existsSync(wasm)) {
+    const wasm = firstIn(`${key}.wasm`);
+    if (!wasm) {
       failed.add(key);
       continue;
     }
@@ -5644,12 +5697,30 @@ function parserFor(key) {
   parser.setLanguage(lang);
   return parser;
 }
-var EXT_GRAMMAR, runtimeReady, parser, loaded, failed;
+var CORE_GRAMMARS, EXTENDED_GRAMMARS, EXT_GRAMMAR, EXTENDED_DIR, runtimeReady, parser, loaded, failed;
 var init_loader = __esm({
   "src/ast/loader.ts"() {
     "use strict";
     init_web_tree_sitter();
     init_types();
+    CORE_GRAMMARS = /* @__PURE__ */ new Set([
+      "typescript",
+      "tsx",
+      "javascript",
+      "python",
+      "go",
+      "rust",
+      "java",
+      "ruby",
+      "c",
+      "cpp",
+      "c_sharp",
+      "php",
+      "scala",
+      "bash",
+      "lua"
+    ]);
+    EXTENDED_GRAMMARS = /* @__PURE__ */ new Set(["kotlin", "elixir", "zig", "hcl", "terraform", "solidity"]);
     EXT_GRAMMAR = {
       ".ts": "typescript",
       ".mts": "typescript",
@@ -5679,8 +5750,19 @@ var init_loader = __esm({
       ".sc": "scala",
       ".sh": "bash",
       ".bash": "bash",
-      ".lua": "lua"
+      ".lua": "lua",
+      // Extended tier — resolvable only after a `grammars pull`.
+      ".kt": "kotlin",
+      ".kts": "kotlin",
+      ".ex": "elixir",
+      ".exs": "elixir",
+      ".zig": "zig",
+      ".hcl": "hcl",
+      ".tf": "terraform",
+      ".tfvars": "terraform",
+      ".sol": "solidity"
     };
+    EXTENDED_DIR = "grammars-extended";
     runtimeReady = false;
     parser = null;
     loaded = /* @__PURE__ */ new Map();
@@ -5786,7 +5868,7 @@ function firstIsBase(clause, self, node) {
   const targets = heritageTargets(clause);
   return targets.map((to, i2) => rel(i2 === 0 ? "extends" : "implements", self, to, node));
 }
-var childOfType, rel, PUBLIC_MEMBER_KINDS, FUNCTION_KINDS, FUNCTION_VALUE_TYPES, byPublicKeyword, byNotPrivate, byNotLocal, byPub, byCapital, byPyConvention, always, neverExport, hasFunctionDeclarator, TS_SPEC, SPECS;
+var childOfType, rel, PUBLIC_MEMBER_KINDS, FUNCTION_KINDS, FUNCTION_VALUE_TYPES, byPublicKeyword, byNotPrivate, byNotLocal, byPub, byCapital, byPyConvention, always, neverExport, hasFunctionDeclarator, ELIXIR_DEFS, HCL_BLOCKS, TERRAFORM_SPEC, TS_SPEC, SPECS;
 var init_specs = __esm({
   "src/ast/specs.ts"() {
     "use strict";
@@ -5818,6 +5900,42 @@ var init_specs = __esm({
     always = () => true;
     neverExport = () => false;
     hasFunctionDeclarator = (node) => findFirst(node, (n) => n.type === "function_declarator") !== void 0;
+    ELIXIR_DEFS = {
+      defmodule: "module",
+      defprotocol: "protocol",
+      defimpl: "impl",
+      defstruct: "struct",
+      defexception: "exception",
+      def: "function",
+      defp: "function",
+      defmacro: "macro",
+      defmacrop: "macro",
+      defguard: "guard",
+      defguardp: "guard",
+      defdelegate: "function"
+    };
+    HCL_BLOCKS = /* @__PURE__ */ new Set(["resource", "data", "variable", "output", "module", "provider", "locals", "terraform"]);
+    TERRAFORM_SPEC = {
+      lang: "terraform",
+      defs: { block: "block" },
+      containers: /* @__PURE__ */ new Set(["config_file", "body"]),
+      exported: always,
+      kindFrom: {
+        block: (node) => {
+          const type = node.namedChildren.find((c2) => c2.type === "identifier")?.text;
+          return type && HCL_BLOCKS.has(type) ? type : void 0;
+        }
+      },
+      nameFrom: {
+        // A block's identity is its labels: `resource "aws_instance" "web"` is
+        // addressed as aws_instance.web, which is exactly how Terraform names it.
+        block: (node) => {
+          const labels = node.namedChildren.filter((c2) => c2.type === "string_lit").map((c2) => c2.text.replace(/^"|"$/g, ""));
+          if (labels.length) return labels.join(".");
+          return node.namedChildren.find((c2) => c2.type === "identifier")?.text;
+        }
+      }
+    };
     TS_SPEC = {
       lang: "typescript",
       defs: {
@@ -6294,6 +6412,177 @@ var init_specs = __esm({
         // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
         calls: { command: "function" }
       },
+      // --- EXTENDED TIER (pull-only; see scripts/fetch-grammars.mjs) --------------
+      kotlin: {
+        lang: "kotlin",
+        defs: {
+          class_declaration: "class",
+          object_declaration: "object",
+          function_declaration: "function",
+          property_declaration: "property",
+          enum_entry: "enum-member",
+          type_alias: "type"
+        },
+        containers: /* @__PURE__ */ new Set(["source_file", "class_body", "enum_class_body", "companion_object", "object_declaration"]),
+        // Kotlin is public by default; `internal` is module-wide, which still counts
+        // as reachable from outside the file.
+        exported: byNotPrivate,
+        calls: { call_expression: "function" },
+        kindFrom: {
+          // One node type covers class, interface, enum class and annotation class —
+          // only the leading keyword tells them apart.
+          class_declaration: (node) => {
+            const head = node.text.slice(0, 80);
+            if (/\binterface\b/.test(head)) return "interface";
+            if (/\benum\s+class\b/.test(head)) return "enum";
+            if (/\bannotation\s+class\b/.test(head)) return "annotation";
+            return "class";
+          }
+        },
+        nameFrom: {
+          // `val depth: Int` wraps the name in a variable_declaration.
+          property_declaration: (node) => findFirst(node, (n) => n.type === "variable_declaration")?.namedChildren[0]?.text ?? node.namedChildren.find((c2) => c2.type === "identifier")?.text
+        },
+        relationsFrom: {
+          class_declaration: (node, ctx) => {
+            if (!ctx.self) return [];
+            const out2 = [];
+            for (const spec of childOfType(node, "delegation_specifiers")?.namedChildren ?? []) {
+              const to = readTypeName(spec);
+              if (!to) continue;
+              out2.push(rel(findFirst(spec, (n) => n.type === "constructor_invocation") ? "extends" : "implements", ctx.self, to, node));
+            }
+            return out2;
+          }
+        }
+      },
+      elixir: {
+        lang: "elixir",
+        // Elixir has NO declaration node types: `defmodule`, `def` and `defp` are
+        // ordinary macro CALLS, so every declaration in the language arrives as the
+        // same `call` node and only its callee name says what it declares.
+        defs: {},
+        containers: /* @__PURE__ */ new Set(["source", "do_block", "call", "stab_clause"]),
+        // `defp`/`defmacrop` are the private forms; everything else is public.
+        exported: (header) => !/^\s*defp?macrop\b|^\s*defp\b/.test(header),
+        calls: { call: "function" },
+        kindFrom: {
+          call: (node) => ELIXIR_DEFS[node.childForFieldName("target")?.text ?? node.namedChildren[0]?.text ?? ""]
+        },
+        skipCall: (node) => {
+          if (node.parent?.type === "unary_operator") return true;
+          if (node.parent?.type !== "arguments") return false;
+          const decl = node.parent.parent;
+          const target = decl?.childForFieldName("target") ?? decl?.namedChildren[0];
+          return target !== void 0 && ELIXIR_DEFS[target.text] !== void 0;
+        },
+        // Elixir documents with `@doc "…"` / `@moduledoc "…"` — a preceding
+        // `unary_operator` wrapping a call, not a comment. Without this, Elixir
+        // symbols carry no intent at all, which is the one thing the doc field is for.
+        docFrom: (node) => {
+          let prev = node.previousNamedSibling;
+          while (prev && prev.type === "unary_operator") {
+            const inner = prev.namedChildren[0];
+            const target = inner?.childForFieldName("target") ?? inner?.namedChildren[0];
+            if (target && /^(doc|moduledoc)$/.test(target.text)) {
+              const str2 = findFirst(prev, (n) => n.type === "string");
+              if (str2) return str2.text.replace(/^"""|"""$/g, "").replace(/^"|"$/g, "").trim() || void 0;
+            }
+            prev = prev.previousNamedSibling;
+          }
+          return void 0;
+        },
+        nameFrom: {
+          call: (node) => {
+            const args2 = node.childForFieldName("arguments") ?? node.namedChildren.find((c2) => c2.type === "arguments");
+            const first = args2?.namedChildren[0];
+            if (!first) return void 0;
+            if (first.type === "alias") return first.text;
+            if (first.type === "identifier") return first.text;
+            const inner = first.childForFieldName("target") ?? first.namedChildren[0];
+            return inner && /identifier|alias/.test(inner.type) ? inner.text : void 0;
+          }
+        }
+      },
+      zig: {
+        lang: "zig",
+        defs: {
+          function_declaration: "function",
+          variable_declaration: "const",
+          container_field: "field",
+          test_declaration: "test"
+        },
+        containers: /* @__PURE__ */ new Set([
+          "source_file",
+          // A type is a `const X = struct { … }`, so the declaration itself must be
+          // walked into to reach the members.
+          "variable_declaration",
+          "struct_declaration",
+          "enum_declaration",
+          "union_declaration",
+          "error_set_declaration",
+          "block"
+        ]),
+        exported: byPub,
+        calls: { call_expression: "function" },
+        kindFrom: {
+          // Zig declares every type as a constant bound to a container literal.
+          variable_declaration: (node) => {
+            const builtin = node.namedChildren.find((c2) => c2.type === "builtin_function");
+            if (builtin && /^@(import|cImport)\b/.test(builtin.text)) return void 0;
+            for (const c2 of node.namedChildren) {
+              if (c2.type === "struct_declaration") return "struct";
+              if (c2.type === "enum_declaration") return "enum";
+              if (c2.type === "union_declaration") return "union";
+              if (c2.type === "error_set_declaration") return "error";
+            }
+            return /^\s*(?:pub\s+)?var\b/.test(node.text.slice(0, 24)) ? "var" : "const";
+          },
+          // The same node is a struct field and an enum member; only the enclosing
+          // container literal distinguishes them.
+          container_field: (node) => node.parent?.type === "enum_declaration" ? "enum-member" : "field"
+        }
+      },
+      solidity: {
+        lang: "solidity",
+        defs: {
+          contract_declaration: "contract",
+          interface_declaration: "interface",
+          library_declaration: "library",
+          function_definition: "function",
+          constructor_definition: "constructor",
+          modifier_definition: "modifier",
+          event_definition: "event",
+          error_declaration: "error",
+          struct_declaration: "struct",
+          struct_member: "field",
+          enum_declaration: "enum",
+          enum_value: "enum-member",
+          state_variable_declaration: "field",
+          user_defined_type_definition: "type"
+        },
+        containers: /* @__PURE__ */ new Set(["source_file", "contract_body", "struct_declaration", "enum_declaration", "enum_body"]),
+        // Solidity states visibility on every member; `public`/`external` is the
+        // contract's ABI, `internal`/`private` is not.
+        exported: (header, name2) => /\b(public|external)\b/.test(header) ? true : /\b(internal|private)\b/.test(header) ? false : byCapital(header, name2) || true,
+        calls: { call_expression: "function" },
+        nameFrom: {
+          // `uint256 public constant MAX = 5` leads with its TYPE, and `type_name`
+          // ends in "name", so the generic reader's last resort would return the type.
+          state_variable_declaration: (node) => node.namedChildren.find((c2) => c2.type === "identifier")?.text,
+          // An enum member is a LEAF whose own text is the name — it has no
+          // identifier child for the generic reader to find.
+          enum_value: (node) => node.text
+        },
+        relationsFrom: {
+          // `contract S is Base, IRunnable` does not distinguish a base contract
+          // from an interface; resolution corrects whichever turns out to be one.
+          contract_declaration: (node, ctx) => ctx.self ? node.namedChildren.filter((c2) => c2.type === "inheritance_specifier").map((c2) => readTypeName(c2)).filter((to) => to !== void 0).map((to) => rel("extends", ctx.self, to, node)) : [],
+          interface_declaration: (node, ctx) => ctx.self ? node.namedChildren.filter((c2) => c2.type === "inheritance_specifier").map((c2) => readTypeName(c2)).filter((to) => to !== void 0).map((to) => rel("extends", ctx.self, to, node)) : []
+        }
+      },
+      terraform: TERRAFORM_SPEC,
+      hcl: { ...TERRAFORM_SPEC, lang: "hcl" },
       lua: {
         lang: "lua",
         defs: { function_declaration: "function" },
@@ -6350,7 +6639,18 @@ var init_signature = __esm({
       "enumerator_list",
       "interface_body",
       "object_type",
-      "do_block"
+      "do_block",
+      // Zig binds every type to a constant holding a container literal, so the
+      // literal IS the body: without these, a struct's signature swallowed every
+      // field it declares.
+      "struct_declaration",
+      "enum_declaration",
+      "union_declaration",
+      "error_set_declaration",
+      // Solidity, Kotlin.
+      "contract_body",
+      "enum_class_body",
+      "class_parameters"
     ]);
     MAX_SIGNATURE = 400;
   }
@@ -6419,6 +6719,8 @@ function docCommentFor(node) {
     }
     const parent = anchor.parent;
     if (!parent || !DOC_WRAPPERS.has(parent.type)) return void 0;
+    const prev = anchor.previousNamedSibling;
+    if (prev && !DECORATION.test(prev.type)) return void 0;
     anchor = parent;
   }
   return void 0;
@@ -6431,7 +6733,7 @@ function docstringFor(node) {
   if (!str2 || str2.type !== "string") return void 0;
   return summarizeDocLines(str2.text.split(/\r?\n/).map(stripCommentMarkers));
 }
-var COMMENT_TYPE, DOC_WRAPPERS;
+var COMMENT_TYPE, DOC_WRAPPERS, DECORATION;
 var init_doc = __esm({
   "src/ast/doc.ts"() {
     "use strict";
@@ -6448,8 +6750,12 @@ var init_doc = __esm({
       "type_declaration",
       "const_declaration",
       "var_declaration",
-      "body_statement"
+      "body_statement",
+      // tree-sitter-hcl hoists a leading comment out of the block body the same way
+      // tree-sitter-ruby does, so the first block in a file would read as undocumented.
+      "body"
     ]);
+    DECORATION = /decorator|annotation|modifiers/;
   }
 });
 
@@ -6499,10 +6805,10 @@ function collectAll(root, spec, defNames, maxCalls, wantImports) {
     } else if (kids.length === 0 && STRING_NODE.test(type) && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
       addTerms2(node.text.replace(/^['"`]+|['"`]+$/g, ""));
     }
-    if (wantCalls) {
+    if (wantCalls && !(spec.kindFrom?.[type] && spec.kindFrom[type](node)) && !spec.skipCall?.(node)) {
       const how = spec.calls[type];
       if (how === "function") {
-        const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
+        const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name") ?? node.childForFieldName("target") ?? kids[0] ?? null;
         addCall(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
       } else if (how === "member") {
         addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
@@ -6589,7 +6895,7 @@ function extractAst(rel2, ext, content, opts = {}) {
       if (ctx.forcePublic) return true;
       return ctx.exported || spec.exported(header, name2);
     };
-    const docOf = (node) => (spec.docstring ? docstringFor(node) : void 0) ?? docCommentFor(node);
+    const docOf = (node) => spec.docFrom?.(node) ?? (spec.docstring ? docstringFor(node) : void 0) ?? docCommentFor(node);
     const walkChildren = (container, ctx) => {
       let sectionPublic = ctx.sectionPublic;
       const bareKind = spec.bareMembers?.[container.type];
@@ -6636,7 +6942,13 @@ function extractAst(rel2, ext, content, opts = {}) {
       }
     };
     const walkBody = (node, ctx) => {
-      for (const c2 of node.namedChildren) if (spec.containers.has(c2.type)) walkChildren(c2, ctx);
+      let descended = false;
+      for (const c2 of node.namedChildren) {
+        if (!spec.containers.has(c2.type)) continue;
+        descended = true;
+        walkChildren(c2, ctx);
+      }
+      if (!descended && spec.containers.has(node.type)) walkChildren(node, ctx);
     };
     const walk2 = (node, ctx) => {
       if (ctx.funcDepth > MAX_FUNC_DEPTH) return;
@@ -6781,7 +7093,8 @@ function extractAst(rel2, ext, content, opts = {}) {
         return;
       }
       const qualifier = spec.parentFrom?.[type]?.(node);
-      const kind = spec.kindFrom?.[type]?.(node) ?? spec.defs[type];
+      const chooser = spec.kindFrom?.[type];
+      const kind = chooser ? chooser(node) : spec.defs[type];
       if (kind) {
         const reader = spec.nameFrom?.[type];
         const name2 = reader ? reader(node) : nameOf(node);
@@ -13147,6 +13460,7 @@ init_markdown();
 init_loader();
 init_extract();
 init_loader();
+init_loader();
 
 // src/ast/grammars-pull.ts
 init_types();
@@ -14125,6 +14439,8 @@ Commands:
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
   grammars    Tree-sitter wasm grammars (optional AST tier; regex without them).
+              Two tiers: CORE ships with the bundle; EXTENDED (kotlin, elixir,
+              zig, solidity, hcl/terraform) arrives only via \`grammars pull\`.
               Precedence: bundle-adjacent > CODEINDEX_GRAMMARS_DIR > shared cache:
                 grammars status  Active tier (adjacent/env/cache/none), resolved
                                  dir, pinned ENGINE_VERSION, pull-needed (JSON)
@@ -14703,15 +15019,26 @@ async function runCli(rawArgv) {
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const runtimePresent = info2.dir ? existsSync7(join19(info2.dir, "web-tree-sitter.wasm")) : false;
+      const present = (name2) => info2.dirs.some((d) => existsSync7(join19(d, name2)));
+      const runtimePresent = present("web-tree-sitter.wasm");
       const target = resolveGrammarsPullTarget();
+      const resolvedIn = (keys) => [...keys].filter((k) => present(`${k}.wasm`)).sort();
+      const core = resolvedIn(CORE_GRAMMARS);
+      const extended = resolvedIn(EXTENDED_GRAMMARS);
       const status = {
         engineVersion: ENGINE_VERSION,
         tier: info2.tier,
         dir: info2.dir ?? null,
+        dirs: info2.dirs,
         cacheDir,
         runtimePresent,
         pullNeeded: !runtimePresent,
+        core: { resolved: core.length, of: CORE_GRAMMARS.size, missing: [...CORE_GRAMMARS].filter((k) => !core.includes(k)).sort() },
+        extended: {
+          resolved: extended.length,
+          of: EXTENDED_GRAMMARS.size,
+          missing: [...EXTENDED_GRAMMARS].filter((k) => !extended.includes(k)).sort()
+        },
         url: target.url
       };
       emit(JSON.stringify(status, null, 2) + "\n", flags2.out);
@@ -14807,12 +15134,15 @@ ${HELP}`);
   }
 }
 export {
+  CORE_GRAMMARS,
   DEFAULT_DELTA_DEPTH,
   DEFAULT_GRAMMARS_URL,
   DEFAULT_MAX_FILES,
   EMBED_VERSION,
   ENGINE_VERSION,
+  EXTENDED_GRAMMARS,
   EXTRACTOR_VERSION,
+  EXT_GRAMMAR,
   INDEX_DIR,
   MARKDOWN_EXT,
   RISK_WEIGHTS,

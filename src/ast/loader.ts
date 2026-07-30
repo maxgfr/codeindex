@@ -8,6 +8,19 @@ import { ENGINE_VERSION } from "../types.js";
 // Extension → committed grammar wasm key (scripts/grammars/<key>.wasm). Only the
 // languages we ship a grammar for appear here; everything else falls back to the
 // regex extractors (still fully searchable, just no AST-exact symbols/imports).
+// The COMMITTED tier: shipped in scripts/grammars/, available to every consumer
+// with no network and no install.
+export const CORE_GRAMMARS = new Set([
+  "typescript", "tsx", "javascript", "python", "go", "rust", "java",
+  "ruby", "c", "cpp", "c_sharp", "php", "scala", "bash", "lua",
+]);
+
+// The PULL-ONLY tier: published in the per-release grammars asset, not in git
+// (see scripts/fetch-grammars.mjs). Absent until `codeindex grammars pull`, and
+// absent is fine — the engine falls back to the regex tier for these exactly as
+// it does for a language with no grammar at all.
+export const EXTENDED_GRAMMARS = new Set(["kotlin", "elixir", "zig", "hcl", "terraform", "solidity"]);
+
 export const EXT_GRAMMAR: Record<string, string> = {
   ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
   ".tsx": "tsx",
@@ -24,6 +37,13 @@ export const EXT_GRAMMAR: Record<string, string> = {
   ".scala": "scala", ".sc": "scala",
   ".sh": "bash", ".bash": "bash",
   ".lua": "lua",
+  // Extended tier — resolvable only after a `grammars pull`.
+  ".kt": "kotlin", ".kts": "kotlin",
+  ".ex": "elixir", ".exs": "elixir",
+  ".zig": "zig",
+  ".hcl": "hcl",
+  ".tf": "terraform", ".tfvars": "terraform",
+  ".sol": "solidity",
 };
 
 export function grammarKeyForExt(ext: string): string | undefined {
@@ -38,6 +58,12 @@ export interface GrammarsTier {
   tier: GrammarsTierName;
   dir?: string; // undefined only when tier === "none"
   cacheDir: string; // where a `grammars pull` would extract, regardless of tier
+  // Every directory a grammar may be loaded from, in precedence order. Usually
+  // just `dir`; in a DEV checkout it also includes the sibling
+  // `grammars-extended/` that `fetch-grammars.mjs --extended` writes, because
+  // locally the two tiers live in two dirs while the release asset extracts both
+  // into one. A consumer that only ever pulls sees a single dir here.
+  dirs: string[];
 }
 
 // The shared, version-scoped cache a `grammars pull` extracts into and the
@@ -47,6 +73,9 @@ export interface GrammarsTier {
 // old dir's bytes remain byte-identical to what that engine shipped). Honors
 // XDG_CACHE_HOME, else ~/.cache — the platform-neutral, dependency-free
 // convention already used by the wider toolchain.
+// Sibling directory name for the pull-only tier in a dev checkout.
+const EXTENDED_DIR = "grammars-extended";
+
 export function sharedGrammarsCacheDir(): string {
   const xdg = process.env.XDG_CACHE_HOME;
   const base = xdg && xdg.trim() ? xdg.trim() : join(homedir(), ".cache");
@@ -69,19 +98,25 @@ export function sharedGrammarsCacheDir(): string {
 // module-relative base of the bundle-adjacent probe (tests/tooling only).
 export function resolveGrammarsTier(opts: { moduleDir?: string } = {}): GrammarsTier {
   const cacheDir = sharedGrammarsCacheDir();
+  const withDirs = (tier: GrammarsTierName, dir: string): GrammarsTier => ({
+    tier,
+    dir,
+    cacheDir,
+    dirs: [dir, ...(existsSync(join(dir, "..", EXTENDED_DIR)) ? [join(dir, "..", EXTENDED_DIR)] : [])],
+  });
   const legacy = process.env.CODEINDEX_GRAMMAR_DIR ?? process.env.ULTRAINDEX_GRAMMAR_DIR;
-  if (legacy && legacy.trim() && existsSync(legacy)) return { tier: "env", dir: legacy, cacheDir };
+  if (legacy && legacy.trim() && existsSync(legacy)) return withDirs("env", legacy);
   const here = opts.moduleDir ?? dirname(fileURLToPath(import.meta.url));
   const adjacent = [
     join(here, "grammars"), // bundle: <...>/scripts/grammars
     join(here, "..", "..", "scripts", "grammars"), // dev: src/ast → <repo>/scripts/grammars
     join(here, "..", "scripts", "grammars"),
   ];
-  for (const c of adjacent) if (existsSync(c)) return { tier: "adjacent", dir: c, cacheDir };
+  for (const c of adjacent) if (existsSync(c)) return withDirs("adjacent", c);
   const env = process.env.CODEINDEX_GRAMMARS_DIR;
-  if (env && env.trim() && existsSync(env)) return { tier: "env", dir: env, cacheDir };
-  if (existsSync(cacheDir)) return { tier: "cache", dir: cacheDir, cacheDir };
-  return { tier: "none", cacheDir };
+  if (env && env.trim() && existsSync(env)) return withDirs("env", env);
+  if (existsSync(cacheDir)) return withDirs("cache", cacheDir);
+  return { tier: "none", cacheDir, dirs: [] };
 }
 
 // The chosen grammars dir, or undefined when nothing is resolvable anywhere
@@ -106,19 +141,26 @@ const failed = new Set<string>();
 // and safe to call repeatedly. A missing/broken wasm is remembered as failed so
 // the caller silently falls back to regex rather than retrying every file.
 export async function ensureGrammars(keys: Iterable<string>): Promise<void> {
-  const dir = resolveGrammarsDir();
-  if (!dir) return; // nothing resolvable (adjacent/env/cache all absent) → regex everywhere
+  const { dirs } = resolveGrammarsTier();
+  if (!dirs.length) return; // nothing resolvable (adjacent/env/cache all absent) → regex everywhere
+  const firstIn = (name: string): string | undefined => {
+    for (const d of dirs) {
+      const p = join(d, name);
+      if (existsSync(p)) return p;
+    }
+    return undefined;
+  };
   if (!runtimeReady) {
-    const runtime = join(dir, "web-tree-sitter.wasm");
-    if (!existsSync(runtime)) return; // dir present but no runtime wasm → regex fallback everywhere
+    const runtime = firstIn("web-tree-sitter.wasm");
+    if (!runtime) return; // dir present but no runtime wasm → regex fallback everywhere
     await Parser.init({ wasmBinary: readFileSync(runtime) as unknown as Uint8Array });
     runtimeReady = true;
     parser = new Parser();
   }
   for (const key of new Set(keys)) {
     if (loaded.has(key) || failed.has(key)) continue;
-    const wasm = join(dir, `${key}.wasm`);
-    if (!existsSync(wasm)) {
+    const wasm = firstIn(`${key}.wasm`);
+    if (!wasm) {
       failed.add(key);
       continue;
     }

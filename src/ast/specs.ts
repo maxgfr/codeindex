@@ -118,6 +118,13 @@ export interface LangSpec {
   docstring?: boolean;
 
   /**
+   * Read a symbol's doc from somewhere neither a preceding comment nor a
+   * docstring: Elixir documents with an `@doc "…"` module ATTRIBUTE, which is a
+   * sibling expression, not a comment. Tried before the generic paths.
+   */
+  docFrom?: (node: TSNode) => string | undefined;
+
+  /**
    * Honour section markers that flip visibility for the members that follow —
    * C++ `private:` / `public:` (an `access_specifier` node) and Ruby's bare
    * `private` (an identifier at body scope). Members default to public; C++
@@ -128,6 +135,15 @@ export interface LangSpec {
 
   /** Force non-exported even inside an `export`ed declaration (TS `private`/`protected` members). */
   privateMember?: (node: TSNode) => boolean;
+
+  /**
+   * A mapped call node that is NOT a call site. Elixir needs this because its
+   * declarations are macro calls: the inner `start(queue)` of `def start(queue)`
+   * is the signature, and a module attribute (`@max_attempts 5`) is a call too.
+   * Structural rather than a (name, line) match, so a genuine same-line
+   * recursion still registers.
+   */
+  skipCall?: (node: TSNode) => boolean;
 
   /** Emit a bare identifier child of these containers as this kind (TS `enum { A, B }`). */
   bareMembers?: Record<string, string>;
@@ -194,6 +210,53 @@ const neverExport = (): boolean => false;
 
 const hasFunctionDeclarator = (node: TSNode): boolean =>
   findFirst(node, (n) => n.type === "function_declarator") !== undefined;
+
+// Elixir's declaring macros, by callee name. Anything not here is an ordinary
+// call, not a declaration.
+const ELIXIR_DEFS: Record<string, string> = {
+  defmodule: "module",
+  defprotocol: "protocol",
+  defimpl: "impl",
+  defstruct: "struct",
+  defexception: "exception",
+  def: "function",
+  defp: "function",
+  defmacro: "macro",
+  defmacrop: "macro",
+  defguard: "guard",
+  defguardp: "guard",
+  defdelegate: "function",
+};
+
+// HCL/Terraform declares everything as a labelled block. Only these top-level
+// block types name something a reader looks up; `lifecycle`, `ingress` and the
+// rest are nested configuration, and treating them as symbols would bury the
+// real ones.
+const HCL_BLOCKS = new Set(["resource", "data", "variable", "output", "module", "provider", "locals", "terraform"]);
+
+const TERRAFORM_SPEC: LangSpec = {
+  lang: "terraform",
+  defs: { block: "block" },
+  containers: new Set(["config_file", "body"]),
+  exported: always,
+  kindFrom: {
+    block: (node) => {
+      const type = node.namedChildren.find((c) => c.type === "identifier")?.text;
+      return type && HCL_BLOCKS.has(type) ? type : undefined;
+    },
+  },
+  nameFrom: {
+    // A block's identity is its labels: `resource "aws_instance" "web"` is
+    // addressed as aws_instance.web, which is exactly how Terraform names it.
+    block: (node) => {
+      const labels = node.namedChildren
+        .filter((c) => c.type === "string_lit")
+        .map((c) => c.text.replace(/^"|"$/g, ""));
+      if (labels.length) return labels.join(".");
+      return node.namedChildren.find((c) => c.type === "identifier")?.text;
+    },
+  },
+};
 
 // TypeScript is the base for tsx and javascript, so it is a named const rather
 // than indexed back out of SPECS (which noUncheckedIndexedAccess would widen to
@@ -708,6 +771,208 @@ export const SPECS: Record<string, LangSpec> = {
     // wrapping a `word` leaf (hence IDENT_LEAF includes `word`).
     calls: { command: "function" },
   },
+  // --- EXTENDED TIER (pull-only; see scripts/fetch-grammars.mjs) --------------
+
+  kotlin: {
+    lang: "kotlin",
+    defs: {
+      class_declaration: "class",
+      object_declaration: "object",
+      function_declaration: "function",
+      property_declaration: "property",
+      enum_entry: "enum-member",
+      type_alias: "type",
+    },
+    containers: new Set(["source_file", "class_body", "enum_class_body", "companion_object", "object_declaration"]),
+    // Kotlin is public by default; `internal` is module-wide, which still counts
+    // as reachable from outside the file.
+    exported: byNotPrivate,
+    calls: { call_expression: "function" },
+    kindFrom: {
+      // One node type covers class, interface, enum class and annotation class —
+      // only the leading keyword tells them apart.
+      class_declaration: (node) => {
+        const head = node.text.slice(0, 80);
+        if (/\binterface\b/.test(head)) return "interface";
+        if (/\benum\s+class\b/.test(head)) return "enum";
+        if (/\bannotation\s+class\b/.test(head)) return "annotation";
+        return "class";
+      },
+    },
+    nameFrom: {
+      // `val depth: Int` wraps the name in a variable_declaration.
+      property_declaration: (node) =>
+        findFirst(node, (n) => n.type === "variable_declaration")?.namedChildren[0]?.text ??
+        node.namedChildren.find((c) => c.type === "identifier")?.text,
+    },
+    relationsFrom: {
+      class_declaration: (node, ctx) => {
+        if (!ctx.self) return [];
+        const out: RawRelation[] = [];
+        for (const spec of childOfType(node, "delegation_specifiers")?.namedChildren ?? []) {
+          const to = readTypeName(spec);
+          if (!to) continue;
+          // `: Base()` invokes a constructor — that is the superclass. A bare
+          // `: Runnable` names an interface.
+          out.push(rel(findFirst(spec, (n) => n.type === "constructor_invocation") ? "extends" : "implements", ctx.self, to, node));
+        }
+        return out;
+      },
+    },
+  },
+
+  elixir: {
+    lang: "elixir",
+    // Elixir has NO declaration node types: `defmodule`, `def` and `defp` are
+    // ordinary macro CALLS, so every declaration in the language arrives as the
+    // same `call` node and only its callee name says what it declares.
+    defs: {},
+    containers: new Set(["source", "do_block", "call", "stab_clause"]),
+    // `defp`/`defmacrop` are the private forms; everything else is public.
+    exported: (header) => !/^\s*defp?macrop\b|^\s*defp\b/.test(header),
+    calls: { call: "function" },
+    kindFrom: {
+      call: (node) => ELIXIR_DEFS[node.childForFieldName("target")?.text ?? node.namedChildren[0]?.text ?? ""],
+    },
+    skipCall: (node) => {
+      // A module attribute: `@max_attempts 5` parses as unary_operator > call.
+      if (node.parent?.type === "unary_operator") return true;
+      // The declaration's own signature: `def start(queue)` nests the name in a
+      // `call` under the declaring macro's `arguments`.
+      if (node.parent?.type !== "arguments") return false;
+      const decl = node.parent.parent;
+      const target = decl?.childForFieldName("target") ?? decl?.namedChildren[0];
+      return target !== undefined && ELIXIR_DEFS[target.text] !== undefined;
+    },
+    // Elixir documents with `@doc "…"` / `@moduledoc "…"` — a preceding
+    // `unary_operator` wrapping a call, not a comment. Without this, Elixir
+    // symbols carry no intent at all, which is the one thing the doc field is for.
+    docFrom: (node) => {
+      let prev = node.previousNamedSibling;
+      while (prev && prev.type === "unary_operator") {
+        const inner = prev.namedChildren[0];
+        const target = inner?.childForFieldName("target") ?? inner?.namedChildren[0];
+        if (target && /^(doc|moduledoc)$/.test(target.text)) {
+          const str = findFirst(prev, (n) => n.type === "string");
+          if (str) return str.text.replace(/^"""|"""$/g, "").replace(/^"|"$/g, "").trim() || undefined;
+        }
+        prev = prev.previousNamedSibling;
+      }
+      return undefined;
+    },
+    nameFrom: {
+      call: (node) => {
+        const args = node.childForFieldName("arguments") ?? node.namedChildren.find((c) => c.type === "arguments");
+        const first = args?.namedChildren[0];
+        if (!first) return undefined;
+        // `defmodule Worker.Scheduler` names an alias; `def start(queue)` wraps
+        // the name in an inner call; `defstruct` has no name of its own.
+        if (first.type === "alias") return first.text;
+        if (first.type === "identifier") return first.text;
+        const inner = first.childForFieldName("target") ?? first.namedChildren[0];
+        return inner && /identifier|alias/.test(inner.type) ? inner.text : undefined;
+      },
+    },
+  },
+
+  zig: {
+    lang: "zig",
+    defs: {
+      function_declaration: "function",
+      variable_declaration: "const",
+      container_field: "field",
+      test_declaration: "test",
+    },
+    containers: new Set([
+      "source_file",
+      // A type is a `const X = struct { … }`, so the declaration itself must be
+      // walked into to reach the members.
+      "variable_declaration",
+      "struct_declaration",
+      "enum_declaration",
+      "union_declaration",
+      "error_set_declaration",
+      "block",
+    ]),
+    exported: byPub,
+    calls: { call_expression: "function" },
+    kindFrom: {
+      // Zig declares every type as a constant bound to a container literal.
+      variable_declaration: (node) => {
+        // `const std = @import("std")` binds an IMPORT, not a declaration this
+        // file makes; treating it as a constant put every dependency in the
+        // symbol table.
+        const builtin = node.namedChildren.find((c) => c.type === "builtin_function");
+        if (builtin && /^@(import|cImport)\b/.test(builtin.text)) return undefined;
+        for (const c of node.namedChildren) {
+          if (c.type === "struct_declaration") return "struct";
+          if (c.type === "enum_declaration") return "enum";
+          if (c.type === "union_declaration") return "union";
+          if (c.type === "error_set_declaration") return "error";
+        }
+        return /^\s*(?:pub\s+)?var\b/.test(node.text.slice(0, 24)) ? "var" : "const";
+      },
+      // The same node is a struct field and an enum member; only the enclosing
+      // container literal distinguishes them.
+      container_field: (node) => (node.parent?.type === "enum_declaration" ? "enum-member" : "field"),
+    },
+  },
+
+  solidity: {
+    lang: "solidity",
+    defs: {
+      contract_declaration: "contract",
+      interface_declaration: "interface",
+      library_declaration: "library",
+      function_definition: "function",
+      constructor_definition: "constructor",
+      modifier_definition: "modifier",
+      event_definition: "event",
+      error_declaration: "error",
+      struct_declaration: "struct",
+      struct_member: "field",
+      enum_declaration: "enum",
+      enum_value: "enum-member",
+      state_variable_declaration: "field",
+      user_defined_type_definition: "type",
+    },
+    containers: new Set(["source_file", "contract_body", "struct_declaration", "enum_declaration", "enum_body"]),
+    // Solidity states visibility on every member; `public`/`external` is the
+    // contract's ABI, `internal`/`private` is not.
+    exported: (header, name) => (/\b(public|external)\b/.test(header) ? true : /\b(internal|private)\b/.test(header) ? false : byCapital(header, name) || true),
+    calls: { call_expression: "function" },
+    nameFrom: {
+      // `uint256 public constant MAX = 5` leads with its TYPE, and `type_name`
+      // ends in "name", so the generic reader's last resort would return the type.
+      state_variable_declaration: (node) => node.namedChildren.find((c) => c.type === "identifier")?.text,
+      // An enum member is a LEAF whose own text is the name — it has no
+      // identifier child for the generic reader to find.
+      enum_value: (node) => node.text,
+    },
+    relationsFrom: {
+      // `contract S is Base, IRunnable` does not distinguish a base contract
+      // from an interface; resolution corrects whichever turns out to be one.
+      contract_declaration: (node, ctx) =>
+        ctx.self
+          ? node.namedChildren
+              .filter((c) => c.type === "inheritance_specifier")
+              .map((c) => readTypeName(c))
+              .filter((to): to is string => to !== undefined)
+              .map((to) => rel("extends", ctx.self!, to, node))
+          : [],
+      interface_declaration: (node, ctx) =>
+        ctx.self
+          ? node.namedChildren
+              .filter((c) => c.type === "inheritance_specifier")
+              .map((c) => readTypeName(c))
+              .filter((to): to is string => to !== undefined)
+              .map((to) => rel("extends", ctx.self!, to, node))
+          : [],
+    },
+  },
+
+  terraform: TERRAFORM_SPEC,
+  hcl: { ...TERRAFORM_SPEC, lang: "hcl" },
   lua: {
     lang: "lua",
     defs: { function_declaration: "function" },

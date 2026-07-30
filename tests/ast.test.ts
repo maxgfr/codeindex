@@ -90,9 +90,14 @@ describe("AST extraction (tree-sitter)", () => {
     expect(syms.find((s) => s.name === "Handle")!.kind).toBe("struct");
   });
 
-  it("returns undefined for a language with no committed grammar (regex fallback)", () => {
+  it("returns undefined for a language with no grammar at all (regex fallback)", () => {
+    // Swift and Dart have a regex extractor but NO loadable wasm anywhere —
+    // Swift publishes no prebuilt wasm, and Dart's does not load under
+    // web-tree-sitter 0.26. Kotlin used to belong here and now ships in the
+    // extended tier, which is exactly why this asserts against languages that
+    // genuinely have none rather than against whichever one was missing that week.
     expect(extractAst("s.swift", ".swift", "func f() {}")).toBeUndefined();
-    expect(extractAst("s.kt", ".kt", "fun f() {}")).toBeUndefined();
+    expect(extractAst("s.dart", ".dart", "void f() {}")).toBeUndefined();
   });
 
   it("falls back (undefined) rather than throwing on unparseable input", () => {

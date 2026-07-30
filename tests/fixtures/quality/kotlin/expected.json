@@ -1,0 +1,26 @@
+{
+  "lang": "kotlin",
+  "files": {
+    "Scheduler.kt": {
+      "symbols": [
+        { "name": "Runnable", "kind": "interface", "doc": true },
+        { "name": "start", "parent": "Runnable", "kind": "function", "doc": true },
+        { "name": "depth", "parent": "Runnable", "kind": "property" },
+        { "name": "Outcome", "kind": "enum", "doc": true },
+        { "name": "TIMEOUT", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "REJECTED", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "Scheduler", "kind": "class", "doc": true },
+        { "name": "pending", "parent": "Scheduler", "kind": "property", "exported": false, "doc": true },
+        { "name": "start", "parent": "Scheduler", "kind": "function", "doc": true },
+        { "name": "dispatch", "parent": "Scheduler", "kind": "function", "doc": true, "sig": "max: Int" },
+        { "name": "reset", "parent": "Scheduler", "kind": "function", "exported": false },
+        { "name": "depth", "parent": "Scheduler", "kind": "property" }
+      ],
+      "calls": ["dispatch", "listOf"],
+      "relations": [
+        { "kind": "extends", "from": "Scheduler", "to": "BaseWorker" },
+        { "kind": "implements", "from": "Scheduler", "to": "Runnable" }
+      ]
+    }
+  }
+}

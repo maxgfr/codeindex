@@ -1,0 +1,16 @@
+{
+  "lang": "terraform",
+  "files": {
+    "main.tf": {
+      "symbols": [
+        { "name": "region", "kind": "variable", "doc": true },
+        { "name": "aws_instance.worker", "kind": "resource", "doc": true },
+        { "name": "vpc", "kind": "module", "doc": true },
+        { "name": "aws_ami.ubuntu", "kind": "data" },
+        { "name": "worker_ip", "kind": "output" }
+      ],
+      "calls": [],
+      "relations": []
+    }
+  }
+}

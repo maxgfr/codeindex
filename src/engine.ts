@@ -68,6 +68,7 @@ export { extractAst } from "./ast/extract.js";
 // committed wasms into the shared cache when none ship next to the bundle
 // (`codeindex grammars pull|status`). Additive; opt-in; offline-safe.
 export { resolveGrammarsDir, resolveGrammarsTier, sharedGrammarsCacheDir } from "./ast/loader.js";
+export { CORE_GRAMMARS, EXTENDED_GRAMMARS, EXT_GRAMMAR } from "./ast/loader.js";
 export type { GrammarsTier, GrammarsTierName } from "./ast/loader.js";
 export {
   DEFAULT_GRAMMARS_URL,

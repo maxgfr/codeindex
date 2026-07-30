@@ -2,7 +2,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { dirname, join, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
-import { ensureGrammars, grammarKeysForExts, resolveGrammarsTier, sharedGrammarsCacheDir } from "./ast/loader.js";
+import {
+  CORE_GRAMMARS,
+  EXTENDED_GRAMMARS,
+  ensureGrammars,
+  grammarKeysForExts,
+  resolveGrammarsTier,
+  sharedGrammarsCacheDir,
+} from "./ast/loader.js";
 import { resolveGrammarsPullTarget, pullGrammars } from "./ast/grammars-pull.js";
 import { buildIndexArtifacts, buildArtifactsFromScan, type BuildIndexOptions, type IndexArtifacts } from "./pipeline.js";
 import { sha1 } from "./hash.js";
@@ -74,6 +81,8 @@ Commands:
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
   grammars    Tree-sitter wasm grammars (optional AST tier; regex without them).
+              Two tiers: CORE ships with the bundle; EXTENDED (kotlin, elixir,
+              zig, solidity, hcl/terraform) arrives only via \`grammars pull\`.
               Precedence: bundle-adjacent > CODEINDEX_GRAMMARS_DIR > shared cache:
                 grammars status  Active tier (adjacent/env/cache/none), resolved
                                  dir, pinned ENGINE_VERSION, pull-needed (JSON)
@@ -843,15 +852,29 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // resolved dir, the pinned ENGINE_VERSION the cache is keyed on, and
       // whether a pull is needed (no runtime wasm resolvable → AST off, regex).
       const info = resolveGrammarsTier();
-      const runtimePresent = info.dir ? existsSync(join(info.dir, "web-tree-sitter.wasm")) : false;
+      const present = (name: string): boolean => info.dirs.some((d) => existsSync(join(d, name)));
+      const runtimePresent = present("web-tree-sitter.wasm");
       const target = resolveGrammarsPullTarget();
+      // Which grammars are actually THERE, split by tier. Without this, `status`
+      // said "adjacent" and a user whose Kotlin repo was silently indexed by the
+      // regex tier had no way to see that the extended set was missing.
+      const resolvedIn = (keys: Set<string>): string[] => [...keys].filter((k) => present(`${k}.wasm`)).sort();
+      const core = resolvedIn(CORE_GRAMMARS);
+      const extended = resolvedIn(EXTENDED_GRAMMARS);
       const status: Record<string, unknown> = {
         engineVersion: ENGINE_VERSION,
         tier: info.tier,
         dir: info.dir ?? null,
+        dirs: info.dirs,
         cacheDir,
         runtimePresent,
         pullNeeded: !runtimePresent,
+        core: { resolved: core.length, of: CORE_GRAMMARS.size, missing: [...CORE_GRAMMARS].filter((k) => !core.includes(k)).sort() },
+        extended: {
+          resolved: extended.length,
+          of: EXTENDED_GRAMMARS.size,
+          missing: [...EXTENDED_GRAMMARS].filter((k) => !extended.includes(k)).sort(),
+        },
         url: target.url,
       };
       emit(JSON.stringify(status, null, 2) + "\n", flags.out);

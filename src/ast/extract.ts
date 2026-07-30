@@ -153,15 +153,29 @@ function collectAll(
     }
 
     // --- call sites ---
-    if (wantCalls) {
+    // A node that DECLARES something is not a call site. Elixir needs this
+    // outright: `def`, `defp` and `defmodule` are ordinary macro calls there, so
+    // without the guard every declaration in the file also registers a call to
+    // "def".
+    if (wantCalls && !(spec.kindFrom?.[type] && spec.kindFrom[type]!(node)) && !spec.skipCall?.(node)) {
       const how = spec.calls![type];
       if (how === "function") {
         // Grammars name the callee field differently: `function` (TS/py/go/rust/
         // c#/php), `name` (Java's method_invocation), `method` (Ruby's call). The
         // receiver lives on the qualified callee node, or (java/ruby) on the call
         // node itself.
+        // Grammars that name the callee field: `function`, `callee`, `method`,
+        // `name`, `target`. Kotlin and Elixir name it NOTHING — the callee is
+        // simply the first child — so a field-only read found no calls at all in
+        // either language.
         const callee =
-          node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name");
+          node.childForFieldName("function") ??
+          node.childForFieldName("callee") ??
+          node.childForFieldName("method") ??
+          node.childForFieldName("name") ??
+          node.childForFieldName("target") ??
+          kids[0] ??
+          null;
         addCall(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
       } else if (how === "member") {
         addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
@@ -311,7 +325,7 @@ export function extractAst(
     };
 
     const docOf = (node: TSNode): string | undefined =>
-      (spec.docstring ? docstringFor(node) : undefined) ?? docCommentFor(node);
+      spec.docFrom?.(node) ?? (spec.docstring ? docstringFor(node) : undefined) ?? docCommentFor(node);
 
     // Iterate a container's children, tracking the visibility section its
     // markers set. The section is LOCAL to this container: a `private:` in one
@@ -367,11 +381,22 @@ export function extractAst(
       }
     };
 
-    // Descend into a declaration's body: only container children yield more
-    // members, exactly as before — what changed is that a function body is now
-    // among the containers, bounded by MAX_FUNC_DEPTH.
+    // Descend into a declaration's body. Normally the body is a container CHILD
+    // (a class_body, a declaration_list). Some grammars give a declaration no
+    // body node at all and hang its members directly off it — Solidity's
+    // `enum Outcome { Timeout, Rejected }` — so when no container child exists
+    // and the declaration is itself a container, walk it directly. Guarded on
+    // "no container child" precisely so a language whose declaration IS also a
+    // container (Ruby's `class`, whose body_statement is the container) does not
+    // get its body walked twice and emit every member twice.
     const walkBody = (node: TSNode, ctx: WalkCtx): void => {
-      for (const c of node.namedChildren) if (spec.containers.has(c.type)) walkChildren(c, ctx);
+      let descended = false;
+      for (const c of node.namedChildren) {
+        if (!spec.containers.has(c.type)) continue;
+        descended = true;
+        walkChildren(c, ctx);
+      }
+      if (!descended && spec.containers.has(node.type)) walkChildren(node, ctx);
     };
 
     const walk = (node: TSNode, ctx: WalkCtx): void => {
@@ -546,7 +571,12 @@ export function extractAst(
       // `impl Scheduler`, and Go's method receiver.
       const qualifier = spec.parentFrom?.[type]?.(node);
 
-      const kind = spec.kindFrom?.[type]?.(node) ?? spec.defs[type];
+      // A registered kind chooser is AUTHORITATIVE, like nameFrom: returning
+      // undefined means "this node is not a declaration". Falling through to
+      // `defs` here made every nested Terraform block (`lifecycle`, `ingress`)
+      // a symbol, burying the resources that are ones.
+      const chooser = spec.kindFrom?.[type];
+      const kind = chooser ? chooser(node) : spec.defs[type];
       if (kind) {
         // A registered reader is AUTHORITATIVE: returning undefined means "this
         // node declares no name, skip it" — Go's embedded struct fields. Falling

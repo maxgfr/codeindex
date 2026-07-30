@@ -44,6 +44,9 @@ const DOC_WRAPPERS = new Set([
   "const_declaration",
   "var_declaration",
   "body_statement",
+  // tree-sitter-hcl hoists a leading comment out of the block body the same way
+  // tree-sitter-ruby does, so the first block in a file would read as undocumented.
+  "body",
 ]);
 
 // The contiguous comment run immediately above `node`, oldest line first.
@@ -82,10 +85,22 @@ export function docCommentFor(node: TSNode): string | undefined {
     }
     const parent: TSNode | null = anchor.parent;
     if (!parent || !DOC_WRAPPERS.has(parent.type)) return undefined;
+    // Climb ONLY when this declaration is the first thing in the wrapper. A
+    // wrapper can hold many declarations (an HCL `body` holds every block in the
+    // file), and climbing out of it from the third one attributes the FILE's
+    // opening comment to it. If a declaration has a preceding sibling that is
+    // not a comment, it is simply undocumented.
+    const prev = anchor.previousNamedSibling;
+    if (prev && !DECORATION.test(prev.type)) return undefined;
     anchor = parent;
   }
   return undefined;
 }
+
+// Sibling nodes that sit between a comment and the declaration it documents
+// WITHOUT being declarations themselves — a Python decorator, an annotation.
+// Their presence must not block the climb above.
+const DECORATION = /decorator|annotation|modifiers/;
 
 /**
  * A Python-style docstring: the first string statement inside the declaration's

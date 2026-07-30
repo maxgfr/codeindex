@@ -1,0 +1,26 @@
+{
+  "lang": "solidity",
+  "files": {
+    "Scheduler.sol": {
+      "symbols": [
+        { "name": "IRunnable", "kind": "interface", "doc": true },
+        { "name": "start", "parent": "IRunnable", "kind": "function", "doc": true },
+        { "name": "Outcome", "kind": "enum", "doc": true },
+        { "name": "Timeout", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "Rejected", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "Scheduler", "kind": "contract", "doc": true },
+        { "name": "MAX_ATTEMPTS", "parent": "Scheduler", "kind": "field", "doc": true },
+        { "name": "owner", "parent": "Scheduler", "kind": "field", "exported": false },
+        { "name": "Attempted", "parent": "Scheduler", "kind": "event", "doc": true },
+        { "name": "start", "parent": "Scheduler", "kind": "function", "doc": true },
+        { "name": "dispatch", "parent": "Scheduler", "kind": "function", "doc": true, "sig": "uint256 max" },
+        { "name": "reset", "parent": "Scheduler", "kind": "function", "exported": false }
+      ],
+      "calls": ["dispatch"],
+      "relations": [
+        { "kind": "extends", "from": "Scheduler", "to": "BaseWorker" },
+        { "kind": "extends", "from": "Scheduler", "to": "IRunnable" }
+      ]
+    }
+  }
+}

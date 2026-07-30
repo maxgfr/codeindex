@@ -122,13 +122,22 @@ jobs:
             -t ghcr.io/maxgfr/codeindex:latest \
             .
 
-      # Package the committed tree-sitter wasm grammars (scripts/grammars/, ~22 MB)
-      # as a per-release asset so a consumer that vendors ONLY the zero-dependency
-      # engine.mjs can `codeindex grammars pull` them into its shared cache and get
-      # byte-identical AST extraction. Same conditional-on-release-cut gate as the
-      # image above, and built from the checked-out release tag so the wasms match
-      # the released bundle exactly. Reproducible tar (sorted, fixed owner/mtime,
-      # gzip -n) + a `.sha256` sidecar that `grammars pull` fetches and verifies.
+      # Package BOTH grammar tiers as one per-release asset so a consumer that
+      # vendors ONLY the zero-dependency engine.mjs can `codeindex grammars pull`
+      # them into its shared cache and get byte-identical AST extraction.
+      #
+      #   CORE      scripts/grammars/, committed (~22 MB)
+      #   EXTENDED  scripts/grammars-extended/, NOT committed (~6 MB) — kotlin,
+      #             elixir, zig, solidity, hcl, terraform. Regenerated here from
+      #             the lockfile so the asset is the ONLY way to get them, which
+      #             is what keeps them out of every vendoring consumer's checkout.
+      #
+      # Both land in the same flat archive because `grammars pull` extracts into
+      # one version-scoped cache dir; the loader looks up each wasm by name.
+      # Same conditional-on-release-cut gate as the image above, and built from
+      # the checked-out release tag so the wasms match the released bundle
+      # exactly. Reproducible tar (sorted, fixed owner/mtime, gzip -n) + a
+      # `.sha256` sidecar that `grammars pull` fetches and verifies.
       - name: Package and upload grammars asset
         if: steps.release.outputs.released == 'true'
         env:
@@ -136,9 +145,13 @@ jobs:
         run: |
           VERSION="${{ steps.release.outputs.version }}"
           ASSET="grammars-${VERSION}.tar.gz"
+          node scripts/fetch-grammars.mjs --extended
+          rm -rf grammars-asset && mkdir grammars-asset
+          cp scripts/grammars/*.wasm grammars-asset/
+          cp scripts/grammars-extended/*.wasm grammars-asset/
           tar --sort=name --owner=0 --group=0 --numeric-owner \
             --mtime='UTC 2020-01-01' \
-            -cf "grammars-${VERSION}.tar" -C scripts/grammars .
+            -cf "grammars-${VERSION}.tar" -C grammars-asset .
           gzip -n "grammars-${VERSION}.tar"
           sha256sum "$ASSET" | awk '{print $1}' > "${ASSET}.sha256"
           gh release upload "v${VERSION}" "$ASSET" "${ASSET}.sha256" --clobber

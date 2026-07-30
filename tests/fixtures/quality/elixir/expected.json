@@ -1,0 +1,16 @@
+{
+  "lang": "elixir",
+  "files": {
+    "scheduler.ex": {
+      "symbols": [
+        { "name": "Worker.Scheduler", "kind": "module" },
+        { "name": "start", "parent": "Worker.Scheduler", "kind": "function" },
+        { "name": "dispatch", "parent": "Worker.Scheduler", "kind": "function" },
+        { "name": "reset", "parent": "Worker.Scheduler", "kind": "function", "exported": false },
+        { "name": "trace", "parent": "Worker.Scheduler", "kind": "macro" }
+      ],
+      "calls": ["dispatch", "reset"],
+      "relations": []
+    }
+  }
+}

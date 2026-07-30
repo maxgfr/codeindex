@@ -15,6 +15,7 @@ import { lua } from "./lua.js";
 import { shell } from "./shell.js";
 import { elixir } from "./elixir.js";
 import { scala } from "./scala.js";
+import { dart } from "./dart.js";
 
 export interface Extractor {
   lang: string;
@@ -27,7 +28,7 @@ export interface Extractor {
 // registry pattern reconstruct uses for its framework adapters.
 const EXTRACTORS: Extractor[] = [
   jsTs, python, go, ruby, java, rust,
-  csharp, php, swift, kotlin, c, lua, shell, elixir, scala,
+  csharp, php, swift, kotlin, c, lua, shell, elixir, scala, dart,
 ];
 
 const BY_EXT = new Map<string, Extractor>();

@@ -35,6 +35,17 @@ const BODY_TYPES = new Set([
   "interface_body",
   "object_type",
   "do_block",
+  // Zig binds every type to a constant holding a container literal, so the
+  // literal IS the body: without these, a struct's signature swallowed every
+  // field it declares.
+  "struct_declaration",
+  "enum_declaration",
+  "union_declaration",
+  "error_set_declaration",
+  // Solidity, Kotlin.
+  "contract_body",
+  "enum_class_body",
+  "class_parameters",
 ]);
 
 const MAX_SIGNATURE = 400;

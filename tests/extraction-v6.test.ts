@@ -36,8 +36,9 @@ describe("call-site receivers (AST tier)", () => {
 
 describe("call-site receivers (regex tier)", () => {
   it("captures receiver-qualified, chained and bare calls in a no-grammar language", () => {
-    // Kotlin ships no grammar wasm — the regex tier must carry receivers too.
-    const info = extractCode("a.kt", ".kt", "fun main() {\n  client.get(url)\n  compute(1)\n  a.b.chain(2)\n}\n");
+    // Swift ships no grammar wasm at all — the regex tier must carry receivers
+    // too. (Kotlin was the example here until it joined the extended tier.)
+    const info = extractCode("a.swift", ".swift", "func main() {\n  client.get(url)\n  compute(1)\n  a.b.chain(2)\n}\n");
     expect(info.calls).toContainEqual({ name: "get", line: 2, receiver: "client" });
     expect(info.calls).toContainEqual({ name: "compute", line: 3 }); // bare — no receiver key
     expect(info.calls).toContainEqual({ name: "chain", line: 4, receiver: "b" });

@@ -22,6 +22,17 @@
       "callsF1": 1,
       "relationsF1": 1
     },
+    "elixir": {
+      "symbolsPrecision": 1,
+      "symbolsRecall": 1,
+      "symbolsF1": 1,
+      "kindAccuracy": 1,
+      "exportedAccuracy": 1,
+      "docCoverage": 1,
+      "sigCoverage": 1,
+      "callsF1": 1,
+      "relationsF1": 1
+    },
     "go": {
       "symbolsPrecision": 1,
       "symbolsRecall": 1,
@@ -34,6 +45,17 @@
       "relationsF1": 1
     },
     "java": {
+      "symbolsPrecision": 1,
+      "symbolsRecall": 1,
+      "symbolsF1": 1,
+      "kindAccuracy": 1,
+      "exportedAccuracy": 1,
+      "docCoverage": 1,
+      "sigCoverage": 1,
+      "callsF1": 1,
+      "relationsF1": 1
+    },
+    "kotlin": {
       "symbolsPrecision": 1,
       "symbolsRecall": 1,
       "symbolsF1": 1,
@@ -99,7 +121,40 @@
       "callsF1": 1,
       "relationsF1": 1
     },
+    "solidity": {
+      "symbolsPrecision": 1,
+      "symbolsRecall": 1,
+      "symbolsF1": 1,
+      "kindAccuracy": 1,
+      "exportedAccuracy": 1,
+      "docCoverage": 1,
+      "sigCoverage": 1,
+      "callsF1": 1,
+      "relationsF1": 1
+    },
+    "terraform": {
+      "symbolsPrecision": 1,
+      "symbolsRecall": 1,
+      "symbolsF1": 1,
+      "kindAccuracy": 1,
+      "exportedAccuracy": 1,
+      "docCoverage": 1,
+      "sigCoverage": 1,
+      "callsF1": 1,
+      "relationsF1": 1
+    },
     "typescript": {
+      "symbolsPrecision": 1,
+      "symbolsRecall": 1,
+      "symbolsF1": 1,
+      "kindAccuracy": 1,
+      "exportedAccuracy": 1,
+      "docCoverage": 1,
+      "sigCoverage": 1,
+      "callsF1": 1,
+      "relationsF1": 1
+    },
+    "zig": {
       "symbolsPrecision": 1,
       "symbolsRecall": 1,
       "symbolsF1": 1,
