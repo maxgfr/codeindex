@@ -1,0 +1,31 @@
+{
+  "lang": "python",
+  "files": {
+    "service.py": {
+      "symbols": [
+        { "name": "MAX_ATTEMPTS", "kind": "const" },
+        { "name": "_DEFAULT_QUEUE", "kind": "const", "exported": false },
+        { "name": "Runnable", "kind": "class", "doc": true },
+        { "name": "start", "parent": "Runnable", "kind": "function", "doc": true },
+        { "name": "JobSpec", "kind": "class", "doc": true },
+        { "name": "name", "parent": "JobSpec", "kind": "field" },
+        { "name": "attempts", "parent": "JobSpec", "kind": "field" },
+        { "name": "Scheduler", "kind": "class", "doc": true },
+        { "name": "__init__", "parent": "Scheduler", "kind": "function" },
+        { "name": "start", "parent": "Scheduler", "kind": "function", "doc": true },
+        {
+          "name": "dispatch",
+          "parent": "Scheduler",
+          "kind": "function",
+          "doc": true,
+          "sig": "timeout: Optional[float]"
+        },
+        { "name": "next_delay", "parent": "dispatch", "kind": "function", "exported": false },
+        { "name": "_reset", "parent": "Scheduler", "kind": "function", "exported": false },
+        { "name": "drain", "kind": "function", "doc": true }
+      ],
+      "calls": ["clear", "dispatch", "next_delay", "start"],
+      "relations": [{ "kind": "extends", "from": "Scheduler", "to": "Runnable" }]
+    }
+  }
+}

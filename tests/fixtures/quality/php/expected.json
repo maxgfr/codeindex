@@ -1,0 +1,33 @@
+{
+  "lang": "php",
+  "files": {
+    "Scheduler.php": {
+      "symbols": [
+        { "name": "Runnable", "kind": "interface", "doc": true },
+        { "name": "start", "parent": "Runnable", "kind": "method", "doc": true },
+        { "name": "depth", "parent": "Runnable", "kind": "method" },
+        { "name": "Outcome", "kind": "enum", "doc": true },
+        { "name": "Timeout", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "Rejected", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "Scheduler", "kind": "class", "doc": true },
+        { "name": "MAX_ATTEMPTS", "parent": "Scheduler", "kind": "const", "doc": true },
+        { "name": "pending", "parent": "Scheduler", "kind": "property", "exported": false, "doc": true },
+        { "name": "start", "parent": "Scheduler", "kind": "method", "doc": true },
+        {
+          "name": "dispatch",
+          "parent": "Scheduler",
+          "kind": "method",
+          "doc": true,
+          "sig": "int $maxAttempts"
+        },
+        { "name": "reset", "parent": "Scheduler", "kind": "method", "exported": false },
+        { "name": "depth", "parent": "Scheduler", "kind": "method" }
+      ],
+      "calls": ["count", "dispatch"],
+      "relations": [
+        { "kind": "extends", "from": "Scheduler", "to": "BaseWorker" },
+        { "kind": "implements", "from": "Scheduler", "to": "Runnable" }
+      ]
+    }
+  }
+}

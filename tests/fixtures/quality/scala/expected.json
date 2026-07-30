@@ -1,0 +1,27 @@
+{
+  "lang": "scala",
+  "files": {
+    "Scheduler.scala": {
+      "symbols": [
+        { "name": "Runnable", "kind": "trait", "doc": true },
+        { "name": "start", "parent": "Runnable", "kind": "def", "doc": true },
+        { "name": "depth", "parent": "Runnable", "kind": "def" },
+        { "name": "JobSpec", "kind": "class", "doc": true },
+        { "name": "Scheduler", "kind": "class", "doc": true },
+        { "name": "maxAttempts", "parent": "Scheduler", "kind": "val", "doc": true },
+        { "name": "pending", "parent": "Scheduler", "kind": "var", "exported": false },
+        { "name": "start", "parent": "Scheduler", "kind": "def", "doc": true },
+        { "name": "dispatch", "parent": "Scheduler", "kind": "def", "doc": true, "sig": "max: Int" },
+        { "name": "reset", "parent": "Scheduler", "kind": "def", "exported": false },
+        { "name": "depth", "parent": "Scheduler", "kind": "def" },
+        { "name": "SchedulerFactory", "kind": "object", "doc": true },
+        { "name": "build", "parent": "SchedulerFactory", "kind": "def", "doc": true }
+      ],
+      "calls": ["Scheduler", "dispatch", "foreach"],
+      "relations": [
+        { "kind": "extends", "from": "Scheduler", "to": "BaseWorker" },
+        { "kind": "implements", "from": "Scheduler", "to": "Runnable" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "lang": "cpp",
+  "files": {
+    "service.hpp": {
+      "symbols": [
+        { "name": "worker", "kind": "namespace" },
+        { "name": "kMaxAttempts", "parent": "worker", "kind": "const", "doc": true },
+        { "name": "Outcome", "parent": "worker", "kind": "enum", "doc": true },
+        { "name": "Timeout", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "Rejected", "parent": "Outcome", "kind": "enum-member" },
+        { "name": "JobSpec", "parent": "worker", "kind": "struct", "doc": true },
+        { "name": "name", "parent": "JobSpec", "kind": "field", "doc": true },
+        { "name": "attempts", "parent": "JobSpec", "kind": "field" },
+        { "name": "Runnable", "parent": "worker", "kind": "class", "doc": true },
+        { "name": "start", "parent": "Runnable", "kind": "method" },
+        { "name": "depth", "parent": "Runnable", "kind": "method" },
+        { "name": "Scheduler", "parent": "worker", "kind": "class", "doc": true },
+        { "name": "start", "parent": "Scheduler", "kind": "method", "doc": true },
+        {
+          "name": "dispatch",
+          "parent": "Scheduler",
+          "kind": "method",
+          "doc": true,
+          "sig": "int max_attempts"
+        },
+        { "name": "depth", "parent": "Scheduler", "kind": "method" },
+        { "name": "pending_", "parent": "Scheduler", "kind": "field", "exported": false }
+      ],
+      "calls": [],
+      "relations": [{ "kind": "extends", "from": "Scheduler", "to": "Runnable" }]
+    }
+  }
+}

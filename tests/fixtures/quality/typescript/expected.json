@@ -1,0 +1,58 @@
+{
+  "lang": "typescript",
+  "files": {
+    "service.ts": {
+      "symbols": [
+        { "name": "DeliveryState", "kind": "enum", "doc": true },
+        { "name": "Pending", "parent": "DeliveryState", "kind": "enum-member" },
+        { "name": "Delivered", "parent": "DeliveryState", "kind": "enum-member" },
+        { "name": "Failed", "parent": "DeliveryState", "kind": "enum-member" },
+        { "name": "Runnable", "kind": "interface", "doc": true },
+        { "name": "start", "parent": "Runnable", "kind": "method", "doc": true },
+        { "name": "depth", "parent": "Runnable", "kind": "property", "doc": true },
+        { "name": "DeliveryOptions", "kind": "interface" },
+        { "name": "maxAttempts", "parent": "DeliveryOptions", "kind": "property" },
+        { "name": "timeoutMs", "parent": "DeliveryOptions", "kind": "property" },
+        { "name": "DeliveryHandler", "kind": "type" },
+        { "name": "Transport", "kind": "class", "doc": true },
+        { "name": "endpoint", "parent": "Transport", "kind": "property", "exported": false },
+        { "name": "constructor", "parent": "Transport", "kind": "method" },
+        { "name": "send", "parent": "Transport", "kind": "method" },
+        { "name": "WebhookDispatcher", "kind": "class", "doc": true },
+        { "name": "depth", "parent": "WebhookDispatcher", "kind": "property", "doc": true },
+        { "name": "handler", "parent": "WebhookDispatcher", "kind": "property", "exported": false },
+        { "name": "start", "parent": "WebhookDispatcher", "kind": "method" },
+        {
+          "name": "send",
+          "parent": "WebhookDispatcher",
+          "kind": "method",
+          "doc": true,
+          "sig": "options: DeliveryOptions"
+        },
+        { "name": "nextDelay", "parent": "send", "kind": "function", "exported": false },
+        { "name": "signPayload", "kind": "function", "doc": true },
+        { "name": "DEFAULT_TIMEOUT_MS", "kind": "const", "exported": false },
+        { "name": "Delivery", "kind": "namespace" },
+        { "name": "isTerminal", "parent": "Delivery", "kind": "function" }
+      ],
+      "calls": ["createHash", "digest", "nextDelay", "signPayload", "update"],
+      "relations": [
+        { "kind": "extends", "from": "WebhookDispatcher", "to": "Transport" },
+        { "kind": "implements", "from": "WebhookDispatcher", "to": "Runnable" }
+      ]
+    },
+    "ambient.d.ts": {
+      "symbols": [
+        { "name": "Webhooks", "kind": "namespace", "doc": true },
+        { "name": "createDispatcher", "parent": "Webhooks", "kind": "function", "doc": true },
+        { "name": "VERSION", "parent": "Webhooks", "kind": "const" },
+        { "name": "Envelope", "kind": "class", "doc": true },
+        { "name": "id", "parent": "Envelope", "kind": "property" },
+        { "name": "sign", "parent": "Envelope", "kind": "method" },
+        { "name": "assertNever", "kind": "function" }
+      ],
+      "calls": [],
+      "relations": []
+    }
+  }
+}

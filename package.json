@@ -35,6 +35,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "CODEINDEX_E2E=1 vitest run tests/e2e-real-repos.test.ts",
+    "quality": "CODEINDEX_QUALITY_WRITE=1 vitest run tests/quality.test.ts",
+    "quality:report": "CODEINDEX_QUALITY_REPORT=1 vitest run tests/quality.test.ts",
     "typecheck": "tsc --noEmit",
     "check:build": "tsup && node scripts/postbuild.mjs && git diff --exit-code -- scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars",
     "demo": "node scripts/cli.mjs graph --repo tests/fixtures/mini-repo",

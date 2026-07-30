@@ -1,0 +1,34 @@
+{
+  "lang": "go",
+  "files": {
+    "service.go": {
+      "symbols": [
+        { "name": "MaxAttempts", "kind": "const", "doc": true },
+        { "name": "defaultQueue", "kind": "var", "exported": false },
+        { "name": "Runnable", "kind": "type", "doc": true },
+        { "name": "Start", "parent": "Runnable", "kind": "method", "doc": true },
+        { "name": "Depth", "parent": "Runnable", "kind": "method" },
+        { "name": "JobSpec", "kind": "type", "doc": true },
+        { "name": "Name", "parent": "JobSpec", "kind": "field", "doc": true },
+        { "name": "Attempts", "parent": "JobSpec", "kind": "field" },
+        { "name": "Scheduler", "kind": "type", "doc": true },
+        { "name": "Queue", "parent": "Scheduler", "kind": "field" },
+        { "name": "pending", "parent": "Scheduler", "kind": "field", "exported": false },
+        { "name": "Audited", "kind": "type", "doc": true },
+        { "name": "Log", "parent": "Audited", "kind": "field" },
+        { "name": "Start", "parent": "Scheduler", "kind": "method", "doc": true },
+        {
+          "name": "Dispatch",
+          "parent": "Scheduler",
+          "kind": "method",
+          "doc": true,
+          "sig": "spec JobSpec"
+        },
+        { "name": "reset", "parent": "Scheduler", "kind": "method", "exported": false },
+        { "name": "Depth", "parent": "Scheduler", "kind": "method", "doc": true }
+      ],
+      "calls": ["Dispatch", "Errorf", "len", "nextDelay"],
+      "relations": [{ "kind": "extends", "from": "Audited", "to": "Scheduler" }]
+    }
+  }
+}

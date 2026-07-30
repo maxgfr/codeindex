@@ -1,0 +1,22 @@
+{
+  "repo": "quality-search",
+  "comment": "Relevance judgements for search ranking. Most query terms appear ONLY in prose (a doc comment or a markdown section) and never in a file name, path segment or symbol name — the case a name-only index cannot answer at all. Each topic lives in exactly one source file, so the judgements are unambiguous.",
+  "cases": [
+    { "query": "jitter between retry attempts", "relevant": ["src/net.ts"] },
+    { "query": "circuit breaker threshold", "relevant": ["src/net.ts", "docs/operations.md"] },
+    { "query": "token bucket burst allowance", "relevant": ["src/throttle.ts", "docs/operations.md"] },
+    { "query": "shed requests beyond the allowance", "relevant": ["src/throttle.ts", "docs/operations.md"] },
+    { "query": "bearer token for a verified principal", "relevant": ["src/session.ts"] },
+    { "query": "swap a near-expiry token without a new login", "relevant": ["src/session.ts"] },
+    { "query": "opaque keyset cursor instead of OFFSET", "relevant": ["src/paging.ts"] },
+    { "query": "stale entries expire instead of pinning memory", "relevant": ["src/store.ts"] },
+    { "query": "read-through memoisation in front of the slow store", "relevant": ["src/store.ts"] },
+    { "query": "forward-only schema evolution resumed after a half-applied upgrade", "relevant": ["src/schema.ts"] },
+    { "query": "prove the payload was not replayed", "relevant": ["src/hooks.ts"] },
+    { "query": "append-only record to back an investigation", "relevant": ["src/audit.ts"] },
+    { "query": "stable non-cryptographic digest", "relevant": ["src/util.ts"] },
+    { "query": "where is authentication handled", "relevant": ["src/session.ts"] },
+    { "query": "where is rate limiting handled", "relevant": ["src/throttle.ts", "docs/operations.md"] },
+    { "query": "where is caching handled", "relevant": ["src/store.ts"] }
+  ]
+}
