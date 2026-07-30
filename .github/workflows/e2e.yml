@@ -24,6 +24,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y universal-ctags
         continue-on-error: true
 
+      # The compiler-based oracle. Without it the three-way differential silently
+      # degrades to ctags-only in CI — which is the correct skip behaviour, but it
+      # would mean the one AUTHORITATIVE check never actually ran in the place
+      # that re-measures weekly.
+      - name: Install the TypeScript compiler indexer
+        run: npm i -g @sourcegraph/scip-typescript
+        continue-on-error: true
+
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:e2e
 
