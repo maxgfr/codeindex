@@ -54,31 +54,49 @@ vocabulary:
 
 | oracle | what makes it independent | result |
 |---|---|---|
-| **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, 0 symbols left unread |
-| **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | covers **61.7%–98.8%** of ctags' names over 6 real repositories, and reports **2,014** declarations it does not — with what is left bucketed by kind, per repo below |
+| **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, against ctags' 94.6% on the same files |
+| **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | reports **2,014** declarations ctags does not over 6 real repositories, and reproduces **61.7%–98.8%** of ctags' names — what is left bucketed by kind, per repo below |
 | **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
 | **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **208** declaration-ish node types still unhandled |
 
-The compiler oracle also calibrates the ctags one: over the same
-compiler-confirmed declarations, ctags itself found 94.6%, and all 5 it missed
-are one construct (string-literal declaration names). That is how far a syntactic
-oracle can be trusted on the ~40 languages no compiler here can check.
+### The one head-to-head
+
+Exactly one figure on this page is a *score*: the one where both tools are
+measured against the same third-party authority, rather than against each other.
+On the 53 files of `create-t3-turbo` that an index built by the **real TypeScript
+compiler** covers:
+
+| against the compiler's 93 named declarations | found |
+|---|---|
+| **codeindex** | **100%** |
+| universal-ctags | 94.6% |
+
+All 5 ctags missed are one construct (string-literal declaration names — module
+augmentations, quoted interface keys). That head-to-head is also the calibration
+for everything below: it is how far a syntactic oracle can be trusted on the ~40
+languages no compiler here can check.
+
+Every other percentage in this section is an *overlap ratio between two tools
+that disagree about what counts as a declaration*, which is a different thing and
+is not scored as one.
 
 ### Per repository, against universal-ctags
 
-Declaration names compared per file over real code, not fixtures. **The last
-column is not a score.** It is `|ours ∩ ctags| / |ctags|` — the share of ctags'
-names this index also reports — so it can only ever show where we lose: nothing
-in it measures what ctags omits. That direction is the column beside it.
+Declaration names compared per file over real code, not fixtures. **The
+percentage here is not a score, which is why it is not in the last column.** It
+is `|ours ∩ ctags| / |ctags|` — the share of ctags' names this index also reports
+— so by construction it can only ever show where we lose: nothing in it measures
+what ctags omits. The two count columns are the directions that actually compare
+the tools; read those.
 
-| repo | files | both report | ctags only | **codeindex only** | of ctags covered |
+| repo | files | both report | of ctags reproduced | ctags only | **codeindex only** |
 |---|---|---|---|---|---|
-| BurntSushi/ripgrep | 107 | 3,189 | 40 | **47** | 98.8% |
-| gin-gonic/gin | 100 | 2,010 | 29 | **15** | 98.6% |
-| pallets/flask | 86 | 1,516 | 98 | **6** | 93.9% |
-| t3-oss/create-t3-turbo | 54 | 97 | 30 | **15** | 76.4% |
-| nrwl/nx-examples | 87 | 87 | 38 | **27** | 69.6% |
-| socialgouv/code-du-travail-numerique | 1,429 | 3,659 | 2,271 | **1,904** | 61.7% |
+| BurntSushi/ripgrep | 107 | 3,189 | 98.8% | 40 | **47** |
+| gin-gonic/gin | 100 | 2,010 | 98.6% | 29 | **15** |
+| pallets/flask | 86 | 1,516 | 93.9% | 98 | **6** |
+| t3-oss/create-t3-turbo | 54 | 97 | 76.4% | 30 | **15** |
+| nrwl/nx-examples | 87 | 87 | 69.6% | 38 | **27** |
+| socialgouv/code-du-travail-numerique | 1,429 | 3,659 | 61.7% | 2,271 | **1,904** |
 
 So no, the low rows are not "ctags finds more" — and that is measured, not
 asserted. The differential records what the *ctags only* column **is**, bucketed
@@ -100,11 +118,11 @@ The same holds on the other repos — ripgrep's 40 are mostly `variable` and Rus
 `unknown`** (its kind for an import alias), gin's are its synthetic
 `anonMember`/`packageName`.
 
-The clean adjudication is `create-t3-turbo`, where a third tool settles it:
-against an index built by the **real TypeScript compiler** on the same files,
-this engine finds **100%** of its 93 named declarations and ctags finds
-**94.6%**. The repository where our ctags coverage looks worst is one where the
-authoritative oracle puts us ahead of ctags.
+And where a third tool can settle it, it does — `create-t3-turbo` is the 76.4%
+row above, and it is also the head-to-head at the top of this section, the one
+the real TypeScript compiler adjudicates **100% to 94.6%** in our favour. A row
+that looks like a loss against ctags is a row the authority scores as a win over
+ctags. That is the whole reason the percentage is not in the score column.
 
 And the residue is what the differential is genuinely for. Where it named real
 misses they were fixed, not explained away: Go package clauses, Python PEP 484

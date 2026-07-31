@@ -111,8 +111,12 @@ export function externalOracleSummaries(): OracleSummary[] {
       label: "TypeScript compiler index",
       authority:
         "an index built by the real TypeScript compiler — authoritative where every other check here is syntactic",
-      value: `${pct(ext.typescriptCompiler.recall)} of its ${ext.typescriptCompiler.theirDeclarations} declarations found`,
-      scope: `Scoped to named declarations on one pinned repository, with ${ext.typescriptCompiler.unparsedSymbols} symbols left unread. It also calibrates the ctags oracle: ctags covered ${pct(ext.calibration.ctagsCoverageOfCompilerDeclarations)} of the same compiler-confirmed declarations.`,
+      // The one head-to-head here, so it is published as one: this is the only
+      // figure on the page where a percentage is a SCORE — both tools measured
+      // against the same third-party authority — rather than an overlap ratio
+      // between two tools that disagree about what a declaration is.
+      value: `${pct(ext.typescriptCompiler.recall)} of its ${ext.typescriptCompiler.theirDeclarations} declarations found, against ctags' ${pct(ext.calibration.ctagsCoverageOfCompilerDeclarations)}`,
+      scope: `Scoped to named declarations on one pinned repository, with ${ext.typescriptCompiler.unparsedSymbols} symbols left unread. Both tools are scored against the same compiler-confirmed declarations, which is what makes this a head-to-head rather than an overlap ratio; it also calibrates the ctags oracle for the languages no compiler here can check.`,
     },
     {
       // Published in BOTH directions, and as a range rather than a best-of.
@@ -124,8 +128,8 @@ export function externalOracleSummaries(): OracleSummary[] {
       id: "universal-ctags",
       label: "universal-ctags differential",
       authority: `an independent, mature indexer (${ext.tools.ctags}) covering ~40 languages`,
-      value: `covers ${pct(worst.recall)}–${pct(best.recall)} of ctags' names, and reports ${group(oursOnly)} declarations it does not`,
-      scope: `One-directional by construction: it asks how much of ctags this index reproduces, never the reverse — highest on ${best.repo}, lowest on ${worst.repo}. What the low end IS, rather than a reassurance about it: ${worstTopShare}% of what ctags has there and this index does not is its "${worstTopKind}" kind — locals and object keys a declaration index omits on purpose — while we report ${group(worst.oursOnly)} declarations ctags does not. Where it named real misses they were fixed, so a low row is a definition gap plus a to-do list, not a verdict.`,
+      value: `reports ${group(oursOnly)} declarations ctags does not, and reproduces ${pct(worst.recall)}–${pct(best.recall)} of ctags' names`,
+      scope: `The percentage is not a score and is deliberately not published as one: it is |ours ∩ ctags| / |ctags|, one-directional by construction, so it can only ever show where we lose — highest on ${best.repo}, lowest on ${worst.repo}. What the low end IS, rather than a reassurance about it: ${worstTopShare}% of what ctags has there and this index does not is its "${worstTopKind}" kind — locals and object keys a declaration index omits on purpose — while we report ${group(worst.oursOnly)} declarations ctags does not. Where it named real misses they were fixed, so a low row is a definition gap plus a to-do list, not a verdict.`,
     },
   ];
 }
