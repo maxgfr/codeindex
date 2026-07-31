@@ -4750,8 +4750,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       "id": "universal-ctags",
       "label": "universal-ctags differential",
       "authority": "an independent, mature indexer (Universal Ctags 6.2.1) covering ~40 languages",
-      "value": "recall 61.7%–98.8% over 6 real repositories",
-      "scope": "Compares declaration names per file over real code, not fixtures — highest on BurntSushi/ripgrep, lowest on socialgouv/code-du-travail-numerique. ctags also reports function-body locals and quoted config keys, which a declaration index omits on purpose, so most of that spread is its surplus rather than our misses."
+      "value": "covers 61.7%–98.8% of ctags' names, and reports 2,014 declarations it does not",
+      "scope": "One-directional by construction: it asks how much of ctags this index reproduces, never the reverse — highest on BurntSushi/ripgrep, lowest on socialgouv/code-du-travail-numerique, where ctags also lists function-body locals and quoted config keys that a declaration index omits on purpose and where we report 1,904 declarations it does not. Where it named real misses they were fixed, so a low row is a definition gap plus a to-do list, not a verdict."
     }
   ],
   "blindSpots": [
@@ -5211,28 +5211,45 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         );
       }
 
-      host.appendChild(
-        table(
-          "Extraction quality, per language",
-          "Precision and recall of declarations found, plus whether each is described right. Scored against " +
-            q.base.symbols + " hand-labelled declarations.",
-          ["Language", "Precision", "Recall", "Kind", "Visibility", "Doc", "Signature", "Calls", "Relations"],
-          q.extraction.map(function (e) {
-            var m = e.metrics;
-            return [
-              e.lang,
-              pct(m.symbolsPrecision),
-              pct(m.symbolsRecall),
-              pct(m.kindAccuracy),
-              pct(m.exportedAccuracy),
-              pct(m.docCoverage),
-              pct(m.sigCoverage),
-              pct(m.callsF1),
-              pct(m.relationsF1)
-            ];
-          })
-        )
-      );
+      /* The per-language scores, as ONE SENTENCE rather than a 17x9 grid of
+         "100.0%". The grid was worse than useless: a wall of identical perfect
+         cells reads as a brag and buries the only cell that carries information
+         — the one that is not 100%. So the exceptions are computed and named,
+         and the full grid stays a click away in site/quality.json for anyone who
+         wants to audit it. Computed, never typed: a new imperfect metric appears
+         here by itself. */
+      (function extractionSummary() {
+        var METRICS = [
+          ["symbolsPrecision", "precision"],
+          ["symbolsRecall", "recall"],
+          ["kindAccuracy", "kind"],
+          ["exportedAccuracy", "visibility"],
+          ["docCoverage", "doc"],
+          ["sigCoverage", "signature"],
+          ["callsF1", "calls"],
+          ["relationsF1", "relations"]
+        ];
+        var below = [];
+        q.extraction.forEach(function (e) {
+          METRICS.forEach(function (m) {
+            var v = e.metrics[m[0]];
+            if (typeof v === "number" && v < 1) below.push(e.lang + " " + m[1] + " " + pct(v));
+          });
+        });
+        var p = document.createElement("p");
+        p.className = "chart-caption";
+        p.innerHTML =
+          "<strong>Extraction, per language.</strong> Scored on " + q.base.symbols +
+          " hand-labelled declarations across " + q.base.languages +
+          " languages, on eight metrics each: precision and recall of the declarations found, " +
+          "their kind, visibility, doc comment and signature, plus call edges and inheritance. " +
+          (below.length === 0
+            ? "Every one of them is currently exact."
+            : "All are exact except " + below.join(", ") + ".") +
+          ' The full grid is in <a href="https://github.com/maxgfr/codeindex/blob/main/site/quality.json">site/quality.json</a>' +
+          " — a table of identical perfect cells is a worse way to read it than this sentence.";
+        host.appendChild(p);
+      })();
 
       host.appendChild(
         table(

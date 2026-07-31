@@ -28,13 +28,18 @@ const EXTERNAL_PATH = join(HERE, "external-oracles.json");
 interface ExternalOracles {
   measuredAt: string;
   tools: Record<string, string>;
-  ctags: { perRepo: { repo: string; recall: number }[] };
+  ctags: { perRepo: { repo: string; recall: number; oursOnly: number }[] };
   typescriptCompiler: { theirDeclarations: number; recall: number; unparsedSymbols: number };
   calibration: { ctagsCoverageOfCompilerDeclarations: number };
 }
 
 function pct(v: number): string {
   return `${(v * 100).toFixed(1)}%`;
+}
+
+/** Thousands separator, spelled out rather than left to a runtime locale. */
+function group(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 /**
@@ -90,6 +95,7 @@ export function externalOracleSummaries(): OracleSummary[] {
   const byRecall = [...ext.ctags.perRepo].sort((a, b) => b.recall - a.recall);
   const best = byRecall[0]!;
   const worst = byRecall[byRecall.length - 1]!;
+  const oursOnly = ext.ctags.perRepo.reduce((n, r) => n + r.oursOnly, 0);
   return [
     {
       id: "typescript-compiler",
@@ -100,14 +106,17 @@ export function externalOracleSummaries(): OracleSummary[] {
       scope: `Scoped to named declarations on one pinned repository, with ${ext.typescriptCompiler.unparsedSymbols} symbols left unread. It also calibrates the ctags oracle: ctags covered ${pct(ext.calibration.ctagsCoverageOfCompilerDeclarations)} of the same compiler-confirmed declarations.`,
     },
     {
-      // Published as a RANGE, not a best-of. "Up to 98.8%" was true and
-      // uninformative: it hid the floor, which is the number a reader weighing
-      // this engine against ctags actually needs.
+      // Published in BOTH directions, and as a range rather than a best-of.
+      // "Recall up to 98.8%" was true and actively misleading twice over: it hid
+      // the floor, and a lone coverage-of-ctags column reads as a scoreboard this
+      // measurement cannot keep — it can only ever show where we lose, because
+      // the reverse direction is not in it. So the count of declarations ctags
+      // does not report is published beside it.
       id: "universal-ctags",
       label: "universal-ctags differential",
       authority: `an independent, mature indexer (${ext.tools.ctags}) covering ~40 languages`,
-      value: `recall ${pct(worst.recall)}–${pct(best.recall)} over ${ext.ctags.perRepo.length} real repositories`,
-      scope: `Compares declaration names per file over real code, not fixtures — highest on ${best.repo}, lowest on ${worst.repo}. ctags also reports function-body locals and quoted config keys, which a declaration index omits on purpose, so most of that spread is its surplus rather than our misses.`,
+      value: `covers ${pct(worst.recall)}–${pct(best.recall)} of ctags' names, and reports ${group(oursOnly)} declarations it does not`,
+      scope: `One-directional by construction: it asks how much of ctags this index reproduces, never the reverse — highest on ${best.repo}, lowest on ${worst.repo}, where ctags also lists function-body locals and quoted config keys that a declaration index omits on purpose and where we report ${group(worst.oursOnly)} declarations it does not. Where it named real misses they were fixed, so a low row is a definition gap plus a to-do list, not a verdict.`,
     },
   ];
 }

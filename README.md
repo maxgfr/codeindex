@@ -55,7 +55,7 @@ vocabulary:
 | oracle | what makes it independent | result |
 |---|---|---|
 | **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, 0 symbols left unread |
-| **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | declaration recall **61.7%–98.8%** over 6 real repositories (per repo below) |
+| **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | covers **61.7%–98.8%** of ctags' names over 6 real repositories, and reports **2,014** declarations it does not (per repo below) |
 | **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
 | **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **208** declaration-ish node types still unhandled |
 
@@ -66,26 +66,39 @@ oracle can be trusted on the ~40 languages no compiler here can check.
 
 ### Per repository, against universal-ctags
 
-Declaration names compared per file over real code, not fixtures — refreshed by
-`CODEINDEX_ORACLE=1 pnpm vitest run tests/oracles-external-diff.test.ts` and by
-the weekly CI job, with the tool version and corpus recorded next to the figures
-in `tests/quality/external-oracles.json`:
+Declaration names compared per file over real code, not fixtures. **The last
+column is not a score.** It is `|ours ∩ ctags| / |ctags|` — the share of ctags'
+names this index also reports — so it can only ever show where we lose: nothing
+in it measures what ctags omits. That direction is the column beside it.
 
-| repo | files compared | ours | ctags | recall |
-|---|---|---|---|---|
-| BurntSushi/ripgrep | 107 | 3,236 | 3,229 | **98.8%** |
-| gin-gonic/gin | 100 | 2,025 | 2,039 | **98.6%** |
-| pallets/flask | 86 | 1,522 | 1,614 | **93.9%** |
-| t3-oss/create-t3-turbo | 54 | 112 | 127 | 76.4% |
-| nrwl/nx-examples | 87 | 114 | 125 | 69.6% |
-| socialgouv/code-du-travail-numerique | 1,429 | 5,560 | 5,930 | 61.7% |
+| repo | files | both report | ctags only | **codeindex only** | of ctags covered |
+|---|---|---|---|---|---|
+| BurntSushi/ripgrep | 107 | 3,189 | 40 | **47** | 98.8% |
+| gin-gonic/gin | 100 | 2,010 | 29 | **15** | 98.6% |
+| pallets/flask | 86 | 1,516 | 98 | **6** | 93.9% |
+| t3-oss/create-t3-turbo | 54 | 97 | 30 | **15** | 76.4% |
+| nrwl/nx-examples | 87 | 87 | 38 | **27** | 69.6% |
+| socialgouv/code-du-travail-numerique | 1,429 | 3,656 | 2,274 | **1,904** | 61.7% |
 
-The low TypeScript rows are largely ctags **surplus** rather than gaps of ours:
-it tags function-body locals and quoted config keys, which a declaration index
-omits on purpose — on `code-du-travail` we report 1,904 declarations ctags does
-not. Where the differential named real misses they were fixed, not explained
-away: Go package clauses, Python PEP 484 re-exports and Rust in-function
-`const`/`static` were all found by it.
+So no, the low rows are not "ctags finds more". Most of the *ctags only* column
+is not declarations at all: it tags function-body locals and quoted config keys,
+which a declaration index omits on purpose. The clean test of that is
+`create-t3-turbo`, where a third tool settles it — against an index built by the
+**real TypeScript compiler** on the same files, this engine finds **100%** of
+its 93 named declarations and ctags finds **94.6%**. The repository where our
+ctags coverage looks worst is one where the authoritative oracle puts us ahead
+of ctags.
+
+What the differential is genuinely good for is the residue: where it named real
+misses they were fixed, not explained away — Go package clauses, Python PEP 484
+re-exports and Rust in-function `const`/`static` were all found this way. And
+the honest limit: on the languages no compiler-backed oracle covers, nothing
+proves the rest of that column is *entirely* surplus.
+
+Refreshed by `CODEINDEX_ORACLE=1 pnpm vitest run
+tests/oracles-external-diff.test.ts` and by the weekly CI job; tool version,
+corpus and date sit next to the figures in
+`tests/quality/external-oracles.json`.
 
 ### Against hand-labelled ground truth
 

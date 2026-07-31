@@ -283,8 +283,8 @@
       "id": "universal-ctags",
       "label": "universal-ctags differential",
       "authority": "an independent, mature indexer (Universal Ctags 6.2.1) covering ~40 languages",
-      "value": "recall 61.7%–98.8% over 6 real repositories",
-      "scope": "Compares declaration names per file over real code, not fixtures — highest on BurntSushi/ripgrep, lowest on socialgouv/code-du-travail-numerique. ctags also reports function-body locals and quoted config keys, which a declaration index omits on purpose, so most of that spread is its surplus rather than our misses."
+      "value": "covers 61.7%–98.8% of ctags' names, and reports 2,014 declarations it does not",
+      "scope": "One-directional by construction: it asks how much of ctags this index reproduces, never the reverse — highest on BurntSushi/ripgrep, lowest on socialgouv/code-du-travail-numerique, where ctags also lists function-body locals and quoted config keys that a declaration index omits on purpose and where we report 1,904 declarations it does not. Where it named real misses they were fixed, so a low row is a definition gap plus a to-do list, not a verdict."
     }
   ],
   "blindSpots": [

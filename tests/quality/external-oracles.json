@@ -1,18 +1,21 @@
 {
-  "comment": "Results of the oracles that need an external tool and a cloned corpus, so they cannot run in `pnpm test`. Refreshed by `CODEINDEX_ORACLE=1 vitest run tests/oracles-external-diff.test.ts` and by the weekly e2e workflow. Committed WITH provenance because the site publishes these numbers: a figure with no tool version, corpus or date is not a measurement, it is a claim. Figures move slightly with the external tool's version \u2014 the weekly CI run measured ctags recall on ripgrep at 0.9861 against the 0.9799 recorded here, on a different ctags build.",
-  "measuredAt": "2026-07-30",
+  "comment": "Results of the oracles that need an external tool and a cloned corpus, so they cannot run in `pnpm test`. Refreshed by `CODEINDEX_ORACLE=1 vitest run tests/oracles-external-diff.test.ts` and by the weekly e2e workflow. Committed WITH provenance because the site publishes these numbers: a figure with no tool version, corpus or date is not a measurement, it is a claim. Figures move slightly with the external tool's version — the weekly CI run measured ctags recall on ripgrep at 0.9861 against the 0.9876 recorded here, on a different ctags build.",
+  "measuredAt": "2026-07-31",
   "tools": {
     "ctags": "Universal Ctags 6.2.1",
     "typescriptCompilerIndexer": "scip-typescript 0.4.0"
   },
   "ctags": {
     "corpus": "the 6 pinned real repos (tests/e2e-real-repos.ts)",
+    "direction": "`recall` is |ours ∩ ctags| / |ctags| — the share of ctags' names this index also reports. It is ONE-DIRECTIONAL by construction and cannot say which tool reports more, which is why `both` and `oursOnly` are recorded beside it: without them a reader sees only the direction in which we can lose.",
     "perRepo": [
       {
         "repo": "BurntSushi/ripgrep",
         "files": 107,
         "ours": 3236,
         "theirs": 3229,
+        "both": 3189,
+        "oursOnly": 47,
         "recall": 0.9876
       },
       {
@@ -20,6 +23,8 @@
         "files": 86,
         "ours": 1522,
         "theirs": 1614,
+        "both": 1516,
+        "oursOnly": 6,
         "recall": 0.9393
       },
       {
@@ -27,6 +32,8 @@
         "files": 100,
         "ours": 2025,
         "theirs": 2039,
+        "both": 2010,
+        "oursOnly": 15,
         "recall": 0.9858
       },
       {
@@ -34,6 +41,8 @@
         "files": 54,
         "ours": 112,
         "theirs": 127,
+        "both": 97,
+        "oursOnly": 15,
         "recall": 0.7638
       },
       {
@@ -41,6 +50,8 @@
         "files": 87,
         "ours": 114,
         "theirs": 125,
+        "both": 87,
+        "oursOnly": 27,
         "recall": 0.696
       },
       {
@@ -48,17 +59,19 @@
         "files": 1429,
         "ours": 5560,
         "theirs": 5930,
+        "both": 3656,
+        "oursOnly": 1904,
         "recall": 0.6165
       }
     ],
-    "note": "The lower TypeScript figures are largely ctags SURPLUS rather than gaps of ours: it tags function-body locals and quoted config keys, which a declaration index deliberately omits \u2014 on code-du-travail we report 1904 declarations ctags does not. The figures rose across every repository after the differential named three real clusters (Go package clauses, Python PEP 484 re-exports, Rust in-function const/static) and they were fixed; gin moved 0.9127 \u2192 0.9858."
+    "note": "The lower TypeScript figures are largely ctags SURPLUS rather than gaps of ours: it tags function-body locals and quoted config keys, which a declaration index deliberately omits — on code-du-travail we report 1904 declarations ctags does not. The strongest evidence that a low recall row is not a quality verdict is t3-oss/create-t3-turbo: 0.7638 against ctags, and 1.0 against the TypeScript compiler on the same corpus, where ctags itself scores 0.946. The figures rose across every repository after the differential named three real clusters (Go package clauses, Python PEP 484 re-exports, Rust in-function const/static) and they were fixed; gin moved 0.9127 → 0.9858."
   },
   "typescriptCompiler": {
     "corpus": "t3-oss/create-t3-turbo, the 53 files all three tools indexed",
     "theirDeclarations": 93,
     "recall": 1.0,
     "unparsedSymbols": 0,
-    "note": "Recall against an index built by the real TypeScript compiler \u2014 authoritative on TypeScript where both ctags and this engine are syntactic. Scoped to NAMED declarations: the indexer also emits a synthetic descriptor per object-literal key, which is not a declaration and is excluded."
+    "note": "Recall against an index built by the real TypeScript compiler — authoritative on TypeScript where both ctags and this engine are syntactic. Scoped to NAMED declarations: the indexer also emits a synthetic descriptor per object-literal key, which is not a declaration and is excluded."
   },
   "calibration": {
     "compilerDeclarationsCtagsMissed": 5,
