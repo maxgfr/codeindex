@@ -71,6 +71,18 @@ export interface ExternalDiff {
   agreeAll: number;
   /** Sorted and capped at SAMPLE_CAP; a truncated list carries a `+N more` tail. */
   ctagsOnly: string[];
+  /**
+   * `ctagsOnly` bucketed by the KIND ctags assigned, biggest first — the whole
+   * of it, not the sample.
+   *
+   * Without this, a recall of 0.62 is unreadable: it cannot distinguish "misses
+   * 38% of the declarations" from "declines 38% of things that are not
+   * declarations". The kinds settle it — a column that is overwhelmingly
+   * `constant` on a repo whose constants are function-body locals is a
+   * definition gap, not a hole. Recorded rather than eyeballed from the sample,
+   * which is capped and sorted by path.
+   */
+  ctagsOnlyByKind: Record<string, number>;
   scipOnly: string[];
   /** |scip \ ctags| — the ctags calibration number. */
   scipNotCtags: number;
@@ -329,7 +341,10 @@ const pairKey = (file: string, name: string): string => file + SEP + name;
 const pairFile = (key: string): string => key.slice(0, key.indexOf(SEP));
 const pairShow = (key: string): string => key.replace(SEP, ":");
 
-function runCtags(repoDir: string, bin: string): { pairs: Set<string>; maps: CtagsMaps; malformed: number } | undefined {
+function runCtags(
+  repoDir: string,
+  bin: string,
+): { pairs: Set<string>; maps: CtagsMaps; malformed: number; kinds: Map<string, string> } | undefined {
   const maps = parseCtagsMaps(runCmd(bin, ["--list-maps", ...LANGMAP]).stdout);
   if (maps.extensions.size === 0) return fail("ctags --list-maps produced no extension maps");
   // `-f -` keeps the tag stream on stdout: the default sink is a `tags` FILE,
@@ -352,8 +367,16 @@ function runCtags(repoDir: string, bin: string): { pairs: Set<string>; maps: Cta
   }
   const { tags, malformed } = parseCtagsJson(r.stdout);
   const pairs = new Set<string>();
-  for (const t of tags) pairs.add(pairKey(t.path, t.name));
-  return { pairs, maps, malformed };
+  // First kind wins: one (file, name) pair can carry several tags (an overload,
+  // a re-declaration), and the pair is what the diff counts. Taking the first
+  // keeps the histogram's total equal to the pair count instead of exceeding it.
+  const kinds = new Map<string, string>();
+  for (const t of tags) {
+    const key = pairKey(t.path, t.name);
+    pairs.add(key);
+    if (!kinds.has(key)) kinds.set(key, t.kind);
+  }
+  return { pairs, maps, malformed, kinds };
 }
 
 // ctags' TypeScript parser handles .tsx/.mts/.cts perfectly well — measured: 16
@@ -734,6 +757,25 @@ function sample(missing: Set<string>): string[] {
 
 const ratio = (num: number, den: number): number => (den === 0 ? 0 : Number((num / den).toFixed(4)));
 
+// ctagsOnly bucketed by ctags' own kind, biggest first. Ties break on the kind
+// name so the record is stable across runs — a histogram that reorders on every
+// measurement would show a diff where nothing moved.
+function kindHistogram(missing: Set<string>, kinds: Map<string, string>): Record<string, number> {
+  const counts = new Map<string, number>();
+  for (const p of missing) {
+    // NOT "unknown": ctags emits that as a kind of its own (62 tags on flask,
+    // all import aliases), so reusing the word would make a lookup failure here
+    // indistinguishable from ctags' own label. Unreachable by construction —
+    // every pair was keyed from a tag — and kept only so it cannot become a
+    // silent miscount if that ever stops being true.
+    const k = kinds.get(p) || "unlabelled";
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const out: Record<string, number> = {};
+  for (const [k, n] of [...counts].sort((a, b) => b[1] - a[1] || byStr(a[0], b[0]))) out[k] = n;
+  return out;
+}
+
 function assemble(
   repo: string,
   universe: Set<string>,
@@ -742,9 +784,11 @@ function assemble(
   scip: Set<string>,
   unparsedScipSymbols: number,
   twoWay: boolean,
+  ctagsKinds: Map<string, string> = new Map(),
 ): ExternalDiff {
   const inOursAndCtags = [...ctags].filter((p) => ours.has(p));
   const inOursAndScip = [...scip].filter((p) => ours.has(p));
+  const ctagsMissing = new Set([...ctags].filter((p) => !ours.has(p)));
   return {
     repo,
     ours: ours.size,
@@ -753,7 +797,8 @@ function assemble(
     agreeAll: twoWay
       ? inOursAndCtags.length
       : inOursAndCtags.filter((p) => scip.has(p)).length,
-    ctagsOnly: sample(new Set([...ctags].filter((p) => !ours.has(p)))),
+    ctagsOnly: sample(ctagsMissing),
+    ctagsOnlyByKind: kindHistogram(ctagsMissing, ctagsKinds),
     scipOnly: sample(new Set([...scip].filter((p) => !ours.has(p)))),
     scipNotCtags: [...scip].filter((p) => !ctags.has(p)).length,
     oursOnly: [...ours].filter((p) => !ctags.has(p) && !scip.has(p)).length,
@@ -803,6 +848,7 @@ export function diffCtags(repoDir: string, repoSlug: string): ExternalDiff | und
     new Set<string>(),
     0,
     true,
+    ct.kinds,
   );
 }
 
@@ -839,5 +885,6 @@ export function diffThreeWay(repoDir: string, repoSlug: string): ExternalDiff | 
     restrict(sc.side.pairs, universe),
     sc.unparsed,
     false,
+    ct.kinds,
   );
 }

@@ -55,7 +55,7 @@ vocabulary:
 | oracle | what makes it independent | result |
 |---|---|---|
 | **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, 0 symbols left unread |
-| **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | covers **61.7%–98.8%** of ctags' names over 6 real repositories, and reports **2,014** declarations it does not (per repo below) |
+| **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | covers **61.7%–98.8%** of ctags' names over 6 real repositories, and reports **2,014** declarations it does not — with what is left bucketed by kind, per repo below |
 | **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
 | **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **208** declaration-ish node types still unhandled |
 
@@ -78,22 +78,40 @@ in it measures what ctags omits. That direction is the column beside it.
 | pallets/flask | 86 | 1,516 | 98 | **6** | 93.9% |
 | t3-oss/create-t3-turbo | 54 | 97 | 30 | **15** | 76.4% |
 | nrwl/nx-examples | 87 | 87 | 38 | **27** | 69.6% |
-| socialgouv/code-du-travail-numerique | 1,429 | 3,656 | 2,274 | **1,904** | 61.7% |
+| socialgouv/code-du-travail-numerique | 1,429 | 3,659 | 2,271 | **1,904** | 61.7% |
 
-So no, the low rows are not "ctags finds more". Most of the *ctags only* column
-is not declarations at all: it tags function-body locals and quoted config keys,
-which a declaration index omits on purpose. The clean test of that is
-`create-t3-turbo`, where a third tool settles it — against an index built by the
-**real TypeScript compiler** on the same files, this engine finds **100%** of
-its 93 named declarations and ctags finds **94.6%**. The repository where our
-ctags coverage looks worst is one where the authoritative oracle puts us ahead
-of ctags.
+So no, the low rows are not "ctags finds more" — and that is measured, not
+asserted. The differential records what the *ctags only* column **is**, bucketed
+by the kind ctags itself assigned (`ctagsOnlyByKind` in the same record). On
+`code-du-travail`, its 2,271 names are:
 
-What the differential is genuinely good for is the residue: where it named real
-misses they were fixed, not explained away — Go package clauses, Python PEP 484
-re-exports and Rust in-function `const`/`static` were all found this way. And
-the honest limit: on the languages no compiler-backed oracle covers, nothing
-proves the rest of that column is *entirely* surplus.
+| ctags kind | count | what they are |
+|---|---|---|
+| `constant` | 2,020 | all but a handful sit inside a function body, an object literal or a test block — read off the source, not assumed |
+| `variable` | 116 | same story |
+| `property` | 107 | object-literal keys (`Conditions: ConditionsIcon`) |
+| `alias` | 13 | import aliases — `import type Engine from "publicodes"` |
+| `method` / `class` / `function` / `enumerator` | 15 | object-literal methods and test-scope declarations |
+
+That is a definition gap, not a hole: a declaration index omits locals and config
+keys on purpose, which is the whole reason its output fits in a model's context.
+The same holds on the other repos — ripgrep's 40 are mostly `variable` and Rust
+`implementation` blocks, flask's include 21 that **ctags itself labels
+`unknown`** (its kind for an import alias), gin's are its synthetic
+`anonMember`/`packageName`.
+
+The clean adjudication is `create-t3-turbo`, where a third tool settles it:
+against an index built by the **real TypeScript compiler** on the same files,
+this engine finds **100%** of its 93 named declarations and ctags finds
+**94.6%**. The repository where our ctags coverage looks worst is one where the
+authoritative oracle puts us ahead of ctags.
+
+And the residue is what the differential is genuinely for. Where it named real
+misses they were fixed, not explained away: Go package clauses, Python PEP 484
+re-exports, Rust in-function `const`/`static`, and — in `EXTRACTOR_VERSION` 12 —
+declarations inside an IIFE, which is why `code-du-travail` moved to 3,659 here.
+The honest limit stands: on the languages no compiler-backed oracle covers,
+nothing proves the rest of that column is *entirely* surplus.
 
 Refreshed by `CODEINDEX_ORACLE=1 pnpm vitest run
 tests/oracles-external-diff.test.ts` and by the weekly CI job; tool version,

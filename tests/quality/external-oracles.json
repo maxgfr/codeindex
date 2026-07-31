@@ -16,7 +16,14 @@
         "theirs": 3229,
         "both": 3189,
         "oursOnly": 47,
-        "recall": 0.9876
+        "recall": 0.9876,
+        "ctagsOnlyByKind": {
+          "variable": 19,
+          "implementation": 11,
+          "constant": 5,
+          "enumerator": 4,
+          "macro": 1
+        }
       },
       {
         "repo": "pallets/flask",
@@ -25,7 +32,17 @@
         "theirs": 1614,
         "both": 1516,
         "oursOnly": 6,
-        "recall": 0.9393
+        "recall": 0.9393,
+        "ctagsOnlyByKind": {
+          "namespace": 32,
+          "variable": 26,
+          "unknown": 21,
+          "field": 7,
+          "class": 6,
+          "function": 3,
+          "table": 2,
+          "member": 1
+        }
       },
       {
         "repo": "gin-gonic/gin",
@@ -34,7 +51,17 @@
         "theirs": 2039,
         "both": 2010,
         "oursOnly": 15,
-        "recall": 0.9858
+        "recall": 0.9858,
+        "ctagsOnlyByKind": {
+          "packageName": 10,
+          "anonMember": 9,
+          "field": 5,
+          "enum": 1,
+          "enumerator": 1,
+          "member": 1,
+          "message": 1,
+          "package": 1
+        }
       },
       {
         "repo": "t3-oss/create-t3-turbo",
@@ -43,7 +70,12 @@
         "theirs": 127,
         "both": 97,
         "oursOnly": 15,
-        "recall": 0.7638
+        "recall": 0.7638,
+        "ctagsOnlyByKind": {
+          "property": 14,
+          "constant": 13,
+          "variable": 3
+        }
       },
       {
         "repo": "nrwl/nx-examples",
@@ -52,19 +84,34 @@
         "theirs": 125,
         "both": 87,
         "oursOnly": 27,
-        "recall": 0.696
+        "recall": 0.696,
+        "ctagsOnlyByKind": {
+          "constant": 17,
+          "variable": 12,
+          "property": 9
+        }
       },
       {
         "repo": "socialgouv/code-du-travail-numerique",
         "files": 1429,
-        "ours": 5560,
+        "ours": 5563,
         "theirs": 5930,
-        "both": 3656,
+        "both": 3659,
         "oursOnly": 1904,
-        "recall": 0.6165
+        "recall": 0.617,
+        "ctagsOnlyByKind": {
+          "constant": 2020,
+          "variable": 116,
+          "property": 107,
+          "alias": 13,
+          "method": 9,
+          "class": 2,
+          "enumerator": 2,
+          "function": 2
+        }
       }
     ],
-    "note": "The lower TypeScript figures are largely ctags SURPLUS rather than gaps of ours: it tags function-body locals and quoted config keys, which a declaration index deliberately omits — on code-du-travail we report 1904 declarations ctags does not. The strongest evidence that a low recall row is not a quality verdict is t3-oss/create-t3-turbo: 0.7638 against ctags, and 1.0 against the TypeScript compiler on the same corpus, where ctags itself scores 0.946. The figures rose across every repository after the differential named three real clusters (Go package clauses, Python PEP 484 re-exports, Rust in-function const/static) and they were fixed; gin moved 0.9127 → 0.9858."
+    "note": "The lower TypeScript figures are largely ctags SURPLUS rather than gaps of ours, and ctagsOnlyByKind is the evidence rather than the assurance: on code-du-travail 2020 of the 2271 names ctags has and we do not (89%) are its `constant` kind — read off the source, all but a handful sit inside a function body, an object literal or a test block, which a declaration index omits on purpose — and the tail is object-literal keys (`property`), import aliases (`alias`, and flask's `unknown`, which is ctags' own label for them) and ctags' synthetic `anonMember`/`packageName`. Meanwhile we report 1904 declarations it does not. The strongest single adjudication is t3-oss/create-t3-turbo: 0.7638 against ctags, and 1.0 against the TypeScript compiler on the same corpus, where ctags itself scores 0.946. Where the differential named REAL misses they were fixed: Go package clauses, Python PEP 484 re-exports and Rust in-function const/static (gin moved 0.9127 → 0.9858), then EXTRACTOR_VERSION 12 added declarations inside an IIFE, which is what moved code-du-travail from 5560 to 5563 declarations and 0.6165 to 0.617."
   },
   "typescriptCompiler": {
     "corpus": "t3-oss/create-t3-turbo, the 53 files all three tools indexed",

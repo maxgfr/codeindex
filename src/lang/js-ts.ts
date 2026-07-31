@@ -24,6 +24,18 @@ const RULES: Rule[] = [
   { re: /^\s*module\.exports\.(?<name>[\w$]+)\s*=/, kind: "const", exported: true },
   // top-level const arrow function (not exported)
   { re: /^\s*(?:const|let)\s+(?<name>[\w$]+)\s*=\s*(?:async\s*)?\([^)]*\)\s*(?::[^=]+)?=>/, kind: "const", exported: false },
+  // A module constant bound to a VALUE, not exported: `const RE = /href=/g`.
+  // The AST tier indexes these (a top-level binding is a declaration, only an
+  // in-function one is a local), and a fallback tier that answers "no such
+  // symbol" for every module constant diverges from the engine it stands in for.
+  //
+  // Anchored at column 0, unlike every rule above it: a line scanner cannot see
+  // scope, so `^\s*` here would sweep in each `const x = 1` inside every function
+  // body — the locals-flood the AST tier's inFunctionBody filter exists to
+  // prevent, and the surplus this project criticises in a flat tags file. Column
+  // 0 is the one module-scope proxy a line can carry. Must stay AFTER the arrow
+  // and export rules: `scan()` keeps the first rule that matches a line.
+  { re: /^(?:const|let|var)\s+(?<name>[\w$]+)\s*[:=]/, kind: "const", exported: false },
   // `export default Foo;` — a class/const declared above and exported by reference.
   { re: /^\s*export\s+default\s+(?<name>[A-Za-z_$][\w$]*)\s*;?\s*$/, kind: "default", exported: true },
 ];

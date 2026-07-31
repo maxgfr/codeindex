@@ -61,7 +61,10 @@ function report(label: string, d: ExternalDiff): void {
     `\n${label}  [${d.universe} files all participants looked at]\n` +
       `  ours=${d.ours}  ctags=${d.ctags}  scip=${d.scip}  agreeAll=${d.agreeAll}\n` +
       `  ctagsRecall=${d.ctagsRecall}  scipRecall=${d.scipRecall}  ` +
-      `scipNotCtags=${d.scipNotCtags}  oursOnly(surplus)=${d.oursOnly}  unparsedScip=${d.unparsedScipSymbols}`,
+      `scipNotCtags=${d.scipNotCtags}  oursOnly(surplus)=${d.oursOnly}  unparsedScip=${d.unparsedScipSymbols}\n` +
+      // What the ctagsOnly column IS, not just how tall it is: a recall figure
+      // alone cannot separate a missed declaration from a declined non-one.
+      `  ctagsOnlyByKind=${JSON.stringify(d.ctagsOnlyByKind)}`,
   );
   for (const [name, list] of [
     ["ctagsOnly", d.ctagsOnly],

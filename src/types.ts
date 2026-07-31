@@ -55,8 +55,17 @@ export const SCHEMA_VERSION = 5;
 // visibility fixes that follow from it (an annotated Java method is no longer
 // read as private, PHP honours `private`, C++ honours `private:` sections,
 // TypeScript honours `private`/`protected` members, and a local declared
-// inside a function body is never reported as exported).
-export const EXTRACTOR_VERSION = 11;
+// inside a function body is never reported as exported). v12 closes two gaps
+// the universal-ctags differential pointed at: the AST walk now descends
+// through `parenthesized_expression`, so declarations inside an IIFE
+// (`(function () { … })()` — browser scripts, UMD and loader bundles, whose
+// whole content sits in one) stop being invisible; and the JS/TS regex tier
+// extracts a module-level `const`/`let`/`var` bound to a value, which the AST
+// tier already indexed, so the fallback tier no longer answers "no such
+// symbol" for every module constant. That rule alone is anchored at column 0:
+// a line scanner cannot see scope, and matching indented bindings would report
+// every in-function local as a declaration.
+export const EXTRACTOR_VERSION = 12;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

@@ -28,7 +28,9 @@ const EXTERNAL_PATH = join(HERE, "external-oracles.json");
 interface ExternalOracles {
   measuredAt: string;
   tools: Record<string, string>;
-  ctags: { perRepo: { repo: string; recall: number; oursOnly: number }[] };
+  ctags: {
+    perRepo: { repo: string; recall: number; oursOnly: number; ctagsOnlyByKind: Record<string, number> }[];
+  };
   typescriptCompiler: { theirDeclarations: number; recall: number; unparsedSymbols: number };
   calibration: { ctagsCoverageOfCompilerDeclarations: number };
 }
@@ -96,6 +98,13 @@ export function externalOracleSummaries(): OracleSummary[] {
   const best = byRecall[0]!;
   const worst = byRecall[byRecall.length - 1]!;
   const oursOnly = ext.ctags.perRepo.reduce((n, r) => n + r.oursOnly, 0);
+  // What dominates the gap on the WORST repo — the row a sceptical reader stops
+  // at. Read from the recorded histogram rather than asserted in prose, so the
+  // published sentence cannot outlive the measurement behind it.
+  const worstKinds = Object.entries(worst.ctagsOnlyByKind);
+  const worstGap = worstKinds.reduce((n, [, v]) => n + v, 0);
+  const [worstTopKind = "unknown", worstTopCount = 0] = worstKinds.sort((a, b) => b[1] - a[1])[0] ?? [];
+  const worstTopShare = worstGap === 0 ? 0 : Math.round((worstTopCount / worstGap) * 100);
   return [
     {
       id: "typescript-compiler",
@@ -116,7 +125,7 @@ export function externalOracleSummaries(): OracleSummary[] {
       label: "universal-ctags differential",
       authority: `an independent, mature indexer (${ext.tools.ctags}) covering ~40 languages`,
       value: `covers ${pct(worst.recall)}–${pct(best.recall)} of ctags' names, and reports ${group(oursOnly)} declarations it does not`,
-      scope: `One-directional by construction: it asks how much of ctags this index reproduces, never the reverse — highest on ${best.repo}, lowest on ${worst.repo}, where ctags also lists function-body locals and quoted config keys that a declaration index omits on purpose and where we report ${group(worst.oursOnly)} declarations it does not. Where it named real misses they were fixed, so a low row is a definition gap plus a to-do list, not a verdict.`,
+      scope: `One-directional by construction: it asks how much of ctags this index reproduces, never the reverse — highest on ${best.repo}, lowest on ${worst.repo}. What the low end IS, rather than a reassurance about it: ${worstTopShare}% of what ctags has there and this index does not is its "${worstTopKind}" kind — locals and object keys a declaration index omits on purpose — while we report ${group(worst.oursOnly)} declarations ctags does not. Where it named real misses they were fixed, so a low row is a definition gap plus a to-do list, not a verdict.`,
     },
   ];
 }

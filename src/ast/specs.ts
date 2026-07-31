@@ -366,6 +366,14 @@ const TS_SPEC: LangSpec = {
     "arrow_function",
     "function_expression",
     "function",
+    // The IIFE's own link: `(function () { … })()` parses as
+    // expression_statement → call_expression → parenthesized_expression →
+    // function_expression, and without the parens listed the descent stopped one
+    // node short — the same break the statement containers above were added for.
+    // Whole categories of file are written inside one (browser scripts, UMD and
+    // loader bundles), so for those the index held no functions at all. Named by
+    // the ctags differential on a real loader script.
+    "parenthesized_expression",
   ]),
   exported: neverExport, // export is tracked structurally; see LangSpec.exportMarkers
   exportMarkers: new Set(["export_statement", "ambient_declaration"]),
