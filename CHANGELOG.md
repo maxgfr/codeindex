@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.22.1](https://github.com/maxgfr/codeindex/compare/v2.22.0...v2.22.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **extract:** index declarations inside an IIFE, and module constants on the regex tier ([891f7fb](https://github.com/maxgfr/codeindex/commit/891f7fb5378aa5174bc9db698eeeb4d473369a06))
+
 # [2.22.0](https://github.com/maxgfr/codeindex/compare/v2.21.1...v2.22.0) (2026-07-30)
 
 
