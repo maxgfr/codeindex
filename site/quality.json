@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "engineVersion": "2.21.1",
+  "engineVersion": "2.22.0",
   "base": {
     "languages": 17,
     "files": 18,
@@ -269,7 +269,7 @@
       "id": "official-tags-queries",
       "label": "Official tags.scm queries",
       "authority": "the code-navigation queries each grammar's own authors publish and maintain",
-      "value": "1 adjudicated difference(s)",
+      "value": "1 adjudicated difference",
       "scope": "Covers 14 of 17 languages: kotlin, terraform and zig publish no query, so nothing independent checks them here. The queries are also thinner than our rules, so agreement is a floor, not a ceiling."
     },
     {
@@ -283,8 +283,8 @@
       "id": "universal-ctags",
       "label": "universal-ctags differential",
       "authority": "an independent, mature indexer (Universal Ctags 6.2.1) covering ~40 languages",
-      "value": "recall up to 98.8% over 6 real repositories",
-      "scope": "Compares declaration names per file over real code, not fixtures. ctags also reports function-body locals, which a declaration index omits on purpose — so its extra hits are not our misses."
+      "value": "recall 61.7%–98.8% over 6 real repositories",
+      "scope": "Compares declaration names per file over real code, not fixtures — highest on BurntSushi/ripgrep, lowest on socialgouv/code-du-travail-numerique. ctags also reports function-body locals and quoted config keys, which a declaration index omits on purpose, so most of that spread is its surplus rather than our misses."
     }
   ],
   "blindSpots": [

@@ -968,11 +968,11 @@
           file, a library, a CLI, and 29 MCP tools.
         </p>
         <p class="lede">
-          Walks a repo, extracts symbols and imports across 15 languages,
-          resolves cross-file references into a typed link-graph, and
-          renders byte-identical artifacts every time it runs. Vendor the
-          single <code>engine.mjs</code>, install it from npm or Homebrew, or
-          run it from a container — nothing else to install, ever.
+          Walks a repo, extracts symbols and imports across 16 languages (21
+          tree-sitter grammars), resolves cross-file references into a typed
+          link-graph, and renders byte-identical artifacts every time it runs.
+          Vendor the single <code>engine.mjs</code>, install it from npm or
+          Homebrew, or run it from a container — nothing else to install, ever.
         </p>
         <div class="pill-row" aria-label="Project badges">
           <a
@@ -980,7 +980,7 @@
             href="https://github.com/maxgfr/codeindex/blob/main/LICENSE"
             ><span class="dot" aria-hidden="true"></span>MIT license</a
           >
-          <span class="pill">v2.21.1</span>
+          <span class="pill">v2.22.0</span>
           <span class="pill">Node ≥ 18</span>
           <a class="pill" href="https://www.npmjs.com/package/@maxgfr/codeindex"
             >npm · @maxgfr/codeindex</a
@@ -1113,7 +1113,7 @@
           spread across worker threads; a warm rerun of
           <code>vercel/next.js</code> in around a second, and roughly twice that
           for one touched file; far fewer tokens than a raw grep dump for a
-          single-symbol lookup; 15 languages; 0 runtime dependencies;
+          single-symbol lookup; 16 languages; 0 runtime dependencies;
           byte-identical rebuilds on 7/7 measured repos; 29 MCP tools.
         </p>
       </noscript>
@@ -1206,43 +1206,70 @@
   </section>
 
   <!-- ============ MEASURED QUALITY ============ -->
-  <!-- Deliberately shows the SCORE AND ITS BASE. Every extraction metric below
-       reads 100%, and published bare that invites the wrong inference — that the
-       engine is known to extract everything. What it means is narrower and worth
-       stating: 100% of a corpus this project labelled itself. The denominator row
-       and the blind-spot list are what turn a misleading number into an
-       informative one, so they are not optional decoration; they are the point.
-       All figures come from the embedded quality-data island, which is written by
-       `pnpm quality` and guarded byte-for-byte by tests/site-quality.test.ts. -->
+  <!-- Ordered so the reader meets the OUTSIDE checks first: a compiler, a mature
+       third-party indexer, the grammars' own published queries and vocabulary.
+       Those are the scores nobody here authored, which is exactly what makes them
+       worth reading. Only then the corpus this project labelled itself — shown
+       WITH its denominators, because every extraction metric reads 100% and
+       published bare that invites the wrong inference (that the engine is known
+       to extract everything, rather than everything in a corpus written here).
+       The denominator tiles and the blind-spot list are not decoration; they are
+       what turn a misleading number into an informative one. All figures come
+       from the embedded quality-data island, written by `pnpm quality` and
+       guarded byte-for-byte by tests/site-quality.test.ts. -->
   <section id="quality" aria-labelledby="quality-heading">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Fig. 02 — how much of a repo it actually finds</p>
+        <p class="eyebrow">Fig. 02 — scored against tools that are not us</p>
         <h2 id="quality-heading">Measured quality</h2>
         <p>
           Speed is easy to measure and easy to trust. Extraction quality is
-          neither, so it is measured against hand-labelled ground truth and
-          enforced as a ratchet in both directions: losing quality fails CI, and
-          <em>gaining</em> it fails too until the recorded baseline is refreshed
-          in the same commit. Every number here is reproducible with
-          <code>pnpm quality:report</code>.
+          neither — an engine scored only against expectations its own authors
+          wrote cannot find the construct nobody thought to label. So the checks
+          that lead here are the ones with an outside authority: an index built
+          by the real TypeScript compiler, a declaration-level differential
+          against a mature independent indexer over real repositories, the
+          code-navigation queries each grammar's own authors publish, and each
+          grammar's declared node vocabulary read straight from the parser.
         </p>
         <p>
-          The scores are shown with the corpus they are measured on, because a
-          bare percentage hides the thing a reader most needs in order to judge
-          it. Independent oracles — the grammars' own declared vocabulary, a
-          third-party indexer, label-free structural invariants — check the parts
-          that hand-written labels cannot, and the blind spots are listed rather
-          than left implicit.
+          Those found real gaps — C headers indexing to nothing, a JS/TS walk
+          stopping one node short of every callback block — and each was fixed
+          rather than argued with. Below them sits the hand-labelled corpus that
+          covers what no external indexer reports at all (doc comments, complete
+          signatures, call edges), shown with the corpus it is measured on,
+          because a bare percentage hides the thing a reader most needs to judge
+          it. Every number is reproducible with <code>pnpm quality:report</code>
+          and ratcheted in both directions: losing quality fails CI, and
+          <em>gaining</em> it fails too until the recorded baseline is refreshed
+          in the same commit. The blind spots are listed rather than left
+          implicit.
         </p>
       </div>
+
+      <div id="quality-oracles">
+        <!-- independent-oracle table, filled by JS — deliberately first -->
+      </div>
+
+      <!-- Hidden until the payload renders: a sub-head introducing tables that
+           never appeared would be the same half-rendered section the guard
+           below refuses to draw. -->
+      <p
+        class="chart-caption"
+        id="quality-labels-intro"
+        style="margin: 1.6rem 0 0.4rem"
+        hidden
+      >
+        <strong>And what the labels say.</strong> The corpus below is written
+        here, so it is published with its denominators.
+      </p>
 
       <div id="quality-base" class="stat-grid">
         <!-- denominator tiles, filled by JS from the embedded payload -->
       </div>
 
       <div id="quality-tables">
-        <!-- per-language table + oracle table, filled by JS -->
+        <!-- per-language + search tables, filled by JS -->
       </div>
 
       <div id="quality-blindspots">
@@ -1491,7 +1518,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           </p>
           <div class="code">
             <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="vendor-cmd">copy</button></div>
-            <pre><code id="vendor-cmd">node scripts/sync-engine.mjs --ref v2.21.1</code></pre>
+            <pre><code id="vendor-cmd">node scripts/sync-engine.mjs --ref v2.22.0</code></pre>
           </div>
           <p class="qs-link">
             Full steps and version-constant semantics:
@@ -1511,10 +1538,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         <p class="eyebrow">Fig. 05 — what each tool is</p>
         <h2 id="compare-heading">How it compares</h2>
         <p>
-          The axis-by-axis scoreboard sits with the
-          <a href="#benchmarks">benchmarks</a>, where its numbers come from. This
-          is the shape of each tool: what it models, what it covers, what it
-          costs to install.
+          These are architecturally different tools, not differently tuned ones,
+          so the comparison is split across the page rather than collapsed into
+          one verdict: the axis-by-axis scoreboard sits with the
+          <a href="#benchmarks">benchmarks</a>, where its numbers come from, and
+          the declaration-level differential against a mature third-party indexer
+          sits with <a href="#quality">measured quality</a>. What is left is the
+          shape of each tool: what it models, what it covers, what it costs to
+          install.
         </p>
       </div>
       <div class="table-wrap compare-wrap">
@@ -1543,24 +1574,25 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
                 each run with an incremental cache
               </td>
               <td>
-                15 (regex, always on) / 13 (tree-sitter AST, opt-in
-                grammars)
+                16 regex extractors (always on) / 21 tree-sitter grammars —
+                15 committed, 6 pulled on demand
               </td>
               <td>npm i -g, brew, or docker — zero runtime deps</td>
               <td>
-                A single-file incremental reindex is slower than a live
-                database (see Benchmarks)
+                Slower to build than a flat tags file, and its extraction is
+                the only one here scored against outside oracles (see
+                <a href="#quality">measured quality</a>)
               </td>
             </tr>
             <tr>
               <td>universal-ctags</td>
               <td>A flat <code>tags</code> file</td>
-              <td>Broad, generic parser rules</td>
+              <td>~40 via broad, generic parser rules</td>
               <td>Binary install</td>
               <td>
-                Fastest cold index on small repos, overtaken on the largest one
-                measured — and definitions only: no call graph, no import
-                resolution, no cross-file links
+                Fastest cold index at every size measured, and mature enough to
+                serve as an oracle here — but definitions only: no call graph,
+                no import resolution, no cross-file links
               </td>
             </tr>
             <tr>
@@ -1585,7 +1617,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
               <td>140 MB Python venv (uv tool)</td>
               <td>
                 ~1 ms per lookup, but <code>graph.json</code> is not
-                byte-identical across rebuilds on 5 of the 6 measurable repos,
+                byte-identical across rebuilds on any of the 6 measurable repos,
                 and file nodes are basename-keyed (no file-overview)
               </td>
             </tr>
@@ -4435,7 +4467,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
      a moment, so an unchanged repo must re-render identically. -->
 <script id="quality-data" type="application/json">{
   "schemaVersion": 1,
-  "engineVersion": "2.21.1",
+  "engineVersion": "2.22.0",
   "base": {
     "languages": 17,
     "files": 18,
@@ -4704,7 +4736,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       "id": "official-tags-queries",
       "label": "Official tags.scm queries",
       "authority": "the code-navigation queries each grammar's own authors publish and maintain",
-      "value": "1 adjudicated difference(s)",
+      "value": "1 adjudicated difference",
       "scope": "Covers 14 of 17 languages: kotlin, terraform and zig publish no query, so nothing independent checks them here. The queries are also thinner than our rules, so agreement is a floor, not a ceiling."
     },
     {
@@ -4718,8 +4750,8 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
       "id": "universal-ctags",
       "label": "universal-ctags differential",
       "authority": "an independent, mature indexer (Universal Ctags 6.2.1) covering ~40 languages",
-      "value": "recall up to 98.8% over 6 real repositories",
-      "scope": "Compares declaration names per file over real code, not fixtures. ctags also reports function-body locals, which a declaration index omits on purpose — so its extra hits are not our misses."
+      "value": "recall 61.7%–98.8% over 6 real repositories",
+      "scope": "Compares declaration names per file over real code, not fixtures — highest on BurntSushi/ripgrep, lowest on socialgouv/code-du-travail-numerique. ctags also reports function-body locals and quoted config keys, which a declaration index omits on purpose, so most of that spread is its surplus rather than our misses."
     }
   ],
   "blindSpots": [
@@ -5097,8 +5129,14 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
 
       function pct(v) { return (v * 100).toFixed(1) + "%"; }
 
+      /* The sub-head that separates the outside oracles from the corpus written
+         here. Hidden in the markup so it never introduces tables that a missing
+         or unreadable payload stopped this function from drawing. */
+      var labelsIntro = document.getElementById("quality-labels-intro");
+      if (labelsIntro) labelsIntro.hidden = false;
+
       /* The denominators, as tiles — the numbers that make the percentages
-         readable. Deliberately first: a reader meets the base before the score. */
+         readable: a reader meets the base before the score. */
       var baseHost = document.getElementById("quality-base");
       if (baseHost && q.base) {
         [
@@ -5119,6 +5157,10 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
 
       var host = document.getElementById("quality-tables");
       if (!host) return;
+      /* The outside checks render into their own host ABOVE the labelled corpus
+         (falling back to the shared one if the markup predates it), so the first
+         quality table a reader meets is the one this project did not author. */
+      var oracleHost = document.getElementById("quality-oracles") || host;
 
       /* Shared table builder, same shape as renderTable so both sections look
          like one system: div.table-wrap > table > caption > span.cap-note. */
@@ -5158,6 +5200,17 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
         return wrap;
       }
 
+      if (q.oracles && q.oracles.length) {
+        oracleHost.appendChild(
+          table(
+            "Independent oracles",
+            "Checks whose authority comes from outside this project, so a construct nobody here thought to label cannot hide.",
+            ["Oracle", "Result", "Why it is independent", "Scope and limits"],
+            q.oracles.map(function (o) { return [o.label, o.value, o.authority, o.scope]; })
+          )
+        );
+      }
+
       host.appendChild(
         table(
           "Extraction quality, per language",
@@ -5193,17 +5246,6 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           ]
         )
       );
-
-      if (q.oracles && q.oracles.length) {
-        host.appendChild(
-          table(
-            "Independent oracles",
-            "Checks whose authority comes from outside this project, so a construct nobody here thought to label cannot hide.",
-            ["Oracle", "Result", "Why it is independent", "Scope and limits"],
-            q.oracles.map(function (o) { return [o.label, o.value, o.authority, o.scope]; })
-          )
-        );
-      }
 
       /* The blind spots. Listed, never implied: a report that hides its gaps is
          worth no more than the bare 100% it is trying to qualify. */
@@ -5475,7 +5517,7 @@ docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp</code></pre>
           ["tie", "n/a", "n/a on next.js"],
           [ctagsSizeBigMs < sizeBigMs ? "lead" : "tie", ctagsSizeBig, ctagsSizeBig + " tags file — definitions only"]] },
         { a: "Language coverage", s: "for retrieval", c: [
-          ["tie", "15", "15 (regex) / 13 (AST) — covers all 7 bench repos incl. Rust"],
+          ["tie", "16", "16 regex extractors / 21 tree-sitter grammars — covers all 7 bench repos incl. Rust"],
           ["lead", "40+", "40+ via LSP — the broadest here"],
           ["tie", "36", "36 via tree-sitter"],
           ["tie", "many", "broad generic parser rules"]] },

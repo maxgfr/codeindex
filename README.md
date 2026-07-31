@@ -9,7 +9,9 @@ as a single zero-dependency `engine.mjs` that consumer tools **vendor** (copy
 into their repo) instead of installing.
 
 Designed for downstream tools — agent skills, CLIs, CI gates — that vendor the
-engine as a single file instead of taking an npm dependency.
+engine as a single file instead of taking an npm dependency. How it stacks up
+against universal-ctags, Serena and Graphify: [How it
+compares](#how-it-compares).
 
 ## What it does
 
@@ -43,39 +45,76 @@ engine as a single file instead of taking an npm dependency.
   (`index.scip`) via a hand-rolled zero-dependency protobuf encoder — validated
   by the official `scip` CLI (`stats`/`lint`).
 
-## Measured quality
+## Measured against other indexers
 
-"Finds better" is a claim, so it is measured. `tests/fixtures/quality/` holds
-hand-labelled ground truth for **15 languages** — every declaration a correct
-indexer should report, with its kind, visibility, doc and signature — plus a
-relevance-judged search corpus whose query terms live only in prose. `pnpm
-quality:report` scores both; `tests/quality.test.ts` enforces the scores as a
-**ratchet in both directions**: losing quality fails CI, and gaining it fails
-too until the baseline is refreshed in the same commit. Every number below is
-reproducible with `pnpm quality:report`.
+"Finds better" is a claim, so the checks that count are the ones this project did
+not author. Four oracles score extraction against outside authorities — a real
+compiler, a mature indexer, and the grammars' own published queries and
+vocabulary:
 
-| | before | now |
+| oracle | what makes it independent | result |
 |---|---|---|
-| symbol recall | 59.4% | **100%** |
-| symbol precision | 91.8% | **100%** |
-| kind / visibility accuracy | 100% / 89.3% | **100% / 100%** |
-| doc coverage | 0% | **100%** |
-| signature completeness | 10% | **100%** |
-| inheritance relations | 0% | **100%** |
-| search MRR | 62.5% | **93.8%** |
-| search nDCG@10 | 59.6% | **86.0%** |
-| search recall@5 | 59.4% | **84.4%** |
-| judged queries returning nothing relevant | 6 of 16 | **1 of 16** |
+| **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, 0 symbols left unread |
+| **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | declaration recall **61.7%–98.8%** over 6 real repositories (per repo below) |
+| **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
+| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **208** declaration-ish node types still unhandled |
 
-The remaining search miss is honest: a query for "authentication" against a file
-that never writes "auth" in any form. No lexical index can answer that; the
-[semantic tier](docs/SEMANTIC.md) is what it is for.
+The compiler oracle also calibrates the ctags one: over the same
+compiler-confirmed declarations, ctags itself found 94.6%, and all 5 it missed
+are one construct (string-literal declaration names). That is how far a syntactic
+oracle can be trusted on the ~40 languages no compiler here can check.
 
-Two independent checks back the labels. `tests/quality/harness.ts` also runs each
-grammar's **own** `queries/tags.scm` — the patterns GitHub uses for code
-navigation — and reports every definition the official query sees that this
-engine did not, so a construct nobody thought to label cannot hide. And two
-builds of an unchanged repo remain byte-identical.
+### Per repository, against universal-ctags
+
+Declaration names compared per file over real code, not fixtures — refreshed by
+`CODEINDEX_ORACLE=1 pnpm vitest run tests/oracles-external-diff.test.ts` and by
+the weekly CI job, with the tool version and corpus recorded next to the figures
+in `tests/quality/external-oracles.json`:
+
+| repo | files compared | ours | ctags | recall |
+|---|---|---|---|---|
+| BurntSushi/ripgrep | 107 | 3,236 | 3,229 | **98.8%** |
+| gin-gonic/gin | 100 | 2,025 | 2,039 | **98.6%** |
+| pallets/flask | 86 | 1,522 | 1,614 | **93.9%** |
+| t3-oss/create-t3-turbo | 54 | 112 | 127 | 76.4% |
+| nrwl/nx-examples | 87 | 114 | 125 | 69.6% |
+| socialgouv/code-du-travail-numerique | 1,429 | 5,560 | 5,930 | 61.7% |
+
+The low TypeScript rows are largely ctags **surplus** rather than gaps of ours:
+it tags function-body locals and quoted config keys, which a declaration index
+omits on purpose — on `code-du-travail` we report 1,904 declarations ctags does
+not. Where the differential named real misses they were fixed, not explained
+away: Go package clauses, Python PEP 484 re-exports and Rust in-function
+`const`/`static` were all found by it.
+
+### Against hand-labelled ground truth
+
+The external indexers report declarations and nothing else, so doc comments,
+complete signatures and call edges cannot be checked against them at all.
+Those are covered by labels written here: `tests/fixtures/quality/` holds every
+declaration a correct indexer should report for **17 languages**, with its kind,
+visibility, doc and signature, plus a relevance-judged search corpus whose query
+terms live only in prose.
+
+| what is scored | score | measured on |
+|---|---|---|
+| symbol precision / recall | **100% / 100%** | 265 labelled declarations in 18 files |
+| kind accuracy | **100%** | the same 265 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 94.4% on Go | the same 265 declarations |
+| doc comment attached | **100%** | the 147 declarations labelled with a doc |
+| complete signature | **100%** | the 29 declarations labelled with a signature |
+| call edges / inheritance (F1) | **100% / 100%** | 47 labelled call sites, 21 relations |
+| search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
+
+`pnpm quality:report` reproduces every number; `tests/quality.test.ts` enforces
+them as a **ratchet in both directions** — losing quality fails CI, and gaining
+it fails too until the baseline is refreshed in the same commit. Two builds of
+an unchanged repo stay byte-identical.
+
+One judged query still returns nothing relevant, and the reason is honest: it
+asks for "authentication" against a file that never writes "auth" in any form.
+No lexical index can answer that; the [semantic tier](docs/SEMANTIC.md) is what
+it is for.
 
 ## Use as a library (the vendoring model)
 
@@ -202,11 +241,13 @@ summary, per-symbol **doc comments**, and the **prose body** (words from comment
 and short string literals, captured at extraction time so they ride the
 incremental cache).
 
-The last two are the point. An index built only from names is a perfectly scored
-index of the wrong text — the words people search with are overwhelmingly in
-prose. Against relevance judgements, adding them took MRR from 62.5% to 93.8%
-and cut queries that returned *nothing* relevant from 6 of 16 to 1. Field weights
-are calibrated against nDCG@10 on the judged corpus, not chosen by taste.
+The last two are the point. An index built only from names — what a tags file or
+a symbol-only search ships — is a perfectly scored index of the wrong text: the
+words people search with are overwhelmingly in prose. Measured on the same
+judged corpus, a names-and-paths-only index returns *nothing* relevant for 6 of
+16 queries; with doc comments and prose in the index it is 1, at 93.8% MRR.
+Field weights are calibrated against nDCG@10 on that corpus, not chosen by
+taste.
 
 Results carry `matchedFields` (was it the path or a doc comment?), a `line`
 anchor and `symbolHits` (name, kind, line), so a hit is a place to open rather
@@ -377,24 +418,37 @@ agent asked for.
 `buildGraph`/`buildIndexArtifacts` accept `meta: { version, schemaVersion }` so
 a consumer can stamp its own identity into artifacts it persists.
 
-## Benchmarks
+## How it compares
 
 Measured against universal-ctags, Serena (LSP over MCP) and Graphify with a
-reproducible harness (`scripts/bench/`); full methodology, fairness notes and
-all scenarios in [BENCHMARKS.md](./BENCHMARKS.md).
+reproducible harness (`scripts/bench/`) — median of 5 runs, one warmup
+discarded; full methodology, fairness notes and every scenario in
+[BENCHMARKS.md](./BENCHMARKS.md). These are architecturally different tools, so
+each row below is a specific operation, never a vague "codeindex vs tool X".
 
-Cold-index speed is not where this engine wins, and the table says so: a flat
-`tags` file is a smaller job and ctags finishes it first at every size. What a
-cold build buys is in the rows under it.
+| | codeindex | universal-ctags | Serena | Graphify |
+| --- | --- | --- | --- | --- |
+| what it produces | byte-stable `graph.json` / `symbols.json` + SCIP | a flat `tags` file | live LSP answers, no artifact | `graph.json` from tree-sitter |
+| cross-file edges | imports, calls, `extends`/`implements`, doc links | none | live and type-aware | label-matched, basename-keyed files |
+| cold index — 2,823 files | 631 ms | **330 ms** | 7,695 ms | 10,478 ms |
+| cold index — 27,952 files | 4,917 ms | **3,357 ms** | n/a — intractable at bench time | n/a — intractable at bench time |
+| warm rerun / one file touched | **1,234 ms / 2,489 ms** | no incremental mode | re-indexes lazily in-session | rebuilds via the cold command |
+| warm query (find-symbol, `next.js`) | 1 ms in-proc | 104 ms tags scan | n/a at that size | n/a at that size |
+| byte-identical rebuilds | **7 / 7 repos** | not measured | no artifact to diff | 0 / 6 measurable repos |
+| language coverage | 16 regex extractors, 21 tree-sitter grammars | ~40, generic parser rules | any language with an LSP server | 36 via tree-sitter |
+| install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv |
+| MCP server | 29 tools | none | yes, LSP-backed | yes |
 
-| Metric | codeindex | Context |
-| --- | --- | --- |
-| `socialgouv/code-du-travail-numerique` (2,823 files) — cold index | 631 ms | vs ctags 330 ms, serena 7,695 ms, graphify 10,478 ms |
-| `vercel/next.js` (27,952 files) — cold index | 4,917 ms | vs ctags 3,357 ms; serena/graphify n/a — intractable at bench time |
-| `vercel/next.js` — warm rerun / one file touched | 1,234 ms / 2,489 ms | no competitor exposes an incremental reindex at all |
-| Byte-identical rebuilds | 7 / 7 repos | graphify's `graph.json` differed on all 6 it could be measured on; serena keeps no artifact |
-| Install footprint | 23.5 MB, zero runtime deps | serena 114.3 MB (+ language servers), graphify 140.1 MB |
-| `vercel/next.js` — token ratio (measured) | 390.3× | structured index vs raw grep, single-symbol lookup |
+Cold-index speed is the axis this engine wins least, and the table says so: a
+flat `tags` file is a smaller job, and ctags finishes it first at every size —
+by an order of magnitude on small repos. Where the extra time goes is the rows
+under it: a typed cross-file graph, an incremental reindex nobody else exposes,
+and rebuilds that are byte-identical. Serena buys type-aware references no
+static tool claims, and pays for them in activation and per-call latency.
+
+On context cost, a single-symbol lookup through the index returns **390.3×**
+fewer tokens than the raw grep it replaces on `vercel/next.js` (measured
+bytes/4, both sides).
 
 ## Development
 

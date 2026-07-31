@@ -62,31 +62,54 @@ export function collectOracleSummaries(): OracleSummary[] {
     id: "official-tags-queries",
     label: "Official tags.scm queries",
     authority: "the code-navigation queries each grammar's own authors publish and maintain",
-    value: audit.length === 0 ? "full agreement" : `${audit.length} adjudicated difference(s)`,
+    value:
+      audit.length === 0
+        ? "full agreement"
+        : `${audit.length} adjudicated difference${audit.length === 1 ? "" : "s"}`,
     scope:
       "Covers 14 of 17 languages: kotlin, terraform and zig publish no query, so nothing independent checks them here. The queries are also thinner than our rules, so agreement is a floor, not a ceiling.",
   });
 
   // --- 3 & 4. the external tools (opt-in; read from the committed record) ----
-  const ext = JSON.parse(readFileSync(EXTERNAL_PATH, "utf8")) as ExternalOracles;
-  const best = ext.ctags.perRepo.reduce((a, b) => (a.recall > b.recall ? a : b));
-  out.push({
-    id: "universal-ctags",
-    label: "universal-ctags differential",
-    authority: `an independent, mature indexer (${ext.tools.ctags}) covering ~40 languages`,
-    value: `recall up to ${pct(best.recall)} over 6 real repositories`,
-    scope:
-      "Compares declaration names per file over real code, not fixtures. ctags also reports function-body locals, which a declaration index omits on purpose — so its extra hits are not our misses.",
-  });
-  out.push({
-    id: "typescript-compiler",
-    label: "TypeScript compiler index",
-    authority: "an index built by the real TypeScript compiler — authoritative where every other check here is syntactic",
-    value: `${pct(ext.typescriptCompiler.recall)} of its ${ext.typescriptCompiler.theirDeclarations} declarations found`,
-    scope: `Scoped to named declarations on one pinned repository, with ${ext.typescriptCompiler.unparsedSymbols} symbols left unread. It also calibrates the ctags oracle: ctags covered ${pct(ext.calibration.ctagsCoverageOfCompilerDeclarations)} of the same compiler-confirmed declarations.`,
-  });
+  out.push(...externalOracleSummaries());
 
   return out;
+}
+
+/**
+ * The two oracles that need a binary we cannot assume is installed, read from
+ * the committed record rather than measured here.
+ *
+ * Split out from collectOracleSummaries so it can be called on its own: the
+ * other two load every tree-sitter grammar to compute their denominators, which
+ * an environment missing the pull-only tier would silently understate. This one
+ * reads a committed JSON file and nothing else, so it is reproducible anywhere.
+ */
+export function externalOracleSummaries(): OracleSummary[] {
+  const ext = JSON.parse(readFileSync(EXTERNAL_PATH, "utf8")) as ExternalOracles;
+  const byRecall = [...ext.ctags.perRepo].sort((a, b) => b.recall - a.recall);
+  const best = byRecall[0]!;
+  const worst = byRecall[byRecall.length - 1]!;
+  return [
+    {
+      id: "typescript-compiler",
+      label: "TypeScript compiler index",
+      authority:
+        "an index built by the real TypeScript compiler — authoritative where every other check here is syntactic",
+      value: `${pct(ext.typescriptCompiler.recall)} of its ${ext.typescriptCompiler.theirDeclarations} declarations found`,
+      scope: `Scoped to named declarations on one pinned repository, with ${ext.typescriptCompiler.unparsedSymbols} symbols left unread. It also calibrates the ctags oracle: ctags covered ${pct(ext.calibration.ctagsCoverageOfCompilerDeclarations)} of the same compiler-confirmed declarations.`,
+    },
+    {
+      // Published as a RANGE, not a best-of. "Up to 98.8%" was true and
+      // uninformative: it hid the floor, which is the number a reader weighing
+      // this engine against ctags actually needs.
+      id: "universal-ctags",
+      label: "universal-ctags differential",
+      authority: `an independent, mature indexer (${ext.tools.ctags}) covering ~40 languages`,
+      value: `recall ${pct(worst.recall)}–${pct(best.recall)} over ${ext.ctags.perRepo.length} real repositories`,
+      scope: `Compares declaration names per file over real code, not fixtures — highest on ${best.repo}, lowest on ${worst.repo}. ctags also reports function-body locals and quoted config keys, which a declaration index omits on purpose, so most of that spread is its surplus rather than our misses.`,
+    },
+  ];
 }
 
 /**
