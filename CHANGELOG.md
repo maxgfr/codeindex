@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.25.1](https://github.com/maxgfr/codeindex/compare/v2.25.0...v2.25.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **playground:** repair the header wordmark, the card padding, and the palette ([fa549e9](https://github.com/maxgfr/codeindex/commit/fa549e98cfe45de45683dbd98d6ba2f0ead5c1b0))
+
 # [2.25.0](https://github.com/maxgfr/codeindex/compare/v2.24.2...v2.25.0) (2026-08-01)
 
 
