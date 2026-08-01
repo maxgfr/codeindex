@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.26.0](https://github.com/maxgfr/codeindex/compare/v2.25.2...v2.26.0) (2026-08-01)
+
+
+### Features
+
+* **playground:** open a local folder, and survive a rough network ([5249efb](https://github.com/maxgfr/codeindex/commit/5249efba621a83bce46d512b3ae3355c93e83f13))
+
 ## [2.25.2](https://github.com/maxgfr/codeindex/compare/v2.25.1...v2.25.2) (2026-08-01)
 
 
