@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.25.0](https://github.com/maxgfr/codeindex/compare/v2.24.2...v2.25.0) (2026-08-01)
+
+
+### Features
+
+* **playground:** index everything by default, and adopt the site's design ([972ab68](https://github.com/maxgfr/codeindex/commit/972ab68fccbcb9d76c2d56a42e83840e34414443))
+
 ## [2.24.2](https://github.com/maxgfr/codeindex/compare/v2.24.1...v2.24.2) (2026-08-01)
 
 
