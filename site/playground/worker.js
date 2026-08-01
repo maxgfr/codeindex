@@ -105,18 +105,22 @@ async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
   const planned = engine.walk(MOUNT, { maxFiles });
   if (!planned.files.length) throw new Error("The walk kept no files — this ref may contain no indexable source.");
 
-  // A byte budget on top of the file cap, applied in walk order. Walk order is
+  // An OPTIONAL byte budget on top of the optional file cap. Neither is set by
+  // default — the whole repository is indexed, which is also walk()'s own
+  // default. When one is set it applies in walk order, and walk order is
   // deterministic, so which files a budget drops is reproducible rather than a
-  // function of whichever response arrived first.
+  // function of whichever response happened to arrive first.
   let selected = planned.files;
   let cappedByBytes = false;
-  let running = 0;
-  for (let i = 0; i < planned.files.length; i++) {
-    running += planned.files[i].size;
-    if (running > maxBytes) {
-      selected = planned.files.slice(0, i);
-      cappedByBytes = true;
-      break;
+  if (maxBytes) {
+    let running = 0;
+    for (let i = 0; i < planned.files.length; i++) {
+      running += planned.files[i].size;
+      if (running > maxBytes) {
+        selected = planned.files.slice(0, i);
+        cappedByBytes = true;
+        break;
+      }
     }
   }
 

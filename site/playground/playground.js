@@ -9,8 +9,6 @@ const $ = (id) => document.getElementById(id);
 const els = {
   form: $("load-form"),
   repo: $("repo"),
-  maxFiles: $("max-files"),
-  maxMb: $("max-mb"),
   loadBtn: $("load-btn"),
   status: $("status"),
   bar: $("bar"),
@@ -46,8 +44,8 @@ const themeIcon = { system: "◐", light: "☀", dark: "☾" };
 function applyTheme(mode) {
   if (mode === "system") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", mode);
-  $("theme-icon").textContent = themeIcon[mode];
-  $("theme-label").textContent = mode;
+  $("theme-toggle-icon").textContent = themeIcon[mode];
+  $("theme-toggle-label").textContent = mode;
   try {
     localStorage.setItem("codeindex-theme", mode);
   } catch {
@@ -65,6 +63,30 @@ $("theme-toggle").addEventListener("click", () => {
   theme = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
   applyTheme(theme);
 });
+
+// ---------------------------------------------------------------------------
+// URL state: #/owner/repo@ref?cmd=…&files=…&mb=…
+//
+// Rewritten through one helper because every part of it is load-bearing: the
+// repo makes the link shareable, cmd replays a session, and files/mb are the
+// only way to bound a very large repository now that the caps are not on
+// screen. Writing the hash by hand used to drop whichever params it did not
+// happen to be setting.
+
+const hashParams = () => new URLSearchParams(location.hash.split("?")[1] ?? "");
+const hashRepo = () => location.hash.replace(/^#\/?/, "").split("?")[0];
+
+function setHash({ repo = hashRepo(), cmd } = {}) {
+  const params = hashParams();
+  if (cmd !== undefined) params.set("cmd", cmd);
+  const query = params.toString();
+  location.hash = `#/${repo}${query ? `?${decodeURIComponent(query)}` : ""}`;
+}
+
+const positiveNumber = (raw) => {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+};
 
 // ---------------------------------------------------------------------------
 // Worker
@@ -135,10 +157,16 @@ function startLoad(rawInput) {
   els.barFill.style.width = "5%";
   setStatus("starting…");
 
-  const maxFiles = Math.max(1, Number(els.maxFiles.value) || 1500);
-  const maxBytes = Math.max(1, Number(els.maxMb.value) || 12) * 1_000_000;
-  location.hash = `#/${target.owner}/${target.repo}${target.ref ? `@${target.ref}` : ""}`;
-  worker.postMessage({ type: "load", ...target, maxFiles, maxBytes });
+  // No cap by default: index the whole repository. That is also the engine's own
+  // default — walk() imposes no file-count limit unless a caller asks for one,
+  // and asking is what sets the `capped` flag. The URL keeps the escape hatch
+  // for a repository big enough to be worth bounding, without putting two
+  // number fields in front of everyone who just wants to try it.
+  const files = positiveNumber(hashParams().get("files"));
+  const mb = positiveNumber(hashParams().get("mb"));
+
+  setHash({ repo: `${target.owner}/${target.repo}${target.ref ? `@${target.ref}` : ""}` });
+  worker.postMessage({ type: "load", ...target, maxFiles: files, maxBytes: mb && mb * 1_000_000 });
 }
 
 const int = (value) => Number(value ?? 0).toLocaleString();
@@ -194,15 +222,17 @@ function onLoaded(summary) {
   els.consolePanel.hidden = false;
   els.cmd.focus();
 
-  const fromUrl = new URLSearchParams(location.hash.split("?")[1] ?? "").get("cmd");
+  const fromUrl = hashParams().get("cmd");
   if (fromUrl) {
     els.cmd.value = fromUrl;
     submitCommand();
   }
 }
 
-const tile = (value, label) => `<div><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span></div>`;
-const tag = (cls, label) => `<span class="tag ${cls}">${escapeHtml(label)}</span>`;
+// The overview page's stat tile: mono label above a large mono value.
+const tile = (value, label) =>
+  `<div class="stat"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-value">${escapeHtml(value)}</div></div>`;
+const tag = (cls, label) => `<span class="pill ${cls}">${escapeHtml(label)}</span>`;
 
 function onError(message) {
   els.loadBtn.disabled = false;
@@ -306,8 +336,7 @@ function submitCommand() {
   const [name, ...rest] = raw.split(/\s+/);
   const args = raw.slice(name.length).trim();
 
-  const hash = location.hash.split("?")[0];
-  location.hash = `${hash}?cmd=${encodeURIComponent(raw)}`;
+  setHash({ cmd: raw });
 
   els.outHead.hidden = false;
   els.outRan.textContent = `${name}${rest.length ? ` ${args}` : ""}`;
@@ -429,10 +458,10 @@ function renderModules(modules) {
 function renderDownload(entries, preview) {
   const wrapper = document.createElement("div");
   const buttons = document.createElement("div");
-  buttons.style.cssText = "display:flex;gap:10px;flex-wrap:wrap;padding:14px 18px;";
+  buttons.className = "downloads";
   for (const [filename, content] of entries) {
     const button = document.createElement("button");
-    button.className = "ghost";
+    button.className = "btn btn-ghost";
     button.textContent = `Download ${filename} (${(content.length / 1024).toFixed(0)} KB)`;
     button.addEventListener("click", () => download(filename, new Blob([content], { type: "application/json" })));
     buttons.append(button);
@@ -444,8 +473,8 @@ function renderDownload(entries, preview) {
 function renderBinary(result) {
   const wrapper = document.createElement("div");
   const button = document.createElement("button");
-  button.className = "ghost";
-  button.style.margin = "14px 18px";
+  button.className = "btn btn-ghost";
+  button.style.margin = "1rem 1.2rem";
   button.textContent = `Download ${result.filename} (${int(result.data.byteLength)} bytes)`;
   button.addEventListener("click", () => download(result.filename, new Blob([result.data], { type: "application/octet-stream" })));
   wrapper.append(button, empty("A SCIP protobuf index — validate it with the official `scip` CLI: scip stats index.scip"));
@@ -510,7 +539,7 @@ function escapeHtml(value) {
 // ---------------------------------------------------------------------------
 // Deep links: #/owner/repo@ref?cmd=search+foo replays a whole session.
 
-const hashTarget = location.hash.replace(/^#\//, "").split("?")[0];
+const hashTarget = hashRepo();
 if (hashTarget) {
   els.repo.value = hashTarget;
   startLoad(hashTarget);
