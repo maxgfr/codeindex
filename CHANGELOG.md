@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.25.2](https://github.com/maxgfr/codeindex/compare/v2.25.1...v2.25.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **playground:** stop a rate-limited load from freezing on a stale counter ([53ce749](https://github.com/maxgfr/codeindex/commit/53ce749219960965f5c28661bbc363ca4bee26bd))
+
 ## [2.25.1](https://github.com/maxgfr/codeindex/compare/v2.25.0...v2.25.1) (2026-08-01)
 
 
