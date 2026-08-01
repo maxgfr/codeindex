@@ -30,7 +30,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsup && node scripts/postbuild.mjs",
+    "build": "tsup && node scripts/postbuild.mjs && node scripts/build-browser.mjs",
     "grammars": "node scripts/fetch-grammars.mjs",
     "test": "node scripts/fetch-grammars.mjs --extended && vitest run",
     "test:watch": "node scripts/fetch-grammars.mjs --extended && vitest",
@@ -38,7 +38,7 @@
     "quality": "node scripts/fetch-grammars.mjs --extended && CODEINDEX_QUALITY_WRITE=1 vitest run tests/quality.test.ts",
     "quality:report": "node scripts/fetch-grammars.mjs --extended && CODEINDEX_QUALITY_REPORT=1 vitest run tests/quality.test.ts",
     "typecheck": "tsc --noEmit",
-    "check:build": "tsup && node scripts/postbuild.mjs && git diff --exit-code -- scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars",
+    "check:build": "tsup && node scripts/postbuild.mjs && node scripts/build-browser.mjs && git diff --exit-code -- scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars site/playground/engine.browser.mjs",
     "demo": "node scripts/cli.mjs graph --repo tests/fixtures/mini-repo",
     "release": "semantic-release",
     "grammars:extended": "node scripts/fetch-grammars.mjs --extended"
@@ -66,6 +66,7 @@
     "@tree-sitter-grammars/tree-sitter-lua": "0.4.1",
     "@tree-sitter-grammars/tree-sitter-zig": "1.1.2",
     "@types/node": "^20.14.0",
+    "esbuild": "0.27.7",
     "semantic-release": "^25.0.8",
     "tree-sitter-bash": "0.25.1",
     "tree-sitter-c": "^0.24.1",
