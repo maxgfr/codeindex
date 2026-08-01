@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>codeindex playground — index a public repo in your browser</title>
+<meta
+  name="description"
+  content="Paste a public GitHub repository and index it entirely in your browser: the real codeindex engine, the real tree-sitter grammars, the full command palette."
+/>
+<link
+  rel="icon"
+  href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23101720'/%3E%3Cpath d='M7 7 17 9 M17 9 10 18 M7 7 10 18' stroke='%233987e5' stroke-width='1.5' fill='none'/%3E%3Ccircle cx='7' cy='7' r='2.3' fill='%233987e5'/%3E%3Ccircle cx='17' cy='9' r='2.3' fill='%233987e5'/%3E%3Ccircle cx='10' cy='18' r='2.3' fill='%233987e5'/%3E%3C/svg%3E"
+/>
+<style>
+  /* Tokens: the same set site/index.html uses, so the two pages read as one. */
+  :root {
+    color-scheme: light;
+    --paper: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #f5f7f9;
+    --ink: #14181d;
+    --ink-2: #4b525c;
+    --muted: #616b77;
+    --grid: #d7dee5;
+    --border: rgba(20, 24, 29, 0.14);
+    --accent: #2a78d6;
+    --accent-strong: #184f95;
+    --accent-wash: rgba(42, 120, 214, 0.1);
+    --annotation: #a8460f;
+    --annotation-wash: rgba(168, 70, 15, 0.08);
+    --ok: #1f7a4d;
+    --ok-wash: rgba(31, 122, 77, 0.1);
+    --code-bg: #10151b;
+    --code-ink: #e7ecf2;
+    --btn-bg: var(--accent-strong);
+    --btn-ink: #ffffff;
+    --focus-ring: #a8460f;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --paper: #0f1216;
+      --surface: #171b20;
+      --surface-2: #1d2229;
+      --ink: #f2f4f6;
+      --ink-2: #c7ccd3;
+      --muted: #8b929b;
+      --grid: #262c33;
+      --border: rgba(255, 255, 255, 0.12);
+      --accent: #3987e5;
+      --accent-strong: #3987e5;
+      --accent-wash: rgba(57, 135, 229, 0.16);
+      --annotation: #e2884f;
+      --annotation-wash: rgba(226, 136, 79, 0.14);
+      --ok: #5cc08c;
+      --ok-wash: rgba(92, 192, 140, 0.14);
+      --btn-bg: var(--accent);
+      --btn-ink: #0f1216;
+      --focus-ring: #e2884f;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #0f1216;
+    --surface: #171b20;
+    --surface-2: #1d2229;
+    --ink: #f2f4f6;
+    --ink-2: #c7ccd3;
+    --muted: #8b929b;
+    --grid: #262c33;
+    --border: rgba(255, 255, 255, 0.12);
+    --accent: #3987e5;
+    --accent-strong: #3987e5;
+    --accent-wash: rgba(57, 135, 229, 0.16);
+    --annotation: #e2884f;
+    --annotation-wash: rgba(226, 136, 79, 0.14);
+    --ok: #5cc08c;
+    --ok-wash: rgba(92, 192, 140, 0.14);
+    --btn-bg: var(--accent);
+    --btn-ink: #0f1216;
+    --focus-ring: #e2884f;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 20px; }
+
+  header.top {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 20;
+  }
+  header.top .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
+  .brand { font-weight: 650; letter-spacing: -0.01em; text-decoration: none; color: var(--ink); }
+  .brand span { color: var(--muted); font-weight: 400; }
+  header.top nav { margin-left: auto; display: flex; align-items: center; gap: 14px; font-size: 14px; }
+  header.top nav a { color: var(--ink-2); text-decoration: none; }
+  header.top nav a:hover { color: var(--accent); }
+  .ghost {
+    background: transparent; border: 1px solid var(--border); color: var(--ink-2);
+    border-radius: 7px; padding: 5px 10px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin: 20px 0;
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+  }
+  .panel-head h2 { margin: 0; font-size: 14px; font-weight: 620; letter-spacing: 0.01em; }
+  .panel-body { padding: 18px; }
+
+  .intro { padding: 28px 0 4px; }
+  .intro h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.02em; }
+  .intro p { margin: 0; color: var(--ink-2); max-width: 68ch; }
+  .intro code { font-family: var(--mono); font-size: 0.9em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+
+  form.loader { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input[type="text"], input[type="number"], select {
+    font: inherit; color: var(--ink); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px;
+  }
+  input[type="text"]#repo { flex: 1 1 340px; font-family: var(--mono); font-size: 14px; }
+  button.primary {
+    font: inherit; font-weight: 560; cursor: pointer;
+    background: var(--btn-bg); color: var(--btn-ink);
+    border: 1px solid transparent; border-radius: 8px; padding: 9px 18px;
+  }
+  button.primary:disabled { opacity: 0.55; cursor: progress; }
+  .caps { display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); }
+  .caps input { width: 92px; }
+  .examples { margin-top: 12px; font-size: 13px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .examples button {
+    font: inherit; font-family: var(--mono); font-size: 12px; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+    padding: 3px 10px; color: var(--ink-2);
+  }
+  .examples button:hover { border-color: var(--accent); color: var(--accent); }
+
+  .status { margin-top: 14px; font-size: 13.5px; font-family: var(--mono); color: var(--ink-2); min-height: 20px; }
+  .status.error { color: var(--annotation); background: var(--annotation-wash); padding: 10px 12px; border-radius: 8px; }
+  .bar { height: 4px; border-radius: 999px; background: var(--grid); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.2s ease; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 1px; background: var(--border); border-radius: 10px; overflow: hidden; }
+  .stats div { background: var(--surface); padding: 12px 14px; }
+  .stats b { display: block; font-size: 20px; font-weight: 620; letter-spacing: -0.01em; }
+  .stats span { font-size: 12px; color: var(--muted); }
+  .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; font-size: 12.5px; }
+  .tag { border-radius: 999px; padding: 3px 10px; border: 1px solid var(--border); color: var(--ink-2); font-family: var(--mono); }
+  .tag.ok { color: var(--ok); background: var(--ok-wash); border-color: transparent; }
+  .tag.warn { color: var(--annotation); background: var(--annotation-wash); border-color: transparent; }
+
+  .console { position: relative; }
+  .prompt { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+  .prompt .chev { color: var(--accent); font-family: var(--mono); font-weight: 700; }
+  .prompt input {
+    flex: 1; font-family: var(--mono); font-size: 14.5px; background: transparent;
+    border: 0; color: var(--ink); padding: 4px 0;
+  }
+  .prompt input:focus { outline: none; }
+  .prompt kbd {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px;
+  }
+
+  .palette {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 15;
+    background: var(--surface); border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 12px 12px; max-height: 330px; overflow-y: auto;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.16);
+  }
+  .palette[hidden] { display: none; }
+  .palette li { list-style: none; }
+  .palette ul { margin: 0; padding: 6px; }
+  .palette button {
+    display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left;
+    font: inherit; background: transparent; border: 0; border-radius: 7px;
+    padding: 7px 11px; cursor: pointer; color: var(--ink);
+  }
+  .palette button:hover, .palette button[aria-selected="true"] { background: var(--accent-wash); }
+  .palette button[disabled] { cursor: not-allowed; opacity: 0.55; }
+  .palette .name { font-family: var(--mono); font-weight: 600; font-size: 13.5px; min-width: 116px; }
+  .palette .name em { font-style: normal; color: var(--muted); font-weight: 400; }
+  .palette .desc { font-size: 13px; color: var(--ink-2); }
+  .palette .why { font-size: 12px; color: var(--annotation); font-family: var(--mono); margin-left: auto; white-space: nowrap; }
+
+  .out { padding: 0; }
+  .out-head {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--muted);
+  }
+  .out-head .ran { font-family: var(--mono); color: var(--ink-2); }
+  .out-head .spacer { margin-left: auto; }
+  .out-body { padding: 4px 0 0; max-height: 62vh; overflow: auto; }
+  .empty { padding: 30px 18px; color: var(--muted); text-align: center; }
+
+  pre.code {
+    margin: 0; padding: 16px 18px; background: var(--code-bg); color: var(--code-ink);
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.6; overflow-x: auto;
+  }
+  table.rows { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.rows th {
+    text-align: left; font-weight: 600; font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em; padding: 8px 18px; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--surface);
+  }
+  table.rows td { padding: 7px 18px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  table.rows tr:last-child td { border-bottom: 0; }
+  table.rows td.path, table.rows td.sym { font-family: var(--mono); font-size: 12.5px; }
+  table.rows td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; white-space: nowrap; }
+  table.rows td.snippet { font-family: var(--mono); font-size: 12px; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; }
+  .kind { font-family: var(--mono); font-size: 11.5px; color: var(--accent); background: var(--accent-wash); border-radius: 4px; padding: 1px 6px; }
+
+  footer.bottom { border-top: 1px solid var(--border); margin-top: 32px; padding: 20px 0 44px; color: var(--muted); font-size: 13px; }
+  footer.bottom .wrap { display: flex; gap: 16px; flex-wrap: wrap; }
+  footer.bottom a { color: var(--ink-2); }
+
+  .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+  .note strong { color: var(--ink-2); font-weight: 600; }
+
+  @media (max-width: 620px) {
+    .intro h1 { font-size: 24px; }
+    .palette .name { min-width: 0; }
+    .palette button { flex-direction: column; gap: 2px; }
+    .palette .why { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../">codeindex <span>/ playground</span></a>
+    <nav>
+      <a href="../">Overview</a>
+      <a href="https://github.com/maxgfr/codeindex">GitHub</a>
+      <button class="ghost" id="theme-toggle" type="button" aria-live="polite">
+        <span aria-hidden="true" id="theme-icon">◐</span> <span id="theme-label">system</span>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="intro">
+    <h1>Index a repository in your browser</h1>
+    <p>
+      This runs the real engine — the same <code>walk</code>, the same tree-sitter grammars, the same link-graph —
+      compiled for the browser and executed in a Web Worker. Nothing is precomputed and no server is involved:
+      the manifest comes from jsDelivr, <code>walk()</code> decides which files are worth downloading, and the
+      index is built on your machine.
+    </p>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Repository</h2></div>
+    <div class="panel-body">
+      <form class="loader" id="load-form">
+        <label class="sr-only" for="repo">Public GitHub repository</label>
+        <input type="text" id="repo" name="repo" placeholder="owner/repo, owner/repo@branch, or a github.com URL" autocomplete="off" spellcheck="false" />
+        <div class="caps">
+          <label for="max-files">files</label>
+          <input type="number" id="max-files" value="1500" min="1" max="20000" step="100" />
+          <label for="max-mb">MB</label>
+          <input type="number" id="max-mb" value="12" min="1" max="200" step="1" />
+        </div>
+        <button class="primary" id="load-btn" type="submit">Index</button>
+      </form>
+
+      <div class="examples">
+        <span>Try:</span>
+        <button type="button" data-repo="gin-gonic/gin">gin-gonic/gin</button>
+        <button type="button" data-repo="pallets/flask">pallets/flask</button>
+        <button type="button" data-repo="t3-oss/create-t3-turbo">t3-oss/create-t3-turbo</button>
+        <button type="button" data-repo="BurntSushi/ripgrep">BurntSushi/ripgrep</button>
+      </div>
+
+      <div class="status" id="status" role="status"></div>
+      <div class="bar" id="bar" hidden><i></i></div>
+
+      <div id="summary" hidden>
+        <div class="stats" id="stats"></div>
+        <div class="tags" id="tags"></div>
+        <p class="note" id="cap-note"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel console" id="console-panel" hidden>
+    <div class="prompt">
+      <span class="chev" aria-hidden="true">&gt;</span>
+      <label class="sr-only" for="cmd">Command</label>
+      <input type="text" id="cmd" placeholder="search http client retry" autocomplete="off" spellcheck="false" />
+      <kbd>⌘K</kbd>
+    </div>
+    <div class="palette" id="palette" hidden><ul id="palette-list"></ul></div>
+    <div class="out">
+      <div class="out-head" id="out-head" hidden>
+        <span class="ran" id="out-ran"></span>
+        <span id="out-meta"></span>
+        <span class="spacer"></span>
+        <button class="ghost" id="copy-btn" type="button">Copy</button>
+        <button class="ghost" id="raw-btn" type="button" aria-pressed="false">Raw JSON</button>
+      </div>
+      <div class="out-body" id="out-body">
+        <p class="empty">Press <kbd>⌘K</kbd> for the command palette, or type a command.</p>
+      </div>
+    </div>
+  </section>
+
+  <p class="note">
+    <strong>What this page fetches.</strong> Unlike the rest of this site, the playground makes external requests: one
+    call to the GitHub trees API for the file list, one request per kept file from
+    <code>raw.githubusercontent.com</code>, and the tree-sitter grammars from this origin. Your caps are enforced
+    before anything downloads, and when they bind, the <code>capped</code> flag says so.
+  </p>
+  <p class="note">
+    <strong>If GitHub's rate limit bites.</strong> The trees API allows 60 unauthenticated calls per hour per IP —
+    one per repository loaded here. When it runs out the playground falls back to jsDelivr, which is unlimited but
+    snapshots a branch rather than following its head, so its file list can lag by a few commits. The summary always
+    names which one answered.
+  </p>
+
+</main>
+
+<footer class="bottom">
+  <div class="wrap">
+    <span id="env-line">engine —</span>
+    <a href="../">Overview</a>
+    <a href="https://github.com/maxgfr/codeindex">GitHub</a>
+    <a href="https://www.npmjs.com/package/@maxgfr/codeindex">npm</a>
+    <a href="https://github.com/maxgfr/codeindex/blob/main/LICENSE">MIT</a>
+  </div>
+</footer>
+
+<script type="module" src="./playground.js"></script>
+</body>
+</html>

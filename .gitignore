@@ -12,3 +12,9 @@ scripts/embed-asset/.venv/
 # never in git: `node scripts/fetch-grammars.mjs --extended` regenerates it, and
 # `codeindex grammars pull` is how a consumer gets it.
 scripts/grammars-extended/
+
+# The playground serves the committed grammars from its own directory. They are
+# COPIED there at deploy time (.github/workflows/site.yml) rather than committed
+# twice — 22 MB of wasm already lives in scripts/grammars/. Populate it locally
+# with: cp -R scripts/grammars site/playground/grammars
+site/playground/grammars/

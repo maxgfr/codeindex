@@ -7,6 +7,12 @@ import { defineConfig } from "tsup";
 //  - scripts/cli.mjs: the thin standalone CLI/MCP wrapper. The engine import
 //    stays EXTERNAL (resolved to the sibling engine.mjs at runtime) so the
 //    library is not duplicated inside the wrapper.
+//
+// A THIRD committed artifact, site/playground/engine.browser.mjs, is built by
+// scripts/build-browser.mjs rather than from here. It needs to intercept the
+// resolution of node builtins, and tsup registers its own node-protocol plugin
+// ahead of user plugins — first onResolve result wins, so the interception has
+// to own the plugin list outright. See that script for the full reasoning.
 export default defineConfig([
   {
     entry: { engine: "src/engine.ts" },

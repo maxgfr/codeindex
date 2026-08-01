@@ -1,14 +1,25 @@
 name: Site
 
-# One-page GitHub Pages site (site/index.html). Self-contained: zero external
-# requests at runtime, so the deploy step is a plain static-asset publish —
-# no build step, no dependency install. Triggers only on changes to the site
-# itself (or this workflow), plus manual dispatch.
+# GitHub Pages site. Still a plain static-asset publish — no build step and no
+# dependency install — because every generated artifact it serves is committed:
+# site/index.html is hand-written, and site/playground/engine.browser.mjs is
+# built by scripts/build-browser.mjs and held byte-reproducible by
+# `pnpm run check:build`.
+#
+# The one thing not committed is the tree-sitter wasm the playground loads. It
+# already lives in scripts/grammars/ (22 MB), so it is COPIED into the artifact
+# here rather than duplicated in git.
+#
+# Note on the site's "zero external requests" property: that holds for
+# site/index.html, which remains fully self-contained. site/playground/ is
+# deliberately different — it fetches repositories from jsDelivr at runtime,
+# which is the entire point of a playground.
 on:
   push:
     branches: [main]
     paths:
       - "site/**"
+      - "scripts/grammars/**"
       - ".github/workflows/site.yml"
   workflow_dispatch:
 
@@ -31,6 +42,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/configure-pages@v5
+
+      # The AST tier the playground demonstrates is these files. Without them it
+      # still works, but silently degrades to the regex tier — so a missing copy
+      # would quietly weaken the one thing the page exists to show.
+      - name: Stage the tree-sitter grammars for the playground
+        run: |
+          cp -R scripts/grammars site/playground/grammars
+          test -f site/playground/grammars/web-tree-sitter.wasm
+          test -f site/playground/engine.browser.mjs
 
       - uses: actions/upload-pages-artifact@v4
         with:
