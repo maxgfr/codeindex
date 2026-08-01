@@ -27,6 +27,9 @@
           "CHANGELOG.md",
           "scripts/engine.mjs",
           "scripts/engine.d.mts",
+          "scripts/engine.browser.mjs",
+          "scripts/engine.browser.d.mts",
+          "scripts/cli.mjs",
           "scripts/grammars/**"
         ],
         "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"

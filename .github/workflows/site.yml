@@ -1,14 +1,15 @@
 name: Site
 
 # GitHub Pages site. Still a plain static-asset publish — no build step and no
-# dependency install — because every generated artifact it serves is committed:
-# site/index.html is hand-written, and site/playground/engine.browser.mjs is
+# dependency install — because every generated artifact it serves is already
+# committed: site/index.html is hand-written, and scripts/engine.browser.mjs is
 # built by scripts/build-browser.mjs and held byte-reproducible by
 # `pnpm run check:build`.
 #
-# The one thing not committed is the tree-sitter wasm the playground loads. It
-# already lives in scripts/grammars/ (22 MB), so it is COPIED into the artifact
-# here rather than duplicated in git.
+# Two things the playground needs live outside site/ and are COPIED in here
+# rather than duplicated in git: the tree-sitter wasm (22 MB, in
+# scripts/grammars/) and the browser bundle itself, which lives in scripts/
+# because it is also published to npm as `@maxgfr/codeindex/browser`.
 #
 # Note on the site's "zero external requests" property: that holds for
 # site/index.html, which remains fully self-contained. site/playground/ is
@@ -43,14 +44,17 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      # The AST tier the playground demonstrates is these files. Without them it
-      # still works, but silently degrades to the regex tier — so a missing copy
-      # would quietly weaken the one thing the page exists to show.
-      - name: Stage the tree-sitter grammars for the playground
+      # The engine bundle, and the grammars that make the AST tier the page
+      # exists to demonstrate. Without the grammars the playground still works
+      # but silently degrades to regex, so a missing copy would quietly weaken
+      # exactly the thing being shown — hence the asserts.
+      - name: Stage the engine bundle and grammars for the playground
         run: |
+          cp scripts/engine.browser.mjs site/playground/engine.browser.mjs
           cp -R scripts/grammars site/playground/grammars
-          test -f site/playground/grammars/web-tree-sitter.wasm
           test -f site/playground/engine.browser.mjs
+          test -f site/playground/grammars/web-tree-sitter.wasm
+          test -f site/playground/grammars/typescript.wasm
 
       - uses: actions/upload-pages-artifact@v4
         with:

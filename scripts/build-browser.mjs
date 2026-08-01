@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// Builds site/playground/engine.browser.mjs — the SAME engine as
-// scripts/engine.mjs, resolved against browser shims instead of node builtins.
-// Committed like the other two artifacts and held byte-reproducible by
-// `pnpm run check:build`, so GitHub Pages stays a plain static publish with no
-// build step and no dependency install.
+// Builds scripts/engine.browser.mjs — the SAME engine as scripts/engine.mjs,
+// resolved against browser shims instead of node builtins. Committed like the
+// other artifacts and held byte-reproducible by `pnpm run check:build`.
+//
+// It lives in scripts/ rather than in the site because it is a PUBLISHED
+// artifact: npm consumers import it as `@maxgfr/codeindex/browser`. The Pages
+// deploy copies it into site/playground/ alongside the grammars, which keeps
+// GitHub Pages a plain static publish and keeps one generated file in git
+// instead of two copies of it.
 //
 // WHY NOT A THIRD tsup TARGET. This build's whole job is to intercept the
 // resolution of node builtins, and tsup registers its own node-protocol plugin
@@ -60,7 +64,7 @@ const browserShims = {
   },
 };
 
-const outfile = join(root, "site", "playground", "engine.browser.mjs");
+const outfile = join(root, "scripts", "engine.browser.mjs");
 
 await build({
   entryPoints: [join(root, "src", "browser", "entry.ts")],

@@ -70,46 +70,10 @@ async function fetchWasm(name) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-/**
- * Load exactly the grammars the walked extensions call for — grammarKeysForExts
- * is the engine's own answer to "which ones does this repo need", so a Go repo
- * pays 217 KB and never touches the 5.4 MB C# grammar.
- *
- * Returns the tier ACTUALLY achieved. A failed wasm fetch silently drops the
- * engine to the regex tier, and a playground that claims an AST tier it did not
- * get would be lying about the one thing it exists to demonstrate.
- */
-async function loadGrammars(exts) {
-  const keys = engine.grammarKeysForExts(exts);
-  if (!keys.length) return { tier: "regex", loaded: [], failed: [], note: "no language in this repo ships a grammar" };
-
-  try {
-    engine.mountRuntime(await fetchWasm(engine.RUNTIME_WASM));
-  } catch (error) {
-    return { tier: "regex", loaded: [], failed: keys, note: `tree-sitter runtime unavailable (${error.message})` };
-  }
-
-  await Promise.all(
-    keys.map(async (key) => {
-      try {
-        engine.mountGrammar(key, await fetchWasm(engine.grammarWasmName(key)));
-      } catch {
-        // Left unmounted: ensureGrammars records it as failed and that language
-        // uses the regex tier, which is the engine's normal degradation.
-      }
-    }),
-  );
-  await engine.ensureGrammars(keys);
-
-  const loaded = keys.filter((key) => engine.grammarReady(key)).sort();
-  const failed = keys.filter((key) => !engine.grammarReady(key)).sort();
-  return {
-    tier: loaded.length ? "ast" : "regex",
-    loaded,
-    failed,
-    note: failed.length ? `${failed.join(", ")} could not load; those languages use the regex tier` : "",
-  };
-}
+// Picking the minimal grammar set, mounting it in the right order and
+// reporting the achieved tier is `engine.loadGrammars` — shipped with the
+// browser build precisely because every consumer needs that same sequence. All
+// this module supplies is the transport above: same-origin, Cache-API-backed.
 
 // ---------------------------------------------------------------------------
 // Load
@@ -176,7 +140,7 @@ async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
   const pruned = engine.pruneUnfetched();
 
   progress("grammars", "loading tree-sitter grammars");
-  const grammars = await loadGrammars(new Set(selected.map((file) => file.ext)));
+  const grammars = await engine.loadGrammars(new Set(selected.map((file) => file.ext)), fetchWasm);
 
   progress("index", "walk → extract → resolve → graph");
   const startedAt = performance.now();

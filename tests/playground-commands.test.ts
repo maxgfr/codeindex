@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PALETTE = new URL("../site/playground/commands.js", import.meta.url).href;
 const REPORT = new URL("../site/playground/report.js", import.meta.url).href;
-const BUNDLE = new URL("../site/playground/engine.browser.mjs", import.meta.url).href;
+const BUNDLE = new URL("../scripts/engine.browser.mjs", import.meta.url).href;
 const GRAMMARS = join(REPO_ROOT, "scripts", "grammars");
 const MOUNT = "/repo";
 

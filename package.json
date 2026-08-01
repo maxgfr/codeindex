@@ -12,6 +12,11 @@
       "import": "./scripts/engine.mjs",
       "default": "./scripts/engine.mjs"
     },
+    "./browser": {
+      "types": "./scripts/engine.browser.d.mts",
+      "import": "./scripts/engine.browser.mjs",
+      "default": "./scripts/engine.browser.mjs"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -20,9 +25,12 @@
   "files": [
     "scripts/engine.mjs",
     "scripts/engine.d.mts",
+    "scripts/engine.browser.mjs",
+    "scripts/engine.browser.d.mts",
     "scripts/cli.mjs",
     "scripts/grammars",
     "src",
+    "docs/BROWSER.md",
     "docs/MIGRATION.md",
     "docs/SEMANTIC.md"
   ],
@@ -38,7 +46,7 @@
     "quality": "node scripts/fetch-grammars.mjs --extended && CODEINDEX_QUALITY_WRITE=1 vitest run tests/quality.test.ts",
     "quality:report": "node scripts/fetch-grammars.mjs --extended && CODEINDEX_QUALITY_REPORT=1 vitest run tests/quality.test.ts",
     "typecheck": "tsc --noEmit",
-    "check:build": "tsup && node scripts/postbuild.mjs && node scripts/build-browser.mjs && git diff --exit-code -- scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars site/playground/engine.browser.mjs",
+    "check:build": "tsup && node scripts/postbuild.mjs && node scripts/build-browser.mjs && git diff --exit-code -- scripts/engine.mjs scripts/engine.d.mts scripts/engine.browser.mjs scripts/engine.browser.d.mts scripts/cli.mjs scripts/grammars",
     "demo": "node scripts/cli.mjs graph --repo tests/fixtures/mini-repo",
     "release": "semantic-release",
     "grammars:extended": "node scripts/fetch-grammars.mjs --extended"

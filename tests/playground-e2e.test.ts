@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 
 const RUN = process.env.CODEINDEX_PLAYGROUND_E2E === "1";
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const BUNDLE = new URL("../site/playground/engine.browser.mjs", import.meta.url).href;
+const BUNDLE = new URL("../scripts/engine.browser.mjs", import.meta.url).href;
 const GRAMMARS = join(REPO_ROOT, "scripts", "grammars");
 const SOURCES = new URL("../site/playground/sources.js", import.meta.url).href;
 const MOUNT = "/repo";

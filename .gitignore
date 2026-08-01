@@ -13,8 +13,12 @@ scripts/embed-asset/.venv/
 # `codeindex grammars pull` is how a consumer gets it.
 scripts/grammars-extended/
 
-# The playground serves the committed grammars from its own directory. They are
-# COPIED there at deploy time (.github/workflows/site.yml) rather than committed
-# twice — 22 MB of wasm already lives in scripts/grammars/. Populate it locally
-# with: cp -R scripts/grammars site/playground/grammars
+# The playground serves the engine bundle and the grammars from its own
+# directory, but both live in scripts/ (the bundle is published to npm as
+# @maxgfr/codeindex/browser; the wasm is 22 MB). They are COPIED in at deploy
+# time by .github/workflows/site.yml rather than committed twice. To run the
+# playground locally:
+#   cp scripts/engine.browser.mjs site/playground/engine.browser.mjs
+#   cp -R scripts/grammars site/playground/grammars
 site/playground/grammars/
+site/playground/engine.browser.mjs

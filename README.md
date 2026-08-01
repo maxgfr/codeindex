@@ -1,6 +1,7 @@
 # codeindex
 
 [![Site](https://img.shields.io/badge/site-maxgfr.github.io%2Fcodeindex-2a78d6)](https://maxgfr.github.io/codeindex/)
+[![Playground](https://img.shields.io/badge/playground-index%20a%20repo%20in%20your%20browser-a8460f)](https://maxgfr.github.io/codeindex/playground/)
 
 Self-contained, deterministic **repo-indexing engine**: file walking, language
 detection, symbol/import extraction (tree-sitter AST with a regex fallback),
@@ -240,6 +241,32 @@ const scan = scanRepo("/path/to/repo");
 The CLI ships in the same package — see **Use as a CLI** below for the global
 install command. Consumer tools should still prefer vendoring: it keeps their
 own bundle single-file and pinned to an exact commit without an npm dependency.
+
+### In a browser
+
+`@maxgfr/codeindex/browser` is the same engine resolved against browser shims:
+an in-memory filesystem you populate, tree-sitter grammars fetched through your
+own transport, and everything spawn-based degrading along the fallbacks the
+engine already ships. Indexing a tree through it produces `graph.json` and
+`symbols.json` **byte-identical** to the Node build — asserted in CI over three
+fixtures, with the grammars asserted loaded so the comparison cannot pass
+vacuously.
+
+```ts
+import { mountFiles, walk, loadGrammars, buildIndexArtifacts, searchIndex } from "@maxgfr/codeindex/browser";
+```
+
+The VFS is mounted in two phases, and the split is the point: sizes alone
+satisfy `lstatSync`, so you mount paths and sizes with **no contents**, run the
+real `walk()`, and let its keep-list decide what is worth reading. Every ignore
+rule, the size cap and the `capped` flag stay the engine's.
+
+There is no `browser` export condition on the main entry, so no bundler will
+swap the builds behind your back — ask for `/browser` explicitly.
+
+Full guide: **[docs/BROWSER.md](docs/BROWSER.md)**. Working example: the
+[playground](https://maxgfr.github.io/codeindex/playground/), which indexes any
+public repository client-side ([source](site/playground/)).
 
 ## Use as a CLI
 

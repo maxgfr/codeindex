@@ -183,7 +183,7 @@ describe("readText decode paths through the VFS", () => {
   let browser: any;
 
   beforeAll(async () => {
-    browser = await import(/* @vite-ignore */ new URL("../site/playground/engine.browser.mjs", import.meta.url).href);
+    browser = await import(/* @vite-ignore */ new URL("../scripts/engine.browser.mjs", import.meta.url).href);
   });
 
   const cases: [string, Uint8Array, string][] = [

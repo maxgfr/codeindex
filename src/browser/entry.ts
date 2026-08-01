@@ -20,6 +20,10 @@ export * from "../engine.js";
 export { resetVfs, mountFiles, setFileBytes, hasFileBytes, residentBytes, pruneUnfetched } from "./fs.js";
 export type { MountedFile } from "./fs.js";
 
-// Grammar mounting. Mount the runtime and the keys grammarKeysForExts asks for,
-// THEN await ensureGrammars — it reads the wasm synchronously.
-export { mountRuntime, mountGrammar, grammarWasmName, GRAMMARS_DIR, RUNTIME_WASM } from "./grammars.js";
+// Grammars. `loadGrammars(exts, fetchWasm)` is the one call most consumers
+// want: it picks the minimal key set for the extensions present, fetches each
+// through your transport, mounts them in the right order, and reports the tier
+// actually achieved. The lower-level mounts are exported for anyone who needs
+// to drive it by hand.
+export { loadGrammars, mountRuntime, mountGrammar, grammarWasmName, GRAMMARS_DIR, RUNTIME_WASM } from "./grammars.js";
+export type { GrammarLoad } from "./grammars.js";

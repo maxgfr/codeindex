@@ -7,10 +7,10 @@
 // bytes on disk. Anything less would mean the playground demonstrates a fork
 // rather than the engine.
 //
-// It exercises the SHIPPED ARTIFACT — site/playground/engine.browser.mjs, the
-// committed file GitHub Pages serves — not a re-resolution of src/. That is the
-// point: the artifact is what users run. `pnpm run check:build` is what keeps
-// that artifact in sync with the source, and CI runs it.
+// It exercises the SHIPPED ARTIFACT — scripts/engine.browser.mjs, the committed
+// file published as `@maxgfr/codeindex/browser` and served by GitHub Pages —
+// not a re-resolution of src/. That is the point: the artifact is what users
+// run. `pnpm run check:build` keeps it in sync with the source, and CI runs it.
 //
 // The fixtures are copied to an OS temp dir first, outside any git work tree,
 // so `headCommit` returns undefined on the Node side exactly as it does in the
@@ -30,7 +30,7 @@ import { grammarKeysForExts } from "../src/ast/loader.js";
 import { searchIndex } from "../src/bm25.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
-const BUNDLE = new URL("../site/playground/engine.browser.mjs", import.meta.url).href;
+const BUNDLE = new URL("../scripts/engine.browser.mjs", import.meta.url).href;
 const GRAMMARS = join(REPO_ROOT, "scripts", "grammars");
 
 // The bundle is plain ESM with no Node-specific imports left in it, so Node can
