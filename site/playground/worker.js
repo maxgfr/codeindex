@@ -13,6 +13,7 @@ import * as engine from "./engine.browser.mjs";
 import { buildCommandTable, runCommand, describeCommands } from "./commands.js";
 import { summariseIndex } from "./report.js";
 import { resolveSource } from "./sources.js";
+import { pooled, fetchWithRetry } from "./fetch-pool.js";
 
 const MOUNT = "/repo";
 const GRAMMAR_CACHE = "codeindex-grammars-v1";
@@ -20,6 +21,10 @@ const GRAMMAR_CACHE = "codeindex-grammars-v1";
 // One request per file — no provider offers a bundle a browser can read (see
 // sources.js) — so this is the knob that decides wall-clock. 40 keeps an HTTP/2
 // pipeline full without looking like abuse; measured at 141 files in ~2.9 s.
+// At the other end of the scale that is ~2,900 requests for a repo the size of
+// socialgouv/code-du-travail-numerique, where a transient refusal is a
+// certainty rather than a risk — which is why the pool retries (fetch-pool.js)
+// instead of treating one 429 as the end of the load.
 const FETCH_CONCURRENCY = 40;
 
 const commands = buildCommandTable(engine, MOUNT);
@@ -43,16 +48,6 @@ self.onmessage = async (event) => {
     post({ type: "error", id: message.id, message: String(error?.message ?? error) });
   }
 };
-
-/** Run `task` over `items` with a bounded number of requests in flight. */
-async function pooled(items, limit, task) {
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (cursor < items.length) await task(items[cursor++]);
-    }),
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Grammars
@@ -97,8 +92,8 @@ async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
 
   // The one thing walk needs real bytes for. They are tiny and few.
   const ignores = source.files.filter((file) => file.path.endsWith("/.gitignore") || file.path === "/.gitignore");
-  await pooled(ignores, FETCH_CONCURRENCY, async (file) => {
-    const response = await fetch(source.contentUrl(file.path));
+  await pooled(ignores, FETCH_CONCURRENCY, async (file, signal) => {
+    const response = await fetchWithRetry(source.contentUrl(file.path), { signal });
     if (response.ok) engine.setFileBytes(`${MOUNT}${file.path}`, new Uint8Array(await response.arrayBuffer()));
   });
 
@@ -128,11 +123,20 @@ async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
   progress("fetch", `downloading ${selected.length.toLocaleString()} of ${source.files.length.toLocaleString()} files`);
   let done = 0;
   let unreadable = 0;
-  await pooled(selected, FETCH_CONCURRENCY, async (file) => {
-    const response = await fetch(source.contentUrl(`/${file.rel}`));
+  await pooled(selected, FETCH_CONCURRENCY, async (file, signal) => {
+    const response = await fetchWithRetry(source.contentUrl(`/${file.rel}`), { signal });
     if (response.ok) engine.setFileBytes(file.abs, new Uint8Array(await response.arrayBuffer()));
-    else if (response.status === 429) throw new Error("The CDN is rate-limiting this browser. Wait a minute, or lower the file cap.");
-    else unreadable++;
+    // Still refusing after the retries and their backoff: the limit is not a
+    // blip, and no amount of waiting inside this load will clear it. Failing
+    // here stops the whole pool (fetch-pool.js), which is what makes the error
+    // the LAST thing the page hears rather than one message buried under the
+    // progress its 39 sibling workers would otherwise keep sending.
+    else if (response.status === 429) {
+      throw new Error(
+        `GitHub is rate-limiting this browser after ${done.toLocaleString()} of ${selected.length.toLocaleString()} files. ` +
+          "Wait a few minutes, or index part of the repository by adding ?files=1500 to this page's URL.",
+      );
+    } else unreadable++;
     if (++done % 25 === 0 || done === selected.length) {
       progress("fetch", `${done.toLocaleString()} / ${selected.length.toLocaleString()} files`);
     }

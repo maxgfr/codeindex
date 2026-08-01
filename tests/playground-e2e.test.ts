@@ -25,6 +25,7 @@ const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const BUNDLE = new URL("../scripts/engine.browser.mjs", import.meta.url).href;
 const GRAMMARS = join(REPO_ROOT, "scripts", "grammars");
 const SOURCES = new URL("../site/playground/sources.js", import.meta.url).href;
+const POOL = new URL("../site/playground/fetch-pool.js", import.meta.url).href;
 const MOUNT = "/repo";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,15 +33,12 @@ type Any = any;
 
 let engine: Any;
 let resolveSource: Any;
-
-async function pooled(items: Any[], limit: number, task: (item: Any) => Promise<void>): Promise<void> {
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (cursor < items.length) await task(items[cursor++]);
-    }),
-  );
-}
+// The real pool and the real per-file retry, not a copy of them. A copy is what
+// this file used to carry, and a copy cannot notice when the shipped one starts
+// behaving differently — which is precisely the bug that froze the page on a
+// 2,900-file repository.
+let pooled: Any;
+let fetchWithRetry: Any;
 
 /** worker.js's loadRepo, minus the messaging — using the real source layer. */
 async function loadRepo(owner: string, repo: string, maxFiles: number, maxBytes: number) {
@@ -52,8 +50,8 @@ async function loadRepo(owner: string, repo: string, maxFiles: number, maxBytes:
   // PHASE A — sizes only, no bytes.
   engine.mountFiles(source.files.map((file: Any) => ({ path: `${MOUNT}${file.path}`, size: file.size })));
   const ignores = source.files.filter((file: Any) => file.path.endsWith("/.gitignore"));
-  await pooled(ignores, 20, async (file: Any) => {
-    const response = await fetch(source.contentUrl(file.path));
+  await pooled(ignores, 20, async (file: Any, signal: AbortSignal) => {
+    const response = await fetchWithRetry(source.contentUrl(file.path), { signal });
     if (response.ok) engine.setFileBytes(`${MOUNT}${file.path}`, new Uint8Array(await response.arrayBuffer()));
   });
 
@@ -75,8 +73,8 @@ async function loadRepo(owner: string, repo: string, maxFiles: number, maxBytes:
   // something the playground can fix, so what matters is that it degrades
   // honestly: the file is counted, pruned, and never indexed as empty.
   let unreadable = 0;
-  await pooled(selected, 40, async (file: Any) => {
-    const response = await fetch(source.contentUrl(`/${file.rel}`));
+  await pooled(selected, 40, async (file: Any, signal: AbortSignal) => {
+    const response = await fetchWithRetry(source.contentUrl(`/${file.rel}`), { signal });
     if (response.ok) engine.setFileBytes(file.abs, new Uint8Array(await response.arrayBuffer()));
     else unreadable++;
   });
@@ -94,6 +92,7 @@ describe.skipIf(!RUN)("playground against the live network", () => {
   beforeAll(async () => {
     engine = await import(/* @vite-ignore */ BUNDLE);
     ({ resolveSource } = await import(/* @vite-ignore */ SOURCES));
+    ({ pooled, fetchWithRetry } = await import(/* @vite-ignore */ POOL));
   });
 
   it("indexes gin-gonic/gin end to end, on the AST tier", async () => {

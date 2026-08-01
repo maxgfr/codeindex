@@ -36,6 +36,7 @@ let lastResult = null;
 let showRaw = false;
 let requestId = 0;
 let loaded = false;
+let failed = false;
 
 // ---------------------------------------------------------------------------
 // Theme — same three-state toggle as the overview page.
@@ -100,6 +101,13 @@ worker.onmessage = (event) => {
     els.envLine.textContent = `engine v${message.engineVersion} · running in your browser`;
     renderPalette("");
   } else if (message.type === "progress") {
+    // A load that has already reported an error is over, and its counter is
+    // frozen wherever it stopped. Showing that counter again would paint over
+    // the only explanation the user gets and leave the page looking busy
+    // forever — which is exactly how a rate-limited 2,900-file repo used to
+    // fail. The worker no longer emits progress past a failure (fetch-pool.js
+    // drains every worker before rethrowing); this makes it unable to matter.
+    if (failed) return;
     setStatus(message.detail);
     advanceBar(message.phase);
   } else if (message.type === "loaded") {
@@ -148,6 +156,7 @@ function startLoad(rawInput) {
   }
 
   loaded = false;
+  failed = false;
   lastResult = null;
   els.summary.hidden = true;
   els.consolePanel.hidden = true;
@@ -245,6 +254,7 @@ function onError(message) {
     els.outBody.innerHTML = `<p class="empty" style="color:var(--annotation)">${escapeHtml(message)}</p>`;
     return;
   }
+  failed = true;
   setStatus(message, true);
 }
 
