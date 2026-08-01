@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.24.1](https://github.com/maxgfr/codeindex/compare/v2.24.0...v2.24.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **site:** redeploy the playground when the engine bundle changes ([6f486fe](https://github.com/maxgfr/codeindex/commit/6f486fe50059008e34d7b3cf86bf89e97a4db991))
+
 # [2.24.0](https://github.com/maxgfr/codeindex/compare/v2.23.0...v2.24.0) (2026-08-01)
 
 
