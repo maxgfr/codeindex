@@ -392,6 +392,49 @@
   }
 
 
+  /* ============ Hero ============ */
+  .hero {
+    padding: 3.4rem 0 3rem;
+  }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 2.5rem;
+    align-items: start;
+  }
+  @media (max-width: 880px) {
+    .hero-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  .hero h1 {
+    font-size: clamp(2.4rem, 6vw, 3.6rem);
+    margin: 0 0 0.3em;
+  }
+  .hero .pitch {
+    font-size: clamp(1.05rem, 2.2vw, 1.25rem);
+    color: var(--ink-2);
+    max-width: 42em;
+    margin-bottom: 0.9em;
+  }
+  .hero .lede {
+    color: var(--ink-2);
+    max-width: 46em;
+  }
+  .hero-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    margin: 1.4rem 0 0.4rem;
+  }
+
+  .spec-box {
+    padding: 1.1rem 1.2rem 1.3rem;
+  }
+  .spec-box .eyebrow {
+    margin-bottom: 0.7em;
+  }
+
   /* ============ Section chrome ============ */
   section {
     padding: 3.4rem 0;
@@ -847,7 +890,6 @@
 <header class="site">
   <div class="wrap nav-row">
     <a class="brand" href="../">
-    <a class="brand" href="#top">
       <svg
         class="brand-mark"
         viewBox="0 0 24 24"
@@ -937,7 +979,7 @@
     <div class="wrap">
       <div id="summary" hidden>
         <div class="section-head">
-          <p class="eyebrow">Fig. 01 — this index, measured</p>
+          <p class="eyebrow">This index, measured</p>
           <h2 id="index-heading">What it built</h2>
         </div>
         <div class="stat-grid" id="stats"></div>
@@ -982,7 +1024,7 @@
   <section id="about" aria-labelledby="about-heading">
     <div class="wrap">
       <div class="section-head">
-        <p class="eyebrow">Fig. 02 — what this page does</p>
+        <p class="eyebrow">What this page does</p>
         <h2 id="about-heading">Where the bytes come from</h2>
         <p>
           Unlike the rest of this site, the playground makes external requests: one call to the

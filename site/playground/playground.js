@@ -280,7 +280,9 @@ function renderPalette(query) {
       const command = commands.find((c) => c.name === button.dataset.name);
       els.cmd.value = command.hint ? `${command.name} ` : command.name;
       els.cmd.focus();
-      if (command.hint) openPalette();
+      // A command that takes an argument leaves you in the input to type it,
+      // with the list dismissed; one that does not just runs.
+      if (command.hint) closePalette();
       else submitCommand();
     });
   }
@@ -298,7 +300,11 @@ els.cmd.addEventListener("focus", openPalette);
 els.cmd.addEventListener("blur", () => setTimeout(closePalette, 120));
 els.cmd.addEventListener("input", () => {
   selectedIndex = 0;
-  openPalette();
+  // The palette exists to pick a COMMAND. Once there is a space in the input
+  // the command is chosen and the rest is its argument, so the list gets out of
+  // the way instead of hovering over the results while you type a query.
+  if (els.cmd.value.includes(" ")) closePalette();
+  else openPalette();
 });
 
 els.cmd.addEventListener("keydown", (event) => {
@@ -333,6 +339,11 @@ document.addEventListener("keydown", (event) => {
 function submitCommand() {
   const raw = els.cmd.value.trim();
   if (!raw) return;
+  // Always, whatever route got here — Enter, or a click in the palette. The
+  // click path used to leave the list open on top of the result it had just
+  // produced, because preventDefault() on mousedown suppresses the blur that
+  // would otherwise have closed it.
+  closePalette();
   const [name, ...rest] = raw.split(/\s+/);
   const args = raw.slice(name.length).trim();
 
