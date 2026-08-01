@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.24.2](https://github.com/maxgfr/codeindex/compare/v2.24.1...v2.24.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **playground:** anchor the palette to the input, and stop claiming jsDelivr ([7c175e0](https://github.com/maxgfr/codeindex/commit/7c175e068c1631369bcd8f7b063e16d050b47644))
+* **site:** deploy the playground after a release, not one release later ([8fb0260](https://github.com/maxgfr/codeindex/commit/8fb0260266509ff807d2208af51a841c597629ed))
+
 ## [2.24.1](https://github.com/maxgfr/codeindex/compare/v2.24.0...v2.24.1) (2026-08-01)
 
 
