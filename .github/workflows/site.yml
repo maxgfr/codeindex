@@ -20,6 +20,11 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      # Both are copied into the artifact below, so both must be able to
+      # trigger a deploy. engine.browser.mjs especially: every release rebuilds
+      # it with the new ENGINE_VERSION, and without this path the playground
+      # would go on serving the previous engine while claiming to be current.
+      - "scripts/engine.browser.mjs"
       - "scripts/grammars/**"
       - ".github/workflows/site.yml"
   workflow_dispatch:
