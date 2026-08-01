@@ -19,6 +19,12 @@ export function summariseIndex(engine, loaded, counters) {
     ref: loaded.ref,
     engineVersion: engine.ENGINE_VERSION,
 
+    // How to name this index on screen. A repository has an owner and a ref
+    // worth showing; a folder off the user's disk has neither, and rendering
+    // it through the same template produced "/my-repo@".
+    label: loaded.owner ? `${loaded.owner}/${loaded.repo}@${loaded.ref}` : loaded.repo,
+    sourceLabel: { github: "the GitHub trees API", local: "the folder you opened", jsdelivr: "jsDelivr" }[counters.provider] ?? counters.provider,
+
     // What the manifest offered, what the walk kept, what actually got indexed.
     // Reported as three separate numbers because they are three different
     // things, and collapsing them is how a cap becomes invisible.

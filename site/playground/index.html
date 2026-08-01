@@ -598,6 +598,21 @@
     font-size: 0.82rem;
     color: var(--muted);
   }
+  .local-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    align-items: center;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .local-note {
+    flex: 1 1 18rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
 
   /* ============ Playground: progress ============ */
   .status {
@@ -941,8 +956,8 @@
       </p>
       <p class="lede">
         Nothing is precomputed and no server of ours is involved: the file list comes straight from
-        GitHub, <code>walk()</code> decides which of those files are worth downloading, and the index
-        is built on your machine.
+        GitHub — or from a folder you open, which never leaves this tab — <code>walk()</code> decides
+        which of those files are worth reading, and the index is built on your machine.
       </p>
 
       <div class="card spec-box" style="margin-top: 1.8rem">
@@ -967,6 +982,19 @@
           <button class="pill" type="button" data-repo="pallets/flask">pallets/flask</button>
           <button class="pill" type="button" data-repo="t3-oss/create-t3-turbo">t3-oss/create-t3-turbo</button>
           <button class="pill" type="button" data-repo="BurntSushi/ripgrep">BurntSushi/ripgrep</button>
+        </div>
+
+        <!-- Reading a folder off the user's own disk. Not an alternative input
+             so much as the one that cannot fail: the GitHub path needs one
+             request per file, and a few thousand of those trips a rate limit,
+             which is how a large monorepo used to die halfway through. -->
+        <div class="local-row">
+          <label class="sr-only" for="folder">Open a local folder</label>
+          <input class="sr-only" type="file" id="folder" webkitdirectory directory multiple />
+          <button class="btn btn-ghost" id="folder-btn" type="button">Open a local folder</button>
+          <span class="local-note">
+            Indexed in this tab — nothing is uploaded, and there is no server of ours to upload it to.
+          </span>
         </div>
 
         <div class="status" id="status" role="status"></div>
@@ -1036,7 +1064,11 @@
           never index anyway — ignored directories, lockfiles, binaries, anything over 1 MiB — and
           the <code>capped</code> flag reports that nothing else was. A very large repository means
           thousands of requests and a lot of memory in the worker; bound it with
-          <code>?files=500</code> or <code>?mb=5</code> on this page's URL.
+          <code>?files=500</code> or <code>?mb=5</code> on this page's URL. Enough requests in a row
+          will trip GitHub's rate limit whatever you do — opening the folder locally is the way out
+          that does not depend on the network at all, and it applies the very same
+          <code>walk()</code> rules, so <code>node_modules</code> is never read rather than read and
+          discarded.
         </p>
         <p>
           The trees API allows 60 unauthenticated calls per hour per IP — one per repository loaded

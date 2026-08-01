@@ -26,7 +26,7 @@ const POOL = new URL("../site/playground/fetch-pool.js", import.meta.url).href;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
-const { pooled, fetchWithRetry, RETRY_ATTEMPTS } = (await import(/* @vite-ignore */ POOL)) as Any;
+const { pooled, fetchWithRetry, failureBudget, RETRY_ATTEMPTS } = (await import(/* @vite-ignore */ POOL)) as Any;
 
 /** A response stand-in — only the fields the pool actually reads. */
 const reply = (status: number) => ({ ok: status >= 200 && status < 300, status });
@@ -179,6 +179,32 @@ describe("fetching one file, with the network misbehaving", () => {
     });
     expect(response.status).toBe(429);
     expect(calls).toBe(RETRY_ATTEMPTS);
+  });
+
+  // Retries make ONE file surviving a bad network very likely; they cannot make
+  // it certain. Over 2,913 files even a 1-in-25,000 chance of losing four
+  // throws in a row comes up often enough to matter, and losing the whole index
+  // because file 2,912 was unlucky is not a reasonable trade — the engine
+  // already drops files it could not read (that is what a 404 does) and the
+  // page already reports how many. A refusal that is SYSTEMIC is a different
+  // claim, and still has to fail loudly.
+  it("tolerates a few refusals and then gives up", () => {
+    const budget = failureBudget(1000); // 2% of 1000
+    expect(budget.limit).toBe(20);
+    for (let i = 0; i < 20; i++) expect(budget.spend()).toBe(true);
+    expect(budget.spend()).toBe(false);
+  });
+
+  it("keeps a floor so a small repository is not held to a fraction of nothing", () => {
+    const budget = failureBudget(12); // 2% would be 1
+    expect(budget.limit).toBe(10);
+  });
+
+  it("reports what it actually spent", () => {
+    const budget = failureBudget(1000);
+    budget.spend();
+    budget.spend();
+    expect(budget.spent).toBe(2);
   });
 
   it("stops retrying the moment the load is aborted", async () => {

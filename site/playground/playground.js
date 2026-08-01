@@ -3,6 +3,7 @@
 // which is why the palette stays responsive while a repo is being pulled.
 
 import { parseRepoInput } from "./sources.js";
+import { toManifest } from "./local-folder.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,6 +19,8 @@ const els = {
   tags: $("tags"),
   capNote: $("cap-note"),
   consolePanel: $("console-panel"),
+  folder: $("folder"),
+  folderBtn: $("folder-btn"),
   cmd: $("cmd"),
   palette: $("palette"),
   paletteList: $("palette-list"),
@@ -148,13 +151,19 @@ for (const button of document.querySelectorAll(".examples button")) {
   });
 }
 
-function startLoad(rawInput) {
-  const target = parseRepoInput(rawInput);
-  if (!target) {
-    setStatus("Give a repository as owner/repo, owner/repo@branch, or a github.com URL.", true);
-    return;
-  }
+// Opening a folder. `webkitdirectory` is the standard folder picker: the
+// browser hands back every file under it, already carrying a size, and the
+// files never leave the page — they are passed to the worker as File objects
+// (structured-cloneable) and read there.
+els.folderBtn.addEventListener("click", () => els.folder.click());
+els.folder.addEventListener("change", () => {
+  if (els.folder.files.length) startLocalLoad(els.folder.files);
+  // Reset so picking the SAME folder twice fires `change` the second time too.
+  els.folder.value = "";
+});
 
+/** Everything a load resets, whichever source it came from. */
+function beginLoad() {
   loaded = false;
   failed = false;
   lastResult = null;
@@ -165,17 +174,47 @@ function startLoad(rawInput) {
   els.bar.hidden = false;
   els.barFill.style.width = "5%";
   setStatus("starting…");
+}
 
-  // No cap by default: index the whole repository. That is also the engine's own
-  // default — walk() imposes no file-count limit unless a caller asks for one,
-  // and asking is what sets the `capped` flag. The URL keeps the escape hatch
-  // for a repository big enough to be worth bounding, without putting two
-  // number fields in front of everyone who just wants to try it.
-  const files = positiveNumber(hashParams().get("files"));
-  const mb = positiveNumber(hashParams().get("mb"));
+// No cap by default: index the whole repository. That is also the engine's own
+// default — walk() imposes no file-count limit unless a caller asks for one,
+// and asking is what sets the `capped` flag. The URL keeps the escape hatch
+// for a repository big enough to be worth bounding, without putting two
+// number fields in front of everyone who just wants to try it.
+const caps = () => ({
+  maxFiles: positiveNumber(hashParams().get("files")),
+  maxBytes: positiveNumber(hashParams().get("mb")) && positiveNumber(hashParams().get("mb")) * 1_000_000,
+});
 
+function startLoad(rawInput) {
+  const target = parseRepoInput(rawInput);
+  if (!target) {
+    setStatus("Give a repository as owner/repo, owner/repo@branch, or a github.com URL.", true);
+    return;
+  }
+
+  beginLoad();
   setHash({ repo: `${target.owner}/${target.repo}${target.ref ? `@${target.ref}` : ""}` });
-  worker.postMessage({ type: "load", ...target, maxFiles: files, maxBytes: mb && mb * 1_000_000 });
+  worker.postMessage({ type: "load", ...target, ...caps() });
+}
+
+function startLocalLoad(fileList) {
+  let manifest;
+  try {
+    manifest = toManifest(fileList);
+  } catch (error) {
+    setStatus(String(error?.message ?? error), true);
+    return;
+  }
+
+  beginLoad();
+  els.repo.value = "";
+  // A folder on this machine is not something a link can reopen, so the repo
+  // slug comes out of the URL rather than being replaced by a name that would
+  // send a reload off to fetch a GitHub repository that does not exist. The
+  // cmd param stays: replaying a command against a freshly opened folder works.
+  setHash({ repo: "" });
+  worker.postMessage({ type: "loadLocal", name: manifest.name, files: manifest.files, ...caps() });
 }
 
 const int = (value) => Number(value ?? 0).toLocaleString();
@@ -184,7 +223,7 @@ function onLoaded(summary) {
   loaded = true;
   els.loadBtn.disabled = false;
   els.barFill.style.width = "100%";
-  setStatus(`${summary.owner}/${summary.repo}@${summary.ref} indexed in ${int(summary.elapsedMs)} ms`);
+  setStatus(`${summary.label} indexed in ${int(summary.elapsedMs)} ms`);
   setTimeout(() => {
     els.bar.hidden = true;
   }, 700);
@@ -212,7 +251,7 @@ function onLoaded(summary) {
   ].join("");
 
   const parts = [
-    `File list via ${summary.provider === "github" ? "the GitHub trees API" : summary.provider}.`,
+    `File list via ${summary.sourceLabel}.`,
     `Walked ${int(summary.walkedFiles)} of ${int(summary.manifestFiles)} listed files; ${int(summary.excluded)} excluded by the engine's own rules (ignores, lockfiles, binaries, the 1 MiB cap).`,
   ];
   if (summary.providerNote) parts.push(summary.providerNote);

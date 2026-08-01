@@ -98,3 +98,32 @@ export async function fetchWithRetry(url, { fetchImpl = fetch, signal, attempts 
 }
 
 const retryable = (status) => status === 429 || status >= 500;
+
+/**
+ * How many files may be given up on before the load itself is given up on.
+ *
+ * The retries above make one file surviving a rough network very likely, not
+ * certain — and "very likely" applied a few thousand times is a load that dies
+ * because one file was unlucky. Files that cannot be read are already an
+ * understood outcome here: a provider that lists what it does not serve
+ * produces them in bulk, they are pruned rather than indexed empty, and the
+ * page reports the count. So a handful more is absorbed the same way.
+ *
+ * What must NOT be absorbed is a transport that has stopped answering
+ * altogether, because then the index would silently be missing most of the
+ * repository. Hence a budget rather than a blanket tolerance: proportional so a
+ * big repository is not held to a small repository's allowance, with a floor so
+ * a small one still gets a few.
+ */
+export function failureBudget(total, { fraction = 0.02, floor = 10 } = {}) {
+  const limit = Math.max(floor, Math.ceil(total * fraction));
+  let spent = 0;
+  return {
+    limit,
+    get spent() {
+      return spent;
+    },
+    /** Record one refusal. False once the budget is exhausted. */
+    spend: () => ++spent <= limit,
+  };
+}

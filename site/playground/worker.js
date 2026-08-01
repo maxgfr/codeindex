@@ -13,7 +13,7 @@ import * as engine from "./engine.browser.mjs";
 import { buildCommandTable, runCommand, describeCommands } from "./commands.js";
 import { summariseIndex } from "./report.js";
 import { resolveSource } from "./sources.js";
-import { pooled, fetchWithRetry } from "./fetch-pool.js";
+import { pooled, fetchWithRetry, failureBudget } from "./fetch-pool.js";
 
 const MOUNT = "/repo";
 const GRAMMAR_CACHE = "codeindex-grammars-v1";
@@ -40,6 +40,8 @@ self.onmessage = async (event) => {
   try {
     if (message.type === "load") {
       post({ type: "loaded", summary: await loadRepo(message) });
+    } else if (message.type === "loadLocal") {
+      post({ type: "loaded", summary: await loadLocal(message) });
     } else if (message.type === "run") {
       const result = runCommand(commands, session, message.command, message.args);
       post({ type: "result", id: message.id, command: message.command, args: message.args, result });
@@ -73,32 +75,41 @@ async function fetchWasm(name) {
 // ---------------------------------------------------------------------------
 // Load
 
-async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
-  session = null;
-  engine.resetVfs();
+/**
+ * A transport refusing to hand over a file, as opposed to not having it.
+ * Carries only the cause; indexManifest adds how far the load had got, which is
+ * the part that tells the user whether they hit a limit or a broken repo.
+ */
+class TransportError extends Error {}
 
-  progress("manifest", `reading ${owner}/${repo}${ref ? `@${ref}` : ""}`);
-  const source = await resolveSource(owner, repo, ref);
-
+/**
+ * PHASE A → PHASE B → index. Shared by both sources, because they differ in
+ * exactly one thing: where a file's bytes come from.
+ *
+ * @param manifest  [{ path, size }] — paths rooted at "/", sizes REQUIRED
+ * @param readBytes (path, signal) => Uint8Array | null — null means "listed but
+ *                  not served", which is counted as unreadable rather than
+ *                  indexed as an empty file
+ */
+async function indexManifest({ manifest, readBytes, maxFiles, maxBytes, verb, escapeHatch, session: identity, provider, providerNote }) {
   // PHASE A — mount the manifest with sizes but NO contents.
   //
-  // This is what makes "only download what the engine would index" true rather
+  // This is what makes "only read what the engine would index" true rather
   // than aspirational. lstatSync is satisfied by size alone, so the real walk()
   // runs here: gitignore chains, IGNORE_DIRS, LOCKFILES, BINARY_EXT, the 1 MiB
   // per-file cap. Not one of those rules is reimplemented in the playground,
   // and the `capped` flag the UI shows is the engine's own.
-  progress("manifest", `${source.files.length.toLocaleString()} files listed via ${source.provider}`);
-  engine.mountFiles(source.files.map((file) => ({ path: `${MOUNT}${file.path}`, size: file.size })));
+  engine.mountFiles(manifest.map((file) => ({ path: `${MOUNT}${file.path}`, size: file.size })));
 
   // The one thing walk needs real bytes for. They are tiny and few.
-  const ignores = source.files.filter((file) => file.path.endsWith("/.gitignore") || file.path === "/.gitignore");
+  const ignores = manifest.filter((file) => file.path.endsWith("/.gitignore") || file.path === "/.gitignore");
   await pooled(ignores, FETCH_CONCURRENCY, async (file, signal) => {
-    const response = await fetchWithRetry(source.contentUrl(file.path), { signal });
-    if (response.ok) engine.setFileBytes(`${MOUNT}${file.path}`, new Uint8Array(await response.arrayBuffer()));
+    const bytes = await readBytes(file.path, signal);
+    if (bytes) engine.setFileBytes(`${MOUNT}${file.path}`, bytes);
   });
 
   const planned = engine.walk(MOUNT, { maxFiles });
-  if (!planned.files.length) throw new Error("The walk kept no files — this ref may contain no indexable source.");
+  if (!planned.files.length) throw new Error("The walk kept no files — this source may contain no indexable code.");
 
   // An OPTIONAL byte budget on top of the optional file cap. Neither is set by
   // default — the whole repository is indexed, which is also walk()'s own
@@ -119,28 +130,40 @@ async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
     }
   }
 
-  // PHASE B — fetch only what the walk kept.
-  progress("fetch", `downloading ${selected.length.toLocaleString()} of ${source.files.length.toLocaleString()} files`);
+  // PHASE B — read only what the walk kept.
+  progress("fetch", `${verb} ${selected.length.toLocaleString()} of ${manifest.length.toLocaleString()} files`);
   let done = 0;
   let unreadable = 0;
-  await pooled(selected, FETCH_CONCURRENCY, async (file, signal) => {
-    const response = await fetchWithRetry(source.contentUrl(`/${file.rel}`), { signal });
-    if (response.ok) engine.setFileBytes(file.abs, new Uint8Array(await response.arrayBuffer()));
-    // Still refusing after the retries and their backoff: the limit is not a
-    // blip, and no amount of waiting inside this load will clear it. Failing
-    // here stops the whole pool (fetch-pool.js), which is what makes the error
-    // the LAST thing the page hears rather than one message buried under the
-    // progress its 39 sibling workers would otherwise keep sending.
-    else if (response.status === 429) {
-      throw new Error(
-        `GitHub is rate-limiting this browser after ${done.toLocaleString()} of ${selected.length.toLocaleString()} files. ` +
-          "Wait a few minutes, or index part of the repository by adding ?files=1500 to this page's URL.",
-      );
-    } else unreadable++;
-    if (++done % 25 === 0 || done === selected.length) {
-      progress("fetch", `${done.toLocaleString()} / ${selected.length.toLocaleString()} files`);
+  const refusals = failureBudget(selected.length);
+
+  try {
+    await pooled(selected, FETCH_CONCURRENCY, async (file, signal) => {
+      let bytes;
+      try {
+        bytes = await readBytes(`/${file.rel}`, signal);
+      } catch (error) {
+        // A refusal this file could not get past. Within budget it is dropped
+        // like any other unreadable file — the alternative is losing an
+        // otherwise complete index because one request in a few thousand was
+        // unlucky. Past the budget the transport, not the file, is the problem.
+        if (signal.aborted || !(error instanceof TransportError) || !refusals.spend()) throw error;
+        bytes = null;
+      }
+      if (bytes) engine.setFileBytes(file.abs, bytes);
+      else unreadable++;
+      if (++done % 25 === 0 || done === selected.length) {
+        progress("fetch", `${done.toLocaleString()} / ${selected.length.toLocaleString()} files`);
+      }
+    });
+  } catch (error) {
+    // Every way a large load dies mid-stream reads the same to the user — the
+    // files stopped arriving — and they share the same ways out, so they are
+    // said in the same words rather than surfacing a bare "Failed to fetch".
+    if (error instanceof TransportError) {
+      throw new Error(`${error.message} after ${done.toLocaleString()} of ${selected.length.toLocaleString()} files. ${escapeHatch}`);
     }
-  });
+    throw error;
+  }
 
   // Whatever the budget excluded is still mounted as a size-only entry. Drop it
   // now, so the scan's own walk sees exactly what was downloaded and no phantom
@@ -155,10 +178,10 @@ async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
   const artifacts = engine.buildIndexArtifacts(MOUNT);
   const elapsedMs = Math.round(performance.now() - startedAt);
 
-  session = { owner, repo, ref: source.ref, artifacts, grammars };
+  session = { ...identity, artifacts, grammars };
 
   return summariseIndex(engine, session, {
-    manifestFiles: source.files.length,
+    manifestFiles: manifest.length,
     walkedFiles: planned.files.length,
     selected: selected.length,
     excluded: planned.excluded,
@@ -167,8 +190,83 @@ async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
     capped: planned.capped || cappedByBytes,
     cappedBy: planned.capped ? "file cap" : cappedByBytes ? "byte budget" : "",
     elapsedMs,
+    provider,
+    providerNote,
+  });
+}
+
+// One request per file against a CDN that rate-limits, so this is the path with
+// failure modes: retries live in fetch-pool.js, and what survives them stops
+// the whole pool rather than letting a dead load keep reporting progress.
+async function loadRepo({ owner, repo, ref, maxFiles, maxBytes }) {
+  session = null;
+  engine.resetVfs();
+
+  progress("manifest", `reading ${owner}/${repo}${ref ? `@${ref}` : ""}`);
+  const source = await resolveSource(owner, repo, ref);
+  progress("manifest", `${source.files.length.toLocaleString()} files listed via ${source.provider}`);
+
+  const readBytes = async (path, signal) => {
+    let response;
+    try {
+      response = await fetchWithRetry(source.contentUrl(path), { signal });
+    } catch (error) {
+      // The pool is already shutting this load down over an earlier failure —
+      // that first error is the one worth reporting, not this abort.
+      if (signal.aborted) throw error;
+      // Otherwise the request did not merely fail, it never completed: after
+      // the retries and their backoff the connection is still being refused.
+      // A browser reports that as a bare "Failed to fetch", which on its own
+      // tells the user nothing about what to do next.
+      throw new TransportError("The connection to GitHub was refused");
+    }
+    if (response.ok) return new Uint8Array(await response.arrayBuffer());
+    // Still refusing after the retries and their backoff: the limit is not a
+    // blip, and no amount of waiting inside this load will clear it.
+    if (response.status === 429) throw new TransportError("GitHub is rate-limiting this browser");
+    return null; // listed by the provider, not served by it
+  };
+
+  return indexManifest({
+    manifest: source.files,
+    readBytes,
+    maxFiles,
+    maxBytes,
+    verb: "downloading",
+    escapeHatch:
+      "A repository this size needs one request per file, and a few thousand in a row is enough to trip a limit. " +
+      "Wait a few minutes, index part of it by adding ?files=1500 to this page's URL, or use “Open a local folder” — that reads from disk and never touches the network.",
+    session: { owner, repo, ref: source.ref },
     provider: source.provider,
     providerNote: source.note,
+  });
+}
+
+// The same pipeline with the network taken out. A File already knows its size,
+// so PHASE A costs nothing and walk() still picks the keep-list from sizes
+// alone — node_modules is never read rather than read and thrown away.
+async function loadLocal({ name, files, maxFiles, maxBytes }) {
+  session = null;
+  engine.resetVfs();
+
+  progress("manifest", `${files.length.toLocaleString()} files in ${name}`);
+
+  const byPath = new Map(files.map((file) => [file.path, file.file]));
+  const readBytes = async (path) => {
+    const file = byPath.get(path);
+    return file ? new Uint8Array(await file.arrayBuffer()) : null;
+  };
+
+  return indexManifest({
+    manifest: files,
+    readBytes,
+    maxFiles,
+    maxBytes,
+    verb: "reading",
+    escapeHatch: "Try opening the folder again.",
+    session: { owner: "", repo: name, ref: "" },
+    provider: "local",
+    providerNote: "",
   });
 }
 
