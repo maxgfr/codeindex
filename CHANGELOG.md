@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.24.0](https://github.com/maxgfr/codeindex/compare/v2.23.0...v2.24.0) (2026-08-01)
+
+
+### Features
+
+* **browser:** publish the browser build as @maxgfr/codeindex/browser ([5a9b8fb](https://github.com/maxgfr/codeindex/commit/5a9b8fb2f7b6a7efa9f07db49f9705b80b0be2c7))
+
 # [2.23.0](https://github.com/maxgfr/codeindex/compare/v2.22.1...v2.23.0) (2026-08-01)
 
 
