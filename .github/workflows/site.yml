@@ -27,6 +27,17 @@ on:
       - "scripts/engine.browser.mjs"
       - "scripts/grammars/**"
       - ".github/workflows/site.yml"
+
+  # A release rebuilds the engine bundle with the new ENGINE_VERSION and commits
+  # it — but as `chore(release): <v> [skip ci]`, and [skip ci] suppresses push
+  # triggers entirely, paths or no paths. Without this the playground would sit
+  # one release behind forever, serving an old engine under a version string it
+  # reads from that same old engine (so nothing would look wrong). Chaining off
+  # the Release workflow is what actually closes it.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
   workflow_dispatch:
 
 permissions:
@@ -41,11 +52,20 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # A failed or cancelled release must not publish. Push and manual dispatch
+    # carry no workflow_run payload, so they fall through the first clause.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Load-bearing for the workflow_run path. There, github.sha is the
+          # commit that TRIGGERED the release — i.e. the one before the version
+          # bump — so the default checkout would deploy the very bundle this
+          # trigger exists to replace. main's head is what we always want here.
+          ref: main
 
       - uses: actions/configure-pages@v5
 
