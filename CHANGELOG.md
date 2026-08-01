@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.23.0](https://github.com/maxgfr/codeindex/compare/v2.22.1...v2.23.0) (2026-08-01)
+
+
+### Features
+
+* **playground:** run the engine in the browser, on a public repo ([#13](https://github.com/maxgfr/codeindex/issues/13)) ([6cd2dec](https://github.com/maxgfr/codeindex/commit/6cd2dec0ef249df28f982b47000d95497c0c8179))
+
 ## [2.22.1](https://github.com/maxgfr/codeindex/compare/v2.22.0...v2.22.1) (2026-07-31)
 
 
