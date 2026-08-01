@@ -74,7 +74,7 @@
     "@tree-sitter-grammars/tree-sitter-lua": "0.4.1",
     "@tree-sitter-grammars/tree-sitter-zig": "1.1.2",
     "@types/node": "^20.14.0",
-    "esbuild": "0.27.7",
+    "esbuild": "0.28.1",
     "semantic-release": "^25.0.8",
     "tree-sitter-bash": "0.25.1",
     "tree-sitter-c": "^0.24.1",
