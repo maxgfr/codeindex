@@ -380,7 +380,7 @@ function renderHits(hits) {
     hits.map((hit) => [
       [escapeHtml(hit.file) + (hit.line ? `<span class="num">:${hit.line}</span>` : ""), "path"],
       [hit.score, "num"],
-      [(hit.matchedFields ?? hit.matchedTerms ?? []).map((f) => `<span class="kind">${escapeHtml(f)}</span>`).join(" "), ""],
+      [(hit.matchedFields ?? hit.matchedTerms ?? []).map((f) => `<span class="kind">${escapeHtml(f)}</span>`).join(""), "fields"],
       [escapeHtml((hit.topSymbols ?? []).join(", ")), "sym"],
     ]),
   );
