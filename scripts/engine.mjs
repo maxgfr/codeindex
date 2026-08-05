@@ -922,7 +922,18 @@ var init_common = __esm({
       ".scss": "scss",
       ".vue": "vue",
       ".svelte": "svelte",
-      ".astro": "astro"
+      ".astro": "astro",
+      // Extended-tier AST languages (src/ast/loader.ts EXT_GRAMMAR). Without an
+      // entry here `extToLang` answered "other", which `classify` reads as non-code
+      // — so a real scan never called extractCode for them and they extracted
+      // nothing, while the quality harness (which calls extractCode directly)
+      // published a perfect score. The grammar still arrives via `grammars pull`;
+      // absent it these fall back to the regex tier like any other language.
+      ".zig": "zig",
+      ".hcl": "hcl",
+      ".tf": "terraform",
+      ".tfvars": "terraform",
+      ".sol": "solidity"
     };
     REEXPORT_EXTS = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
     MAX_REEXPORTS = 400;
@@ -13713,7 +13724,16 @@ var CODE_EXTS = /* @__PURE__ */ new Set([
   ".sh",
   ".bash",
   ".zig",
-  ".elm"
+  ".elm",
+  ".hcl",
+  ".tf",
+  ".tfvars",
+  ".sol",
+  ".hh",
+  ".sc",
+  ".pyi",
+  ".rake",
+  ".cxx"
 ]);
 var STYLE_EXTS = /* @__PURE__ */ new Set([".css", ".scss", ".sass", ".less", ".styl", ".pcss"]);
 var DOC_EXTS = /* @__PURE__ */ new Set([".md", ".mdx", ".rst", ".adoc", ".txt"]);

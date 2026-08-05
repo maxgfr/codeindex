@@ -20,6 +20,7 @@ const CODE_EXTS = new Set([
   ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro",
   ".py", ".rb", ".go", ".rs", ".java", ".kt", ".kts", ".php", ".c", ".cc", ".cpp", ".h", ".hpp",
   ".cs", ".swift", ".scala", ".clj", ".ex", ".exs", ".dart", ".lua", ".sh", ".bash", ".zig", ".elm",
+  ".hcl", ".tf", ".tfvars", ".sol", ".hh", ".sc", ".pyi", ".rake", ".cxx",
 ]);
 const STYLE_EXTS = new Set([".css", ".scss", ".sass", ".less", ".styl", ".pcss"]);
 const DOC_EXTS = new Set([".md", ".mdx", ".rst", ".adoc", ".txt"]);

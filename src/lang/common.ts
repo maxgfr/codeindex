@@ -61,6 +61,13 @@ const EXT_LANG: Record<string, string> = {
   ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".ini": "ini",
   ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue", ".svelte": "svelte",
   ".astro": "astro",
+  // Extended-tier AST languages (src/ast/loader.ts EXT_GRAMMAR). Without an
+  // entry here `extToLang` answered "other", which `classify` reads as non-code
+  // — so a real scan never called extractCode for them and they extracted
+  // nothing, while the quality harness (which calls extractCode directly)
+  // published a perfect score. The grammar still arrives via `grammars pull`;
+  // absent it these fall back to the regex tier like any other language.
+  ".zig": "zig", ".hcl": "hcl", ".tf": "terraform", ".tfvars": "terraform", ".sol": "solidity",
 };
 
 export function extToLang(ext: string): string {
