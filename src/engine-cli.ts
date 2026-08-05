@@ -30,6 +30,7 @@ import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { findDeadCode } from "./deadcode.js";
+import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { impactOf, neighborsOf } from "./traverse.js";
@@ -90,12 +91,21 @@ Commands:
                                  asset into the shared cache (sha256-verified,
                                  atomic). Override the source with
                                  CODEINDEX_GRAMMARS_URL
-  rules       Architecture rules (forbidden edges, cycles, orphans) validated
-              against the link-graph: --config <codeindex.rules.json>; exits 1
-              on any error-severity violation (a CI gate)
+  rules       Architecture rules (forbidden edges, cycles, orphans, literals)
+              validated against the link-graph: --config <codeindex.rules.json>;
+              exits 1 on any error-severity violation (a CI gate)
   repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
   hotspots    Churn × size ranking of the files where work concentrates (JSON)
   coupling    Change coupling: files that change together (JSON; --since <ref>)
+  literals    Values with no single source of truth: one literal written out
+              across many files, in three labeled tiers — 'competing' (two or
+              more exported constants hold it), 'bypassed' (a constant holds
+              it and other files rewrite it anyway), 'uncentralized' (nothing
+              holds it). Groups path-like values into namespace families so a
+              whole route space reports once, not forty times. Reads code AND
+              config files (JSON/YAML/TOML), because the duplications that hurt
+              are the ones crossing a language boundary no compiler checks.
+              (--min-files, --min-count, --include-tests)
   deadcode    Dead-code candidates in two labeled tiers: 'unreferenced' (no
               call site binds AND nothing references the name) and 'uncalled'
               (referenced — re-export, type position — but never called)
@@ -116,7 +126,7 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (26 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (30 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
               find_symbol, find_references, repo_map, hotspots, coupling,
               dead_code, complexity, mermaid, grep, search, embed_status,
@@ -170,6 +180,10 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       each site corroborated|unique-name
   --ignore-case       \`grep\`: case-insensitive matching
   --max-hits <n>      \`grep\`: cap returned hits (default 200)
+  --min-files <n>     \`literals\`: distinct files a value must span (default 2)
+  --min-count <n>     \`literals\`: total occurrences required (default 3)
+  --include-tests     \`literals\`: count test files too. Off by default — a test
+                      restating a value is usually asserting it deliberately
 `;
 
 interface CliFlags {
@@ -193,6 +207,9 @@ interface CliFlags {
   budgetTokens?: number;
   config?: string; // rules config path
   limit?: number; // search result cap
+  minFiles?: number; // literals: distinct-file floor for a duplication
+  minCount?: number; // literals: total-occurrence floor for a duplication
+  includeTests?: boolean; // literals: count test files too (off by default)
   fuzzy: boolean; // search: trigram fuzzy fallback for df==0 terms (default true)
   semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
   recall?: boolean; // callers: recall-oriented binding
@@ -239,6 +256,9 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--ignore-case") flags.ignoreCase = true;
     else if (a === "--max-hits") flags.maxHits = num();
     else if (a === "--budget-tokens") flags.budgetTokens = num();
+    else if (a === "--min-files") flags.minFiles = num();
+    else if (a === "--min-count") flags.minCount = num();
+    else if (a === "--include-tests") flags.includeTests = true;
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--index") flags.indexDir = next();
     else if (a === "--no-index-cache") flags.noIndexCache = true;
@@ -359,6 +379,8 @@ const VALUE_FLAGS = new Set([
   "--max-calls",
   "--max-hits",
   "--budget-tokens",
+  "--min-files",
+  "--min-count",
   "--since",
   "--config",
   "--limit",
@@ -925,6 +947,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
   } else if (cmd === "deadcode") {
     emit(JSON.stringify(findDeadCode(readScan()), null, 2) + "\n", flags.out);
+  } else if (cmd === "literals") {
+    const report = findLiteralDuplications(readScan(), {
+      minFiles: flags.minFiles,
+      minCount: flags.minCount,
+      includeTests: flags.includeTests,
+    });
+    emit(JSON.stringify(report, null, 2) + "\n", flags.out);
   } else if (cmd === "complexity") {
     const scan = readScan();
     emit(JSON.stringify(symbolComplexity(scan, flags.positional), null, 2) + "\n", flags.out);

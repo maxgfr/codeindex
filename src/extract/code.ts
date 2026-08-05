@@ -1,4 +1,5 @@
-import type { CodeSymbol, RawRef, RawRelation } from "../types.js";
+import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
+import { LiteralCollector } from "./literals.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
 import { extractReexports, MAX_REEXPORTS } from "../lang/common.js";
@@ -26,6 +27,8 @@ export interface CodeInfo {
   // Prose vocabulary — comment and short-string-literal words, subtokenized,
   // deduped, capped and sorted. Feeds search's `body` field.
   terms?: string[];
+  // Literal values kept verbatim with their line — feeds duplication analysis.
+  literals?: CodeLiteral[];
   // Inheritance stated by this file's declarations (AST path) — feeds the
   // extends/implements edges and the type hierarchy.
   relations?: RawRelation[];
@@ -400,6 +403,47 @@ export function collectTermsRegex(content: string): string[] {
   return [...found].sort();
 }
 
+// Literal VALUES for files the AST tier cannot parse. Same line-by-line,
+// comment-stripping scan as collectTermsRegex — deliberately sharing its
+// crudeness rather than inventing a second, differently-wrong scanner — but it
+// keeps the value and the line instead of subtokenizing them away.
+export function collectLiteralsRegex(content: string): CodeLiteral[] | undefined {
+  const literals = new LiteralCollector();
+  let inBlock = false;
+  let lineNo = 0;
+  for (const raw of content.split("\n")) {
+    lineNo++;
+    if (literals.full) break;
+    let line = raw;
+    if (inBlock) {
+      const close = line.indexOf("*/");
+      if (close === -1) continue;
+      inBlock = false;
+      line = line.slice(close + 2);
+    }
+    const open = line.indexOf("/*");
+    if (open !== -1) {
+      const close = line.indexOf("*/", open + 2);
+      if (close === -1) {
+        inBlock = true;
+        line = line.slice(0, open);
+      } else line = line.slice(0, open) + line.slice(close + 2);
+    }
+    const lineComment = /(^|\s)(\/\/|#|--)(.*)$/.exec(line);
+    if (lineComment) line = line.slice(0, lineComment.index);
+
+    for (const m of line.matchAll(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+      literals.add("string", m[2]!, lineNo);
+    }
+    // Numbers not glued to an identifier (so `utf8` and `base64` do not yield
+    // 8 and 64) and not inside a quoted run already consumed above.
+    for (const m of line.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, " ").matchAll(/(?<![\w.])-?\d[\d_]*(?:\.\d+)?(?![\w.])/g)) {
+      literals.add("number", m[0].replace(/_/g, ""), lineNo);
+    }
+  }
+  return literals.result();
+}
+
 // `opts.maxCallsPerFile` overrides the per-file call-site cap (default 512) on
 // BOTH extraction tiers — AST and regex — so recall-oriented consumers can raise
 // it. Dedup/sort semantics are unchanged; absent, output is byte-identical.
@@ -418,6 +462,15 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // Add barrel re-exports the local def didn't already cover.
   const known = new Set(symbols.map((s) => s.name));
   const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
+  const refs = extractImports(ext, content);
+  // An import specifier is a literal, but it is already modelled — as `refs`,
+  // and resolved into real import edges. Leaving it in `literals` would make
+  // every shared dependency look like an un-centralized value and bury the
+  // findings that are actually about values.
+  const importSpecs = new Set(refs.map((r) => r.spec));
+  const literals = (ast ? (ast.literals.length ? ast.literals : undefined) : collectLiteralsRegex(content))?.filter(
+    (l) => !(l.kind === "string" && importSpecs.has(l.value)),
+  );
   return {
     symbols: [...symbols, ...reexports],
     // A re-export list that hit its own ceiling is truncated too — a barrel that
@@ -427,7 +480,7 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
       ? { truncated: true as const }
       : {}),
     summary: topDocComment(content),
-    refs: extractImports(ext, content),
+    refs,
     // pkg anchors namespace→source-root resolution: Java's `package`, C#'s
     // `namespace` (block or file-scoped). Both feed the same resolver pattern.
     pkg:
@@ -448,5 +501,6 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
     // the line scanner above still supplies a vocabulary, so search quality does
     // not silently collapse for a language with no wasm.
     terms: ast ? ast.terms : collectTermsRegex(content),
+    literals: literals?.length ? literals : undefined,
   };
 }

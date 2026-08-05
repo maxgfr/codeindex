@@ -24,6 +24,7 @@ import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { findDeadCode } from "./deadcode.js";
+import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
@@ -251,6 +252,28 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // Additive: without `limit` the payload is exactly what it always was.
     if (limit === undefined || all.length <= limit) return JSON.stringify(all, null, 2);
     return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
+  }
+  if (name === "duplicated_literals") {
+    const report = findLiteralDuplications(getScan(repo, scanOpts, walked), {
+      minFiles: num(args.minFiles),
+      minCount: num(args.minCount),
+      includeTests: args.includeTests === true,
+    });
+    const limit = num(args.limit);
+    if (limit === undefined || report.duplications.length <= limit) return JSON.stringify(report, null, 2);
+    // Truncation says so, same doctrine as dead_code: a capped list that looks
+    // complete is worse than a shorter one that admits it.
+    return JSON.stringify(
+      {
+        total: report.duplications.length,
+        shown: limit,
+        truncated: true,
+        duplications: report.duplications.slice(0, limit),
+        families: report.families,
+      },
+      null,
+      2,
+    );
   }
   if (name === "complexity") {
     const scan = getScan(repo, scanOpts, walked);

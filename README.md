@@ -281,7 +281,56 @@ codeindex hierarchy       --repo .            # type hierarchy (both directions)
 codeindex implementations Runnable --repo .   # who implements it, transitively
 codeindex callgraph buildGraph --repo . --depth 2
 codeindex grep    'pattern' --repo .
+codeindex literals --repo .                   # values with no single source of truth
 ```
+
+## Values with no single source of truth
+
+`codeindex literals` reports the defect a compiler cannot: **one value written
+out across many files**, where a constant holding it already exists and some
+call sites use it while others rewrite the literal. Change the value and the
+helper's users follow; the literal's users silently do not.
+
+Three labeled tiers, the same doctrine `deadcode` uses for
+`unreferenced`/`uncalled` — the analysis says which case it found rather than
+flattening them into one confidence-free list:
+
+| tier | what it means | what to do |
+|---|---|---|
+| `competing` | two or more exported constants hold the same value | pick one owner, delete the rest |
+| `bypassed` | a constant holds it, other files rewrite it anyway | import the constant at those sites |
+| `uncentralized` | nothing holds it | decide whether it deserves an owner |
+
+Two things make the output readable rather than a wall of strings:
+
+- **Namespace families.** Path-like values are grouped by their root, so an app
+  with forty route literals reports one `/checkout` finding, not forty.
+- **Config files are read too.** JSON, YAML and TOML values are extracted
+  alongside code, because the duplications that actually hurt are the ones that
+  cross a language boundary — a threshold declared in TypeScript and again in a
+  rules JSON, a route called from a Kubernetes manifest. Nothing else compares
+  those pairs.
+
+```sh
+codeindex literals --repo . --min-files 3 --min-count 5   # tighten the floors
+codeindex literals --repo . --include-tests               # count test files too
+```
+
+As a CI gate, via the `literals` builtin rule (defaults to the two actionable
+tiers; `tiers` narrows it):
+
+```json
+[{ "name": "no-uncentralized-routes", "builtin": "literals", "tiers": ["competing"] }]
+```
+
+```sh
+codeindex rules --repo . --config codeindex.rules.json    # exit 1 on violations
+```
+
+An arrow function returning a value (`export const getPath = () => "/a/b"`) is
+a *consumer*, not a source of truth, and is reported as a call site. A lookup
+table (`export const ROUTES = { … }`) genuinely is one, and is reported as a
+holder.
 
 ## Docker
 
@@ -404,7 +453,7 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**29 tools**, grouped by what they answer:
+**30 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
@@ -412,7 +461,7 @@ claude mcp add codeindex -- codeindex mcp
 | find | `search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
 | impact | `find_references`, `callers`, `call_graph`, `dead_code` |
 | types | `type_hierarchy`, `implementations` |
-| risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules` |
+| risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
 | memory | `write_memory`, `read_memory`, `list_memories`, `delete_memory` *(write except reads)* |
 | embeddings | `embed_status` |
@@ -513,7 +562,7 @@ each row below is a specific operation, never a vague "codeindex vs tool X".
 | byte-identical rebuilds | **7 / 7 repos** | not measured | no artifact to diff | 0 / 6 measurable repos |
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | ~40, generic parser rules | any language with an LSP server | 36 via tree-sitter |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv |
-| MCP server | 29 tools | none | yes, LSP-backed | yes |
+| MCP server | 30 tools | none | yes, LSP-backed | yes |
 
 Cold-index speed is the axis this engine wins least, and the table says so: a
 flat `tags` file is a smaller job, and ctags finishes it first at every size —

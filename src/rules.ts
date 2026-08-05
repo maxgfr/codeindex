@@ -10,10 +10,14 @@
 //               is reported once, as a canonical shortest cycle from its
 //               lexicographically smallest module);
 //     orphans — code files with no resolved in/out edges, excluding
-//               entrypoint-looking basenames (index/main/cli/…).
+//               entrypoint-looking basenames (index/main/cli/…);
+//     literals — values with no single source of truth (see literals.ts):
+//               a constant holds the value and other files rewrite it, or
+//               several constants hold the same one. Reads the duplications
+//               the pipeline stamped onto the graph, so it needs no rescan.
 // Violations are sorted deterministically (rule, from, to, kind) so two runs on
 // the same graph are byte-identical.
-import type { EdgeKind, Graph } from "./types.js";
+import type { EdgeKind, Graph, LiteralDuplication } from "./types.js";
 import { compileGlobs } from "./glob.js";
 import { byStr } from "./sort.js";
 
@@ -30,7 +34,12 @@ export interface ForbiddenEdgeRule {
 
 export interface BuiltinRule {
   name: string;
-  builtin: "cycles" | "orphans";
+  builtin: "cycles" | "orphans" | "literals";
+  // `literals` only: report tiers at or above this actionability. Defaults to
+  // "bypassed", i.e. a helper exists and is being ignored — the tier that names
+  // a fix. "uncentralized" also flags values nothing owns yet, which is a
+  // design decision rather than a defect and is noisy as a gate.
+  tiers?: LiteralDuplication["tier"][];
   severity?: RuleSeverity;
   comment?: string;
 }
@@ -41,14 +50,16 @@ export interface RuleViolation {
   rule: string;
   from: string;
   to: string; // for a cycle: the full path, "a -> b -> a"
-  kind: EdgeKind | "cycle" | "orphan";
+  kind: EdgeKind | "cycle" | "orphan" | "literal";
   severity: RuleSeverity;
   comment?: string;
 }
 
 const EDGE_KINDS = new Set<string>(["contains", "doc-link", "import", "call", "use", "mention"]);
 const SEVERITIES = new Set<string>(["error", "warn"]);
-const BUILTINS = new Set<string>(["cycles", "orphans"]);
+const BUILTINS = new Set<string>(["cycles", "orphans", "literals"]);
+// Gate default: the two tiers that name a concrete fix.
+const GATED_TIERS: LiteralDuplication["tier"][] = ["competing", "bypassed"];
 
 // A basename that looks like an entrypoint — excluded from the orphans check,
 // because nothing is EXPECTED to import a main/cli/server entry.
@@ -96,8 +107,14 @@ export function parseRules(input: unknown): ArchRule[] {
       throw new Error(`${at} (${r.name}): \`comment\` must be a string`);
     if (r.builtin !== undefined) {
       if (!BUILTINS.has(r.builtin as string))
-        throw new Error(`${at} (${r.name}): \`builtin\` must be "cycles" or "orphans"`);
-      return { name: r.name, builtin: r.builtin, severity: r.severity, comment: r.comment } as BuiltinRule;
+        throw new Error(`${at} (${r.name}): \`builtin\` must be "cycles", "orphans" or "literals"`);
+      return {
+        name: r.name,
+        builtin: r.builtin,
+        severity: r.severity,
+        comment: r.comment,
+        ...(r.tiers !== undefined ? { tiers: r.tiers } : {}),
+      } as BuiltinRule;
     }
     const glob = (field: "from" | "to"): string | string[] => {
       const v = r[field];
@@ -222,6 +239,20 @@ export function checkRules(graph: Graph, rules: ArchRule[]): RuleViolation[] {
       if (rule.builtin === "cycles") {
         for (const c of findImportCycles(graph)) {
           emit(rule, { from: c.start, to: c.path.join(" -> "), kind: "cycle" });
+        }
+      } else if (rule.builtin === "literals") {
+        const wanted = new Set(rule.tiers?.length ? rule.tiers : GATED_TIERS);
+        for (const d of graph.literalDuplications ?? []) {
+          if (!wanted.has(d.tier)) continue;
+          // `from` is where the value is DEFINED (or the first site rewriting
+          // it, when nothing defines it) and `to` names the value, so a CI log
+          // line reads as "this constant, this value" without opening the JSON.
+          const origin = d.holders[0] ?? d.literals[0]!;
+          emit(rule, {
+            from: `${origin.file}:${origin.line}`,
+            to: `${d.tier} ${JSON.stringify(d.value)} (${d.count} sites, ${d.files} files)`,
+            kind: "literal",
+          });
         }
       } else {
         for (const f of graph.files) {

@@ -7,6 +7,7 @@ import { detectCommunities } from "./community.js";
 import { applyCentrality } from "./centrality.js";
 import { computeTestMap } from "./tests-map.js";
 import { computeSurprises } from "./surprise.js";
+import { findLiteralDuplications, LITERAL_DUPLICATION_CAP } from "./literals.js";
 import { buildSymbolIndex } from "./render/symbols-json.js";
 
 export interface BuildIndexOptions extends ScanOptions {
@@ -64,6 +65,9 @@ export function buildArtifactsFromScan(scan: RepoScan, opts: BuildIndexOptions =
 
   const surprises = computeSurprises(graph);
   if (surprises.length) graph.surprises = surprises;
+
+  const { duplications } = findLiteralDuplications(scan);
+  if (duplications.length) graph.literalDuplications = duplications.slice(0, LITERAL_DUPLICATION_CAP);
 
   const symbols = buildSymbolIndex(scan, symbolRefsFor(scan), opts.meta?.schemaVersion);
   return { scan, graph, symbols };

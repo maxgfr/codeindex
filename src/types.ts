@@ -65,7 +65,16 @@ export const SCHEMA_VERSION = 5;
 // symbol" for every module constant. That rule alone is anchored at column 0:
 // a line scanner cannot see scope, and matching indented bindings would report
 // every in-function local as a declaration.
-export const EXTRACTOR_VERSION = 12;
+// v13 adds FileRecord.literals — literal VALUES kept verbatim with their line.
+// Both tiers already walked every string literal, but fed it to `addTerms`,
+// which subtokenizes into a Set: "/api/v2/users" became {api, v2, users} and
+// the value, the line and the multiplicity were gone. Nothing downstream could
+// answer "this exact value appears in N files, and is a constant already
+// holding it" — the question behind every un-centralized route, storage key or
+// threshold. Config files (JSON/YAML/TOML) get the same collector, because the
+// dangerous duplications are the ones that cross a language boundary where no
+// compiler is looking.
+export const EXTRACTOR_VERSION = 13;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
@@ -117,6 +126,48 @@ export interface CodeSymbol {
 export interface RawRef {
   kind: "doc-link" | "import";
   spec: string; // the target/specifier exactly as written
+}
+
+// A literal VALUE as written, kept verbatim. `terms` destroys exactly this:
+// it subtokenizes into a Set, so the value, its position and how often it
+// recurs are all lost. Duplication analysis needs all three.
+//
+// `regex` covers a syntax a string scanner cannot see at all — `/\/avis-cse\//`
+// in a test assertion is the same route as the quoted literal next to it. The
+// pattern is stored as written and never interpreted; its presence is enough to
+// tie the call site to the value family.
+export interface CodeLiteral {
+  value: string; // the literal's inner text, quotes/delimiters stripped
+  line: number; // 1-based
+  kind: "string" | "number" | "regex";
+}
+
+// One occurrence of a duplicated value. `holder` names the exported constant
+// whose declaration span contains it — i.e. this occurrence DEFINES the value
+// rather than restating it.
+export interface LiteralSite {
+  file: string;
+  line: number;
+  holder?: string;
+  // False when the holder is module-private. That is the sharper finding, not
+  // the milder one: the value has an owner that no other file can import, so
+  // every other site was forced to duplicate it. The fix is "export it, then
+  // import it", not "import it".
+  holderExported?: boolean;
+}
+
+// A value with no single source of truth. Tiers are labeled rather than scored,
+// the same doctrine `deadcode` uses: `competing` (two or more exported
+// constants hold it), `bypassed` (one holds it, other files rewrite it),
+// `uncentralized` (nothing holds it). See literals.ts for the full rationale.
+export interface LiteralDuplication {
+  value: string;
+  kind: CodeLiteral["kind"];
+  tier: "uncentralized" | "bypassed" | "competing";
+  holders: LiteralSite[];
+  literals: LiteralSite[];
+  files: number;
+  count: number;
 }
 
 // An inheritance relation stated by a declaration, with both ends as bare type
@@ -172,6 +223,11 @@ export interface FileRecord {
   // so search's `body` field rides the incremental cache instead of re-reading
   // and re-tokenizing every file on every query.
   terms?: string[];
+  // Literal values kept verbatim (cap 256, deduped by value+line, sorted by
+  // value then line) — the raw material for duplication analysis. Populated on
+  // BOTH extraction tiers and for config files, so the analytic works the same
+  // whether or not a grammar was available.
+  literals?: CodeLiteral[];
 }
 
 // A node in the link-graph. Files and modules are both nodes.
@@ -252,6 +308,11 @@ export interface Graph {
   // Surprising cross-community couplings (see surprise.ts), capped and sorted
   // (pairEdges asc, from, to). Absent when none were found.
   surprises?: SurpriseEdge[];
+  // Values with no single source of truth (see literals.ts), capped and sorted
+  // (tier, files desc, count desc, value). Absent when none were found. Carried
+  // here so a graph-only consumer — `rules`, an INDEX.md renderer — can report
+  // them without re-scanning; the full, uncapped report is `codeindex literals`.
+  literalDuplications?: LiteralDuplication[];
 }
 
 // A dependency edge that is one of at most 2 links between two otherwise-

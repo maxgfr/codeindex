@@ -114,6 +114,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   call_graph: { symbol: "HttpClient", depth: 1 },
   hotspots: {},
   coupling: {},
+  duplicated_literals: {},
   embed_status: {},
   write_memory: { name: "schema-probe", content: "x" },
   delete_memory: { name: "schema-probe" },

@@ -9,6 +9,7 @@ import { compileGlobs } from "./glob.js";
 import { byKey } from "./sort.js";
 import { extractMarkdown } from "./extract/markdown.js";
 import { extractCode } from "./extract/code.js";
+import { extractConfigLiterals } from "./extract/config.js";
 
 export interface RepoScan {
   root: string;
@@ -331,6 +332,12 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
         record.truncated = code.truncated;
         record.relations = code.relations;
         record.terms = code.terms;
+        record.literals = code.literals;
+      } else if (kind === "config") {
+        // Config files carry no symbols, but they DO carry values — and a value
+        // duplicated across a language boundary is the one no compiler checks.
+        record.title = basename(f.rel);
+        record.literals = extractConfigLiterals(content);
       } else {
         record.title = basename(f.rel);
       }

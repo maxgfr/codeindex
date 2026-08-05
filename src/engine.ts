@@ -15,6 +15,7 @@ export type {
   EdgeKind,
   Tier,
   CodeSymbol,
+  CodeLiteral,
   RawRef,
   RawRelation,
   FileRecord,
@@ -204,6 +205,14 @@ export type { ChangeCoupling, CouplingOptions, Hotspot } from "./coupling.js";
 export { renderRepoMap } from "./repomap.js";
 export { findDeadCode } from "./deadcode.js";
 export type { DeadSymbol } from "./deadcode.js";
+export { findLiteralDuplications } from "./literals.js";
+export type {
+  LiteralDuplication,
+  LiteralFamily,
+  LiteralSite,
+  LiteralsOptions,
+  LiteralsReport,
+} from "./literals.js";
 export { symbolComplexity, riskHotspots, complexityOfSource } from "./complexity.js";
 export type { SymbolComplexity, RiskHotspot } from "./complexity.js";
 export { renderMermaid, renderMermaidClustered } from "./viz.js";

@@ -1,4 +1,5 @@
-import type { CodeSymbol, RawRef, RawRelation } from "../types.js";
+import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
+import { LiteralCollector } from "../extract/literals.js";
 import { byStr } from "../sort.js";
 import { grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
 import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
@@ -31,6 +32,9 @@ export interface AstResult {
   // "where is rate limiting handled" answerable — the phrase lives in a comment,
   // and an index built only from declaration names cannot see it.
   terms: string[];
+  // Literal VALUES kept verbatim with their line — what `terms` destroys by
+  // subtokenizing. Always present (empty when the file holds none).
+  literals: CodeLiteral[];
   // True when a per-file cap truncated the result — never silent, same doctrine
   // as the walk's `capped` flag.
   truncated?: true;
@@ -89,10 +93,24 @@ interface Collected {
   calls: { name: string; line: number; receiver?: string }[];
   importedNames: string[];
   terms: string[];
+  literals: CodeLiteral[];
 }
 
 const COMMENT_NODE = /(^|_)comment$/;
 const STRING_NODE = /(^|_)string(_literal)?$/;
+// Numeric and regex leaves, named consistently enough across the grammars to
+// match structurally: `integer`/`float`/`number`/`*_literal` for numbers,
+// `regex`/`regex_pattern`/`regular_expression` for patterns.
+const NUMBER_NODE = /(^|_)(integer|float|number|decimal|numeric)(_literal)?$/;
+const REGEX_NODE = /(^|_)(regex|regular_expression)(_pattern|_literal)?$/;
+// Children a string node may have and still be one fixed value. An
+// interpolation (`${x}`, `#{x}`, `{}`) makes the text a TEMPLATE, whose
+// concatenated source is not a value anything else can equal — storing it
+// would invent duplications that do not exist.
+const STRING_PART = /(^|_)(fragment|content|escape_sequence|character)$/;
+function isPlainString(node: TSNode): boolean {
+  return node.namedChildren.every((c) => STRING_PART.test(c.type));
+}
 
 function collectAll(
   root: TSNode,
@@ -125,6 +143,10 @@ function collectAll(
     }
   };
 
+  // Literal VALUES, collected next to the prose pass rather than in a second
+  // traversal — the node carries its own text and position already.
+  const literals = new LiteralCollector();
+
   const wantNames = spec.imports?.import_statement !== undefined;
   const namesFound = new Set<string>();
 
@@ -154,6 +176,18 @@ function collectAll(
       for (const line of node.text.split(/\r?\n/)) addTerms(stripCommentMarkers(line));
     } else if (kids.length === 0 && STRING_NODE.test(type) && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
       addTerms(node.text.replace(/^['"`]+|['"`]+$/g, ""));
+    }
+
+    // --- literal values (kept verbatim, unlike the prose pass above) ---
+    // NOT gated on `kids.length === 0`, unlike the prose pass: in several
+    // grammars (TypeScript among them) a `string` node is a PARENT whose text
+    // lives in a `string_fragment` child, so a leaf-only guard sees no strings
+    // at all in the very languages this analysis is most needed for.
+    if (!literals.full) {
+      const line = node.startPosition.row + 1;
+      if (STRING_NODE.test(type) && isPlainString(node)) literals.addString(node.text, line);
+      else if (kids.length === 0 && NUMBER_NODE.test(type)) literals.add("number", node.text.trim(), line);
+      else if (REGEX_NODE.test(type)) literals.add("regex", node.text, line);
     }
 
     // --- call sites ---
@@ -239,6 +273,7 @@ function collectAll(
     calls: calls.slice(0, maxCalls),
     importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
     terms: [...termsFound].sort(byStr),
+    literals: literals.result() ?? [],
   };
 }
 
@@ -722,7 +757,7 @@ export function extractAst(
     }
 
     const wantImports = opts.imports !== false;
-    const { refs, idents, calls, importedNames, terms } = collectAll(
+    const { refs, idents, calls, importedNames, terms, literals } = collectAll(
       root,
       spec,
       new Set(symbols.map((s) => s.name)),
@@ -744,6 +779,7 @@ export function extractAst(
       importedNames,
       relations,
       terms,
+      literals,
       ...(symbols.length >= maxSymbols ? { truncated: true as const } : {}),
     };
   } catch {

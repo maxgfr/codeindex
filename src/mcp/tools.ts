@@ -218,6 +218,23 @@ export const TOOLS = [
     },
   },
   {
+    name: "duplicated_literals",
+    description:
+      "Values with no single source of truth: one literal written out across many files. Three labeled tiers — 'competing' (two or more exported constants hold the same value), 'bypassed' (a constant holds it and other files rewrite it anyway), 'uncentralized' (nothing holds it). Path-like values are also grouped into namespace families, so a whole route space reports once instead of once per route. Covers config files (JSON/YAML/TOML) as well as code, which is where the dangerous cases live: a threshold declared in TypeScript and again in a rules JSON is checked by no compiler. Use it to answer 'what breaks if this value changes' and 'is there already a helper for this'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...scopeProps,
+        minFiles: { type: "number", description: "Distinct files a value must span (default 2)" },
+        minCount: { type: "number", description: "Total occurrences required (default 3)" },
+        includeTests: { type: "boolean", description: "Count test files too (default false)" },
+        limit: { type: "number", description: "Cap duplications (default: all)" },
+      },
+      required: ["repo"],
+    },
+  },
+  {
     name: "complexity",
     description:
       "Cyclomatic-complexity estimates (branch-token counting over AST line spans), most-complex first. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
@@ -464,6 +481,14 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
     properties: { ok: { type: "boolean" }, couplings: { type: "array", items: anyObj } },
     required: ["ok", "couplings"],
   },
+  duplicated_literals: {
+    type: "object",
+    properties: {
+      duplications: { type: "array", items: anyObj },
+      families: { type: "array", items: anyObj },
+    },
+    required: ["duplications", "families"],
+  },
   embed_status: {
     type: "object",
     properties: {
@@ -539,6 +564,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   list_memories: { title: "List memories" },
   delete_memory: { title: "Delete memory", write: true, destructive: true, idempotent: true },
   dead_code: { title: "Dead-code candidates" },
+  duplicated_literals: { title: "Values with no single source of truth" },
   complexity: { title: "Complexity" },
   mermaid: { title: "Mermaid module diagram" },
   grep: { title: "Grep file contents" },
