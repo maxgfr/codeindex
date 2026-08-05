@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.27.0](https://github.com/maxgfr/codeindex/compare/v2.26.0...v2.27.0) (2026-08-05)
+
+
+### Bug Fixes
+
+* **classify:** index terraform, solidity, zig and hcl in real scans ([0784eeb](https://github.com/maxgfr/codeindex/commit/0784eeb65cde52fbeacb4a9a70b5938926493a49))
+
+
+### Features
+
+* **literals:** report values with no single source of truth ([ac410b7](https://github.com/maxgfr/codeindex/commit/ac410b7c6aa4548d9e423ef675d9b5ce878b0bf0))
+
 # [2.26.0](https://github.com/maxgfr/codeindex/compare/v2.25.2...v2.26.0) (2026-08-01)
 
 
