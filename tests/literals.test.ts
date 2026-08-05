@@ -141,13 +141,50 @@ describe("literal duplication tiers", () => {
 
   it("never merges a number with the string of the same digits", () => {
     const scan = scanOf([
-      rec("a.ts", { literals: [{ value: "2027", line: 1, kind: "number" }] }),
-      rec("b.ts", { literals: [{ value: "2027", line: 1, kind: "number" }] }),
-      rec("c.ts", { literals: [{ value: "2027", line: 1, kind: "string" }] }),
-      rec("d.ts", { literals: [{ value: "2027", line: 1, kind: "string" }] }),
+      rec("n1.ts", {
+        literals: [{ value: "123456789", line: 1, kind: "number" }],
+        symbols: [holder("LIMIT", 1, "export const LIMIT = 123456789;")],
+      }),
+      rec("n2.ts", { literals: [{ value: "123456789", line: 1, kind: "number" }] }),
+      rec("c.ts", { literals: [{ value: "123456789", line: 1, kind: "string" }] }),
+      rec("d.ts", { literals: [{ value: "123456789", line: 1, kind: "string" }] }),
     ]);
     const dups = findLiteralDuplications(scan, { minCount: 2 }).duplications;
     expect(dups.map((d) => d.kind).sort()).toEqual(["number", "string"]);
+  });
+
+  // Numeric equality is not semantic identity: MAX_CSE_FILES and QUARTILE_COUNT
+  // both being 4 is a coincidence, not two definitions of one value. Reporting
+  // it drowned every real finding under 3, 4, 10, 100, 255…
+  it("does not report a number owned by two differently-named constants", () => {
+    const scan = scanOf([
+      rec("a.ts", {
+        literals: [{ value: "4", line: 1, kind: "number" }],
+        symbols: [holder("MAX_CSE_FILES", 1, "export const MAX_CSE_FILES = 4;")],
+      }),
+      rec("b.ts", {
+        literals: [{ value: "4", line: 1, kind: "number" }],
+        symbols: [holder("QUARTILE_COUNT", 1, "export const QUARTILE_COUNT = 4;")],
+      }),
+      rec("c.ts", { literals: [{ value: "4", line: 7, kind: "number" }] }),
+    ]);
+    expect(findLiteralDuplications(scan, { minCount: 2 }).duplications).toEqual([]);
+  });
+
+  // …but the case that matters survives: one named constant, and the same value
+  // restated where no compiler compares them (here, a config file).
+  it("reports a number one constant owns and a config file restates", () => {
+    const scan = scanOf([
+      rec("constants.ts", {
+        literals: [{ value: "5", line: 3, kind: "number" }],
+        symbols: [holder("GAP_ALERT_THRESHOLD", 3, "export const GAP_ALERT_THRESHOLD = 5;")],
+      }),
+      rec("rules.json", { kind: "config", literals: [{ value: "5", line: 7, kind: "number" }] }),
+    ]);
+    const [dup] = findLiteralDuplications(scan, { minCount: 2 }).duplications;
+    expect(dup).toMatchObject({ tier: "bypassed", value: "5" });
+    expect(dup!.holders.map((h) => h.holder)).toEqual(["GAP_ALERT_THRESHOLD"]);
+    expect(dup!.literals.map((l) => l.file)).toEqual(["rules.json"]);
   });
 
   it("excludes test files by default and includes them on request", () => {
@@ -172,6 +209,50 @@ describe("literal duplication tiers", () => {
     const { families } = findLiteralDuplications(scan);
     expect(families.map((f) => f.prefix)).toEqual(["/declaration"]);
     expect(families[0]!.members).toHaveLength(2);
+  });
+
+  // Precision guards. Without these, the report is dominated by vocabulary and
+  // by big structures that merely MENTION a value, and the real findings are
+  // unreadable underneath.
+  it("ignores short generic tokens with no separator", () => {
+    const scan = scanOf(
+      ["a.ts", "b.ts", "c.ts"].map((f) =>
+        rec(f, {
+          literals: [
+            { value: "siren", line: 1, kind: "string" },
+            { value: "asc", line: 2, kind: "string" },
+            { value: "/a/b", line: 3, kind: "string" },
+            { value: "joint_evaluation", line: 4, kind: "string" },
+          ],
+        }),
+      ),
+    );
+    const values = findLiteralDuplications(scan).duplications.map((d) => d.value).sort();
+    expect(values).toEqual(["/a/b", "joint_evaluation"]);
+  });
+
+  it("does not treat a large declaration that merely mentions a value as its holder", () => {
+    const big = { ...holder("searchSchema", 1, "export const searchSchema = z.object({"), endLine: 60 };
+    const scan = scanOf([
+      rec("schema.ts", { literals: [{ value: "/a/b/c", line: 30, kind: "string" }], symbols: [big] }),
+      rec("x.ts", { literals: [{ value: "/a/b/c", line: 1, kind: "string" }] }),
+      rec("y.ts", { literals: [{ value: "/a/b/c", line: 1, kind: "string" }] }),
+    ]);
+    const [dup] = findLiteralDuplications(scan).duplications;
+    expect(dup).toMatchObject({ tier: "uncentralized" });
+    expect(dup!.holders).toEqual([]);
+  });
+
+  it("still treats a small lookup table as a holder", () => {
+    const table = { ...holder("ROUTES", 1, "export const ROUTES = {"), endLine: 6 };
+    const scan = scanOf([
+      rec("routes.ts", { literals: [{ value: "/a/b/c", line: 3, kind: "string" }], symbols: [table] }),
+      rec("x.ts", { literals: [{ value: "/a/b/c", line: 1, kind: "string" }] }),
+      rec("y.ts", { literals: [{ value: "/a/b/c", line: 1, kind: "string" }] }),
+    ]);
+    const [dup] = findLiteralDuplications(scan).duplications;
+    expect(dup).toMatchObject({ tier: "bypassed" });
+    expect(dup!.holders.map((h) => h.holder)).toEqual(["ROUTES"]);
   });
 
   it("orders competing before bypassed before uncentralized", () => {

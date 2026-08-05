@@ -63,6 +63,27 @@ const DEFAULTS = { minFiles: 2, minCount: 3 };
 // function parameter is not a source of truth; an exported const/enum member is.
 const HOLDER_KINDS = new Set(["const", "constant", "variable", "enum", "enumerator", "property", "field", "static"]);
 
+// How many lines a declaration may span and still be read as "the constant
+// holding this value". A one-liner is obviously one; a small lookup table still
+// is. A 40-line zod schema that happens to contain "asc" is NOT a source of
+// truth for "asc" — it merely mentions it — and counting it made every generic
+// token in the repo look like a competing definition.
+const MAX_HOLDER_SPAN = 12;
+
+// A value needs enough identity to be worth centralizing. `siren`, `year`,
+// `name`, `type`, `asc` recur in dozens of unrelated files because they are
+// vocabulary, not shared constants: nobody would import them, and reporting
+// them buries the paths, keys and thresholds that people really do duplicate.
+// A separator (`/ : . - _`) marks a compound value — a path, a namespaced key,
+// a dotted identifier — which is worth reporting at any length.
+const DISTINCTIVE_MIN_LEN = 6;
+const HAS_SEPARATOR = /[/:._-]/;
+
+function isDistinctive(value: string, kind: CodeLiteral["kind"]): boolean {
+  if (kind !== "string") return true;
+  return value.length >= DISTINCTIVE_MIN_LEN || HAS_SEPARATOR.test(value);
+}
+
 // Path-ish values are the ones worth grouping into families: routes, storage
 // key namespaces, URL prefixes. A sentence of French UI copy shares a prefix
 // with nothing and would only produce noise families.
@@ -113,6 +134,7 @@ function holderFor(symbols: CodeSymbol[], line: number): CodeSymbol | undefined 
     if (!HOLDER_KINDS.has(s.kind)) continue;
     if (isFunctionValued(s.signature)) continue;
     const end = s.endLine ?? s.line;
+    if (end - s.line > MAX_HOLDER_SPAN) continue;
     if (line < s.line || line > end) continue;
     // Innermost wins: a const nested in an exported object literal is the
     // tighter holder.
@@ -134,6 +156,7 @@ export function findLiteralDuplications(scan: RepoScan, opts: LiteralsOptions = 
     if (!opts.includeTests && isTestPath(f.rel)) continue;
     for (const lit of f.literals) {
       if (opts.kinds && !opts.kinds.has(lit.kind)) continue;
+      if (!isDistinctive(lit.value, lit.kind)) continue;
       const key = `${lit.kind}\u0000${lit.value}`;
       let g = groups.get(key);
       if (!g) groups.set(key, (g = { value: lit.value, kind: lit.kind, sites: [] }));
@@ -153,13 +176,28 @@ export function findLiteralDuplications(scan: RepoScan, opts: LiteralsOptions = 
 
     const holders = g.sites.filter((s) => s.holder);
     const literals = g.sites.filter((s) => !s.holder);
+    const distinctHolderNames = new Set(holders.map((h) => h.holder!));
     const distinctHolders = new Set(holders.map((h) => `${h.file}\u0000${h.holder}`));
 
     // A value only ever written inside constants, in different files, is two
     // (or more) competing sources of truth — the "three centralization
     // attempts that ignore each other" case.
-    const tier: LiteralDuplication["tier"] =
+    let tier: LiteralDuplication["tier"] =
       distinctHolders.size >= 2 ? "competing" : holders.length > 0 ? "bypassed" : "uncentralized";
+
+    // Numeric equality is not semantic identity. Two constants that both equal
+    // 4 — MAX_CSE_FILES and QUARTILE_COUNT — are different concepts sharing a
+    // value, not rival definitions of one, and a long distinctive STRING
+    // recurring is evidence of sameness in a way a small integer never is. So a
+    // number is reported only as `bypassed`, and only when a single named
+    // constant owns it: that is the honest claim ("you already have a name for
+    // this") and it still catches the case that matters most — a threshold
+    // declared in code and restated in a config file no compiler reads.
+    if (g.kind === "number") {
+      if (distinctHolderNames.size !== 1 || literals.length === 0) continue;
+      tier = "bypassed";
+    }
+
     // A single holder with nothing bypassing it is a constant used correctly.
     if (tier === "bypassed" && literals.length === 0) continue;
 
