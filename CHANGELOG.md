@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.27.1](https://github.com/maxgfr/codeindex/compare/v2.27.0...v2.27.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **literals:** stop reporting vocabulary and coincidence as duplication ([3aed123](https://github.com/maxgfr/codeindex/commit/3aed123e2d5ae4c22340a33388552975b63ea4e9))
+
 # [2.27.0](https://github.com/maxgfr/codeindex/compare/v2.26.0...v2.27.0) (2026-08-05)
 
 
