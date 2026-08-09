@@ -1759,7 +1759,7 @@ var init_literals = __esm({
   }
 });
 
-// node_modules/.pnpm/web-tree-sitter@0.26.11/node_modules/web-tree-sitter/web-tree-sitter.js
+// node_modules/.pnpm/web-tree-sitter@0.26.12/node_modules/web-tree-sitter/web-tree-sitter.js
 function assertInternal(x) {
   if (x !== INTERNAL) throw new Error("Illegal constructor");
 }
@@ -3687,7 +3687,7 @@ function parsePattern(index, stepType, stepValueId, captureNames, stringValues, 
 }
 var __defProp2, __name, Edit, SIZE_OF_SHORT, SIZE_OF_INT, SIZE_OF_CURSOR, SIZE_OF_NODE, SIZE_OF_POINT, SIZE_OF_RANGE, ZERO_POINT, INTERNAL, C, LookaheadIterator, Tree, TreeCursor, Node, LANGUAGE_FUNCTION_REGEX, Language, web_tree_sitter_default, Module3, TRANSFER_BUFFER, LANGUAGE_VERSION, MIN_COMPATIBLE_VERSION, Parser, PREDICATE_STEP_TYPE_CAPTURE, PREDICATE_STEP_TYPE_STRING, QUERY_WORD_REGEX, CaptureQuantifier, isCaptureStep, isStringStep, QueryErrorKind, QueryError, Query;
 var init_web_tree_sitter = __esm({
-  "node_modules/.pnpm/web-tree-sitter@0.26.11/node_modules/web-tree-sitter/web-tree-sitter.js"() {
+  "node_modules/.pnpm/web-tree-sitter@0.26.12/node_modules/web-tree-sitter/web-tree-sitter.js"() {
     "use strict";
     __defProp2 = Object.defineProperty;
     __name = (target, value) => __defProp2(target, "name", { value, configurable: true });

@@ -94,7 +94,7 @@
     "tsup": "^8.3.0",
     "typescript": "^5.5.0",
     "vitest": "^4.1.0",
-    "web-tree-sitter": "^0.26.11"
+    "web-tree-sitter": "^0.26.12"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
