@@ -655,7 +655,9 @@ async function scenarioAnswers(ctxs, comp, _cfg) {
 
   for (const ctx of ctxs) {
     const dir = ctx.dir();
-    const cases = corpus.cases.filter((c) => c.repo === dir);
+    // Matched on SLUG, not on this machine's clone path — the corpus is
+    // committed and has to mean the same thing on every checkout.
+    const cases = corpus.cases.filter((c) => c.repo === ctx.repo.slug);
     if (!cases.length) continue; // no compiler-derived questions for this repo
     const knownFiles = new Set(ctx.arts().graph.files.map((f) => f.rel));
     for (const server of MCP_SERVERS) {

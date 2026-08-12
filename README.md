@@ -682,15 +682,88 @@ each row below is a specific operation, never a vague "codeindex vs tool X".
 | type-aware references | opt-in LSP tier, annotating the static answer | none | native | none |
 | answer quality measured | yes — graded against the TS compiler | not measured | not measured | not measured |
 
-The last two rows are the ones that answer "which is more powerful for an AI",
-and they pull in opposite directions — which is the honest position. Serena's
-references come from a live language server and are type-aware; nothing static
-matches that, so codeindex now offers the same thing as an
-[opt-in tier](#type-aware-references-opt-in-lsp-tier) that annotates the static
-answer rather than replacing it. And *answer quality* was, until now, measured
-by nobody: every table above this one measures a cost. The
-[answer-quality benchmark](./BENCHMARKS.md#answer-quality) grades all three
-servers on questions whose answers come from the real TypeScript compiler.
+### Is the answer right? — the row nobody had
+
+Every figure above measures a **cost**. None of them says whether the answer is
+*correct*, which is the whole of the claim when someone says a tool is "more
+powerful for an AI". So it is measured now, on 75 questions whose answers come
+from `scip-typescript` — the real TypeScript compiler — and asked of all three
+MCP servers through one shape-blind grader:
+
+| repo | server | asked | **correct** | incomplete | missed | tokens/answer |
+| --- | --- | --- | --- | --- | --- | --- |
+| t3-oss/create-t3-turbo | **codeindex** | 25 | **25** | 0 | 0 | 89 |
+| t3-oss/create-t3-turbo | serena | 25 | **25** | 0 | 0 | 48 |
+| t3-oss/create-t3-turbo | graphify | 25 | 17 | 5 | 3 | 42 |
+| socialgouv/code-du-travail-numerique | **codeindex** | 25 | **25** | 0 | 0 | 82 |
+| socialgouv/code-du-travail-numerique | serena | 25 | 24 | 1 | 0 | 54 |
+| socialgouv/code-du-travail-numerique | graphify | 25 | **2** | 4 | **19** | 31 |
+| vercel/next.js (27,952 files) | **codeindex** | 25 | **25** | 0 | 0 | 76 |
+| vercel/next.js (27,952 files) | serena | — | — | — | — | n/a — too large to index at bench time |
+| vercel/next.js (27,952 files) | graphify | — | — | — | — | n/a — too large to index at bench time |
+
+Read it honestly, because it does not say what a marketing table would.
+
+**Against Serena this is a tie, not a win.** On the two repos where both run it
+is 50/50 against 49/50 — one question, which is noise — and Serena answers in
+roughly **half the tokens**. That gap is not waste on our side and not a
+shortcut on theirs: the two are returning different things, and the difference
+is measurable. Asking both for `Route` in `create-t3-turbo`:
+
+| answer | bytes | what you get |
+| --- | --- | --- |
+| serena `find_symbol` | 640 | name, kind, path, line span — **no signature** |
+| serena `find_symbol` + `include_body: true` | 1,503 | the whole function body |
+| codeindex `find_symbol` | 1,561 | the **complete signature** (parameters + return type) per match |
+
+So the cheap Serena answer is cheap because it does not tell you the shape of
+what it found, and the Serena answer that does costs **1,503 bytes of raw body
+against our 1,561 bytes of distilled signature** — the same price for the
+version an agent has to read line by line. Which trade is right is a judgement;
+the point is that the table gives you the numbers to make it rather than making
+it for you.
+
+**Against Graphify it is not close**, and the second row is the reason: on the
+1,429-file monorepo it answers **2 of 25**, missing 19 outright. Its nodes are
+label-matched and its file nodes are keyed by basename, which is fine on a small
+tree and collapses on a real one.
+
+**The last three rows are the ones that are not a tie.** Both competitors are
+gated above ~8k files, so on `vercel/next.js` their score is not a loss — it is
+*no answer at all*, because the index cannot be built at bench time. codeindex
+indexes that tree in 4.9 s and answers 25 of 25 from it, at the lowest token
+cost of the three repos. Across all 75 questions it is 75/75.
+
+The other axis where the honest answer is not ours: Serena's references come
+from a live language server and are genuinely type-aware. Nothing static matches
+that, which is why codeindex now offers the same thing as an
+[opt-in tier](#type-aware-references-opt-in-lsp-tier) that *annotates* the static
+answer instead of replacing it — and reports where the two disagree.
+
+Full methodology, the three rules that keep the grader from being a variable in
+its own experiment, and how to reproduce it:
+[BENCHMARKS.md](./BENCHMARKS.md#answer-quality).
+
+### So why this one
+
+Nothing above says "use codeindex for everything", and the table is built so it
+cannot. What it does say is that four properties come together here and nowhere
+else in the comparison:
+
+- **Correct at repository scale.** 75/75 on compiler-graded questions, including
+  on a monorepo where the closest static competitor scores 2/25 and on a
+  27,952-file tree where neither competitor runs at all.
+- **Reproducible.** `graph.json`/`symbols.json` are byte-identical across
+  rebuilds on **7/7** repos; Graphify manages 0/6 and Serena has no artifact to
+  compare. That is what makes an index reviewable in a PR and cacheable in CI.
+- **Cheap to adopt and to keep.** 23.5 MB, zero runtime dependencies, one
+  vendorable file — against a 114 MB venv plus language servers, or a 140 MB
+  Python venv. It is the only one of the three with an incremental reindex
+  (1.2 s warm, 2.5 s with a file touched).
+- **Honest when it cannot answer.** A search that matches nothing
+  [says so](#when-the-query-matched-nothing); a walk that was capped sets a flag;
+  an absent tier degrades on exit 0 with a stated reason. Everything else in this
+  README is a number someone can re-run.
 
 Cold-index speed is the axis this engine wins least, and the table says so: a
 flat `tags` file is a smaller job, and ctags finishes it first at every size —

@@ -100,6 +100,44 @@ and a tool that says nothing is less harmful than one that says something false.
 Mean tokens per answer sit beside them, because being correct at ten times the
 context is a different result from being correct.
 
+#### Measured session
+
+Apple M5, Node v24.15.0, 2026-08-12. serena 1.6.1, graphify 0.9.26,
+scip-typescript via `npx`; 25 questions per repo.
+
+| Repo | Server | Asked | Correct | Incomplete | Missed | Tokens/answer |
+| --- | --- | --- | --- | --- | --- | --- |
+| t3-oss/create-t3-turbo | codeindex | 25 | **25** | 0 | 0 | 89 |
+| t3-oss/create-t3-turbo | serena | 25 | **25** | 0 | 0 | 48 |
+| t3-oss/create-t3-turbo | graphify | 25 | 17 | 5 | 3 | 42 |
+| socialgouv/code-du-travail-numerique | codeindex | 25 | **25** | 0 | 0 | 82 |
+| socialgouv/code-du-travail-numerique | serena | 25 | 24 | 1 | 0 | 54 |
+| socialgouv/code-du-travail-numerique | graphify | 25 | 2 | 4 | 19 | 31 |
+| vercel/next.js | codeindex | 25 | **25** | 0 | 0 | 76 |
+| vercel/next.js | serena | n/a (repo too large for a bench-time full index) | | | | |
+| vercel/next.js | graphify | n/a (repo too large for a bench-time full index) | | | | |
+
+_All three servers are asked on a PRIMED index — `codeindex index`,
+`serena project index`, `graphify update` — the same untimed one-time build the
+latency scenarios already give them. Without priming graphify answers nothing,
+and would score zero for a setup mistake rather than for the quality of its
+answers._
+
+`nrwl/nx-examples` is absent by design and not by omission: its dependency
+install fails under both yarn (corepack download) and npm (`workspace:*`
+protocol), so scip-typescript cannot type-check it and no compiler-derived
+question exists for it. The generator prints the reason rather than silently
+producing a narrower corpus.
+
+Two readings the table does not make for you. **codeindex costs ~1.7× Serena's
+tokens per answer**, because `find_symbol` returns each declaration's complete
+signature while Serena's returns its location — measured on `Route` in
+`create-t3-turbo`: 640 bytes from serena without a body and no signature at all,
+1,503 bytes with `include_body: true` (the raw body), against 1,561 bytes from
+codeindex carrying the distilled signature. And the **next.js rows are not a
+loss for the competitors** — they are an absence: the gate above ~8k files means
+no index can be built at bench time, so there is no answer to grade.
+
 Regenerate the corpus (opt-in; clones, installs and indexes — minutes):
 
 ```sh

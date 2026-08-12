@@ -1,0 +1,456 @@
+{
+  "generatedAt": "2026-08-12T13:54:50.212Z",
+  "tool": "scip-typescript",
+  "cases": [
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "A11Y_MESSAGES",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/common/Autocomplete/HomemadeAutocomplete.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AB_TESTS",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/config/abTests.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AGREEMENT_SEARCH",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/convention-collective/tracking.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AGREEMENT_SEARCH_HELP",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/analytics/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AGREEMENT_SEARCH_TYPE_OF_USERS",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/analytics/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AGREEMENT_SELECT_P1",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/analytics/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AGREEMENT_SELECT_P2",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/analytics/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AGREEMENT_STORAGE_EVENT",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/utils/useLocalStorage.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ANCIENNETE_MOINS_2_ANS",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/analytics/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ANCIENNETE_PLUS_2_ANS",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/analytics/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ANY_CHARS_BUT_BRACKET",
+      "declaredIn": "packages/code-du-travail-modeles/src/modeles/common/utils/formula.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "API_GEO_MAX_SEARCH_RESULTS",
+      "declaredIn": "packages/code-du-travail-frontend/src/config.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "API_GEO_URL",
+      "declaredIn": "packages/code-du-travail-frontend/src/config.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ASCII_COMMA",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/common/challenger.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ASCII_DOT",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/common/challenger.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ASCII_MINUS",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/common/challenger.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ASCII_NINE",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/common/challenger.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ASCII_SPACE",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/common/challenger.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "ASCII_ZERO",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/common/challenger.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "About",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/a-propos/index.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "Absence",
+      "declaredIn": "packages/code-du-travail-modeles/src/modeles/common/types/seniority.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AbsenceDetailStoreError",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/outils/indemnite-depart/steps/Absences/store/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AbsencePerYear",
+      "declaredIn": "packages/code-du-travail-modeles/src/modeles/common/utils/seniority.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AbsenceStoreData",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/outils/indemnite-depart/steps/Absences/store/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "symbol": "AbsenceStoreError",
+      "declaredIn": "packages/code-du-travail-frontend/src/modules/outils/indemnite-depart/steps/Absences/store/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "ApiAuthSplatRoute",
+      "declaredIn": "apps/tanstack-start/src/routeTree.gen.ts",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "ApiTrpcSplatRoute",
+      "declaredIn": "apps/tanstack-start/src/routeTree.gen.ts",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "AppRouter",
+      "declaredIn": "packages/api/src/root.ts",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Auth",
+      "declaredIn": "packages/auth/src/index.ts",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Button",
+      "declaredIn": "packages/ui/src/button.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "CreatePost",
+      "declaredIn": "apps/expo/src/app/index.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "CreatePostSchema",
+      "declaredIn": "packages/db/src/schema.ts",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenu",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuCheckboxItem",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuContent",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuGroup",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuItem",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuLabel",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuPortal",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuRadioGroup",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuRadioItem",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuSeparator",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuShortcut",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuSub",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuSubContent",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuSubTrigger",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuTrigger",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Field",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "FieldContent",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "FieldDescription",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABORT",
+      "declaredIn": "packages/next/src/experimental/testmode/proxy/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABORT_ONCE",
+      "declaredIn": "packages/next/src/server/app-render/app-render.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABSOLUTE_URL_RE",
+      "declaredIn": "packages/eslint-plugin-next/src/rules/no-location-assign-relative-destination.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABSOLUTE_URL_REGEX",
+      "declaredIn": "packages/next/src/shared/lib/utils.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABeeZee",
+      "declaredIn": "packages/font/src/google/index.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BEFORE_REFRESH",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILDING_INDICATOR_HIDE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILDING_INDICATOR_SHOW",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILD_ERROR",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILD_OK",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_CACHE_INDICATOR",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEBUG_INFO",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DESCRIPTOR_ID_PREFIX",
+      "declaredIn": "packages/next/src/server/app-render/action-handler.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_CONFIG",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_PANEL_POSITION",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_POSITION",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_SCALE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOL_UPDATE_ROUTE_STATE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEV_INDICATOR",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEV_INDICATOR_SET",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_ERROR_OVERLAY_CLOSE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_ERROR_OVERLAY_OPEN",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_ERROR_OVERLAY_TOGGLE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_HEADER",
+      "declaredIn": "packages/next/src/client/components/app-router-headers.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_HMR_REFRESH",
+      "declaredIn": "packages/next/src/client/components/router-reducer/router-reducer-types.ts",
+      "distractors": []
+    }
+  ]
+}

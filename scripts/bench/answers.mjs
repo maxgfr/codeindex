@@ -73,6 +73,14 @@ export async function askAll(server, dir, cases, knownFiles, opts = {}) {
   const adapter = adapterFor(server, opts);
   if (!adapter) return { ok: false, reason: `no adapter for ${server}` };
 
+  // PRIME FIRST. graphify's get_node reads a graph.json that `graphify update`
+  // has to write; without it the server answers nothing and would score zero
+  // for a setup mistake rather than for the quality of its answers. serena and
+  // codeindex both prime too, so all three are asked on a warm index — the
+  // same untimed one-time build the latency scenarios already give them.
+  const primed = adapter.prime ? adapter.prime(dir) : { ok: true };
+  if (!primed.ok) return { ok: false, reason: `prime: ${primed.reason}` };
+
   const spec = adapter.spawn(dir);
   const client = startMcpClient(spec.cmd, spec.args, { cwd: spec.cwd ?? dir, env: spec.env });
   const bail = async (reason) => {

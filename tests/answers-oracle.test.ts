@@ -16,7 +16,8 @@
 // because a benchmark this project can no longer pass is a benchmark this
 // project would otherwise quietly stop running.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { casesFromPairs, gradeAnswer, pathsIn, type AnswerCorpus } from "./oracles/answers.js";
@@ -24,6 +25,7 @@ import { findSymbol } from "../src/query.js";
 import { scanRepo } from "../src/scan.js";
 
 const CORPUS_PATH = fileURLToPath(new URL("./quality/answer-cases.json", import.meta.url));
+const CACHE = fileURLToPath(new URL("./.e2e-cache/", import.meta.url));
 
 describe("answer grading", () => {
   const known = new Set(["src/client.ts", "src/util.ts", "packages/app/src/test/gipGapFixtures.ts"]);
@@ -89,17 +91,27 @@ describe("answer grading", () => {
 // Standing check: whatever the corpus says, this engine still answers it. A
 // benchmark whose own author's tool has quietly regressed is worse than none.
 describe.runIf(existsSync(CORPUS_PATH))("codeindex answers the committed corpus", () => {
-  it("finds each symbol in the file the compiler says declares it", () => {
+  it("finds each symbol in the file the compiler says declares it", async () => {
     const corpus = JSON.parse(readFileSync(CORPUS_PATH, "utf8")) as AnswerCorpus;
+    const bench = (await import(/* @vite-ignore */ new URL("../scripts/bench/repos.mjs", import.meta.url).href)) as unknown as {
+      REPOS: { slug: string }[];
+      clonePinned: (repo: { slug: string }) => string;
+    };
+    const dirOf = new Map(bench.REPOS.map((r) => [r.slug, join(CACHE, r.slug.replace("/", "__"))]));
+
     const byRepo = new Map<string, typeof corpus.cases>();
     for (const c of corpus.cases) byRepo.set(c.repo, [...(byRepo.get(c.repo) ?? []), c]);
 
-    for (const [repoDir, cases] of byRepo) {
-      if (!existsSync(repoDir)) continue; // the pinned clone is not on this machine
+    for (const [slug, cases] of byRepo) {
+      const base = dirOf.get(slug);
+      // The pinned clone is not on this machine — the corpus stays portable,
+      // the check simply has nothing to run against here.
+      const repoDir = base && existsSync(dirname(base)) ? readdirSync(dirname(base)).map((d) => join(dirname(base), d)).find((d) => d.startsWith(base)) : undefined;
+      if (!repoDir) continue;
       const scan = scanRepo(repoDir);
       const graded = cases.map((c) => gradeAnswer(c.declaredIn, findSymbol(scan, c.symbol).map((m) => m.file)));
       const wrong = graded.filter((g) => g === "wrong" || g === "empty").length;
-      expect(wrong / graded.length, `${repoDir}: ${wrong}/${graded.length} missed`).toBeLessThanOrEqual(0.1);
+      expect(wrong / graded.length, `${slug}: ${wrong}/${graded.length} missed`).toBeLessThanOrEqual(0.1);
     }
   }, 120_000);
 });
@@ -124,7 +136,10 @@ describe.runIf(process.env.CODEINDEX_ANSWERS === "1")("answer corpus generation"
         process.stderr.write(`answers: skipping ${repo.slug} — ${lastFailure() ?? "unknown"}\n`);
         continue;
       }
-      cases.push(...casesFromPairs(dir, declarations));
+      // The SLUG, never `dir`: a corpus keyed on this machine's clone path
+      // matches nothing anywhere else, which would make it look empty rather
+      // than portable.
+      cases.push(...casesFromPairs(repo.slug, declarations));
     }
 
     expect(cases.length).toBeGreaterThan(0);

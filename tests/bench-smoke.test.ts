@@ -166,7 +166,9 @@ describe("answer-quality scenario", () => {
       JSON.stringify({
         generatedAt: "2026-01-01T00:00:00.000Z",
         tool: "hand-written (smoke)",
-        cases: [{ repo: FIXTURE, symbol: "HttpClient", declaredIn: "src/client.ts", distractors: [] }],
+        // Keyed on the SLUG the harness uses (basename for --repo-dir), not on
+        // a path — the committed corpus has to mean the same thing everywhere.
+        cases: [{ repo: "mini-repo", symbol: "HttpClient", declaredIn: "src/client.ts", distractors: [] }],
       }),
     );
     try {

@@ -8,10 +8,20 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SRC = join(ROOT, "src");
 const TESTS = join(ROOT, "tests");
 
+// This walker is hand-rolled rather than the engine's, so it has none of
+// walk()'s exclusions and will happily descend into anything under tests/.
+// `pnpm test:e2e` leaves several GB of pinned clones — node_modules included —
+// in tests/.e2e-cache/, which turned this guard into a five-second timeout on
+// any machine that had ever run the e2e suite. Skipped here rather than in the
+// caller because every future user of tsFiles wants the same thing: our own
+// source, not a checkout of somebody else's.
+const SKIP_DIRS = new Set(["node_modules", "dist", "build", "coverage"]);
+
 function tsFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? tsFiles(join(dir, e.name)) : e.name.endsWith(".ts") ? [join(dir, e.name)] : [],
-  );
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    if (e.isDirectory()) return e.name.startsWith(".") || SKIP_DIRS.has(e.name) ? [] : tsFiles(join(dir, e.name));
+    return e.name.endsWith(".ts") ? [join(dir, e.name)] : [];
+  });
 }
 
 // A literal NUL byte in a source file makes git, grep and file(1) treat the
