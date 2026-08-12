@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.28.0](https://github.com/maxgfr/codeindex/compare/v2.27.1...v2.28.0) (2026-08-12)
+
+
+### Bug Fixes
+
+* **bench:** the repo cloner is clonePinned, not ensureRepo ([f4eab99](https://github.com/maxgfr/codeindex/commit/f4eab995505ed22e56b4462467cb776440ba03e7))
+* **search:** index the right tree, and say when a query found nothing ([df2c9c3](https://github.com/maxgfr/codeindex/commit/df2c9c3b428f97711ea90bd5f1763301f230380e))
+
+
+### Features
+
+* **bench:** grade answer quality against the TypeScript compiler ([a2d8521](https://github.com/maxgfr/codeindex/commit/a2d852167ca77dbb24043be00b6056211f8d1e36))
+* **bench:** run the answer-quality benchmark, and report what it says ([612870b](https://github.com/maxgfr/codeindex/commit/612870bf649dead00eecd7c1f41c3b080f81d71e))
+* **lsp:** opt-in language-server tier for type-aware references ([a70ca0d](https://github.com/maxgfr/codeindex/commit/a70ca0d0f9895e1b378832ea2ab793c9a2d19428))
+* **mcp:** tool profiles and a one-call project brief ([f73df3a](https://github.com/maxgfr/codeindex/commit/f73df3ac899bc7c0e0f5dd288f497fb568385e90))
+* **query:** let the caller choose the payload, and score the row we were losing ([8f716a8](https://github.com/maxgfr/codeindex/commit/8f716a8247179c4a6581bf87417ac24a403f920c))
+
 ## [2.27.1](https://github.com/maxgfr/codeindex/compare/v2.27.0...v2.27.1) (2026-08-05)
 
 
