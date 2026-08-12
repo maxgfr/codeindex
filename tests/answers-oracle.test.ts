@@ -110,13 +110,13 @@ describe.runIf(process.env.CODEINDEX_ANSWERS === "1")("answer corpus generation"
     const { scipDeclarations, lastFailure } = await import("./oracles/external-diff.js");
     const bench = (await import(/* @vite-ignore */ new URL("../scripts/bench/repos.mjs", import.meta.url).href)) as unknown as {
       REPOS: { slug: string; lang: string }[];
-      ensureRepo: (repo: { slug: string }) => string;
+      clonePinned: (repo: { slug: string }) => string;
     };
-    const { REPOS, ensureRepo } = bench;
+    const { REPOS, clonePinned } = bench;
 
     const cases = [];
     for (const repo of REPOS.filter((r) => r.lang === "typescript")) {
-      const dir = ensureRepo(repo);
+      const dir = clonePinned(repo);
       const declarations = scipDeclarations(dir);
       if (!declarations) {
         // Named, not swallowed: a corpus silently missing a repo would make the
