@@ -163,8 +163,8 @@ an unchanged repo stay byte-identical.
 
 One judged query still returns nothing relevant, and the reason is honest: it
 asks for "authentication" against a file that never writes "auth" in any form.
-No lexical index can answer that; the [semantic tier](docs/SEMANTIC.md) is what
-it is for.
+No lexical index can answer that; the [semantic tier](#semantic-search-deterministic-static-embedding-tier)
+is what it is for.
 
 ## Use as a library (the vendoring model)
 
@@ -252,19 +252,86 @@ engine already ships. Indexing a tree through it produces `graph.json` and
 fixtures, with the grammars asserted loaded so the comparison cannot pass
 vacuously.
 
+The VFS is mounted in **two phases**, and the split is the point rather than an
+implementation detail. Sizes alone satisfy `lstatSync`, which is all `walk()`
+needs — so the real walk runs *before* you have fetched anything, and its
+keep-list is your download list. Gitignore chains, `IGNORE_DIRS`, `LOCKFILES`,
+`BINARY_EXT` and the 1 MiB cap all apply, and you never pay for a file the
+engine was going to discard.
+
 ```ts
-import { mountFiles, walk, loadGrammars, buildIndexArtifacts, searchIndex } from "@maxgfr/codeindex/browser";
+import {
+  resetVfs, mountFiles, setFileBytes, pruneUnfetched,
+  loadGrammars, walk, buildIndexArtifacts, searchIndex,
+} from "@maxgfr/codeindex/browser";
+
+const ROOT = "/repo";
+resetVfs();
+
+// Phase A — the whole tree, sizes only. `manifest` is whatever you can
+// enumerate cheaply: a git tree listing, a directory handle, a zip index.
+mountFiles(manifest.map((e) => ({ path: `${ROOT}/${e.path}`, size: e.size })));
+
+// walk() honours .gitignore, so give it the real bytes of those (they are tiny).
+for (const path of gitignorePaths) setFileBytes(`${ROOT}/${path}`, await readBytes(path));
+
+// The engine decides what is worth reading.
+const planned = walk(ROOT, { maxFiles: 5000 });
+if (planned.capped) console.warn("hit the cap you asked for — the index is partial");
+
+// Phase B — only those, then drop anything still without contents so no
+// phantom empty file enters the index.
+for (const file of planned.files) setFileBytes(file.abs, await readBytes(file.rel));
+pruneUnfetched();
+
+// Load only the grammars these extensions need: a Go repo pays 217 KB and
+// never touches the 5.4 MB C# grammar.
+const grammars = await loadGrammars(new Set(planned.files.map((f) => f.ext)), (name) =>
+  fetch(`/grammars/${name}`).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b)),
+);
+if (grammars.tier !== "ast") console.warn(`regex tier: ${grammars.note}`);
+
+const { scan, graph, symbols } = buildIndexArtifacts(ROOT);
 ```
 
-The VFS is mounted in two phases, and the split is the point: sizes alone
-satisfy `lstatSync`, so you mount paths and sizes with **no contents**, run the
-real `walk()`, and let its keep-list decide what is worth reading. Every ignore
-rule, the size cap and the `capped` flag stay the engine's.
+Holding every file already — a directory the user picked, an unpacked archive —
+mount them in one pass with `bytes` set and skip phase A. The two phases matter
+when *fetching* is the expensive part.
+
+**API this build adds**, on top of the whole main barrel:
+
+| | |
+|---|---|
+| `resetVfs()` | Empty the VFS. Call between trees so one cannot leak into the next. |
+| `mountFiles(files)` | Mount `{ path, size, bytes? }`. Omit `bytes` for phase A. |
+| `setFileBytes(path, bytes)` | Attach contents to a mounted path (or add a file). |
+| `hasFileBytes(path)` / `residentBytes()` | Is it resident; total bytes held. |
+| `pruneUnfetched()` | Drop every file still without contents; returns how many. |
+| `loadGrammars(exts, fetchWasm)` | Fetch + mount the minimal grammar set; returns the tier achieved. |
+| `mountRuntime(bytes)` / `mountGrammar(key, bytes)` | Lower-level mounts, if you drive loading yourself. Mount *before* `ensureGrammars`, which reads them synchronously. |
+| `grammarWasmName(key)`, `RUNTIME_WASM` | Filenames, for assembling your own URLs. |
+
+`loadGrammars` calls your `fetchWasm(name)` with bare filenames —
+`web-tree-sitter.wasm` first, then `typescript.wasm` and so on. Copy
+`node_modules/@maxgfr/codeindex/scripts/grammars/` into your static assets and
+serve them as `application/wasm`; the set is immutable per release, so a `Cache`
+entry keyed by URL never needs invalidating. Skip it entirely and every language
+falls back to the regex tier — a real option for a small bundle, and
+`loadGrammars` returns the tier it achieved so you can say which one you got
+rather than implying the better one.
+
+**Sizing.** ~325 KB minified (~90 KB gzipped); grammars are separate and lazy
+(`go` 217 KB, `javascript` 412 KB, `python` 458 KB, `typescript` 1.4 MB, plus a
+201 KB runtime). **Run it in a Web Worker**: extraction is synchronous and
+CPU-bound by design — that is what keeps rebuilds byte-identical — so on the
+main thread it blocks the page.
 
 There is no `browser` export condition on the main entry, so no bundler will
-swap the builds behind your back — ask for `/browser` explicitly.
+swap the builds behind your back — ask for `/browser` explicitly. `runCli` and
+`runMcpServer` are exported for signature compatibility and throw if called:
+both are Node-only end to end.
 
-Full guide: **[docs/BROWSER.md](docs/BROWSER.md)**. Working example: the
+Working example: the
 [playground](https://maxgfr.github.io/codeindex/playground/), which indexes any
 public repository client-side ([source](site/playground/)).
 
@@ -477,8 +544,55 @@ CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
   codeindex search "auth token" --repo . --semantic
 ```
 
-Full details incl. the HTTP protocol (build your own server):
-[docs/SEMANTIC.md](./docs/SEMANTIC.md).
+#### The artifact, and the protocol
+
+`embeddings.bin` is what `deserializeEmbeddings` reads back:
+
+```
+offset 0            "CIE1"      4-byte ASCII magic (a foreign file fails loudly)
+offset 4            uint32 LE   header length
+offset 8            UTF-8 JSON  { embedVersion, modelId, dim, count, records:[{file,symbol,line}] }
+offset 8+headerLen  int8 body   count × dim signed bytes, row-major
+```
+
+No absolute path and no timestamp; records follow scan order, so two builds of
+an unchanged repo are byte-identical. `EMBED_VERSION` + `modelId` + `dim`
+invalidate a stale or foreign artifact. Granularity is per-symbol (name +
+signature + file summary + path segments), with a per-file fallback for
+symbol-less files so every file with content is represented.
+
+**Fusion is by RANK, never a score blend**: BM25 scores and integer dot products
+live on incomparable scales, so `searchSemantic` uses the shared `rrf` helper
+(k=60) and adds `semanticSymbol` — the corpus symbol whose embedding was closest
+for that file — additively to the lexical result.
+
+To implement your own server, `CODEINDEX_EMBED_ENDPOINT` is the **base URL** and
+the client derives two routes:
+
+| method + path | request | response |
+|---|---|---|
+| `POST {base}/embed` | `{ "texts": ["…", …] }` | `{ "vectors": [[…float…], …] }` — same order, one row per text |
+| `GET {base}/healthz` | — | `200` (any body) when ready |
+
+Any dimension is accepted and vectors need not be pre-normalized — the engine
+L2-normalizes and int8-quantizes whatever it receives, through the *same* tail
+as the static tier, so ranking stays a pure integer dot product. Requests time
+out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000). Endpoint corpus vectors
+are built at search time and **never serialized**: that tier is deterministic
+per image digest, not byte-golden, so pin the digest. The reference server is
+`docker/embed/` (transformers.js + all-MiniLM-L6-v2, baked in at build, offline
+at run, non-root, `:8756`).
+
+**Degradation, in full** — every row exits 0:
+
+| present | behaviour |
+|---|---|
+| nothing | BM25 lexical |
+| + fuzzy | BM25 + stem/trigram fallback for `df==0` terms |
+| + model asset | RRF-fused deterministic static semantic search |
+| + `CODEINDEX_EMBED_ENDPOINT` | rich tier — **wins over a static model** |
+| `--semantic`, nothing available | lexical + stderr note |
+| endpoint set but unreachable | lexical + stderr note — **never** falls back to the static model |
 
 ## Type-aware references (opt-in LSP tier)
 

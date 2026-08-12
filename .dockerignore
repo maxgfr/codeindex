@@ -6,8 +6,6 @@
 !package.json
 !README.md
 !LICENSE
-!docs/MIGRATION.md
-!docs/SEMANTIC.md
 !scripts/engine.mjs
 !scripts/engine.d.mts
 !scripts/cli.mjs

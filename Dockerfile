@@ -6,8 +6,8 @@
 # so there is nothing to `npm install` or compile here: the image is just
 # `node` plus that bundle, its thin CLI entry, and the optional tree-sitter
 # grammars that turn on the AST extraction tier. No src/, no node_modules, no
-# embedding model (those are opt-in and stay outside the image — see
-# docs/SEMANTIC.md / `codeindex embed pull`).
+# embedding model (those are opt-in and stay outside the image — see the
+# semantic tier in README.md / `codeindex embed pull`).
 #
 # Base: node:22-slim (Debian bookworm). A distroless nodejs22 base is ~27 MiB
 # smaller, but node:22-slim already lands the full image comfortably under
@@ -32,8 +32,10 @@ COPY --chown=node:node scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs .
 # for the loader's same-directory resolution to find them — see
 # resolveGrammarDir() in engine.mjs.
 COPY --chown=node:node scripts/grammars ./scripts/grammars
+# README.md carries the browser guide, the semantic tier and the versioning
+# rules that used to live under docs/ — one file, so the image documents itself
+# without a directory to keep in sync.
 COPY --chown=node:node package.json README.md LICENSE ./
-COPY --chown=node:node docs/MIGRATION.md docs/SEMANTIC.md ./docs/
 
 # Drop root: the image only ever reads its own files and the bind-mounted
 # repo under /work, never writes inside /app.

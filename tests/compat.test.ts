@@ -13,7 +13,7 @@ import { renderSymbolsJson } from "../src/render/symbols-json.js";
 // tests/compat/. The engine, stamped with ultraindex's version/schema via
 // `meta`, must reproduce them byte-for-byte — proving the core moved here
 // without a behavior change. Regenerate the pins ONLY for an adjudicated,
-// documented behavior change (see the golden rules in docs/MIGRATION.md).
+// documented behavior change (see the versioning rules in README.md).
 const EXPECTED_GRAPH = fileURLToPath(new URL("./compat/ultraindex-5.1.0-graph.json", import.meta.url));
 const EXPECTED_SYMBOLS = fileURLToPath(new URL("./compat/ultraindex-5.1.0-symbols.json", import.meta.url));
 const FIXTURE = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));

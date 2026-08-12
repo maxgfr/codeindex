@@ -93,12 +93,15 @@ describe("@maxgfr/codeindex/browser", () => {
   });
 
   it("is documented for consumers", () => {
-    const docs = join(REPO_ROOT, "docs", "BROWSER.md");
-    expect(existsSync(docs)).toBe(true);
-    expect(pkg.files).toContain("docs/BROWSER.md");
-    const text = readFileSync(docs, "utf8");
+    // The browser guide used to be docs/BROWSER.md and now lives in README.md.
+    // The guard moved with it rather than being dropped: an entry point nobody
+    // documents is an entry point nobody can adopt, and npm ships README.md
+    // unconditionally — so the documentation reaches a consumer either way.
+    const text = readFileSync(join(REPO_ROOT, "README.md"), "utf8");
     expect(text).toContain("@maxgfr/codeindex/browser");
     expect(text).toContain("loadGrammars");
+    // The two-phase mount is the part a consumer gets wrong without prose.
+    expect(text).toContain("pruneUnfetched");
   });
 
   it("keeps the built bundle in the build and reproducibility scripts", () => {

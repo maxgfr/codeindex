@@ -19,7 +19,8 @@ The engine's encoder (src/embed/encode.ts) is the compatibility contract:
 
 potion-base-8M's tokenizer IS BERT WordPiece (`##` continuation, uncased,
 strip-accents), so its vocab drops straight into that contract. Fidelity to the
-original HF tokenizer is deliberately NOT required (docs/SEMANTIC.md): query and
+original HF tokenizer is deliberately NOT required (see README, semantic tier):
+query and
 corpus are both encoded by the same JS encoder, so self-consistency is all that
 matters.
 

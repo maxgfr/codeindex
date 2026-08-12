@@ -24,7 +24,8 @@ into.
 ## Why the conversion is faithful (the compatibility contract)
 
 The engine encoder is the contract, and it is documented as self-consistent by
-design (`docs/SEMANTIC.md`): the corpus **and** the query are encoded by the same
+design (see the semantic tier in the root README): the corpus **and** the query
+are encoded by the same
 JS encoder, so fidelity to the original HF tokenizer is *not* required — only
 that every vocab entry the encoder can gather is present.
 

@@ -29,10 +29,7 @@
     "scripts/engine.browser.d.mts",
     "scripts/cli.mjs",
     "scripts/grammars",
-    "src",
-    "docs/BROWSER.md",
-    "docs/MIGRATION.md",
-    "docs/SEMANTIC.md"
+    "src"
   ],
   "engines": {
     "node": ">=18"

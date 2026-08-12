@@ -50,7 +50,11 @@ describe("npm pack contents", () => {
     expect(packFiles).toContain("scripts/engine.mjs");
     expect(packFiles).toContain("scripts/engine.d.mts");
     expect(packFiles).toContain("scripts/cli.mjs");
-    expect(packFiles).toContain("docs/MIGRATION.md");
+    // npm ships README.md unconditionally, and it now carries the browser
+    // guide, the semantic tier and the versioning rules that used to sit under
+    // docs/ — so a consumer still gets the documentation without the package
+    // having to list a directory that can drift out of sync with it.
+    expect(packFiles).toContain("README.md");
     expect(packFiles.some((f) => /^scripts\/grammars\/.*\.wasm$/.test(f))).toBe(true);
   });
 
