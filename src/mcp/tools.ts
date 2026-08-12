@@ -101,8 +101,29 @@ export const TOOLS = [
       "Who references a symbol? Three labeled tiers: defs (declarations), callSites (line-precise, import-corroborated call bindings), referencingFiles (file-level identifier/doc mentions — may include homonyms). Confidence decreases across tiers; the labels let you decide what to trust.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Symbol name" } },
+      properties: {
+        ...repoProp,
+        name: { type: "string", description: "Symbol name" },
+        lsp: {
+          type: "boolean",
+          description:
+            "Also ask a configured language server (see lsp_status) and append an `lsp` block: its references plus an `agreement` matrix (both / lspOnly / staticOnly). The three static tiers are unchanged either way. `staticOnly` is where the homonyms are. No config, no binary, a crash or a timeout all degrade to the static answer with a stated reason (default false).",
+        },
+      },
       required: ["repo", "name"],
+    },
+  },
+  {
+    name: "lsp_status",
+    description:
+      "Is the optional LSP tier configured, and would it answer? Reports the config path and its source, each server with whether its command is on PATH and how many files in this repo it claims, and the languages no server covers. Opt-in by asset: the tier is active only when <repo>/.codeindex/lsp.json exists (or CODEINDEX_LSP_CONFIG points at one). `probe: true` additionally starts each server to read the capabilities it really advertises. The tier never touches graph.json/symbols.json — it annotates query answers only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        probe: { type: "boolean", description: "Start each server and read its real capabilities (default false: no spawn)" },
+      },
+      required: ["repo"],
     },
   },
   {
@@ -500,6 +521,18 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ["defs", "callSites", "referencingFiles"],
   },
+  lsp_status: {
+    type: "object",
+    properties: {
+      lspVersion: { type: "number" },
+      mode: { type: "string", enum: ["none", "configured"] },
+      configPath: { type: ["string", "null"] },
+      source: { type: "string", enum: ["env", "repo", "cwd", "none"] },
+      servers: { type: "array", items: anyObj },
+      unmappedLanguages: strArr,
+    },
+    required: ["lspVersion", "mode", "source", "servers", "unmappedLanguages"],
+  },
   explain_search: {
     type: "object",
     properties: {
@@ -621,6 +654,10 @@ export const TOOL_META: Record<string, ToolMeta> = {
   grep: { title: "Grep file contents" },
   search: { title: "Lexical search", openWorld: true },
   explain_search: { title: "Search with a verdict", openWorld: true },
+  // openWorld: it spawns a process the user configured, whose answer this
+  // engine does not determine — the same honesty `search` and `embed_status`
+  // already carry for reaching outside their own artifacts.
+  lsp_status: { title: "LSP tier status", openWorld: true },
   embed_status: { title: "Embedding tier status", openWorld: true },
   type_hierarchy: { title: "Type hierarchy" },
   implementations: { title: "Implementations" },

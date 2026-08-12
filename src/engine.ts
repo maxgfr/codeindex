@@ -188,6 +188,26 @@ export {
 } from "./embed/endpoint.js";
 export type { EmbedEndpointOptions } from "./embed/endpoint.js";
 
+// Optional LSP tier: type-aware references from a language server the user
+// configures, annotating the static answer rather than replacing it.
+//
+// NOTHING HERE IS REACHABLE FROM THE ARTIFACT PIPELINE — src/pipeline.ts does
+// not import src/lsp/, and tests/lsp-boundary.test.ts proves it by building
+// this repo's own graph and checking the import closure. That is what makes
+// "the LSP tier cannot change graph.json/symbols.json bytes" a property of the
+// module graph rather than a promise in a comment.
+export { lspStatus, referencesWithLsp } from "./lsp/index.js";
+export { loadLspConfig, parseLspConfig, resolveLspConfigPath, serverForLang } from "./lsp/config.js";
+export { openLspSession, LspTimeout } from "./lsp/client.js";
+export { spawnLspTransport } from "./lsp/spawn.js";
+export { createFramer, encodeMessage, fileUri, relFromUri, locationsToRefs, MAX_FRAME_BYTES } from "./lsp/protocol.js";
+export { agreementOf, columnOfSymbol, lspUnavailable } from "./lsp/refs.js";
+export type { LspConfig, LspServerConfig, LspConfigSource } from "./lsp/config.js";
+export type { LspStatus, LspServerStatus } from "./lsp/index.js";
+export type { LspTransport, LspSession, LspSessionOptions, LspCapabilities } from "./lsp/client.js";
+export type { LspReferences, LspBlock, LspAgreement } from "./lsp/refs.js";
+export type { LspRef, LspMessage } from "./lsp/protocol.js";
+
 // Architecture rules: forbidden edges + cycles/orphans builtins (issue #4).
 export { checkRules, parseRules } from "./rules.js";
 export type { ArchRule, ForbiddenEdgeRule, BuiltinRule, RuleSeverity, RuleViolation } from "./rules.js";

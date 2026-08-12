@@ -34,4 +34,52 @@ export function execSync(command: string): never {
   throw error;
 }
 
-export default { spawnSync, execSync };
+/** The shape `spawn` consumers actually touch — deliberately not Node's full one. */
+export interface ChildProcessLike {
+  pid: number | undefined;
+  stdin: { write(chunk: string): boolean; end(): void } | null;
+  stdout: { on(event: string, listener: (chunk: unknown) => void): unknown } | null;
+  stderr: { on(event: string, listener: (chunk: unknown) => void): unknown } | null;
+  on(event: string, listener: (...a: unknown[]) => void): ChildProcessLike;
+  kill(signal?: string): boolean;
+}
+
+/**
+ * Asynchronous spawn, absent the same way `spawnSync` is absent.
+ *
+ * `spawnSync` can report ENOENT in its return value; `spawn` cannot, because
+ * the real one reports it by emitting `error` on a process object it has
+ * already returned. So this returns a process that emits ENOENT on the next
+ * microtask and then closes — which is exactly the sequence a caller has to
+ * handle anyway for a language server that is not installed, and therefore the
+ * path that is already tested rather than a browser-specific fork.
+ */
+export function spawn(command: string, _args?: readonly string[], _options?: unknown): ChildProcessLike {
+  const listeners = new Map<string, ((...a: unknown[]) => void)[]>();
+  const child: ChildProcessLike = {
+    pid: undefined,
+    stdin: null,
+    stdout: null,
+    stderr: null,
+    on(event, listener) {
+      const arr = listeners.get(event) ?? [];
+      arr.push(listener);
+      listeners.set(event, arr);
+      return child;
+    },
+    kill: () => false,
+  };
+  const error = new Error(`spawn ${command} ENOENT`) as NodeJS.ErrnoException;
+  error.code = "ENOENT";
+  error.syscall = `spawn ${command}`;
+  error.path = command;
+  // Next microtask, so a caller that attaches listeners synchronously after the
+  // call — which is the only correct way to use spawn — still receives both.
+  void Promise.resolve().then(() => {
+    for (const listener of listeners.get("error") ?? []) listener(error);
+    for (const listener of listeners.get("close") ?? []) listener(null);
+  });
+  return child;
+}
+
+export default { spawnSync, execSync, spawn };

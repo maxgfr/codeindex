@@ -28,6 +28,7 @@ import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
+import { lspStatus, referencesWithLsp } from "./lsp/index.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
@@ -207,7 +208,16 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "find_references") {
     const symName = str(args.name);
     if (!symName) throw new Error("`name` is required");
-    return JSON.stringify(findReferences(getScan(repo, scanOpts, walked), symName), null, 2);
+    const scan = getScan(repo, scanOpts, walked);
+    const statik = findReferences(scan, symName);
+    // The static answer is computed FIRST and passed in, so the LSP tier is
+    // structurally incapable of removing anything from it — it can only append
+    // a labelled `lsp` block. Absent config → no block at all, byte-compat.
+    if (args.lsp === true) return JSON.stringify(await referencesWithLsp(scan, repo, symName, statik), null, 2);
+    return JSON.stringify(statik, null, 2);
+  }
+  if (name === "lsp_status") {
+    return JSON.stringify(await lspStatus(getScan(repo, scanOpts, walked), repo, args.probe === true), null, 2);
   }
   if (name === "replace_symbol_body" || name === "insert_after_symbol" || name === "insert_before_symbol") {
     const namePath = str(args.namePath);

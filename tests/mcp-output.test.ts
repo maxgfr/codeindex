@@ -112,6 +112,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   churn: {},
   find_references: { name: "HttpClient" },
   explain_search: { query: "http client retry" },
+  lsp_status: {},
   call_graph: { symbol: "HttpClient", depth: 1 },
   hotspots: {},
   coupling: {},

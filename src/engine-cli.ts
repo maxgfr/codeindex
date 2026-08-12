@@ -47,6 +47,7 @@ import {
   probeEndpoint,
 } from "./embed/endpoint.js";
 import { have, sh } from "./util.js";
+import { lspStatus } from "./lsp/index.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
@@ -81,6 +82,15 @@ Commands:
                                the source with CODEINDEX_EMBED_URL
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
+  lsp         Optional LSP tier (opt-in by asset — the tier is active only when
+              <repo>/.codeindex/lsp.json exists, or CODEINDEX_LSP_CONFIG points
+              at one). It annotates QUERY answers only and never touches
+              graph.json/symbols.json:
+                lsp status     Config path and source, each server with whether
+                               its command is on PATH and how many files it
+                               claims, and the languages nothing covers (JSON).
+                               --probe also starts each server to read the
+                               capabilities it really advertises
   grammars    Tree-sitter wasm grammars (optional AST tier; regex without them).
               Two tiers: CORE ships with the bundle; EXTENDED (kotlin, elixir,
               zig, solidity, hcl/terraform) arrives only via \`grammars pull\`.
@@ -179,6 +189,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
                       local static model (lexical-only when neither is available)
   --run               \`embed serve\`: run the docker command instead of printing it
+  --probe             \`lsp status\`: start each server and read the capabilities
+                      it really advertises (default: no spawn)
   --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
@@ -220,6 +232,7 @@ interface CliFlags {
   semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
   recall?: boolean; // callers: recall-oriented binding
   run?: boolean; // `embed serve`: actually run the docker command (default: print)
+  probe?: boolean; // `lsp status`: start each server to read its real capabilities
   projectRoot?: string; // scip: override Metadata.project_root
   base?: string; // delta: branch/ref to diff against (default: the repo's default branch)
   staged?: boolean; // delta: diff the index instead of the merge-base
@@ -284,6 +297,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--semantic") flags.semantic = true;
     else if (a === "--recall") flags.recall = true;
     else if (a === "--run") flags.run = true;
+    else if (a === "--probe") flags.probe = true;
     else if (a === "--base") flags.base = next();
     else if (a === "--staged") flags.staged = true;
     else if (a === "--depth") flags.depth = num();
@@ -894,6 +908,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");
     }
+  } else if (cmd === "lsp") {
+    const sub = flags.positional;
+    if (sub !== "status") throw new Error("lsp needs a subcommand: status");
+    // A MALFORMED config is the one case that exits 1: here the config IS the
+    // question being asked, so swallowing the parse error would answer it
+    // wrongly. Everywhere else an unusable tier degrades on exit 0.
+    emit(JSON.stringify(await lspStatus(readScan(), flags.repo, flags.probe === true), null, 2) + "\n", flags.out);
   } else if (cmd === "grammars") {
     const sub = flags.positional;
     const cacheDir = sharedGrammarsCacheDir();
