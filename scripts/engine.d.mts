@@ -715,6 +715,21 @@ interface FindSymbolOptions {
     substring?: boolean;
     includeBody?: boolean;
     maxResults?: number;
+    /**
+     * Return only what LOCATES a declaration — name, kind, file, line — dropping
+     * the signature, line span, visibility and language.
+     *
+     * The default answer carries the complete signature because "what shape is
+     * it" is the question that follows "where is it" almost every time, and one
+     * round trip beats two. But it is not free: measured on `Route` in
+     * create-t3-turbo, the full answer is 1,561 bytes against 640 for a
+     * locate-only one — and when the caller genuinely only wants a path, the
+     * signature is context spent on a question nobody asked.
+     *
+     * So it is the CALLER's choice rather than ours, and the default does not
+     * move: an agent that knows it is only resolving a path can say so.
+     */
+    concise?: boolean;
 }
 declare function findSymbol(scan: RepoScan, namePath: string, opts?: FindSymbolOptions): SymbolMatch[];
 interface SymbolReferences {

@@ -664,23 +664,37 @@ Measured against universal-ctags, Serena (LSP over MCP) and Graphify with a
 reproducible harness (`scripts/bench/`) — median of 5 runs, one warmup
 discarded; full methodology, fairness notes and every scenario in
 [BENCHMARKS.md](./BENCHMARKS.md). These are architecturally different tools, so
-each row below is a specific operation, never a vague "codeindex vs tool X".
+every row is a specific operation, never a vague "codeindex vs tool X" — and
+the last column names who actually wins it, including the rows we lose.
 
-| | codeindex | universal-ctags | Serena | Graphify |
-| --- | --- | --- | --- | --- |
-| what it produces | byte-stable `graph.json` / `symbols.json` + SCIP | a flat `tags` file | live LSP answers, no artifact | `graph.json` from tree-sitter |
-| cross-file edges | imports, calls, `extends`/`implements`, doc links | none | live and type-aware | label-matched, basename-keyed files |
-| cold index — 2,823 files | 631 ms | **330 ms** | 7,695 ms | 10,478 ms |
-| cold index — 27,952 files | 4,917 ms | **3,357 ms** | n/a — intractable at bench time | n/a — intractable at bench time |
-| warm rerun / one file touched | **1,234 ms / 2,489 ms** | no incremental mode | re-indexes lazily in-session | rebuilds via the cold command |
-| warm query (find-symbol, `next.js`) | 1 ms in-proc | 104 ms tags scan | n/a at that size | n/a at that size |
-| byte-identical rebuilds | **7 / 7 repos** | not measured | no artifact to diff | 0 / 6 measurable repos |
-| language coverage | 16 regex extractors, 21 tree-sitter grammars | ~40, generic parser rules | any language with an LSP server | 36 via tree-sitter |
-| install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv |
-| MCP server | 33 tools, subsettable by profile | none | yes, LSP-backed | yes |
-| onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none |
-| type-aware references | opt-in LSP tier, annotating the static answer | none | native | none |
-| answer quality measured | yes — graded against the TS compiler | not measured | not measured | not measured |
+| | codeindex | universal-ctags | Serena | Graphify | winner |
+| --- | --- | --- | --- | --- | --- |
+| what it produces | byte-stable `graph.json` / `symbols.json` + SCIP | a flat `tags` file | live LSP answers, no artifact | `graph.json` from tree-sitter | — |
+| cross-file edges | imports, calls, `extends`/`implements`, doc links | none | live and type-aware | label-matched, basename-keyed files | — |
+| **answers correct** (75 compiler-graded questions) | **75 / 75** | n/a — no MCP server | 49 / 50, 25 unanswerable | 19 / 50, 25 unanswerable | **codeindex** |
+| tokens per answer | 76–89 default / **35 concise** | n/a | 48–54 | 31–42 | **codeindex** (concise) |
+| answers on a 27,952-file repo | **25 / 25** | n/a | cannot index at bench time | cannot index at bench time | **codeindex** |
+| cold index — 2,823 files | 631 ms | **330 ms** | 7,695 ms | 10,478 ms | **ctags** |
+| cold index — 27,952 files | 4,917 ms | **3,357 ms** | n/a — intractable | n/a — intractable | **ctags** |
+| warm rerun / one file touched | **1,234 ms / 2,489 ms** | no incremental mode | re-indexes lazily in-session | rebuilds via the cold command | **codeindex** |
+| warm query (find-symbol, `next.js`) | **1 ms** in-proc | 104 ms tags scan | n/a at that size | n/a at that size | **codeindex** |
+| byte-identical rebuilds | **7 / 7 repos** | not measured | no artifact to diff | 0 / 6 measurable repos | **codeindex** |
+| declarations vs the TS compiler | **100%** | 94.6% | n/a | n/a | **codeindex** |
+| language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
+| type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
+| install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
+| MCP server | **33 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
+| says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
+
+**The rows we do not win, stated plainly.** ctags indexes cold faster at
+every size and installs smaller — it is writing a flat tags file, which is a
+smaller job, and it will keep winning that row. ctags and Serena cover more
+languages: ~40 generic parser rules and "anything with a language server"
+against our 21 grammars plus 16 regex extractors. And Serena's references are
+type-aware where ours are static, which is the gap the
+[opt-in LSP tier](#type-aware-references-opt-in-lsp-tier) exists to close
+without making everyone pay for it.
 
 ### Is the answer right? — the row nobody had
 
@@ -693,6 +707,7 @@ MCP servers through one shape-blind grader:
 | repo | server | asked | **correct** | incomplete | missed | tokens/answer |
 | --- | --- | --- | --- | --- | --- | --- |
 | t3-oss/create-t3-turbo | **codeindex** | 25 | **25** | 0 | 0 | 89 |
+| t3-oss/create-t3-turbo | codeindex `concise:true` | 25 | **25** | 0 | 0 | **35** |
 | t3-oss/create-t3-turbo | serena | 25 | **25** | 0 | 0 | 48 |
 | t3-oss/create-t3-turbo | graphify | 25 | 17 | 5 | 3 | 42 |
 | socialgouv/code-du-travail-numerique | **codeindex** | 25 | **25** | 0 | 0 | 82 |
@@ -704,24 +719,31 @@ MCP servers through one shape-blind grader:
 
 Read it honestly, because it does not say what a marketing table would.
 
-**Against Serena this is a tie, not a win.** On the two repos where both run it
-is 50/50 against 49/50 — one question, which is noise — and Serena answers in
-roughly **half the tokens**. That gap is not waste on our side and not a
-shortcut on theirs: the two are returning different things, and the difference
-is measurable. Asking both for `Route` in `create-t3-turbo`:
+**On correctness, Serena is a tie, not a loss.** On the two repos where both run
+it is 50/50 against 49/50 — one question, which is noise. Nobody should read
+that row as a win either way.
+
+**On tokens the default row is a loss, and it is the signature.** Our
+`find_symbol` returns each declaration's complete signature (parameters and
+return type) because "what shape is it" is the question that follows "where is
+it" almost every time, and one round trip beats two. Serena's returns the
+location. Measured on `Route` in `create-t3-turbo`:
 
 | answer | bytes | what you get |
 | --- | --- | --- |
-| serena `find_symbol` | 640 | name, kind, path, line span — **no signature** |
+| **codeindex `concise: true`** | **498** | name, kind, path, line |
+| serena `find_symbol` | 640 | name_path, kind, path, line span — **no signature** |
 | serena `find_symbol` + `include_body: true` | 1,503 | the whole function body |
-| codeindex `find_symbol` | 1,561 | the **complete signature** (parameters + return type) per match |
+| codeindex `find_symbol` (default) | 1,561 | the **complete signature** per match |
 
-So the cheap Serena answer is cheap because it does not tell you the shape of
-what it found, and the Serena answer that does costs **1,503 bytes of raw body
-against our 1,561 bytes of distilled signature** — the same price for the
-version an agent has to read line by line. Which trade is right is a judgement;
-the point is that the table gives you the numbers to make it rather than making
-it for you.
+_Both tools return the same 4 matches, both measured over their own MCP server —
+so these are payload sizes for identical answers, not different answers._
+
+So both ends of the trade exist here, and the caller picks: ask a locating
+question and pay **498 bytes / 35 tokens** for it — under Serena's 640/48, at
+the same 25/25 — or ask a shape question and get a distilled signature for
+roughly what Serena charges to hand you the raw body. What makes that true is
+one flag, not a smaller answer: the default did not move.
 
 **Against Graphify it is not close**, and the second row is the reason: on the
 1,429-file monorepo it answers **2 of 25**, missing 19 outright. Its nodes are

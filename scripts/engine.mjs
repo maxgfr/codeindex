@@ -10604,6 +10604,15 @@ function findSymbol(scan2, namePath, opts = {}) {
       m.body = content.split("\n").slice(m.line - 1, end).join("\n");
     }
   }
+  if (opts.concise) {
+    return capped.map((m) => ({
+      name: m.name,
+      kind: m.kind,
+      file: m.file,
+      line: m.line,
+      ...m.body !== void 0 ? { body: m.body } : {}
+    }));
+  }
   return capped;
 }
 function findReferences(scan2, name2) {
@@ -13524,7 +13533,7 @@ var init_tools = __esm({
       },
       {
         name: "find_symbol",
-        description: "Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Options: substring matching, includeBody to return the declaration's source. Exact-name matches rank first.",
+        description: `Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Each match carries its COMPLETE SIGNATURE (parameters and return type) by default, because "what shape is it" is the question that follows "where is it" almost every time and one round trip beats two. Options: substring matching, includeBody for the declaration's source, concise to drop everything but name/kind/file/line when you genuinely only want a location. Exact-name matches rank first.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -13532,6 +13541,10 @@ var init_tools = __esm({
             namePath: { type: "string", description: "Symbol name or Parent/child path" },
             substring: { type: "boolean" },
             includeBody: { type: "boolean" },
+            concise: {
+              type: "boolean",
+              description: "Return only name/kind/file/line \u2014 drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false)."
+            },
             maxResults: { type: "number", description: "Cap matches (default 50)" }
           },
           required: ["repo", "namePath"]
@@ -14295,6 +14308,7 @@ async function callTool(name2, args2, defaultRepo) {
     const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
       substring: args2.substring === true,
       includeBody: args2.includeBody === true,
+      concise: args2.concise === true,
       maxResults: num(args2.maxResults)
     });
     return JSON.stringify(matches, null, 2);

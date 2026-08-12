@@ -347,6 +347,23 @@ describe("symbol query API", () => {
     expect(fuzzy.map((m) => m.name)).toContain("makeWidget");
   });
 
+  it("concise drops the metadata without changing WHICH declarations are found", () => {
+    // The whole point is that it is a payload switch, not a search switch: an
+    // agent trading the signature for context must not also trade recall.
+    const scan = scanRepo(makeRepo());
+    const full = findSymbol(scan, "makeWidget");
+    const lean = findSymbol(scan, "makeWidget", { concise: true });
+    expect(lean.map((m) => `${m.file}:${m.line}`)).toEqual(full.map((m) => `${m.file}:${m.line}`));
+    expect(Object.keys(lean[0]!).sort()).toEqual(["file", "kind", "line", "name"]);
+    expect(JSON.stringify(lean).length).toBeLessThan(JSON.stringify(full).length);
+
+    // Composes with includeBody: a caller asking for both wants the source
+    // WITHOUT the metadata around it, not neither.
+    const withBody = findSymbol(scan, "makeWidget", { concise: true, includeBody: true })[0]!;
+    expect(withBody.body).toContain("return new Widget()");
+    expect(withBody.signature).toBeUndefined();
+  });
+
   it("findReferences merges precise call sites with file-level references", () => {
     const scan = scanRepo(makeRepo());
     const refs = findReferences(scan, "makeWidget");

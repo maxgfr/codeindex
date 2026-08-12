@@ -202,6 +202,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
       substring: args.substring === true,
       includeBody: args.includeBody === true,
+      concise: args.concise === true,
       maxResults: num(args.maxResults),
     });
     return JSON.stringify(matches, null, 2);

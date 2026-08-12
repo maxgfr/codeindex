@@ -129,14 +129,30 @@ protocol), so scip-typescript cannot type-check it and no compiler-derived
 question exists for it. The generator prints the reason rather than silently
 producing a narrower corpus.
 
-Two readings the table does not make for you. **codeindex costs ~1.7× Serena's
-tokens per answer**, because `find_symbol` returns each declaration's complete
-signature while Serena's returns its location — measured on `Route` in
-`create-t3-turbo`: 640 bytes from serena without a body and no signature at all,
-1,503 bytes with `include_body: true` (the raw body), against 1,561 bytes from
-codeindex carrying the distilled signature. And the **next.js rows are not a
-loss for the competitors** — they are an absence: the gate above ~8k files means
-no index can be built at bench time, so there is no answer to grade.
+Two readings the table does not make for you.
+
+**The token column is measuring payload SHAPE, not efficiency.** codeindex's
+`find_symbol` returns each declaration's complete signature; Serena's returns
+its location. Asking both for `Route` in `create-t3-turbo`, over their own MCP
+servers, both returning the same 4 matches:
+
+| answer | bytes |
+| --- | --- |
+| codeindex `concise: true` | **498** |
+| serena `find_symbol` | 640 |
+| serena `find_symbol` + `include_body: true` | 1,503 |
+| codeindex `find_symbol` (default) | 1,561 |
+| codeindex `find_symbol` + `includeBody: true` | 2,496 |
+
+Re-run over the whole 25-question corpus through the MCP server, `concise: true`
+scores the same **25/25 at 35 tokens per answer** against Serena's 48 — so the
+default row is a deliberate payload choice rather than a ceiling, and the flag
+that shows it does not move the default. Reported on defaults above, because a
+benchmark tuned to its own tool is not a benchmark.
+
+**The next.js rows are not a loss for the competitors** — they are an absence:
+the gate above ~8k files means no index can be built at bench time, so there is
+no answer to grade.
 
 Regenerate the corpus (opt-in; clones, installs and indexes — minutes):
 
