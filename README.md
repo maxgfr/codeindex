@@ -391,6 +391,42 @@ default; disable with `--no-fuzzy` (CLI) or `fuzzy: false` (library/MCP
 `SearchOptions.fuzzy`); results carry an additive `fuzzyTerms` field when the
 fallback contributed.
 
+### When the query matched nothing
+
+A search that finds nothing useful and a search that finds nothing *at all* look
+identical in a ranked list, and the second one is the dangerous one.
+`subtokens("nullGipStep7")` emits `["nullgipstep7", "null", "gip", "step7"]`, so
+an identifier that is **not in the tree** still scores every file containing
+`null` or `gip` — twenty confident-looking rows for a symbol that does not
+exist. That is a real report, and it cost an afternoon.
+
+So `search` now says so:
+
+```sh
+$ codeindex search nullGipStep7 --repo .
+codeindex: No file in this index defines or mentions "nullgipstep7". The 5 results
+below match only its parts (null, gip). Closest indexed names: nullgipstep2,
+nullgipstep3. If you expected it here, check you are indexing the right branch
+or commit.
+```
+
+The note goes to **stderr**, so stdout stays a bare JSON array. Machine-readable
+diagnostics come from `explainQuery` (library), `--explain` (CLI) or the
+`explain_search` tool (MCP):
+
+| field | what it answers |
+|---|---|
+| `verdict` | `match` · `weak` (results rest on a near match, or the identifier has df 0) · `none` |
+| `wholeIdentifier` | the identifier you typed, with its document frequency — df 0 is the finding |
+| `unresolvedTerms` | terms that exist nowhere and bridged to nothing |
+| `droppedStopwords` | why an all-stopword query returned an empty array |
+| `terms[].bridge` | what a zero-df term fell back to, and whether by stem or trigram |
+
+Individual results carry `bridgedOnly: true` when nothing matched verbatim —
+present only when true, so an ordinary hit serialises to exactly the bytes it
+always did. `--exact` drops those rows entirely. Nothing here changes a score or
+an ordering, which is why the judged corpus cannot move.
+
 ### Semantic search (deterministic static-embedding tier)
 
 `codeindex search "<query>" --repo . --semantic` RRF-fuses lexical BM25 with a
@@ -444,6 +480,63 @@ CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
 Full details incl. the HTTP protocol (build your own server):
 [docs/SEMANTIC.md](./docs/SEMANTIC.md).
 
+## Type-aware references (opt-in LSP tier)
+
+`find_references` ships three labelled tiers, and it says out loud that the
+third is name-based and may include homonyms. A language server does not have
+that problem, so — same doctrine as the embedding tier — you can point one at
+the repository and get its answer *alongside* the static one:
+
+```jsonc
+// <repo>/.codeindex/lsp.json — presence of this file IS the opt-in
+{
+  "version": 1,
+  "servers": [{
+    "id": "ts",
+    "languages": ["typescript", "tsx", "javascript"],
+    "command": "typescript-language-server",
+    "args": ["--stdio"]
+  }]
+}
+```
+
+```sh
+codeindex lsp status --repo .           # config, PATH resolution, files claimed
+codeindex lsp status --repo . --probe   # also start each server, read its real capabilities
+```
+
+`find_references` then takes `lsp: true` and appends an `lsp` block:
+
+```jsonc
+{
+  "defs": [...], "callSites": [...], "referencingFiles": [...],   // unchanged
+  "lsp": {
+    "server": "ts", "ok": true, "refs": [...],
+    "agreement": { "both": [...], "lspOnly": [...], "staticOnly": [...] }
+  }
+}
+```
+
+**It annotates, it never replaces.** The three static tiers come back
+byte-identical, and the product is the agreement matrix: `lspOnly` is where the
+static tier under-recalled, and **`staticOnly` is where the homonyms are** — the
+only evidence the static tier over-reported, which a replace-merge would delete.
+A language server that has not finished indexing returns a partial answer with
+no error, which a union makes visible and a replace would silently hide.
+
+Three deliberate constraints:
+
+- **It cannot touch `graph.json` / `symbols.json`.** The config lives under
+  `.codeindex/` — already in the walker's ignore list — so it is not even a
+  walked file, and nothing under `src/lsp/` appears in the import closure of the
+  artifact pipeline. That is checked by building this repo's own graph
+  (`tests/lsp-boundary.test.ts`), not asserted in a comment.
+- **No built-in server table.** A default that activated itself wherever
+  `typescript-language-server` happened to be installed would make the same repo
+  answer differently per machine.
+- **Every failure degrades to the static answer on exit 0**, with a stated
+  reason: absent config, absent binary, missing capability, crash, timeout.
+
 ## Use as an MCP server
 
 `codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio.
@@ -453,18 +546,40 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**30 tools**, grouped by what they answer:
+**33 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
-| orient | `scan_summary`, `repo_map`, `graph`, `mermaid`, `workspaces` |
-| find | `search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
+| orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
+| find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
 | impact | `find_references`, `callers`, `call_graph`, `dead_code` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
 | memory | `write_memory`, `read_memory`, `list_memories`, `delete_memory` *(write except reads)* |
-| embeddings | `embed_status` |
+| tiers | `embed_status`, `lsp_status` |
+
+`onboard` is the one that saves the most round trips: it composes
+`scan_summary` + `workspaces` + `repo_map` + `hotspots` into one project brief
+and persists it as the `onboarding` memory, so the second session reads instead
+of rebuilding.
+
+### Advertising fewer tools
+
+Every advertised tool's full JSON Schema sits in an agent's context on **every
+turn**, so a session that only ever searches is paying for the graph analytics
+all day. `--tools` advertises a named subset:
+
+```sh
+codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview
+codeindex mcp --tools orient,impact # compose profiles with a comma
+```
+
+Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`.
+It trims what is **advertised**, not what is answerable: a tool left out of the
+profile still works when called by name, so a narrowed server loses no
+capability. An unknown profile fails at startup rather than quietly advertising
+everything.
 
 ### Pinning the server to one repository
 
@@ -495,9 +610,9 @@ introduced are only sent to clients that asked for it, so an older client sees
 exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
-the 21 read tools, `destructiveHint`/`idempotentHint` on the five that write —
+the 27 read tools, `destructiveHint`/`idempotentHint` on the six that write —
 which is what lets a host auto-approve reads and confirm only writes. From
-`2025-06-18`, the 15 tools whose result is always a JSON object also declare an
+`2025-06-18`, the 20 tools whose result is always a JSON object also declare an
 `outputSchema` and return `structuredContent`, so a client can validate and type
 the result instead of re-parsing a string. The remaining tools return arrays,
 argument-dependent shapes or plain text, which cannot yield a conforming
@@ -562,7 +677,20 @@ each row below is a specific operation, never a vague "codeindex vs tool X".
 | byte-identical rebuilds | **7 / 7 repos** | not measured | no artifact to diff | 0 / 6 measurable repos |
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | ~40, generic parser rules | any language with an LSP server | 36 via tree-sitter |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv |
-| MCP server | 30 tools | none | yes, LSP-backed | yes |
+| MCP server | 33 tools, subsettable by profile | none | yes, LSP-backed | yes |
+| onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none |
+| type-aware references | opt-in LSP tier, annotating the static answer | none | native | none |
+| answer quality measured | yes — graded against the TS compiler | not measured | not measured | not measured |
+
+The last two rows are the ones that answer "which is more powerful for an AI",
+and they pull in opposite directions — which is the honest position. Serena's
+references come from a live language server and are type-aware; nothing static
+matches that, so codeindex now offers the same thing as an
+[opt-in tier](#type-aware-references-opt-in-lsp-tier) that annotates the static
+answer rather than replacing it. And *answer quality* was, until now, measured
+by nobody: every table above this one measures a cost. The
+[answer-quality benchmark](./BENCHMARKS.md#answer-quality) grades all three
+servers on questions whose answers come from the real TypeScript compiler.
 
 Cold-index speed is the axis this engine wins least, and the table says so: a
 flat `tags` file is a smaller job, and ctags finishes it first at every size —

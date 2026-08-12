@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -137,5 +138,50 @@ describe("bench harness smoke", () => {
     expect(stderr).toContain("unknown scenario: no-such-scenario");
     expect(stderr).toContain("mcp-sessions");
     expect(stderr).toContain("mcp-tokens");
+  });
+});
+
+// The answer-quality scenario. Every other table in this harness measures a
+// cost; this one measures whether the answer is RIGHT, which is what a claim
+// like "more powerful for an AI" is actually about. Two properties are worth
+// pinning: it says so honestly when the compiler-derived corpus is absent, and
+// when a corpus IS present it drives a real MCP session and grades real answers.
+describe("answer-quality scenario", () => {
+  const CORPUS = fileURLToPath(new URL("./quality/answer-cases.json", import.meta.url));
+
+  it("renders one honest n/a row rather than skipping when no corpus exists", { timeout: 60_000 }, () => {
+    // Point the harness at a repo the corpus cannot possibly cover.
+    const md = runBench(["--repo-dir", FIXTURE, "--runs", "1", "--scenario", "answers", "--no-competitors"]);
+    expect(md).toContain("## Answer quality");
+    // A silent skip would read as "not applicable"; the reason has to be here.
+    expect(md).toMatch(/no answer corpus|Asked/);
+  });
+
+  it("grades a real MCP answer end to end against a hand-written corpus", { timeout: 180_000 }, () => {
+    // A stand-in for the scip-typescript corpus, so the plumbing — session,
+    // adapter, path extraction, grading — is proven without the toolchain.
+    const previous = existsSync(CORPUS) ? readFileSync(CORPUS, "utf8") : undefined;
+    writeFileSync(
+      CORPUS,
+      JSON.stringify({
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        tool: "hand-written (smoke)",
+        cases: [{ repo: FIXTURE, symbol: "HttpClient", declaredIn: "src/client.ts", distractors: [] }],
+      }),
+    );
+    try {
+      const md = runBench(["--repo-dir", FIXTURE, "--runs", "1", "--scenario", "answers", "--no-competitors"]);
+      const section = md.split("## Answer quality")[1]!.split("\n## ")[0]!;
+      const row = section.split("\n").find((l) => l.startsWith("| mini-repo | codeindex |"));
+      expect(row, section).toBeTruthy();
+      const cells = cellsOf(row!);
+      // Repo, server, asked, correct, incomplete, missed, tokens.
+      expect(cells[3]).toBe("1"); // asked
+      expect(cells[4]).toBe("1"); // correct — one file, the right one
+      expect(cells[6]).toBe("0"); // missed
+    } finally {
+      if (previous === undefined) rmSync(CORPUS, { force: true });
+      else writeFileSync(CORPUS, previous);
+    }
   });
 });

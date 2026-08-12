@@ -70,6 +70,46 @@ economy tables:
   timed; activation (spawn -> ready) is measured separately in the MCP
   sessions table, and each server's index/parse cost lives in Cold index.
 
+### Answer quality
+
+Every table in this file measures a **cost** — milliseconds, bytes, tokens,
+disk. None of them measures whether the answer is **right**, which is the claim
+people actually argue about when they say one tool is "more powerful for an AI".
+The `answers` scenario measures that, and three rules are what make it a
+measurement rather than a demonstration:
+
+1. **The answer key is not ours.** Questions are derived from
+   `scip-typescript`'s index — the real TypeScript compiler, the same authority
+   the extraction oracles already use — into
+   `tests/quality/answer-cases.json`. No tool in the table gets to author the
+   answers it is graded against.
+2. **The grader is shape-based and identical for all three servers.** It pulls
+   repo-relative paths out of the raw response text and checks the expected file
+   is among them. A per-server response parser would make the grader a variable
+   in the experiment it referees, and the three servers return three different
+   JSON shapes.
+3. **Only questions with exactly one right answer are asked.** A name the
+   compiler declares in two files would grade whichever the tool happened to
+   return first, which measures luck. Names under four characters are dropped
+   too: `New` matches half a Go repo by coincidence.
+
+Three outcomes rather than a pass/fail, because they cost a reader differently:
+`correct` is the right file and only it, `incomplete` is the right file among
+others (the reader pays for the others), `missed` is a wrong file or nothing —
+and a tool that says nothing is less harmful than one that says something false.
+Mean tokens per answer sit beside them, because being correct at ten times the
+context is a different result from being correct.
+
+Regenerate the corpus (opt-in; clones, installs and indexes — minutes):
+
+```sh
+CODEINDEX_ANSWERS=1 pnpm vitest run tests/answers-oracle.test.ts
+node scripts/bench/bench.mjs --scenario answers
+```
+
+Without the corpus the scenario renders one `n/a` row naming what is missing,
+rather than skipping in silence.
+
 ### Token-economy caveat
 
 The token-economy scenario's `grep lines` column locates symbol occurrences

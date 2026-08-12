@@ -853,6 +853,23 @@ export function diffCtags(repoDir: string, repoSlug: string): ExternalDiff | und
 }
 
 /**
+ * The compiler's declarations alone, as (file, name) pairs.
+ *
+ * Exposed so the ANSWER-quality corpus can be derived from the same authority
+ * the extraction differential already trusts, without re-running ctags for a
+ * comparison it does not need. Returns undefined — with lastFailure() set —
+ * exactly like the differentials.
+ */
+export function scipDeclarations(repoDir: string): { file: string; name: string }[] | undefined {
+  failure = undefined;
+  const { scipTs } = detectTools();
+  if (!scipTs.available) return fail(`scip-typescript unavailable: ${scipTs.reason}`);
+  const sc = runScipTs(repoDir, scipTs.path!);
+  if (!sc) return undefined;
+  return [...sc.side.pairs].map((key) => ({ file: pairFile(key), name: key.slice(key.indexOf(SEP) + 1) }));
+}
+
+/**
  * The full three-way differential.
  *
  * THE PROJECTION. Every count is taken over the files ALL THREE tools looked at:

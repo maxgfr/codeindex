@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { REPO_ROOT, CLI_PATH, ENGINE_URL, reposFor, clonePinned, pickSymbol } from "./repos.mjs";
 import { detectCompetitors, noCompetitors, runCmd } from "./competitors.mjs";
 import { adapterFor } from "./mcp-adapters.mjs";
+import { askAll, loadCorpus } from "./answers.mjs";
 import { measuredTokens, byteLen } from "./tokens.mjs";
 import { renderMarkdown, renderJson, na } from "./render.mjs";
 
@@ -633,6 +634,64 @@ function scenarioInstall(_ctxs, comp, _cfg) {
   };
 }
 
+// Answer quality: the only scenario here that measures whether a tool is RIGHT
+// rather than what it costs. Everything about it is deliberately opt-in-shaped:
+// it needs tests/quality/answer-cases.json, which is generated from
+// scip-typescript (CODEINDEX_ANSWERS=1 pnpm vitest run tests/answers-oracle),
+// so a missing corpus renders one honest n/a row instead of a silent skip.
+async function scenarioAnswers(ctxs, comp, _cfg) {
+  const corpus = loadCorpus();
+  const rows = [];
+  if (!corpus?.cases?.length) {
+    rows.push([na("no answer corpus — run CODEINDEX_ANSWERS=1 pnpm vitest run tests/answers-oracle.test.ts")]);
+    return {
+      id: "answers",
+      title: "Answer quality (find-symbol, graded against the TypeScript compiler)",
+      note: "Corpus absent on this machine.",
+      headers: ["Status"],
+      rows,
+    };
+  }
+
+  for (const ctx of ctxs) {
+    const dir = ctx.dir();
+    const cases = corpus.cases.filter((c) => c.repo === dir);
+    if (!cases.length) continue; // no compiler-derived questions for this repo
+    const knownFiles = new Set(ctx.arts().graph.files.map((f) => f.rel));
+    for (const server of MCP_SERVERS) {
+      const gate = mcpGate(server, comp, ctx);
+      const head = [{ v: ctx.repo.slug, k: "text" }, { v: server, k: "text" }];
+      if (gate) {
+        rows.push([...head, na(gate), na(gate), na(gate), na(gate), na(gate)]);
+        continue;
+      }
+      log(`answers: ${ctx.repo.slug} × ${server} (${cases.length} questions)`);
+      const opts = server === "codeindex" ? { engine: CLI_PATH } : { bin: comp[server].path };
+      if (server === "graphify" && comp.graphify.extra?.mcpPath) opts.mcpBin = comp.graphify.extra.mcpPath;
+      const r = await askAll(server, probeWorkDir(ctx, server), cases, knownFiles, opts);
+      if (!r.ok) {
+        rows.push([...head, na(r.reason), na(r.reason), na(r.reason), na(r.reason), na(r.reason)]);
+        continue;
+      }
+      rows.push([
+        ...head,
+        { v: r.asked, k: "int" },
+        { v: r.grades.correct, k: "int" },
+        { v: r.grades.incomplete, k: "int" },
+        { v: r.grades.wrong + r.grades.empty, k: "int" },
+        { v: r.tokens, k: "int" },
+      ]);
+    }
+  }
+  return {
+    id: "answers",
+    title: "Answer quality (find-symbol, graded against the TypeScript compiler)",
+    note: `Questions derived from scip-typescript's index — the REAL TypeScript compiler, the same authority the extraction oracles use — so the answer key is not authored by any tool in this table. Only names the compiler declares in exactly ONE file are asked (${corpus.cases.length} across the corpus, generated ${corpus.generatedAt}); a name declared twice would grade luck. The grader is shape-based and identical for all three servers: it pulls repo-relative paths out of the raw response text and checks the expected file is among them — a per-server parser would make the grader a variable in the experiment. "correct" = the right file and only it; "incomplete" = the right file among others, which costs the reader the others; "missed" = a wrong file or nothing. Tokens are the mean per answer (bytes/4), because being correct at ten times the context is a different result from being correct.`,
+    headers: ["Repo", "Server", "Asked", "Correct", "Incomplete", "Missed", "Tokens/answer"],
+    rows,
+  };
+}
+
 const SCENARIOS = {
   cold: scenarioCold,
   warm: scenarioWarm,
@@ -643,8 +702,9 @@ const SCENARIOS = {
   determinism: scenarioDeterminism,
   size: scenarioSize,
   install: scenarioInstall,
+  answers: scenarioAnswers,
 };
-const SCENARIO_ORDER = ["cold", "warm", "queries", "mcp-sessions", "tokens", "mcp-tokens", "determinism", "size", "install"];
+const SCENARIO_ORDER = ["cold", "warm", "queries", "mcp-sessions", "mcp-tokens", "answers", "tokens", "determinism", "size", "install"];
 
 // ---- CLI ---------------------------------------------------------------------
 
@@ -685,7 +745,9 @@ async function main() {
 
   const sections = [];
   try {
-    for (const id of ids) sections.push(SCENARIOS[id](ctxs, comp, cfg));
+    // await: every scenario but `answers` is synchronous and unaffected, and
+    // the answer probe drives a live MCP session that cannot be.
+    for (const id of ids) sections.push(await SCENARIOS[id](ctxs, comp, cfg));
   } finally {
     cleanupProbeScratch(); // per-repo scratch copies kept alive across mcp-sessions/mcp-tokens
   }
