@@ -48,6 +48,26 @@ describe("the engine's own sources stay indexable", () => {
     expect(offenders).toEqual([]);
   });
 
+  // README.md quoted SCHEMA_VERSION as "currently 4" while src/types.ts had
+  // moved to 5 — the exact drift this project spends its determinism budget
+  // avoiding in artifacts, happening in the prose that describes them. A
+  // consumer reads the README to decide whether their pinned artifacts are
+  // still valid, so a stale constant there is a wrong answer, not a typo.
+  it("README quotes the version constants the source actually declares", () => {
+    const types = readFileSync(join(ROOT, "src", "types.ts"), "utf8");
+    const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+    const declared = (name: string): string => {
+      const found = new RegExp(`export const ${name} = (\\d+)`).exec(types);
+      expect(found, `${name} not declared in src/types.ts`).toBeTruthy();
+      return found![1]!;
+    };
+    // Matched loosely on purpose: the assertion is that the NUMBER next to the
+    // constant is right, not that the sentence around it never gets rewritten.
+    const quoted = /`SCHEMA_VERSION` — the `graph\.json`\/`symbols\.json` shape \(currently (\d+)\)/.exec(readme);
+    expect(quoted, "README no longer states SCHEMA_VERSION — update this guard with it").toBeTruthy();
+    expect(quoted![1]).toBe(declared("SCHEMA_VERSION"));
+  });
+
   // A WHOLE-REPO scan with AST extraction, so it is seconds rather than
   // milliseconds and grows with the source tree. It sat just under vitest's
   // 5s default until src/lsp/ pushed it to 5.2s on CI hardware and turned a

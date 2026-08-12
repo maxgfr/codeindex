@@ -259,6 +259,9 @@ keep-list is your download list. Gitignore chains, `IGNORE_DIRS`, `LOCKFILES`,
 `BINARY_EXT` and the 1 MiB cap all apply, and you never pay for a file the
 engine was going to discard.
 
+<details>
+<summary><b>The full mount → walk → fetch → index sequence, the API this build adds, and sizing</b></summary>
+
 ```ts
 import {
   resetVfs, mountFiles, setFileBytes, pruneUnfetched,
@@ -325,6 +328,8 @@ rather than implying the better one.
 201 KB runtime). **Run it in a Web Worker**: extraction is synchronous and
 CPU-bound by design — that is what keeps rebuilds byte-identical — so on the
 main thread it blocks the page.
+
+</details>
 
 There is no `browser` export condition on the main entry, so no bundler will
 swap the builds behind your back — ask for `/browser` explicitly. `runCli` and
@@ -544,7 +549,8 @@ CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
   codeindex search "auth token" --repo . --semantic
 ```
 
-#### The artifact, and the protocol
+<details>
+<summary><b>The <code>embeddings.bin</code> layout, the fusion rule, the full degradation matrix, and the HTTP protocol for your own endpoint</b></summary>
 
 `embeddings.bin` is what `deserializeEmbeddings` reads back:
 
@@ -593,6 +599,8 @@ at run, non-root, `:8756`).
 | + `CODEINDEX_EMBED_ENDPOINT` | rich tier — **wins over a static model** |
 | `--semantic`, nothing available | lexical + stderr note |
 | endpoint set but unreachable | lexical + stderr note — **never** falls back to the static model |
+
+</details>
 
 ## Type-aware references (opt-in LSP tier)
 
@@ -764,7 +772,7 @@ agent asked for.
 ## Versioning
 
 - `ENGINE_VERSION` — the release tag, embedded greppably in the bundle.
-- `SCHEMA_VERSION` — the `graph.json`/`symbols.json` shape (currently 4).
+- `SCHEMA_VERSION` — the `graph.json`/`symbols.json` shape (currently 5).
   Consumers reject mismatched artifacts.
 - `EXTRACTOR_VERSION` — the extraction output shape; incremental caches keyed
   on it are discarded wholesale when it bumps.
