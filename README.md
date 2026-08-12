@@ -667,6 +667,11 @@ discarded; full methodology, fairness notes and every scenario in
 every row is a specific operation, never a vague "codeindex vs tool X" — and
 the last column names who actually wins it, including the rows we lose.
 
+_Provenance: the answer-quality and token rows were measured 2026-08-12
+(serena 1.6.1, graphify 0.9.26); the timing, determinism and footprint rows come
+from the 2026-07-25 session on the same machine (Apple M5, Node v24.15.0). Two
+dates in one table, said out loud rather than implied._
+
 | | codeindex | universal-ctags | Serena | Graphify | winner |
 | --- | --- | --- | --- | --- | --- |
 | what it produces | byte-stable `graph.json` / `symbols.json` + SCIP | a flat `tags` file | live LSP answers, no artifact | `graph.json` from tree-sitter | — |
