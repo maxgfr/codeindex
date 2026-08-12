@@ -127,6 +127,20 @@ export const TOOLS = [
     },
   },
   {
+    name: "onboard",
+    description:
+      "One call that says what this repository IS: its own tagline, size and language mix, monorepo layout when there is one, a token-budgeted map of the highest-PageRank files with their key signatures, and where git says work concentrates. Composes scan_summary + workspaces + repo_map + hotspots so the first four round trips of a session become one, and persists the result as the `onboarding` memory (read_memory) so the next session does not repeat them. Set remember:false to skip the write.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        budgetTokens: { type: "number", description: "Token budget for the key-files section (default 900)" },
+        remember: { type: "boolean", description: "Persist the brief as the `onboarding` memory (default true)" },
+      },
+      required: ["repo"],
+    },
+  },
+  {
     name: "repo_map",
     description:
       "Token-budgeted map of the repository: the highest-PageRank files with their key exported signatures, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
@@ -533,6 +547,11 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ["lspVersion", "mode", "source", "servers", "unmappedLanguages"],
   },
+  onboard: {
+    type: "object",
+    properties: { brief: { type: "string" }, memory: { type: "string" } },
+    required: ["brief"],
+  },
   explain_search: {
     type: "object",
     properties: {
@@ -638,6 +657,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   find_symbol: { title: "Find symbol" },
   find_references: { title: "Find references" },
   repo_map: { title: "Repository map" },
+  onboard: { title: "Project brief", write: true, destructive: false, idempotent: true },
   hotspots: { title: "Hotspots" },
   coupling: { title: "Change coupling" },
   replace_symbol_body: { title: "Replace symbol body", write: true, destructive: true, idempotent: true },
@@ -682,12 +702,63 @@ export function annotationsFor(name: string): Record<string, boolean> | undefine
 // `required` set and documents the default, so a client that omits it is
 // spec-correct rather than relying on the server being lenient. Newer protocol
 // revisions additionally get `title` and `annotations`.
-export function toolsFor(defaultRepo?: string, protocolVersion: string = PROTOCOL_VERSIONS[0]): readonly unknown[] {
+/**
+ * Named subsets of the tool list, by the question they answer.
+ *
+ * Every advertised tool's full JSON Schema sits in an agent's context on EVERY
+ * turn, so 32 of them is a standing cost paid whether or not the session ever
+ * touches a graph. A profile trims what is advertised, not what exists: the
+ * server still answers a tool that was not advertised, so nothing breaks for a
+ * client that knows a name from elsewhere.
+ *
+ * The default is `all`, deliberately. Narrowing by default would silently
+ * remove capability from every existing configuration.
+ */
+export const TOOL_PROFILES: Record<string, readonly string[]> = {
+  // Land in an unfamiliar repository and get your bearings.
+  orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "read_memory", "list_memories"],
+  // Locate a thing.
+  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
+  // Decide whether changing it is safe.
+  impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
+  // Change it.
+  edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
+  // Where the work and the risk concentrate.
+  risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"],
+};
+
+export function profileNames(): string[] {
+  return ["all", ...Object.keys(TOOL_PROFILES).sort()];
+}
+
+/** Resolve one or more comma-separated profile names to a tool-name set. */
+export function toolsInProfiles(spec: string): Set<string> {
+  const names = spec
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out = new Set<string>();
+  for (const name of names) {
+    if (name === "all") return new Set(TOOLS.map((t) => t.name));
+    const profile = TOOL_PROFILES[name];
+    if (!profile) throw new Error(`unknown tool profile "${name}" — one of: ${profileNames().join(", ")}`);
+    for (const tool of profile) out.add(tool);
+  }
+  return out;
+}
+
+export function toolsFor(
+  defaultRepo?: string,
+  protocolVersion: string = PROTOCOL_VERSIONS[0],
+  profile?: string,
+): readonly unknown[] {
   const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
   // Tool.title and Tool.outputSchema both arrive in 2025-06-18.
   const withRich = protocolVersion >= RICH_TOOLS_SINCE;
-  if (!defaultRepo && !withAnnotations && !withRich) return TOOLS;
-  return TOOLS.map((t) => ({
+  const allowed = profile ? toolsInProfiles(profile) : undefined;
+  const TOOLS_ = allowed ? TOOLS.filter((t) => allowed.has(t.name)) : TOOLS;
+  if (!defaultRepo && !withAnnotations && !withRich) return TOOLS_;
+  return TOOLS_.map((t) => ({
     ...t,
     ...(withRich && TOOL_META[t.name] ? { title: TOOL_META[t.name]!.title } : {}),
     ...(withRich && OUTPUT_SCHEMAS[t.name] ? { outputSchema: OUTPUT_SCHEMAS[t.name] } : {}),

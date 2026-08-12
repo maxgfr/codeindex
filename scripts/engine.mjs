@@ -1975,13 +1975,13 @@ async function Module2(moduleArg = {}) {
       }
       readAsync = /* @__PURE__ */ __name(async (url) => {
         if (isFileURI(url)) {
-          return new Promise((resolve4, reject) => {
+          return new Promise((resolve5, reject) => {
             var xhr = new XMLHttpRequest();
             xhr.open("GET", url, true);
             xhr.responseType = "arraybuffer";
             xhr.onload = () => {
               if (xhr.status == 200 || xhr.status == 0 && xhr.response) {
-                resolve4(xhr.response);
+                resolve5(xhr.response);
                 return;
               }
               reject(xhr.status);
@@ -2177,9 +2177,9 @@ async function Module2(moduleArg = {}) {
     __name(receiveInstantiationResult, "receiveInstantiationResult");
     var info2 = getWasmImports();
     if (Module["instantiateWasm"]) {
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         Module["instantiateWasm"](info2, (mod, inst) => {
-          resolve4(receiveInstance(mod, inst));
+          resolve5(receiveInstance(mod, inst));
         });
       });
     }
@@ -3510,8 +3510,8 @@ async function Module2(moduleArg = {}) {
   if (runtimeInitialized) {
     moduleRtn = Module;
   } else {
-    moduleRtn = new Promise((resolve4, reject) => {
-      readyPromiseResolve = resolve4;
+    moduleRtn = new Promise((resolve5, reject) => {
+      readyPromiseResolve = resolve5;
       readyPromiseReject = reject;
     });
   }
@@ -12279,6 +12279,174 @@ var init_endpoint = __esm({
   }
 });
 
+// src/repomap.ts
+function renderRepoMap(scan2, graph, opts = {}) {
+  const budgetChars = (opts.budgetTokens ?? 1024) * CHARS_PER_TOKEN;
+  const maxSymbols = opts.maxSymbolsPerFile ?? 8;
+  const ranked = [...graph.files].filter((f) => f.fileKind === "code").sort((a, b) => (b.pagerank ?? 0) - (a.pagerank ?? 0) || b.symbols - a.symbols || byStr(a.rel, b.rel));
+  const records = new Map(scan2.files.map((f) => [f.rel, f]));
+  const header = `# repo map \u2014 ${graph.fileCount} files
+`;
+  let out2 = header;
+  let files = 0;
+  for (const node of ranked) {
+    const rec = records.get(node.rel);
+    if (!rec) continue;
+    const symbols = [...rec.symbols].filter((s) => s.kind !== "reexport" && s.kind !== "reexport-all").sort((a, b) => Number(b.exported) - Number(a.exported) || a.line - b.line).slice(0, maxSymbols);
+    let block = `
+${node.rel}:
+`;
+    for (const s of symbols) {
+      const sig = (s.signature ?? `${s.kind} ${s.name}`).replace(/\s+/g, " ").trim().slice(0, 120);
+      block += `  ${s.line}: ${sig}
+`;
+    }
+    if (out2.length + block.length > budgetChars) break;
+    out2 += block;
+    files++;
+  }
+  return `${out2}
+(${files} of ${ranked.length} code files shown, ~${Math.ceil(out2.length / CHARS_PER_TOKEN)} tokens)
+`;
+}
+var CHARS_PER_TOKEN;
+var init_repomap = __esm({
+  "src/repomap.ts"() {
+    "use strict";
+    init_sort();
+    CHARS_PER_TOKEN = 4;
+  }
+});
+
+// src/coupling.ts
+function changeCoupling(dir, opts = {}) {
+  const maxCommitFiles = opts.maxCommitFiles ?? 30;
+  const minTogether = opts.minTogether ?? 3;
+  const maxPairs = opts.maxPairs ?? 100;
+  const range = opts.since ? [`${opts.since}..HEAD`] : [];
+  const res = sh("git", ["-C", dir, "-c", "core.quotePath=false", "log", ...range, "--pretty=format:%x1e", "--name-only"]);
+  if (!res.ok) return { ok: false, couplings: [] };
+  const totals = /* @__PURE__ */ new Map();
+  const pairs = /* @__PURE__ */ new Map();
+  for (const block of res.stdout.split("")) {
+    const files = block.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!files.length || files.length > maxCommitFiles) continue;
+    const unique = [...new Set(files)].sort(byStr);
+    for (const f of unique) totals.set(f, (totals.get(f) ?? 0) + 1);
+    for (let i2 = 0; i2 < unique.length; i2++) {
+      for (let j = i2 + 1; j < unique.length; j++) {
+        const key = `${unique[i2]}${SEP4}${unique[j]}`;
+        pairs.set(key, (pairs.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  const out2 = [];
+  for (const [key, together] of pairs) {
+    if (together < minTogether) continue;
+    const [a, b] = key.split(SEP4);
+    const totalA = totals.get(a) ?? together;
+    const totalB = totals.get(b) ?? together;
+    out2.push({ a, b, together, totalA, totalB, strength: Number((together / Math.min(totalA, totalB)).toFixed(3)) });
+  }
+  out2.sort((x, y) => y.strength - x.strength || y.together - x.together || byStr(x.a, y.a) || byStr(x.b, y.b));
+  return { ok: true, couplings: out2.slice(0, maxPairs) };
+}
+function rankHotspots(scan2, churn, top = 20) {
+  const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
+    const commits = churn.get(f.rel) ?? 0;
+    return { rel: f.rel, lines: f.lines, commits, score: Number((commits * Math.log2(f.lines + 1)).toFixed(2)) };
+  });
+  out2.sort((a, b) => b.score - a.score || b.lines - a.lines || byStr(a.rel, b.rel));
+  return out2.slice(0, top);
+}
+var SEP4;
+var init_coupling = __esm({
+  "src/coupling.ts"() {
+    "use strict";
+    init_util();
+    init_sort();
+    SEP4 = "\0";
+  }
+});
+
+// src/onboard.ts
+import { existsSync as existsSync7, readFileSync as readFileSync9 } from "fs";
+import { join as join17, resolve as resolve2 } from "path";
+function tagline(root) {
+  for (const name2 of README_NAMES) {
+    const path = join17(root, name2);
+    if (!existsSync7(path)) continue;
+    let text;
+    try {
+      text = readFileSync9(path, "utf8");
+    } catch {
+      continue;
+    }
+    for (const raw of text.split(/\n\s*\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#") || line.startsWith("<")) continue;
+      if (/^(\[!\[|!\[|\[)/.test(line) && !/[.:]\s/.test(line)) continue;
+      const cleaned = line.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, "").replace(/\s+/g, " ").trim();
+      if (cleaned.length > 20) return cleaned.slice(0, 400);
+    }
+    break;
+  }
+  return void 0;
+}
+function onboardBrief(scan2, graph, opts = {}) {
+  const lines = [];
+  const name2 = resolve2(scan2.root).replace(/\/+$/, "").split("/").pop() || "repository";
+  lines.push(`# ${name2}`, "");
+  const summary = tagline(scan2.root);
+  if (summary) lines.push(summary, "");
+  const languages = Object.entries(graph.languages).sort((a, b) => b[1] - a[1] || byStr(a[0], b[0])).slice(0, 6).map(([lang, count]) => `${lang} ${count}`).join(", ");
+  lines.push(`**${graph.fileCount} indexed files** \xB7 ${languages}`, "");
+  const workspaces = detectWorkspaces(scan2.root);
+  if (workspaces.packages.length > 1) {
+    lines.push(`## Layout \u2014 monorepo, ${workspaces.packages.length} packages`, "");
+    for (const pkg of workspaces.packages.slice(0, 20)) lines.push(`- \`${pkg.dir}\` \u2014 ${pkg.name}`);
+    if (workspaces.packages.length > 20) lines.push(`- \u2026and ${workspaces.packages.length - 20} more`);
+    if (workspaces.cycle?.length) lines.push("", `\u26A0 dependency cycle: ${workspaces.cycle.join(" \u2192 ")}`);
+    lines.push("");
+  }
+  lines.push("## Key files", "", renderRepoMap(scan2, graph, { budgetTokens: opts.budgetTokens ?? 900 }).trim(), "");
+  const { churn, ok: churnOk } = gitChurn(scan2.root);
+  if (churnOk && churn.size) {
+    const hotspots = rankHotspots(scan2, churn, 8);
+    if (hotspots.length) {
+      lines.push("## Where work concentrates", "", "Files ranked by commits \xD7 size \u2014 where changes and defects cluster.", "");
+      for (const spot of hotspots) lines.push(`- \`${spot.rel}\` \u2014 ${spot.commits} commits, ${spot.lines} lines`);
+      lines.push("");
+    }
+  }
+  lines.push(
+    "## Next",
+    "",
+    "- `search <query>` \u2014 BM25 over names, paths, doc comments and prose; `explain_search` says whether it really matched",
+    "- `find_symbol <Name>` / `symbols_overview <file>` \u2014 read structure without reading files",
+    "- `find_references <Name>` \u2014 three labelled tiers; add `lsp: true` when a language server is configured",
+    ""
+  );
+  const brief = lines.join("\n");
+  if (opts.remember === false) return { brief };
+  const memoryName = opts.memoryName ?? "onboarding";
+  writeMemory(scan2.root, memoryName, brief);
+  return { brief, memory: memoryName };
+}
+var README_NAMES;
+var init_onboard = __esm({
+  "src/onboard.ts"() {
+    "use strict";
+    init_repomap();
+    init_workspaces();
+    init_coupling();
+    init_git();
+    init_memory();
+    init_sort();
+    README_NAMES = ["README.md", "README.markdown", "README.rst", "README.txt", "README"];
+  }
+});
+
 // src/lsp/protocol.ts
 function encodeMessage(msg) {
   const body2 = JSON.stringify(msg);
@@ -12414,13 +12582,13 @@ async function openLspSession(transport, options) {
   const request = (method, params, budget = timeoutMs) => {
     if (dead) return Promise.reject(dead);
     const id = nextId++;
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new LspTimeout(method, budget));
       }, budget);
       timer.unref?.();
-      pending.set(id, { resolve: resolve4, reject, timer });
+      pending.set(id, { resolve: resolve5, reject, timer });
       transport.write(encodeMessage({ jsonrpc: "2.0", id, method, params }));
     });
   };
@@ -12509,19 +12677,19 @@ var init_client = __esm({
 });
 
 // src/lsp/config.ts
-import { existsSync as existsSync7, readFileSync as readFileSync9 } from "fs";
-import { join as join17, resolve as resolve2 } from "path";
+import { existsSync as existsSync8, readFileSync as readFileSync10 } from "fs";
+import { join as join18, resolve as resolve3 } from "path";
 function resolveLspConfigPath(repo) {
   const env = process.env.CODEINDEX_LSP_CONFIG;
   if (env !== void 0) {
     const trimmed = env.trim();
     if (!trimmed || trimmed === "0" || trimmed.toLowerCase() === "off") return { path: void 0, source: "none" };
-    return { path: resolve2(trimmed), source: "env" };
+    return { path: resolve3(trimmed), source: "env" };
   }
-  const inRepo = join17(repo, LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (existsSync7(inRepo)) return { path: inRepo, source: "repo" };
-  const inCwd = join17(process.cwd(), LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (inCwd !== inRepo && existsSync7(inCwd)) return { path: inCwd, source: "cwd" };
+  const inRepo = join18(repo, LSP_CONFIG_DIR, LSP_CONFIG_NAME);
+  if (existsSync8(inRepo)) return { path: inRepo, source: "repo" };
+  const inCwd = join18(process.cwd(), LSP_CONFIG_DIR, LSP_CONFIG_NAME);
+  if (inCwd !== inRepo && existsSync8(inCwd)) return { path: inCwd, source: "cwd" };
   return { path: void 0, source: "none" };
 }
 function parseLspConfig(payload) {
@@ -12560,10 +12728,10 @@ function parseLspConfig(payload) {
 }
 function loadLspConfig(repo) {
   const { path } = resolveLspConfigPath(repo);
-  if (!path || !existsSync7(path)) return void 0;
+  if (!path || !existsSync8(path)) return void 0;
   let payload;
   try {
-    payload = JSON.parse(readFileSync9(path, "utf8"));
+    payload = JSON.parse(readFileSync10(path, "utf8"));
   } catch (e) {
     throw new Error(`${path}: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -12596,14 +12764,14 @@ var init_config2 = __esm({
 });
 
 // src/lsp/refs.ts
-import { readFileSync as readFileSync10 } from "fs";
-import { join as join18 } from "path";
+import { readFileSync as readFileSync11 } from "fs";
+import { join as join19 } from "path";
 function lspUnavailable(server, reason) {
   return { server, ok: false, reason, refs: [], agreement: { both: [], lspOnly: [], staticOnly: [] } };
 }
 function columnOfSymbol(root, rel2, line, name2) {
   try {
-    const lines = readFileSync10(join18(root, rel2), "utf8").split(/\r?\n/);
+    const lines = readFileSync11(join19(root, rel2), "utf8").split(/\r?\n/);
     const index = lines[line - 1]?.indexOf(name2) ?? -1;
     return index < 0 ? 0 : index;
   } catch {
@@ -12668,7 +12836,7 @@ function refOrder(a, b) {
 }
 function readTextOrEmpty(root, rel2) {
   try {
-    return readFileSync10(join18(root, rel2), "utf8");
+    return readFileSync11(join19(root, rel2), "utf8");
   } catch {
     return "";
   }
@@ -13029,96 +13197,6 @@ var init_rules = __esm({
   }
 });
 
-// src/coupling.ts
-function changeCoupling(dir, opts = {}) {
-  const maxCommitFiles = opts.maxCommitFiles ?? 30;
-  const minTogether = opts.minTogether ?? 3;
-  const maxPairs = opts.maxPairs ?? 100;
-  const range = opts.since ? [`${opts.since}..HEAD`] : [];
-  const res = sh("git", ["-C", dir, "-c", "core.quotePath=false", "log", ...range, "--pretty=format:%x1e", "--name-only"]);
-  if (!res.ok) return { ok: false, couplings: [] };
-  const totals = /* @__PURE__ */ new Map();
-  const pairs = /* @__PURE__ */ new Map();
-  for (const block of res.stdout.split("")) {
-    const files = block.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (!files.length || files.length > maxCommitFiles) continue;
-    const unique = [...new Set(files)].sort(byStr);
-    for (const f of unique) totals.set(f, (totals.get(f) ?? 0) + 1);
-    for (let i2 = 0; i2 < unique.length; i2++) {
-      for (let j = i2 + 1; j < unique.length; j++) {
-        const key = `${unique[i2]}${SEP4}${unique[j]}`;
-        pairs.set(key, (pairs.get(key) ?? 0) + 1);
-      }
-    }
-  }
-  const out2 = [];
-  for (const [key, together] of pairs) {
-    if (together < minTogether) continue;
-    const [a, b] = key.split(SEP4);
-    const totalA = totals.get(a) ?? together;
-    const totalB = totals.get(b) ?? together;
-    out2.push({ a, b, together, totalA, totalB, strength: Number((together / Math.min(totalA, totalB)).toFixed(3)) });
-  }
-  out2.sort((x, y) => y.strength - x.strength || y.together - x.together || byStr(x.a, y.a) || byStr(x.b, y.b));
-  return { ok: true, couplings: out2.slice(0, maxPairs) };
-}
-function rankHotspots(scan2, churn, top = 20) {
-  const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
-    const commits = churn.get(f.rel) ?? 0;
-    return { rel: f.rel, lines: f.lines, commits, score: Number((commits * Math.log2(f.lines + 1)).toFixed(2)) };
-  });
-  out2.sort((a, b) => b.score - a.score || b.lines - a.lines || byStr(a.rel, b.rel));
-  return out2.slice(0, top);
-}
-var SEP4;
-var init_coupling = __esm({
-  "src/coupling.ts"() {
-    "use strict";
-    init_util();
-    init_sort();
-    SEP4 = "\0";
-  }
-});
-
-// src/repomap.ts
-function renderRepoMap(scan2, graph, opts = {}) {
-  const budgetChars = (opts.budgetTokens ?? 1024) * CHARS_PER_TOKEN;
-  const maxSymbols = opts.maxSymbolsPerFile ?? 8;
-  const ranked = [...graph.files].filter((f) => f.fileKind === "code").sort((a, b) => (b.pagerank ?? 0) - (a.pagerank ?? 0) || b.symbols - a.symbols || byStr(a.rel, b.rel));
-  const records = new Map(scan2.files.map((f) => [f.rel, f]));
-  const header = `# repo map \u2014 ${graph.fileCount} files
-`;
-  let out2 = header;
-  let files = 0;
-  for (const node of ranked) {
-    const rec = records.get(node.rel);
-    if (!rec) continue;
-    const symbols = [...rec.symbols].filter((s) => s.kind !== "reexport" && s.kind !== "reexport-all").sort((a, b) => Number(b.exported) - Number(a.exported) || a.line - b.line).slice(0, maxSymbols);
-    let block = `
-${node.rel}:
-`;
-    for (const s of symbols) {
-      const sig = (s.signature ?? `${s.kind} ${s.name}`).replace(/\s+/g, " ").trim().slice(0, 120);
-      block += `  ${s.line}: ${sig}
-`;
-    }
-    if (out2.length + block.length > budgetChars) break;
-    out2 += block;
-    files++;
-  }
-  return `${out2}
-(${files} of ${ranked.length} code files shown, ~${Math.ceil(out2.length / CHARS_PER_TOKEN)} tokens)
-`;
-}
-var CHARS_PER_TOKEN;
-var init_repomap = __esm({
-  "src/repomap.ts"() {
-    "use strict";
-    init_sort();
-    CHARS_PER_TOKEN = 4;
-  }
-});
-
 // src/deadcode.ts
 function findDeadCode(scan2) {
   const callers = callerIndexFor(scan2);
@@ -13228,8 +13306,8 @@ var init_viz = __esm({
 });
 
 // src/mcp/protocol.ts
-import { existsSync as existsSync8 } from "fs";
-import { join as join19 } from "path";
+import { existsSync as existsSync9 } from "fs";
+import { join as join20 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 function validateArgs(schema, args2) {
   const props = schema.properties ?? {};
@@ -13271,7 +13349,7 @@ function negotiateProtocol(requested) {
 function capResponse(text, tool, repo, maxBytes) {
   const bytes = Buffer.byteLength(text, "utf8");
   if (bytes <= maxBytes) return text;
-  const artifact = ARTIFACT_FOR[tool] ? join19(repo, INDEX_DIR, ARTIFACT_FOR[tool]) : void 0;
+  const artifact = ARTIFACT_FOR[tool] ? join20(repo, INDEX_DIR, ARTIFACT_FOR[tool]) : void 0;
   return JSON.stringify(
     {
       truncated: true,
@@ -13280,7 +13358,7 @@ function capResponse(text, tool, repo, maxBytes) {
       maxBytes,
       reason: "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
       narrower: NARROWER[tool] ?? "narrow the request with `scope`, `include`/`exclude`, or a `limit`",
-      ...artifact && existsSync8(artifact) ? { artifact, artifactNote: "The full result is already on disk here \u2014 read it directly if you need all of it." } : artifact ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join19(repo, INDEX_DIR)}\` to get this as a file.` } : {}
+      ...artifact && existsSync9(artifact) ? { artifact, artifactNote: "The full result is already on disk here \u2014 read it directly if you need all of it." } : artifact ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join20(repo, INDEX_DIR)}\` to get this as a file.` } : {}
     },
     null,
     2
@@ -13336,11 +13414,27 @@ function annotationsFor(name2) {
     openWorldHint: meta.openWorld === true
   };
 }
-function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0]) {
+function profileNames() {
+  return ["all", ...Object.keys(TOOL_PROFILES).sort()];
+}
+function toolsInProfiles(spec) {
+  const names = spec.split(",").map((s) => s.trim()).filter(Boolean);
+  const out2 = /* @__PURE__ */ new Set();
+  for (const name2 of names) {
+    if (name2 === "all") return new Set(TOOLS.map((t) => t.name));
+    const profile = TOOL_PROFILES[name2];
+    if (!profile) throw new Error(`unknown tool profile "${name2}" \u2014 one of: ${profileNames().join(", ")}`);
+    for (const tool of profile) out2.add(tool);
+  }
+  return out2;
+}
+function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0], profile) {
   const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
   const withRich = protocolVersion >= RICH_TOOLS_SINCE;
-  if (!defaultRepo && !withAnnotations && !withRich) return TOOLS;
-  return TOOLS.map((t) => ({
+  const allowed = profile ? toolsInProfiles(profile) : void 0;
+  const TOOLS_ = allowed ? TOOLS.filter((t) => allowed.has(t.name)) : TOOLS;
+  if (!defaultRepo && !withAnnotations && !withRich) return TOOLS_;
+  return TOOLS_.map((t) => ({
     ...t,
     ...withRich && TOOL_META[t.name] ? { title: TOOL_META[t.name].title } : {},
     ...withRich && OUTPUT_SCHEMAS[t.name] ? { outputSchema: OUTPUT_SCHEMAS[t.name] } : {},
@@ -13358,7 +13452,7 @@ function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0]) {
     }
   }));
 }
-var repoProp, scopeProps, TOOLS, strArr, anyObj, OUTPUT_SCHEMAS, TOOL_META;
+var repoProp, scopeProps, TOOLS, strArr, anyObj, OUTPUT_SCHEMAS, TOOL_META, TOOL_PROFILES;
 var init_tools = __esm({
   "src/mcp/tools.ts"() {
     "use strict";
@@ -13467,6 +13561,19 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             probe: { type: "boolean", description: "Start each server and read its real capabilities (default false: no spawn)" }
+          },
+          required: ["repo"]
+        }
+      },
+      {
+        name: "onboard",
+        description: "One call that says what this repository IS: its own tagline, size and language mix, monorepo layout when there is one, a token-budgeted map of the highest-PageRank files with their key signatures, and where git says work concentrates. Composes scan_summary + workspaces + repo_map + hotspots so the first four round trips of a session become one, and persists the result as the `onboarding` memory (read_memory) so the next session does not repeat them. Set remember:false to skip the write.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ...repoProp,
+            budgetTokens: { type: "number", description: "Token budget for the key-files section (default 900)" },
+            remember: { type: "boolean", description: "Persist the brief as the `onboarding` memory (default true)" }
           },
           required: ["repo"]
         }
@@ -13826,6 +13933,11 @@ var init_tools = __esm({
         },
         required: ["lspVersion", "mode", "source", "servers", "unmappedLanguages"]
       },
+      onboard: {
+        type: "object",
+        properties: { brief: { type: "string" }, memory: { type: "string" } },
+        required: ["brief"]
+      },
       explain_search: {
         type: "object",
         properties: {
@@ -13911,6 +14023,7 @@ var init_tools = __esm({
       find_symbol: { title: "Find symbol" },
       find_references: { title: "Find references" },
       repo_map: { title: "Repository map" },
+      onboard: { title: "Project brief", write: true, destructive: false, idempotent: true },
       hotspots: { title: "Hotspots" },
       coupling: { title: "Change coupling" },
       replace_symbol_body: { title: "Replace symbol body", write: true, destructive: true, idempotent: true },
@@ -13937,12 +14050,24 @@ var init_tools = __esm({
       call_graph: { title: "Call graph neighborhood" },
       check_rules: { title: "Check architecture rules" }
     };
+    TOOL_PROFILES = {
+      // Land in an unfamiliar repository and get your bearings.
+      orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "read_memory", "list_memories"],
+      // Locate a thing.
+      find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
+      // Decide whether changing it is safe.
+      impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
+      // Change it.
+      edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
+      // Where the work and the risk concentrate.
+      risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"]
+    };
   }
 });
 
 // src/mcp/session.ts
 import { statSync as statSync5 } from "fs";
-import { join as join20 } from "path";
+import { join as join21 } from "path";
 function scanFingerprint(scan2) {
   return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
 }
@@ -13956,7 +14081,7 @@ async function memoizedEmbeddingIndex(key, build) {
 function memoizedEmbedModel(modelDir) {
   let stat;
   try {
-    stat = statSync5(join20(modelDir, "model.json"));
+    stat = statSync5(join21(modelDir, "model.json"));
   } catch {
     return void 0;
   }
@@ -14070,6 +14195,7 @@ __export(mcp_exports, {
   PROTOCOL_VERSIONS: () => PROTOCOL_VERSIONS,
   TOOLS: () => TOOLS,
   TOOL_META: () => TOOL_META,
+  TOOL_PROFILES: () => TOOL_PROFILES,
   annotationsFor: () => annotationsFor,
   capResponse: () => capResponse,
   getArtifacts: () => getArtifacts,
@@ -14078,18 +14204,20 @@ __export(mcp_exports, {
   memoizedEmbedModel: () => memoizedEmbedModel,
   memoizedEmbeddingIndex: () => memoizedEmbeddingIndex,
   negotiateProtocol: () => negotiateProtocol,
+  profileNames: () => profileNames,
   resourceLinkFor: () => resourceLinkFor,
   runMcpServer: () => runMcpServer,
   scanFingerprint: () => scanFingerprint,
   structuredContentFor: () => structuredContentFor,
   toCacheMap: () => toCacheMap,
   toolsFor: () => toolsFor,
+  toolsInProfiles: () => toolsInProfiles,
   validateArgs: () => validateArgs,
   warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
-import { readFileSync as readFileSync11 } from "fs";
-import { isAbsolute, join as join21 } from "path";
+import { readFileSync as readFileSync12 } from "fs";
+import { isAbsolute, join as join22 } from "path";
 import { createInterface } from "readline";
 function str(v) {
   return typeof v === "string" && v ? v : void 0;
@@ -14251,6 +14379,18 @@ async function callTool(name2, args2, defaultRepo) {
     const { graph } = getArtifacts(repo, scanOpts, walked);
     return renderMermaid(graph, { module: str(args2.module), maxEdges: num(args2.maxEdges) });
   }
+  if (name2 === "onboard") {
+    const scan2 = getScan(repo, scanOpts, walked);
+    const { graph } = getArtifacts(repo, scanOpts, walked);
+    return JSON.stringify(
+      onboardBrief(scan2, graph, {
+        ...typeof args2.budgetTokens === "number" ? { budgetTokens: args2.budgetTokens } : {},
+        ...args2.remember === false ? { remember: false } : {}
+      }),
+      null,
+      2
+    );
+  }
   if (name2 === "repo_map") {
     const { scan: scan2, graph } = getArtifacts(repo, scanOpts, walked);
     return renderRepoMap(scan2, graph, { budgetTokens: typeof args2.budgetTokens === "number" ? args2.budgetTokens : void 0 });
@@ -14383,9 +14523,9 @@ async function callTool(name2, args2, defaultRepo) {
     const configPath = str(args2.configPath);
     let payload = args2.rules;
     if (payload === void 0 && configPath) {
-      const abs = isAbsolute(configPath) ? configPath : join21(repo, configPath);
+      const abs = isAbsolute(configPath) ? configPath : join22(repo, configPath);
       try {
-        payload = JSON.parse(readFileSync11(abs, "utf8"));
+        payload = JSON.parse(readFileSync12(abs, "utf8"));
       } catch (e) {
         throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
       }
@@ -14403,7 +14543,7 @@ async function runMcpServer(opts = {}) {
     version: opts.serverInfo?.version ?? ENGINE_VERSION
   };
   let protocolVersion = PROTOCOL_VERSIONS[0];
-  let tools = toolsFor(opts.defaultRepo, protocolVersion);
+  let tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
   const send = (msg) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
   };
@@ -14426,7 +14566,7 @@ async function runMcpServer(opts = {}) {
     try {
       if (req.method === "initialize") {
         protocolVersion = negotiateProtocol(req.params?.protocolVersion);
-        tools = toolsFor(opts.defaultRepo, protocolVersion);
+        tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
         send({
           id: req.id,
           result: {
@@ -14497,6 +14637,7 @@ var init_mcp = __esm({
     init_viz();
     init_query();
     init_lsp();
+    init_onboard();
     init_edit();
     init_memory();
     init_bm25();
@@ -14723,7 +14864,7 @@ runExtractWorker(workerData.input, (o) => parentPort.postMessage(o)).catch((e) =
   try {
     const outputs = await Promise.all(
       shards.map(
-        (jobsForShard) => new Promise((resolve4, reject) => {
+        (jobsForShard) => new Promise((resolve5, reject) => {
           const w = new Worker(bootstrap, {
             eval: true,
             workerData: { input: { jobs: jobsForShard, grammarKeys: wanted, maxCallsPerFile: opts.maxCallsPerFile } }
@@ -14737,7 +14878,7 @@ runExtractWorker(workerData.input, (o) => parentPort.postMessage(o)).catch((e) =
             fn();
           };
           w.once("message", (m) => {
-            settle(() => resolve4(m));
+            settle(() => resolve5(m));
             void w.terminate();
           });
           w.once("error", (e) => settle(() => reject(e)));
@@ -15517,6 +15658,7 @@ init_encode();
 init_embed();
 init_search();
 init_endpoint();
+init_onboard();
 init_lsp();
 init_config2();
 init_client();
@@ -15922,8 +16064,8 @@ init_util();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync9, mkdirSync as mkdirSync3, readFileSync as readFileSync12, writeFileSync as writeFileSync4 } from "fs";
-import { join as join22, resolve as resolve3 } from "path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync3, readFileSync as readFileSync13, writeFileSync as writeFileSync4 } from "fs";
+import { join as join23, resolve as resolve4 } from "path";
 init_pipeline();
 init_hash();
 init_graph_json();
@@ -15952,6 +16094,7 @@ init_search();
 init_endpoint();
 init_util();
 init_lsp();
+init_tools();
 var HELP = `codeindex engine v${ENGINE_VERSION} \u2014 deterministic repo indexing
 
 Usage: engine.mjs <command> [flags]
@@ -16039,17 +16182,22 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative \u2014 any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (30 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (33 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
-              find_symbol, find_references, repo_map, hotspots, coupling,
-              dead_code, complexity, mermaid, grep, search, embed_status,
-              check_rules, the memory quartet and the three symbolic-edit
-              writes). Flags: --repo <dir> pins ONE repository so the per-tool
-              repo argument becomes optional (an explicit per-call repo still
-              wins); --server-name <name> overrides the announced serverInfo;
-              --max-response-bytes <n> caps a single tool response (default 1e6;
-              a response under the cap is byte-identical, one over it is
-              replaced by an actionable notice instead of an unusable blob)
+              find_symbol, find_references, lsp_status, onboard, repo_map,
+              hotspots, coupling, dead_code, complexity, mermaid, grep, search,
+              explain_search, embed_status, check_rules, the memory quartet and
+              the three symbolic-edit writes). Flags: --repo <dir> pins ONE
+              repository so the per-tool repo argument becomes optional (an
+              explicit per-call repo still wins); --server-name <name> overrides
+              the announced serverInfo; --max-response-bytes <n> caps a single
+              tool response (default 1e6; a response under the cap is
+              byte-identical, one over it is replaced by an actionable notice
+              instead of an unusable blob); --tools <profile[,profile]>
+              advertises a named subset (all | orient | find | impact | edit |
+              risk, default all) \u2014 every advertised tool's schema costs an agent
+              context on EVERY turn, and a tool left out is still answerable
+              when called by name
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -16119,10 +16267,10 @@ function parseFlags(args2) {
       if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
       return n;
     };
-    if (a === "--repo") flags2.repo = resolve3(next());
+    if (a === "--repo") flags2.repo = resolve4(next());
     else if (a === "--out") {
       const v = next();
-      flags2.out = v === "-" ? "-" : resolve3(v);
+      flags2.out = v === "-" ? "-" : resolve4(v);
     } else if (a === "--project-root") flags2.projectRoot = next();
     else if (a === "--include") flags2.include.push(next());
     else if (a === "--exclude") flags2.exclude.push(next());
@@ -16147,7 +16295,7 @@ function parseFlags(args2) {
       if (!Number.isInteger(n) || n < 0) throw new Error(`--workers expects a non-negative integer, got "${raw}"`);
       flags2.workers = n;
     } else if (a === "--since") flags2.since = next();
-    else if (a === "--config") flags2.config = resolve3(next());
+    else if (a === "--config") flags2.config = resolve4(next());
     else if (a === "--limit") flags2.limit = num2();
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
     else if (a === "--exact") flags2.exact = true;
@@ -16199,12 +16347,13 @@ function parseMcpFlags(argv) {
   let defaultRepo;
   let name2;
   let maxResponseBytes;
+  let profile;
   for (let i2 = 0; i2 < argv.length; i2++) {
     const a = argv[i2];
     if (a === "--repo") {
       const v = argv[++i2];
       if (!v) throw new Error("--repo requires a directory");
-      defaultRepo = resolve3(v);
+      defaultRepo = resolve4(v);
     } else if (a === "--server-name") {
       const v = argv[++i2];
       if (!v) throw new Error("--server-name requires a value");
@@ -16214,12 +16363,17 @@ function parseMcpFlags(argv) {
       const n = Number(v);
       if (!v || !Number.isFinite(n) || n <= 0) throw new Error("--max-response-bytes requires a positive number");
       maxResponseBytes = n;
+    } else if (a === "--tools") {
+      const v = argv[++i2];
+      if (!v) throw new Error(`--tools requires a profile: ${profileNames().join(", ")}`);
+      toolsInProfiles(v);
+      profile = v === "all" ? void 0 : v;
     } else {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
-  if (defaultRepo && !existsSync9(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
-  return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes };
+  if (defaultRepo && !existsSync10(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes, profile };
 }
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--repo",
@@ -16240,6 +16394,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--config",
   "--limit",
   "--server-name",
+  "--tools",
   "--workers",
   "--index",
   "--max-response-bytes"
@@ -16287,7 +16442,7 @@ async function runCli(rawArgv) {
     return;
   }
   const flags2 = parseFlags(rest);
-  if (!existsSync9(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
+  if (!existsSync10(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
   const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags2.positional !== "build");
   let precomputedWalk;
   if (scans && !flags2.noAst) {
@@ -16321,11 +16476,11 @@ async function runCli(rawArgv) {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync3(outDir, { recursive: true });
-    const cachePath = join22(outDir, "cache.json");
+    const cachePath = join23(outDir, "cache.json");
     let cache;
     let meta = {};
     try {
-      const parsed = JSON.parse(readFileSync12(cachePath, "utf8"));
+      const parsed = JSON.parse(readFileSync13(cachePath, "utf8"));
       if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
         cache = new Map(Object.entries(parsed.files));
         meta = {
@@ -16346,12 +16501,12 @@ async function runCli(rawArgv) {
     });
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : void 0;
-    const graphPath = join22(outDir, "graph.json");
-    const symbolsPath = join22(outDir, "symbols.json");
-    const embedPath = join22(outDir, "embeddings.bin");
+    const graphPath = join23(outDir, "graph.json");
+    const symbolsPath = join23(outDir, "symbols.json");
+    const embedPath = join23(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
-        return sha1(readFileSync12(path));
+        return sha1(readFileSync13(path));
       } catch {
         return void 0;
       }
@@ -16424,7 +16579,7 @@ async function runCli(rawArgv) {
   } else if (cmd === "scip") {
     const scan2 = readScan();
     const bytes = renderScip(scan2, { projectRoot: flags2.projectRoot });
-    const out2 = flags2.out ?? resolve3("index.scip");
+    const out2 = flags2.out ?? resolve4("index.scip");
     if (out2 === "-") process.stdout.write(Buffer.from(bytes));
     else {
       writeFileSync4(out2, bytes);
@@ -16577,14 +16732,14 @@ async function runCli(rawArgv) {
       mkdirSync3(flags2.out, { recursive: true });
       const scan2 = readScan();
       const index = buildEmbeddingIndex(scan2, model);
-      writeFileSync4(join22(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      writeFileSync4(join23(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
       const { url, sha256 } = resolveEmbedPullUrl();
-      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join22(flags2.repo, ".codeindex", "models");
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join23(flags2.repo, ".codeindex", "models");
       mkdirSync3(destDir, { recursive: true });
-      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join22(destDir, "model.json")}
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join23(destDir, "model.json")}
 `);
       let body2;
       try {
@@ -16605,8 +16760,8 @@ async function runCli(rawArgv) {
         process.exitCode = 1;
         return;
       }
-      writeFileSync4(join22(destDir, "model.json"), body2);
-      process.stderr.write(`codeindex: model written to ${join22(destDir, "model.json")}
+      writeFileSync4(join23(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join23(destDir, "model.json")}
 `);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");
@@ -16620,7 +16775,7 @@ async function runCli(rawArgv) {
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const present = (name2) => info2.dirs.some((d) => existsSync9(join22(d, name2)));
+      const present = (name2) => info2.dirs.some((d) => existsSync10(join23(d, name2)));
       const runtimePresent = present("web-tree-sitter.wasm");
       const target = resolveGrammarsPullTarget();
       const resolvedIn = (keys) => [...keys].filter((k) => present(`${k}.wasm`)).sort();
@@ -16652,7 +16807,7 @@ async function runCli(rawArgv) {
     }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRules(JSON.parse(readFileSync12(flags2.config, "utf8")));
+    const rules = parseRules(JSON.parse(readFileSync13(flags2.config, "utf8")));
     const { graph } = readArtifacts();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
@@ -16862,6 +17017,7 @@ export {
   lspUnavailable,
   neighborhood,
   neighborsOf,
+  onboardBrief,
   openLspSession,
   pagerankOf,
   parseGitignore,

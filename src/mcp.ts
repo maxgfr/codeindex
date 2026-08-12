@@ -29,6 +29,7 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { lspStatus, referencesWithLsp } from "./lsp/index.js";
+import { onboardBrief } from "./onboard.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
@@ -64,7 +65,7 @@ import {
 // The public surface of this module is unchanged: everything that used to live
 // here is re-exported, so `src/engine.ts`, the tests and any consumer importing
 // from "./mcp.js" keep working exactly as before.
-export { toolsFor, TOOLS, TOOL_META, OUTPUT_SCHEMAS, annotationsFor } from "./mcp/tools.js";
+export { toolsFor, TOOLS, TOOL_META, OUTPUT_SCHEMAS, annotationsFor, TOOL_PROFILES, profileNames, toolsInProfiles } from "./mcp/tools.js";
 export {
   DEFAULT_MAX_RESPONSE_BYTES,
   PROTOCOL_VERSIONS,
@@ -298,6 +299,21 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const { graph } = getArtifacts(repo, scanOpts, walked);
     return renderMermaid(graph, { module: str(args.module), maxEdges: num(args.maxEdges) });
   }
+  if (name === "onboard") {
+    // getArtifacts, not a fresh build: the session cache already holds the
+    // graph, and onboarding is precisely the first call of a session — paying
+    // for a second pass here is paying at the worst possible moment.
+    const scan = getScan(repo, scanOpts, walked);
+    const { graph } = getArtifacts(repo, scanOpts, walked);
+    return JSON.stringify(
+      onboardBrief(scan, graph, {
+        ...(typeof args.budgetTokens === "number" ? { budgetTokens: args.budgetTokens } : {}),
+        ...(args.remember === false ? { remember: false } : {}),
+      }),
+      null,
+      2,
+    );
+  }
   if (name === "repo_map") {
     const { scan, graph } = getArtifacts(repo, scanOpts, walked);
     return renderRepoMap(scan, graph, { budgetTokens: typeof args.budgetTokens === "number" ? args.budgetTokens : undefined });
@@ -484,6 +500,12 @@ export interface McpServerOptions {
   // Cap on a single tool response, in bytes (default DEFAULT_MAX_RESPONSE_BYTES).
   // Responses under it are untouched; see capResponse for what happens above it.
   maxResponseBytes?: number;
+  // Advertise a NAMED SUBSET of the tools (see TOOL_PROFILES). Every advertised
+  // tool's full schema rides in an agent's context on every turn, so a session
+  // that only ever searches is paying for the graph analytics all day. Trims
+  // what is ADVERTISED, not what is answerable: a tool left out of the profile
+  // still works when called. Undefined = all tools, so no existing setup moves.
+  profile?: string;
 }
 
 export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
@@ -497,7 +519,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   let protocolVersion: string = PROTOCOL_VERSIONS[0];
   // Rebuilt when negotiation lands: the pin cannot change mid-session, but the
   // fields we are allowed to advertise depend on the version.
-  let tools = toolsFor(opts.defaultRepo, protocolVersion);
+  let tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
   // No startup warm: each scan-needing tool warms the present-language grammars
   // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
@@ -530,7 +552,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     try {
       if (req.method === "initialize") {
         protocolVersion = negotiateProtocol(req.params?.protocolVersion);
-        tools = toolsFor(opts.defaultRepo, protocolVersion);
+        tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
         send({
           id: req.id,
           result: {

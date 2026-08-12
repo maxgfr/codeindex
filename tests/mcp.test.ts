@@ -17,6 +17,7 @@ import {
   toCacheMap,
   validateArgs,
 } from "../src/mcp.js";
+import { parseMcpFlags } from "../src/engine-cli.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -145,7 +146,7 @@ describe("MCP server", () => {
 
     expect(res.get(1)!.result!.serverInfo!.name).toBe("codeindex");
     const toolNames = res.get(2)!.result!.tools!.map((t) => t.name);
-    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "lsp_status", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules"]);
+    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "lsp_status", "onboard", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules"]);
 
     const summary = JSON.parse(res.get(3)!.result!.content![0]!.text) as { fileCount: number };
     expect(summary.fileCount).toBeGreaterThan(0);
@@ -1194,6 +1195,9 @@ describe("tool metadata is gated on the negotiated version", () => {
       "insert_before_symbol",
       "write_memory",
       "delete_memory",
+      // onboard persists the brief it composes, so it is a write — declared as
+      // one rather than left read-only because a host gates approval on this.
+      "onboard",
     ];
     for (const [name, ann] of byName) {
       expect(ann.readOnlyHint, name).toBe(!writes.includes(name));
@@ -1288,4 +1292,51 @@ describe("search diagnostics over MCP", () => {
     expect(wrapped.explain.verdict).toBe("weak");
     expect(JSON.stringify(wrapped.results)).toBe(JSON.stringify(bare));
   }, 20_000);
+});
+
+// Two borrowings from Serena, chosen because they are the ones codeindex did
+// not already have an equivalent of: a tool-list subset (its modes/contexts)
+// and a project brief in one call (its onboarding).
+describe("tool profiles and onboarding", () => {
+  it("advertises a subset without making the omitted tools unanswerable", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+      { method: "notifications/initialized" },
+      { id: 2, method: "tools/list", params: {} },
+      // A tool NOT in the `find` profile still answers when called by name —
+      // the profile trims what an agent is told about, not what the server does.
+      { id: 3, method: "tools/call", params: { name: "hotspots", arguments: { repo: REPO } } },
+    ], undefined, [CLI, "mcp", "--tools", "find"]);
+
+    const names = res.get(2)!.result!.tools!.map((t) => t.name);
+    expect(names).toContain("search");
+    expect(names).toContain("explain_search");
+    expect(names).not.toContain("hotspots");
+    expect(names).not.toContain("replace_symbol_body");
+    expect(res.get(3)!.result!.isError).toBeUndefined();
+  }, 20_000);
+
+  it("rejects an unknown profile at startup rather than advertising everything", () => {
+    expect(() => parseMcpFlags(["--tools", "nonsense"])).toThrow(/unknown tool profile/);
+    // "all" is the default and must stay expressible.
+    expect(parseMcpFlags(["--tools", "all"]).profile).toBeUndefined();
+    expect(parseMcpFlags(["--tools", "find,impact"]).profile).toBe("find,impact");
+  });
+
+  it("onboard composes a brief and persists it as a memory", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+      { method: "notifications/initialized" },
+      { id: 2, method: "tools/call", params: { name: "onboard", arguments: { repo: REPO } } },
+      // The point of writing it: the SECOND session reads instead of rebuilding.
+      { id: 3, method: "tools/call", params: { name: "read_memory", arguments: { repo: REPO, name: "onboarding" } } },
+      { id: 4, method: "tools/call", params: { name: "delete_memory", arguments: { repo: REPO, name: "onboarding" } } },
+    ]);
+
+    const brief = JSON.parse(res.get(2)!.result!.content![0]!.text) as { brief: string; memory?: string };
+    expect(brief.memory).toBe("onboarding");
+    expect(brief.brief).toContain("indexed files");
+    expect(brief.brief).toContain("## Key files");
+    expect(res.get(3)!.result!.content![0]!.text).toBe(brief.brief);
+  }, 30_000);
 });

@@ -48,6 +48,7 @@ import {
 } from "./embed/endpoint.js";
 import { have, sh } from "./util.js";
 import { lspStatus } from "./lsp/index.js";
+import { profileNames, toolsInProfiles } from "./mcp/tools.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
@@ -136,17 +137,22 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (30 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (33 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
-              find_symbol, find_references, repo_map, hotspots, coupling,
-              dead_code, complexity, mermaid, grep, search, embed_status,
-              check_rules, the memory quartet and the three symbolic-edit
-              writes). Flags: --repo <dir> pins ONE repository so the per-tool
-              repo argument becomes optional (an explicit per-call repo still
-              wins); --server-name <name> overrides the announced serverInfo;
-              --max-response-bytes <n> caps a single tool response (default 1e6;
-              a response under the cap is byte-identical, one over it is
-              replaced by an actionable notice instead of an unusable blob)
+              find_symbol, find_references, lsp_status, onboard, repo_map,
+              hotspots, coupling, dead_code, complexity, mermaid, grep, search,
+              explain_search, embed_status, check_rules, the memory quartet and
+              the three symbolic-edit writes). Flags: --repo <dir> pins ONE
+              repository so the per-tool repo argument becomes optional (an
+              explicit per-call repo still wins); --server-name <name> overrides
+              the announced serverInfo; --max-response-bytes <n> caps a single
+              tool response (default 1e6; a response under the cap is
+              byte-identical, one over it is replaced by an actionable notice
+              instead of an unusable blob); --tools <profile[,profile]>
+              advertises a named subset (all | orient | find | impact | edit |
+              risk, default all) — every advertised tool's schema costs an agent
+              context on EVERY turn, and a tool left out is still answerable
+              when called by name
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -358,10 +364,12 @@ export function parseMcpFlags(argv: string[]): {
   defaultRepo?: string;
   serverInfo?: { name?: string };
   maxResponseBytes?: number;
+  profile?: string;
 } {
   let defaultRepo: string | undefined;
   let name: string | undefined;
   let maxResponseBytes: number | undefined;
+  let profile: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--repo") {
@@ -377,12 +385,19 @@ export function parseMcpFlags(argv: string[]): {
       const n = Number(v);
       if (!v || !Number.isFinite(n) || n <= 0) throw new Error("--max-response-bytes requires a positive number");
       maxResponseBytes = n;
+    } else if (a === "--tools") {
+      const v = argv[++i];
+      if (!v) throw new Error(`--tools requires a profile: ${profileNames().join(", ")}`);
+      // Validate HERE, at startup, rather than on the first tools/list: a typo'd
+      // profile that silently advertised everything would look like it worked.
+      toolsInProfiles(v);
+      profile = v === "all" ? undefined : v;
     } else {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
   if (defaultRepo && !existsSync(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
-  return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes };
+  return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes, profile };
 }
 
 // Flags that consume the following argv element. Needed to hoist leading flags
@@ -407,6 +422,7 @@ const VALUE_FLAGS = new Set([
   "--config",
   "--limit",
   "--server-name",
+  "--tools",
   "--workers",
   "--index",
   "--max-response-bytes",

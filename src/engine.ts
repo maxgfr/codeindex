@@ -188,6 +188,11 @@ export {
 } from "./embed/endpoint.js";
 export type { EmbedEndpointOptions } from "./embed/endpoint.js";
 
+// Project brief in one call: the pieces (repo map, workspaces, hotspots, the
+// memory store) all existed and every agent assembled them by hand, differently.
+export { onboardBrief } from "./onboard.js";
+export type { OnboardOptions, OnboardBrief } from "./onboard.js";
+
 // Optional LSP tier: type-aware references from a language server the user
 // configures, annotating the static answer rather than replacing it.
 //
