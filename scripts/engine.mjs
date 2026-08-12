@@ -85,6 +85,14 @@ function keywords(question) {
   }
   return out2;
 }
+function droppedKeywords(question) {
+  const out2 = [];
+  for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
+    if (!raw) continue;
+    if (raw.length < 2 || STOPWORDS.has(raw.toLowerCase())) out2.push(raw);
+  }
+  return out2;
+}
 function rankedKeywords(question) {
   const base = keywords(question);
   const score = (raw) => {
@@ -9849,6 +9857,27 @@ function buildTrigramIndex(docs) {
   return index;
 }
 function searchIndex(scan2, query, opts = {}) {
+  return runSearch(scan2, query, opts).results;
+}
+function explainQuery(scan2, query, opts = {}) {
+  return runSearch(scan2, query, opts);
+}
+function emptyExplanation(query, verdict, note) {
+  return {
+    results: [],
+    explain: {
+      query,
+      terms: [],
+      droppedStopwords: droppedKeywords(query),
+      unresolvedTerms: [],
+      verdict,
+      note,
+      bridgedOnlyResults: 0,
+      resultCount: 0
+    }
+  };
+}
+function runSearch(scan2, query, opts = {}) {
   const terms = [];
   const seen = /* @__PURE__ */ new Set();
   for (const kw of keywords(query)) {
@@ -9858,11 +9887,18 @@ function searchIndex(scan2, query, opts = {}) {
       terms.push(t);
     }
   }
-  if (!terms.length) return [];
+  if (!terms.length) {
+    const dropped = droppedKeywords(query);
+    return emptyExplanation(
+      query,
+      "none",
+      dropped.length ? `Nothing was searched for: every token in this query (${dropped.join(", ")}) is a stopword or too short to index. Search with the identifiers or domain words you are actually looking for.` : "Nothing was searched for: the query carried no indexable token."
+    );
+  }
   const queryWantsTests = terms.some((t) => TEST_INTENT.test(t));
   const docs = bm25DocsFor(scan2);
   const n = docs.length;
-  if (!n) return [];
+  if (!n) return emptyExplanation(query, "none", "This index contains no files.");
   const avgLen = {};
   for (const f of FIELDS) {
     let total = 0;
@@ -9924,7 +9960,7 @@ function searchIndex(scan2, query, opts = {}) {
     const matchedFields = /* @__PURE__ */ new Set();
     const symbolTerms = /* @__PURE__ */ new Set();
     const fuzzyHit = /* @__PURE__ */ new Set();
-    let exact = false;
+    let exactNameHit = false;
     const weightedTf = (term) => {
       let wtf = 0;
       for (const f of FIELDS) {
@@ -9942,7 +9978,7 @@ function searchIndex(scan2, query, opts = {}) {
       if (wtf > 0) {
         matched.push(t);
         symbolTerms.add(t);
-        if (d.exactNames.has(t)) exact = true;
+        if (d.exactNames.has(t)) exactNameHit = true;
         score += idfOf(df.get(t)) * (wtf / (K1 + wtf));
         continue;
       }
@@ -9955,7 +9991,7 @@ function searchIndex(scan2, query, opts = {}) {
       }
     }
     if (!matched.length && !fuzzyHit.size) continue;
-    if (exact) score *= EXACT_NAME_BOOST;
+    if (exactNameHit) score *= EXACT_NAME_BOOST;
     if (d.isTest && !queryWantsTests) score *= TEST_DEMOTION;
     if (prior) {
       score *= 1 + 0.35 * Math.log1p(prior.get(d.file) ?? 0);
@@ -9979,10 +10015,60 @@ function searchIndex(scan2, query, opts = {}) {
       result.line = Math.min(...hits.map((h) => h.line));
     }
     if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
+    if (!matched.length) result.bridgedOnly = true;
     results.push(result);
   }
   results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
-  return results.slice(0, opts.limit ?? DEFAULT_LIMIT);
+  const kept = (opts.exact ? results.filter((r) => !r.bridgedOnly) : results).slice(0, opts.limit ?? DEFAULT_LIMIT);
+  return { results: kept, explain: explainOf(query, terms, df, fuzzyCandidates, kept) };
+}
+function explainOf(query, terms, df, fuzzyCandidates, kept) {
+  const diagnostics = terms.map((term) => {
+    const frequency = df.get(term) ?? 0;
+    const candidates = frequency === 0 ? fuzzyCandidates.get(term) ?? [] : [];
+    if (!candidates.length) return { term, df: frequency };
+    const via = candidates[0].dice === STEM_WEIGHT ? "stem" : "trigram";
+    return { term, df: frequency, bridge: { via, to: candidates.map((c2) => c2.term), dice: candidates[0].dice } };
+  });
+  const unresolvedTerms = diagnostics.filter((d) => d.df === 0 && !d.bridge).map((d) => d.term).sort(byStr);
+  const wholeIdentifier = !/\s/.test(query.trim()) && terms.length ? { term: terms[0], df: df.get(terms[0]) ?? 0 } : void 0;
+  const bridgedOnlyResults = kept.filter((r) => r.bridgedOnly).length;
+  const allBridged = kept.length > 0 && bridgedOnlyResults === kept.length;
+  const missingIdentifier = wholeIdentifier?.df === 0;
+  const verdict = !kept.length ? "none" : missingIdentifier || allBridged ? "weak" : "match";
+  const explain = {
+    query,
+    terms: diagnostics,
+    droppedStopwords: droppedKeywords(query),
+    unresolvedTerms,
+    ...wholeIdentifier ? { wholeIdentifier } : {},
+    verdict,
+    bridgedOnlyResults,
+    resultCount: kept.length
+  };
+  const note = noteFor(explain, missingIdentifier, allBridged);
+  if (note) explain.note = note;
+  return explain;
+}
+function noteFor(explain, missingIdentifier, allBridged) {
+  const { verdict, wholeIdentifier, resultCount, terms } = explain;
+  if (verdict === "match") return void 0;
+  if (!resultCount) {
+    return explain.unresolvedTerms.length ? `No file matches. ${explain.unresolvedTerms.length === 1 ? "The term" : "The terms"} ${explain.unresolvedTerms.join(", ")} appear nowhere in this index.` : "No file matches this query.";
+  }
+  if (missingIdentifier && wholeIdentifier) {
+    const parts2 = terms.filter((t) => t.term !== wholeIdentifier.term && t.df > 0).map((t) => t.term).join(", ");
+    const near = terms.find((t) => t.term === wholeIdentifier.term)?.bridge?.to ?? [];
+    const because = parts2 ? ` The ${resultCount} result${resultCount === 1 ? "" : "s"} below match only its parts (${parts2}).` : "";
+    const suggestion = near.length ? ` Closest indexed name${near.length === 1 ? "" : "s"}: ${near.join(", ")}.` : "";
+    return `No file in this index defines or mentions "${wholeIdentifier.term}".${because}${suggestion} If you expected it here, check you are indexing the right branch or commit.`;
+  }
+  if (allBridged) {
+    const bridged = terms.filter((t) => t.bridge);
+    const spelled = bridged.map((t) => `"${t.term}" \u2192 ${t.bridge.to.join(", ")}`).join("; ");
+    return `Nothing matched verbatim. Every result below came from a near match: ${spelled}. Re-run with --exact to see only literal matches.`;
+  }
+  return void 0;
 }
 var K1, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP, STEM_WEIGHT, FIELDS, FIELD_WEIGHT, FIELD_B, EXACT_NAME_BOOST, TEST_DEMOTION, TEST_INTENT;
 var init_bm25 = __esm({
@@ -12990,10 +13076,34 @@ var init_tools = __esm({
               type: "string",
               description: `Structural prior: "graph" multiplies the lexical score by the file's PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus \u2014 see SearchOptions.rank.`
             },
+            exact: {
+              type: "boolean",
+              description: "Drop results that carry no verbatim query-term match \u2014 the ones the stem/trigram bridge produced (default false)."
+            },
+            explain: {
+              type: "boolean",
+              description: "Wrap the response as `{ results, explain }` with the query verdict (default false = bare array). See explain_search."
+            },
             semantic: {
               type: "boolean",
               description: 'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently \u2014 see embed_status.'
             }
+          },
+          required: ["repo", "query"]
+        }
+      },
+      {
+        name: "explain_search",
+        description: 'Search, and say whether the query actually found anything. Returns `{ results, explain }` where explain.verdict is "match" (a verbatim term matched), "weak" (results exist but rest on a near match, or the identifier you asked for has document frequency 0) or "none". Use this instead of `search` whenever an empty-feeling or surprising result matters: a query for an identifier that is NOT in the indexed tree still returns confident-looking rows built from its subtokens \u2014 searching "nullGipStep7" in a repo that only has "nullGipStep2" ranks files matching "null" and "gip" \u2014 and only the verdict distinguishes that from a real hit. Also names the terms dropped as stopwords, the terms that exist nowhere, and what each near match bridged to.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            ...repoProp,
+            ...scopeProps,
+            query: { type: "string", description: "Natural-language or identifier query" },
+            limit: { type: "number", description: "Max results (default 20)" },
+            fuzzy: { type: "boolean", description: "Stem/trigram fallback for zero-document-frequency terms (default true)" },
+            exact: { type: "boolean", description: "Drop results carrying no verbatim term match (default false)" }
           },
           required: ["repo", "query"]
         }
@@ -13137,6 +13247,28 @@ var init_tools = __esm({
         },
         required: ["defs", "callSites", "referencingFiles"]
       },
+      explain_search: {
+        type: "object",
+        properties: {
+          results: { type: "array", items: anyObj },
+          explain: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+              terms: { type: "array", items: anyObj },
+              droppedStopwords: strArr,
+              unresolvedTerms: strArr,
+              wholeIdentifier: anyObj,
+              verdict: { type: "string", enum: ["match", "weak", "none"] },
+              note: { type: "string" },
+              bridgedOnlyResults: { type: "number" },
+              resultCount: { type: "number" }
+            },
+            required: ["query", "terms", "droppedStopwords", "unresolvedTerms", "verdict", "bridgedOnlyResults", "resultCount"]
+          }
+        },
+        required: ["results", "explain"]
+      },
       hotspots: {
         type: "object",
         properties: { churnOk: { type: "boolean" }, hotspots: { type: "array", items: anyObj } },
@@ -13215,6 +13347,7 @@ var init_tools = __esm({
       mermaid: { title: "Mermaid module diagram" },
       grep: { title: "Grep file contents" },
       search: { title: "Lexical search", openWorld: true },
+      explain_search: { title: "Search with a verdict", openWorld: true },
       embed_status: { title: "Embedding tier status", openWorld: true },
       type_hierarchy: { title: "Type hierarchy" },
       implementations: { title: "Implementations" },
@@ -13560,18 +13693,19 @@ async function callTool(name2, args2, defaultRepo) {
     const scan2 = getScan(repo, scanOpts, walked);
     const limit = typeof args2.limit === "number" ? args2.limit : void 0;
     const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
+    const exactOpt = args2.exact === true ? { exact: true } : {};
     if (args2.semantic === true) {
       const endpoint = resolveEmbedEndpoint();
       if (endpoint) {
         try {
           const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan: scan2 }, () => buildEndpointIndex(scan2));
           const queryVec = await encodeQueryViaEndpoint(query);
-          const results2 = searchSemantic(scan2, query, index, { queryVec, limit, fuzzy });
-          return JSON.stringify({ results: results2, tier: "endpoint" }, null, 2);
+          const results3 = searchSemantic(scan2, query, index, { queryVec, limit, fuzzy });
+          return JSON.stringify({ results: results3, tier: "endpoint" }, null, 2);
         } catch (e) {
-          const results2 = searchIndex(scan2, query, { limit, fuzzy, ...rankOpt });
+          const results3 = searchIndex(scan2, query, { limit, fuzzy, ...rankOpt });
           return JSON.stringify(
-            { results: results2, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
+            { results: results3, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
             null,
             2
           );
@@ -13584,17 +13718,32 @@ async function callTool(name2, args2, defaultRepo) {
           { mode: "static", identity: `${modelDir}#${model.modelId}`, scan: scan2 },
           () => buildEmbeddingIndex(scan2, model)
         );
-        const results2 = searchSemantic(scan2, query, index, { model, limit, fuzzy });
-        return JSON.stringify({ results: results2, tier: "static" }, null, 2);
+        const results3 = searchSemantic(scan2, query, index, { model, limit, fuzzy });
+        return JSON.stringify({ results: results3, tier: "static" }, null, 2);
       }
-      const results = searchIndex(scan2, query, { limit, fuzzy, ...rankOpt });
+      const results2 = searchIndex(scan2, query, { limit, fuzzy, ...rankOpt });
       return JSON.stringify(
-        { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured \u2014 see embed_status" },
+        { results: results2, tier: "lexical", degradedReason: "no embedding endpoint or static model configured \u2014 see embed_status" },
         null,
         2
       );
     }
-    return JSON.stringify(searchIndex(scan2, query, { limit, fuzzy, ...rankOpt }), null, 2);
+    const { results, explain } = explainQuery(scan2, query, { limit, fuzzy, ...exactOpt, ...rankOpt });
+    return JSON.stringify(args2.explain === true ? { results, explain } : results, null, 2);
+  }
+  if (name2 === "explain_search") {
+    const query = str(args2.query);
+    if (!query) throw new Error("`query` is required");
+    const scan2 = getScan(repo, scanOpts, walked);
+    const limit = typeof args2.limit === "number" ? args2.limit : void 0;
+    const fuzzy = typeof args2.fuzzy === "boolean" ? args2.fuzzy : void 0;
+    const { results, explain } = explainQuery(scan2, query, {
+      limit,
+      fuzzy,
+      ...args2.exact === true ? { exact: true } : {},
+      ...rankOpt
+    });
+    return JSON.stringify({ results, explain }, null, 2);
   }
   if (name2 === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
@@ -15329,6 +15478,10 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
+  --exact             \`search\`: drop results that carry no verbatim term match
+                      (the ones the stem/trigram bridge produced)
+  --explain           \`search\`: emit { results, explain } \u2014 which terms matched,
+                      which bridged, and whether the query really found anything
   --semantic          \`search\`: RRF-fuse an embedding tier with lexical \u2014 the
                       HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
                       local static model (lexical-only when neither is available)
@@ -15389,6 +15542,8 @@ function parseFlags(args2) {
     else if (a === "--config") flags2.config = resolve2(next());
     else if (a === "--limit") flags2.limit = num2();
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
+    else if (a === "--exact") flags2.exact = true;
+    else if (a === "--explain") flags2.explain = true;
     else if (a === "--semantic") flags2.semantic = true;
     else if (a === "--recall") flags2.recall = true;
     else if (a === "--run") flags2.run = true;
@@ -15707,10 +15862,21 @@ async function runCli(rawArgv) {
   } else if (cmd === "search") {
     if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan2 = readScan();
+    const searchOpts = {
+      limit: flags2.limit,
+      fuzzy: flags2.fuzzy,
+      ...flags2.exact ? { exact: true } : {},
+      ...flags2.rank ? { rank: flags2.rank } : {}
+    };
+    const warnIfWeak = () => {
+      const { explain } = explainQuery(scan2, flags2.positional, searchOpts);
+      if (explain.note) process.stderr.write(`codeindex: ${explain.note}
+`);
+    };
     if (flags2.semantic) {
       const endpoint = resolveEmbedEndpoint();
       const lexical = () => {
-        const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy, ...flags2.rank ? { rank: flags2.rank } : {} });
+        const results = searchIndex(scan2, flags2.positional, searchOpts);
         emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
       };
       if (endpoint) {
@@ -15740,9 +15906,12 @@ async function runCli(rawArgv) {
           emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
         }
       }
+      warnIfWeak();
     } else {
-      const results = searchIndex(scan2, flags2.positional, { limit: flags2.limit, fuzzy: flags2.fuzzy, ...flags2.rank ? { rank: flags2.rank } : {} });
-      emit(JSON.stringify(results, null, 2) + "\n", flags2.out);
+      const { results, explain } = explainQuery(scan2, flags2.positional, searchOpts);
+      emit(JSON.stringify(flags2.explain ? { results, explain } : results, null, 2) + "\n", flags2.out);
+      if (explain.note) process.stderr.write(`codeindex: ${explain.note}
+`);
     }
   } else if (cmd === "embed") {
     const sub = flags2.positional;
@@ -16022,6 +16191,7 @@ export {
   encodeQueryViaEndpoint,
   ensureGrammars,
   escapeRegExp,
+  explainQuery,
   extToLang,
   extractAst,
   extractCode,

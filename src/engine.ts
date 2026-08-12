@@ -152,8 +152,8 @@ export { grepRepo } from "./grep.js";
 export type { SearchHit, GrepOptions } from "./grep.js";
 
 // Keyless BM25 lexical search over symbols/paths/headings/summaries (issue #4).
-export { searchIndex, subtokens } from "./bm25.js";
-export type { SearchOptions, SearchResult } from "./bm25.js";
+export { searchIndex, explainQuery, subtokens } from "./bm25.js";
+export type { SearchOptions, SearchResult, ExplainedSearch, QueryExplanation, QueryVerdict, TermDiagnostic } from "./bm25.js";
 
 // Deterministic static-embedding tier (v2.10.0): a keyless, byte-deterministic
 // semantic search, opt-in by model-asset presence (models NEVER ship in the

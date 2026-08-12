@@ -87,15 +87,22 @@ async function jsdelivrManifest(fetchImpl, owner, repo, ref) {
  * Resolve a repository to a file manifest and a way to fetch each file.
  *
  * Tries each candidate ref against GitHub first, then the same refs against
- * jsDelivr. Ref candidates are `main` then `master` when none was given —
- * gin-gonic/gin is on master while pallets/flask is on main, so assuming either
- * one fails on a large share of real repositories.
+ * jsDelivr. When no ref was given the first candidate is `HEAD`, which BOTH
+ * providers resolve to the repository's real default branch — so the default
+ * branch is asked for rather than guessed, at no extra request.
+ *
+ * Guessing `main` then `master` (what this did before) silently indexes the
+ * wrong tree whenever a repository's default branch is neither: SocialGouv/egapro
+ * defaults to `alpha`, has no `main`, and still has a `master` six weeks stale —
+ * so the guess resolved, returned a full file list, and answered every query
+ * about a tree the user never asked for. `main`/`master` stay as a net for a
+ * provider that will not resolve `HEAD`.
  *
  * @returns {{provider, ref, files, note, contentUrl}}
  * @throws when no provider can answer, with a message naming what was tried
  */
 export async function resolveSource(owner, repo, requestedRef, fetchImpl = fetch) {
-  const refs = requestedRef ? [requestedRef] : ["main", "master"];
+  const refs = requestedRef ? [requestedRef] : ["HEAD", "main", "master"];
   let rateLimited = "";
 
   for (const provider of [githubTree, jsdelivrManifest]) {
@@ -118,12 +125,31 @@ export async function resolveSource(owner, repo, requestedRef, fetchImpl = fetch
     }
   }
 
-  const tried = requestedRef ? `@${requestedRef}` : " on main or master";
+  const tried = requestedRef ? `@${requestedRef}` : " on HEAD, main or master";
   throw new Error(
     `Could not read ${owner}/${repo}${tried}. Check the name and that the repository is public${
       requestedRef ? "" : ", or give the ref explicitly (owner/repo@branch)"
     }.`,
   );
+}
+
+/**
+ * The branch name `HEAD` stood for, for DISPLAY only.
+ *
+ * Deliberately separate from resolveSource and never awaited before indexing:
+ * it costs a second call against the same 60-per-hour budget, and a rate limit
+ * here must cost a branch label, never the index. Returns "" when it cannot be
+ * answered, and the caller keeps showing `HEAD`.
+ */
+export async function resolveDefaultBranch(owner, repo, fetchImpl = fetch) {
+  try {
+    const response = await fetchImpl(`${GITHUB_API}/repos/${owner}/${repo}`);
+    if (!response.ok) return "";
+    const body = await response.json();
+    return typeof body.default_branch === "string" ? body.default_branch : "";
+  } catch {
+    return "";
+  }
 }
 
 /**

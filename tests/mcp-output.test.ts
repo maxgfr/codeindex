@@ -111,6 +111,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   workspaces: {},
   churn: {},
   find_references: { name: "HttpClient" },
+  explain_search: { query: "http client retry" },
   call_graph: { symbol: "HttpClient", depth: 1 },
   hotspots: {},
   coupling: {},

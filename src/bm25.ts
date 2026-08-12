@@ -40,7 +40,7 @@ import type { RepoScan } from "./scan.js";
 // which Node ESM and esbuild both resolve safely — the same arrangement
 // callers.ts and complexity.ts already use.
 import { bm25DocsFor, bm25StemsFor, bm25TrigramsFor, importPagerankFor } from "./derived.js";
-import { foldText, keywords, stemOf, subtokens } from "./util.js";
+import { droppedKeywords, foldText, keywords, stemOf, subtokens } from "./util.js";
 import { isTestPath } from "./tests-map.js";
 import { byStr } from "./sort.js";
 
@@ -99,6 +99,13 @@ export interface SearchOptions {
   // only ever engages on terms that would otherwise match nothing, so a
   // query where every term already hits is completely unaffected.
   fuzzy?: boolean;
+  // Drop results that carry no verbatim query-term match — the ones built
+  // entirely out of the stem/trigram bridge. OFF by default, because that
+  // bridge is what makes a typo ("authh") and an inflection ("caching") still
+  // find their file, and suppressing it by default would delete a working
+  // feature to fix its reporting. On, it is the "I meant this identifier
+  // literally" switch.
+  exact?: boolean;
   // "graph" multiplies the lexical score by a structural prior — the file's
   // PageRank over the resolved import graph — so that among comparably worded
   // files the one the repo actually depends on ranks first.
@@ -141,6 +148,60 @@ export interface SearchResult {
   // to this result, sorted. Present only when >=1 term used the fallback —
   // purely additive, never present for an all-exact-match result.
   fuzzyTerms?: string[];
+  // Set only when this result carries NO verbatim query-term match — every
+  // point of its score came from the stem/trigram bridge, so it is a near
+  // miss the engine surfaced rather than something the query actually found.
+  //
+  // `true`-only, never `false`: an ordinary hit must serialise to exactly the
+  // bytes it did before this field existed, which is what keeps the judged
+  // corpus and the golden fixtures untouched.
+  bridgedOnly?: true;
+}
+
+/**
+ * Whether the query really found anything, as one word.
+ *
+ * `weak` is the case this whole diagnostic exists for. Searching `nullGipStep7`
+ * against a repo that has `nullGipStep2` returns twenty results at scores no
+ * different from a real hit, because `subtokens` splits the identifier into
+ * ["nullgipstep7", "null", "gip", "step7"] and the subtokens match plenty of
+ * files on their own. The one token that mattered — the whole identifier — has
+ * df 0, no bridge, and appeared in NO output field at all. A caller could not
+ * tell "found it" from "found nothing and improvised".
+ */
+export type QueryVerdict = "match" | "weak" | "none";
+
+export interface TermDiagnostic {
+  term: string;
+  df: number;
+  /** How a df==0 term still earned score, when it did. Absent when df > 0. */
+  bridge?: { via: "stem" | "trigram"; to: string[]; dice: number };
+}
+
+export interface QueryExplanation {
+  query: string;
+  /** Post keywords() + subtokens(), in query order. */
+  terms: TermDiagnostic[];
+  /** Raw tokens keywords() discarded as stopwords or 1-char noise, in order. */
+  droppedStopwords: string[];
+  /** df==0 AND no stem/trigram bridge — present in the repo nowhere, sorted. */
+  unresolvedTerms: string[];
+  /**
+   * For a single-token query, the whole lowercased identifier with its df.
+   * df 0 here means the thing asked for is not in this tree, whatever the
+   * rows below say.
+   */
+  wholeIdentifier?: { term: string; df: number };
+  verdict: QueryVerdict;
+  /** A sentence a human or an agent can act on. Absent when verdict is "match". */
+  note?: string;
+  bridgedOnlyResults: number;
+  resultCount: number;
+}
+
+export interface ExplainedSearch {
+  results: SearchResult[];
+  explain: QueryExplanation;
 }
 
 interface FieldDoc {
@@ -274,6 +335,38 @@ export function buildTrigramIndex(docs: Doc[]): Map<string, Set<string>> {
  * byte-for-byte.
  */
 export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions = {}): SearchResult[] {
+  return runSearch(scan, query, opts).results;
+}
+
+/**
+ * `searchIndex` plus the diagnostics it throws away, in ONE pass.
+ *
+ * `explainQuery(scan, q, o).results` is `searchIndex(scan, q, o)`, asserted by
+ * a test rather than promised by a comment — they are literally the same code
+ * path, which is why the ranking cannot drift between them.
+ */
+export function explainQuery(scan: RepoScan, query: string, opts: SearchOptions = {}): ExplainedSearch {
+  return runSearch(scan, query, opts);
+}
+
+/** An empty result set, plus the reason it is empty. */
+function emptyExplanation(query: string, verdict: QueryVerdict, note: string): ExplainedSearch {
+  return {
+    results: [],
+    explain: {
+      query,
+      terms: [],
+      droppedStopwords: droppedKeywords(query),
+      unresolvedTerms: [],
+      verdict,
+      note,
+      bridgedOnlyResults: 0,
+      resultCount: 0,
+    },
+  };
+}
+
+function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): ExplainedSearch {
   // Query tokens: util keywords (stopwords dropped, identifiers kept) expanded
   // through the SAME subtoken splitter the documents use.
   const terms: string[] = [];
@@ -285,14 +378,26 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
       terms.push(t);
     }
   }
-  if (!terms.length) return [];
+  if (!terms.length) {
+    // Every token was a stopword or a 1-char fragment. The empty array alone
+    // reads as "nothing in this repo matches", which is a different and much
+    // more misleading statement than "the query carried no searchable term".
+    const dropped = droppedKeywords(query);
+    return emptyExplanation(
+      query,
+      "none",
+      dropped.length
+        ? `Nothing was searched for: every token in this query (${dropped.join(", ")}) is a stopword or too short to index. Search with the identifiers or domain words you are actually looking for.`
+        : "Nothing was searched for: the query carried no indexable token.",
+    );
+  }
   const queryWantsTests = terms.some((t) => TEST_INTENT.test(t));
 
   // Memoized per scan (src/derived.ts) — identical docs to a direct build;
   // read-only from here on.
   const docs = bm25DocsFor(scan);
   const n = docs.length;
-  if (!n) return [];
+  if (!n) return emptyExplanation(query, "none", "This index contains no files.");
 
   // Per-field average length, the BM25F normaliser.
   const avgLen = {} as Record<Field, number>;
@@ -376,7 +481,7 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
     const matchedFields = new Set<Field>();
     const symbolTerms = new Set<string>(); // matched ∪ fuzzy-expanded, for topSymbols ranking
     const fuzzyHit = new Set<string>(); // original query terms resolved via fuzzy fallback
-    let exact = false;
+    let exactNameHit = false;
 
     const weightedTf = (term: string): number => {
       let wtf = 0;
@@ -396,7 +501,7 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
       if (wtf > 0) {
         matched.push(t);
         symbolTerms.add(t);
-        if (d.exactNames.has(t)) exact = true;
+        if (d.exactNames.has(t)) exactNameHit = true;
         score += idfOf(df.get(t)!) * (wtf / (K1 + wtf));
         continue;
       }
@@ -414,7 +519,7 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
     }
     if (!matched.length && !fuzzyHit.size) continue;
 
-    if (exact) score *= EXACT_NAME_BOOST;
+    if (exactNameHit) score *= EXACT_NAME_BOOST;
     if (d.isTest && !queryWantsTests) score *= TEST_DEMOTION;
     if (prior) {
       // log1p keeps a hub from swamping a well-worded match: the prior reorders
@@ -447,10 +552,107 @@ export function searchIndex(scan: RepoScan, query: string, opts: SearchOptions =
       result.line = Math.min(...hits.map((h) => h.line));
     }
     if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
+    // Nothing verbatim matched here: every point of this score came through the
+    // stem/trigram bridge. Set only when true, so an ordinary hit serialises to
+    // exactly the bytes it did before this field existed.
+    if (!matched.length) result.bridgedOnly = true;
     results.push(result);
   }
 
   // Rounded score first (so 4-dp ties resolve stably), then path.
   results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
-  return results.slice(0, opts.limit ?? DEFAULT_LIMIT);
+  const kept = (opts.exact ? results.filter((r) => !r.bridgedOnly) : results).slice(0, opts.limit ?? DEFAULT_LIMIT);
+
+  return { results: kept, explain: explainOf(query, terms, df, fuzzyCandidates, kept) };
+}
+
+/**
+ * Turn what the scoring pass already knew into a verdict a caller can act on.
+ *
+ * Reads only values the pass computed anyway — no second scan, no second index
+ * build — which is why diagnostics are always on rather than opt-in.
+ */
+function explainOf(
+  query: string,
+  terms: string[],
+  df: Map<string, number>,
+  fuzzyCandidates: Map<string, { term: string; dice: number }[]>,
+  kept: SearchResult[],
+): QueryExplanation {
+  const diagnostics: TermDiagnostic[] = terms.map((term) => {
+    const frequency = df.get(term) ?? 0;
+    const candidates = frequency === 0 ? (fuzzyCandidates.get(term) ?? []) : [];
+    if (!candidates.length) return { term, df: frequency };
+    // STEM_WEIGHT is a pinned constant, a real Dice score never is — which is
+    // exactly how the two mechanisms tell themselves apart here.
+    const via = candidates[0]!.dice === STEM_WEIGHT ? "stem" : "trigram";
+    return { term, df: frequency, bridge: { via, to: candidates.map((c) => c.term), dice: candidates[0]!.dice } };
+  });
+
+  const unresolvedTerms = diagnostics
+    .filter((d) => d.df === 0 && !d.bridge)
+    .map((d) => d.term)
+    .sort(byStr);
+
+  // A single-token query decomposes into the whole identifier PLUS its parts,
+  // and the whole identifier is subtokens()'s first output. It is the only term
+  // that answers "does the thing I typed exist", and it is precisely the one
+  // that vanishes without trace when it matches nothing.
+  const wholeIdentifier = !/\s/.test(query.trim()) && terms.length ? { term: terms[0]!, df: df.get(terms[0]!) ?? 0 } : undefined;
+
+  const bridgedOnlyResults = kept.filter((r) => r.bridgedOnly).length;
+  const allBridged = kept.length > 0 && bridgedOnlyResults === kept.length;
+  const missingIdentifier = wholeIdentifier?.df === 0;
+
+  const verdict: QueryVerdict = !kept.length ? "none" : missingIdentifier || allBridged ? "weak" : "match";
+
+  const explain: QueryExplanation = {
+    query,
+    terms: diagnostics,
+    droppedStopwords: droppedKeywords(query),
+    unresolvedTerms,
+    ...(wholeIdentifier ? { wholeIdentifier } : {}),
+    verdict,
+    bridgedOnlyResults,
+    resultCount: kept.length,
+  };
+
+  const note = noteFor(explain, missingIdentifier, allBridged);
+  if (note) explain.note = note;
+  return explain;
+}
+
+/** One actionable sentence, or nothing at all when the query genuinely matched. */
+function noteFor(explain: QueryExplanation, missingIdentifier: boolean, allBridged: boolean): string | undefined {
+  const { verdict, wholeIdentifier, resultCount, terms } = explain;
+  if (verdict === "match") return undefined;
+
+  if (!resultCount) {
+    return explain.unresolvedTerms.length
+      ? `No file matches. ${explain.unresolvedTerms.length === 1 ? "The term" : "The terms"} ${explain.unresolvedTerms.join(", ")} appear nowhere in this index.`
+      : "No file matches this query.";
+  }
+
+  if (missingIdentifier && wholeIdentifier) {
+    // The headline case. Say the identifier is absent, then account for the
+    // rows below — they matched its PARTS, which is why they look like answers.
+    // And when the corpus holds a near neighbour, name it: "nullGipStep2 exists,
+    // nullGipStep7 does not" is the whole answer to the question being asked.
+    const parts = terms
+      .filter((t) => t.term !== wholeIdentifier.term && t.df > 0)
+      .map((t) => t.term)
+      .join(", ");
+    const near = terms.find((t) => t.term === wholeIdentifier.term)?.bridge?.to ?? [];
+    const because = parts ? ` The ${resultCount} result${resultCount === 1 ? "" : "s"} below match only its parts (${parts}).` : "";
+    const suggestion = near.length ? ` Closest indexed name${near.length === 1 ? "" : "s"}: ${near.join(", ")}.` : "";
+    return `No file in this index defines or mentions "${wholeIdentifier.term}".${because}${suggestion} If you expected it here, check you are indexing the right branch or commit.`;
+  }
+
+  if (allBridged) {
+    const bridged = terms.filter((t) => t.bridge);
+    const spelled = bridged.map((t) => `"${t.term}" → ${t.bridge!.to.join(", ")}`).join("; ");
+    return `Nothing matched verbatim. Every result below came from a near match: ${spelled}. Re-run with --exact to see only literal matches.`;
+  }
+
+  return undefined;
 }

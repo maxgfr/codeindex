@@ -20,7 +20,7 @@ const SOURCES = new URL("../site/playground/sources.js", import.meta.url).href;
 type Any = any;
 
 const sources = await import(/* @vite-ignore */ SOURCES);
-const { resolveSource, parseRepoInput } = sources as Any;
+const { resolveSource, resolveDefaultBranch, parseRepoInput } = sources as Any;
 
 /** A fetch stand-in driven by a url → response table. */
 function fakeFetch(routes: Record<string, { status?: number; body?: unknown }>) {
@@ -52,12 +52,32 @@ describe("playground source resolution", () => {
     const source = await resolveSource("acme", "thing", "", impl);
 
     expect(source.provider).toBe("github");
-    expect(source.ref).toBe("main");
+    expect(source.ref).toBe("HEAD");
     expect(source.files).toEqual([{ path: "/src/index.ts", size: 120 }]);
     expect(source.note).toBe("");
-    expect(calls[0]).toContain("git/trees/main?recursive=1");
+    expect(calls[0]).toContain("git/trees/HEAD?recursive=1");
     // jsDelivr must not be consulted at all when GitHub answered.
     expect(calls.some((url) => url.includes("jsdelivr"))).toBe(false);
+  });
+
+  it("asks for the default branch instead of guessing main or master", async () => {
+    // SocialGouv/egapro, the repository that exposed this: default branch
+    // `alpha`, no `main` at all, and a `master` that still resolves while
+    // being 409 commits stale. Guessing lands on master and answers every
+    // query about the wrong tree, with nothing to signal it.
+    const { impl, calls } = fakeFetch({
+      "git/trees/HEAD": { body: tree([["packages/app/src/test/gipGapFixtures.ts", 900]]) },
+      "git/trees/main": { status: 404 },
+      "git/trees/master": { body: tree([["packages/app/src/legacy.ts", 40]]) },
+    });
+
+    const source = await resolveSource("SocialGouv", "egapro", "", impl);
+
+    expect(source.ref).toBe("HEAD");
+    expect(source.files).toEqual([{ path: "/packages/app/src/test/gipGapFixtures.ts", size: 900 }]);
+    // HEAD answered first, so the stale master is never even requested.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("git/trees/HEAD");
   });
 
   it("serves contents from raw.githubusercontent, encoding each path segment", async () => {
@@ -80,8 +100,9 @@ describe("playground source resolution", () => {
     expect(source.contentUrl("/src/a b/[id].ts")).toBe("https://cdn.jsdelivr.net/gh/acme/thing@main/src/a%20b/%5Bid%5D.ts");
   });
 
-  it("falls back from main to master", async () => {
+  it("falls back HEAD -> main -> master for a provider that will not resolve HEAD", async () => {
     const { impl, calls } = fakeFetch({
+      "git/trees/HEAD": { status: 404 },
       "git/trees/main": { status: 404 },
       "git/trees/master": { body: tree([["gin.go", 90]]) },
     });
@@ -90,8 +111,9 @@ describe("playground source resolution", () => {
 
     expect(source.ref).toBe("master");
     expect(source.provider).toBe("github");
-    expect(calls[0]).toContain("git/trees/main");
-    expect(calls[1]).toContain("git/trees/master");
+    expect(calls[0]).toContain("git/trees/HEAD");
+    expect(calls[1]).toContain("git/trees/main");
+    expect(calls[2]).toContain("git/trees/master");
   });
 
   it("falls back to jsDelivr when the GitHub rate limit is exhausted, and says so", async () => {
@@ -132,8 +154,21 @@ describe("playground source resolution", () => {
 
   it("explains what it tried when nothing resolves", async () => {
     const { impl } = fakeFetch({});
-    await expect(resolveSource("acme", "missing", "", impl)).rejects.toThrow(/on main or master/);
+    await expect(resolveSource("acme", "missing", "", impl)).rejects.toThrow(/on HEAD, main or master/);
     await expect(resolveSource("acme", "missing", "dev", impl)).rejects.toThrow(/@dev/);
+  });
+
+  it("resolves HEAD to a branch name for display, and never throws when it cannot", async () => {
+    const named = fakeFetch({ "api.github.com/repos/SocialGouv/egapro": { body: { default_branch: "alpha" } } });
+    expect(await resolveDefaultBranch("SocialGouv", "egapro", named.impl)).toBe("alpha");
+
+    // A rate limit here must cost a branch LABEL, never the index — so this
+    // degrades to "" and the caller keeps showing `HEAD`.
+    const limited = fakeFetch({ "api.github.com": { status: 403 } });
+    expect(await resolveDefaultBranch("acme", "thing", limited.impl)).toBe("");
+
+    const broken = { impl: async () => { throw new Error("offline"); } };
+    expect(await resolveDefaultBranch("acme", "thing", broken.impl as Any)).toBe("");
   });
 });
 

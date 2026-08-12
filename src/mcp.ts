@@ -30,7 +30,7 @@ import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
-import { searchIndex, type RankMode } from "./bm25.js";
+import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
@@ -321,6 +321,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const scan = getScan(repo, scanOpts, walked);
     const limit = typeof args.limit === "number" ? args.limit : undefined;
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
+    const exactOpt = args.exact === true ? { exact: true as const } : {};
     if (args.semantic === true) {
       // semantic:true changes the response SHAPE (wraps the ranked list with a
       // `tier`/`degradedReason?`) so a caller can tell "fusion happened" apart
@@ -366,7 +367,30 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
         2,
       );
     }
-    return JSON.stringify(searchIndex(scan, query, { limit, fuzzy, ...rankOpt }), null, 2);
+    // Plain lexical. `explain:true` wraps the array so a caller can see the
+    // verdict; absent, the response is the bare array it has always been —
+    // byte-compatible for every existing consumer. The `bridgedOnly` flag rides
+    // INSIDE that array either way, which is the only diagnostic that reaches a
+    // client that never adopts the wrapper or the explain_search tool.
+    const { results, explain } = explainQuery(scan, query, { limit, fuzzy, ...exactOpt, ...rankOpt });
+    return JSON.stringify(args.explain === true ? { results, explain } : results, null, 2);
+  }
+  if (name === "explain_search") {
+    const query = str(args.query);
+    if (!query) throw new Error("`query` is required");
+    const scan = getScan(repo, scanOpts, walked);
+    const limit = typeof args.limit === "number" ? args.limit : undefined;
+    const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
+    // Always an object, which is exactly why this is a tool of its own rather
+    // than another shape `search` can return: a stable shape is what lets it
+    // declare an outputSchema at all.
+    const { results, explain } = explainQuery(scan, query, {
+      limit,
+      fuzzy,
+      ...(args.exact === true ? { exact: true as const } : {}),
+      ...rankOpt,
+    });
+    return JSON.stringify({ results, explain }, null, 2);
   }
   if (name === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);

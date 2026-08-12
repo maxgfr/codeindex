@@ -292,11 +292,38 @@ export const TOOLS = [
           description:
             'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus — see SearchOptions.rank.',
         },
+        exact: {
+          type: "boolean",
+          description:
+            "Drop results that carry no verbatim query-term match — the ones the stem/trigram bridge produced (default false).",
+        },
+        explain: {
+          type: "boolean",
+          description:
+            "Wrap the response as `{ results, explain }` with the query verdict (default false = bare array). See explain_search.",
+        },
         semantic: {
           type: "boolean",
           description:
             'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently — see embed_status.',
         },
+      },
+      required: ["repo", "query"],
+    },
+  },
+  {
+    name: "explain_search",
+    description:
+      'Search, and say whether the query actually found anything. Returns `{ results, explain }` where explain.verdict is "match" (a verbatim term matched), "weak" (results exist but rest on a near match, or the identifier you asked for has document frequency 0) or "none". Use this instead of `search` whenever an empty-feeling or surprising result matters: a query for an identifier that is NOT in the indexed tree still returns confident-looking rows built from its subtokens — searching "nullGipStep7" in a repo that only has "nullGipStep2" ranks files matching "null" and "gip" — and only the verdict distinguishes that from a real hit. Also names the terms dropped as stopwords, the terms that exist nowhere, and what each near match bridged to.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...scopeProps,
+        query: { type: "string", description: "Natural-language or identifier query" },
+        limit: { type: "number", description: "Max results (default 20)" },
+        fuzzy: { type: "boolean", description: "Stem/trigram fallback for zero-document-frequency terms (default true)" },
+        exact: { type: "boolean", description: "Drop results carrying no verbatim term match (default false)" },
       },
       required: ["repo", "query"],
     },
@@ -380,8 +407,10 @@ export const TOOLS = [
 //     option that breaks neither.
 //   * argument-dependent shapes — dead_code (array, object with `limit`),
 //     complexity (array, object with `risk`), search (array, object with
-//     `semantic`). A schema that cannot describe every response is worse than
-//     none: it would make a conforming client reject valid output.
+//     `semantic` or `explain`). A schema that cannot describe every response is
+//     worse than none: it would make a conforming client reject valid output.
+//     `explain_search` exists precisely because of this rule — it is the same
+//     answer with ONE shape, so it can carry a schema where `search` cannot.
 //   * text responses — repo_map, mermaid, read_memory, which are not JSON.
 //
 // Shapes are deliberately open (no `additionalProperties: false`): a later
@@ -470,6 +499,28 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       referencingFiles: strArr,
     },
     required: ["defs", "callSites", "referencingFiles"],
+  },
+  explain_search: {
+    type: "object",
+    properties: {
+      results: { type: "array", items: anyObj },
+      explain: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          terms: { type: "array", items: anyObj },
+          droppedStopwords: strArr,
+          unresolvedTerms: strArr,
+          wholeIdentifier: anyObj,
+          verdict: { type: "string", enum: ["match", "weak", "none"] },
+          note: { type: "string" },
+          bridgedOnlyResults: { type: "number" },
+          resultCount: { type: "number" },
+        },
+        required: ["query", "terms", "droppedStopwords", "unresolvedTerms", "verdict", "bridgedOnlyResults", "resultCount"],
+      },
+    },
+    required: ["results", "explain"],
   },
   hotspots: {
     type: "object",
@@ -569,6 +620,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   mermaid: { title: "Mermaid module diagram" },
   grep: { title: "Grep file contents" },
   search: { title: "Lexical search", openWorld: true },
+  explain_search: { title: "Search with a verdict", openWorld: true },
   embed_status: { title: "Embedding tier status", openWorld: true },
   type_hierarchy: { title: "Type hierarchy" },
   implementations: { title: "Implementations" },

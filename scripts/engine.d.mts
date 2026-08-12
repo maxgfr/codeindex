@@ -870,6 +870,7 @@ type RankMode = "graph" | "lexical";
 interface SearchOptions {
     limit?: number;
     fuzzy?: boolean;
+    exact?: boolean;
     rank?: RankMode;
 }
 /** A specific declaration a result matched, so a caller can jump straight to it. */
@@ -887,6 +888,56 @@ interface SearchResult {
     line?: number;
     symbolHits?: SymbolHit[];
     fuzzyTerms?: string[];
+    bridgedOnly?: true;
+}
+/**
+ * Whether the query really found anything, as one word.
+ *
+ * `weak` is the case this whole diagnostic exists for. Searching `nullGipStep7`
+ * against a repo that has `nullGipStep2` returns twenty results at scores no
+ * different from a real hit, because `subtokens` splits the identifier into
+ * ["nullgipstep7", "null", "gip", "step7"] and the subtokens match plenty of
+ * files on their own. The one token that mattered — the whole identifier — has
+ * df 0, no bridge, and appeared in NO output field at all. A caller could not
+ * tell "found it" from "found nothing and improvised".
+ */
+type QueryVerdict = "match" | "weak" | "none";
+interface TermDiagnostic {
+    term: string;
+    df: number;
+    /** How a df==0 term still earned score, when it did. Absent when df > 0. */
+    bridge?: {
+        via: "stem" | "trigram";
+        to: string[];
+        dice: number;
+    };
+}
+interface QueryExplanation {
+    query: string;
+    /** Post keywords() + subtokens(), in query order. */
+    terms: TermDiagnostic[];
+    /** Raw tokens keywords() discarded as stopwords or 1-char noise, in order. */
+    droppedStopwords: string[];
+    /** df==0 AND no stem/trigram bridge — present in the repo nowhere, sorted. */
+    unresolvedTerms: string[];
+    /**
+     * For a single-token query, the whole lowercased identifier with its df.
+     * df 0 here means the thing asked for is not in this tree, whatever the
+     * rows below say.
+     */
+    wholeIdentifier?: {
+        term: string;
+        df: number;
+    };
+    verdict: QueryVerdict;
+    /** A sentence a human or an agent can act on. Absent when verdict is "match". */
+    note?: string;
+    bridgedOnlyResults: number;
+    resultCount: number;
+}
+interface ExplainedSearch {
+    results: SearchResult[];
+    explain: QueryExplanation;
 }
 /**
  * Rank the scanned files against a natural-language (or identifier) query.
@@ -894,6 +945,14 @@ interface SearchResult {
  * byte-for-byte.
  */
 declare function searchIndex(scan: RepoScan, query: string, opts?: SearchOptions): SearchResult[];
+/**
+ * `searchIndex` plus the diagnostics it throws away, in ONE pass.
+ *
+ * `explainQuery(scan, q, o).results` is `searchIndex(scan, q, o)`, asserted by
+ * a test rather than promised by a comment — they are literally the same code
+ * path, which is why the ranking cannot drift between them.
+ */
+declare function explainQuery(scan: RepoScan, query: string, opts?: SearchOptions): ExplainedSearch;
 
 declare const EMBED_VERSION = 1;
 interface StaticEmbedModel {
@@ -1245,4 +1304,4 @@ declare function byKey<T>(keyOf: (x: T) => string): (a: T, b: T) => number;
 
 declare function runCli(rawArgv: string[]): Promise<void>;
 
-export { type ArchRule, type BuildIndexOptions, type BuiltinRule, CORE_GRAMMARS, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type ChangedSymbol, type ClusteredMermaidOptions, type ClusteredMermaidResult, type CodeInfo, type CodeLiteral, type CodeSymbol, type CouplingOptions, DEFAULT_DELTA_DEPTH, DEFAULT_GRAMMARS_URL, DEFAULT_MAX_FILES, type DeadSymbol, type DeltaChange, type DeltaError, type DeltaModule, type DeltaOptions, type DeltaResult, type DiffFile, type DiffSpec, type Direction, EMBED_VERSION, ENGINE_VERSION, EXTENDED_GRAMMARS, EXTRACTOR_VERSION, EXT_GRAMMAR, type Edge, type EdgeKind, type EditResult, type EmbedEndpointOptions, type EmbedPullTarget, type EmbeddingIndex, type EmbeddingRecord, type EmbeddingUnit, type ExtractedRecord, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type GrammarsPullResult, type GrammarsPullTarget, type GrammarsTier, type GrammarsTierName, type Graph, type GrepOptions, type HierarchyRef, type Hotspot, type Hunk, INDEX_DIR, type IgnoreRule, type ImpactResult, type ImpactedFile, type IndexArtifacts, type LiteralDuplication, type LiteralFamily, type LiteralSite, type LiteralsOptions, type LiteralsReport, MARKDOWN_EXT, type MarkdownInfo, type McpServerOptions, type MermaidOptions, type ModuleInfo, type ModuleNode, type NeighborLink, type NeighborResult, type Neighborhood, type PersistedCacheEntry, type PersistedCacheMap, type PersistedMeta, RISK_WEIGHTS, type RawCallerIndex, type RawCallerSite, type RawRef, type RawRelation, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type ResolvedRelation, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type ScanSummary, type SearchHit, type SearchOptions, type SearchResult, type SemanticSearchOptions, type SemanticSearchResult, type ShResult, type StaticEmbedModel, type SurpriseEdge, type SymbolComplexity, type SymbolEdge, type SymbolEdgeKind, type SymbolGraph, type SymbolIndex, type SymbolMatch, type SymbolNode, type SymbolReferences, type TagDefinition, type TagsQueryStatus, type TestMap, type Tier, type TypeHierarchyEntry, type WalkOptions, type WalkResult, type WalkedFile, type WarmGrammarsOptions, type WarmGrammarsResult, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, basicTokenize, betweennessOf, buildArtifactsFromScan, buildCallerIndex, buildCodeRecord, buildEmbeddingIndex, buildEndpointIndex, buildGraph, buildIndexArtifacts, buildModules, buildRawCallerIndex, buildResolveContext, buildSymbolGraph, buildSymbolIndex, buildTypeHierarchy, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, complexityOfSource, computeDelta, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, deltaFor, deserializeEmbeddings, detectCommunities, detectWorkspaces, diffFiles, diffHunks, embedEndpointUrl, embedViaEndpoint, embeddingUnits, enclosingSymbol, encode, encodeQueryViaEndpoint, ensureGrammars, escapeRegExp, extToLang, extractAst, extractCode, extractGrammarsTarball, extractInParallel, extractMarkdown, extractSymbols, extractTags, extractTarInto, fetchExpectedSha256, fetchGrammarsTarball, findDeadCode, findLiteralDuplications, findReferences, findSymbol, foldText, formatDeltaPanel, gitChurn, grammarKeyForExt, grammarKeysForExts, grammarReady, grepRepo, hasEmbedModel, have, headCommit, healthzUrl, hubThreshold, impactOf, implementationsOf, insertAfterSymbol, insertBeforeSymbol, intDot, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keptCodeFiles, keywords, languageOf, listMemories, loadEmbedModel, neighborhood, neighborsOf, pagerankOf, parseGitignore, parseRules, preloadArtifacts, preloadSession, probeEndpoint, pullGrammars, quantize, rankHotspots, rankedKeywords, readMemory, readPersistedIndex, readText, renderGraphJson, renderMermaid, renderMermaidClustered, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveEmbedEndpoint, resolveEmbedModelDir, resolveEmbedPullUrl, resolveGrammarsDir, resolveGrammarsPullTarget, resolveGrammarsTier, resolveImport, resolveRelationEdges, resolveRelations, resolveUniqueSymbol, reverseClosure, rewriteCommand, riskHotspots, roundHalfToEven, rrf, runCli, runExtractWorker, runMcpServer, scanRepo, scanRepoParallel, scanSummary, searchIndex, searchSemantic, serializeEmbeddings, sh, sha1, sharedGrammarsCacheDir, shortHash, slugify, subtokens, symbolComplexity, symbolId, symbolsInHunks, symbolsOverview, tagsQueryStatus, testsForModule, tierForPath, toCacheMap, tokenize, typeEntry, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, warmGrammars, wordpiece, workerCount, writeMemory };
+export { type ArchRule, type BuildIndexOptions, type BuiltinRule, CORE_GRAMMARS, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type ChangedSymbol, type ClusteredMermaidOptions, type ClusteredMermaidResult, type CodeInfo, type CodeLiteral, type CodeSymbol, type CouplingOptions, DEFAULT_DELTA_DEPTH, DEFAULT_GRAMMARS_URL, DEFAULT_MAX_FILES, type DeadSymbol, type DeltaChange, type DeltaError, type DeltaModule, type DeltaOptions, type DeltaResult, type DiffFile, type DiffSpec, type Direction, EMBED_VERSION, ENGINE_VERSION, EXTENDED_GRAMMARS, EXTRACTOR_VERSION, EXT_GRAMMAR, type Edge, type EdgeKind, type EditResult, type EmbedEndpointOptions, type EmbedPullTarget, type EmbeddingIndex, type EmbeddingRecord, type EmbeddingUnit, type ExplainedSearch, type ExtractedRecord, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type GrammarsPullResult, type GrammarsPullTarget, type GrammarsTier, type GrammarsTierName, type Graph, type GrepOptions, type HierarchyRef, type Hotspot, type Hunk, INDEX_DIR, type IgnoreRule, type ImpactResult, type ImpactedFile, type IndexArtifacts, type LiteralDuplication, type LiteralFamily, type LiteralSite, type LiteralsOptions, type LiteralsReport, MARKDOWN_EXT, type MarkdownInfo, type McpServerOptions, type MermaidOptions, type ModuleInfo, type ModuleNode, type NeighborLink, type NeighborResult, type Neighborhood, type PersistedCacheEntry, type PersistedCacheMap, type PersistedMeta, type QueryExplanation, type QueryVerdict, RISK_WEIGHTS, type RawCallerIndex, type RawCallerSite, type RawRef, type RawRelation, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type ResolvedRelation, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type ScanSummary, type SearchHit, type SearchOptions, type SearchResult, type SemanticSearchOptions, type SemanticSearchResult, type ShResult, type StaticEmbedModel, type SurpriseEdge, type SymbolComplexity, type SymbolEdge, type SymbolEdgeKind, type SymbolGraph, type SymbolIndex, type SymbolMatch, type SymbolNode, type SymbolReferences, type TagDefinition, type TagsQueryStatus, type TermDiagnostic, type TestMap, type Tier, type TypeHierarchyEntry, type WalkOptions, type WalkResult, type WalkedFile, type WarmGrammarsOptions, type WarmGrammarsResult, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, allGrammarKeys, applyCentrality, basicTokenize, betweennessOf, buildArtifactsFromScan, buildCallerIndex, buildCodeRecord, buildEmbeddingIndex, buildEndpointIndex, buildGraph, buildIndexArtifacts, buildModules, buildRawCallerIndex, buildResolveContext, buildSymbolGraph, buildSymbolIndex, buildTypeHierarchy, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, communityOf, compileGlobs, complexityOfSource, computeDelta, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, deleteMemory, deltaFor, deserializeEmbeddings, detectCommunities, detectWorkspaces, diffFiles, diffHunks, embedEndpointUrl, embedViaEndpoint, embeddingUnits, enclosingSymbol, encode, encodeQueryViaEndpoint, ensureGrammars, escapeRegExp, explainQuery, extToLang, extractAst, extractCode, extractGrammarsTarball, extractInParallel, extractMarkdown, extractSymbols, extractTags, extractTarInto, fetchExpectedSha256, fetchGrammarsTarball, findDeadCode, findLiteralDuplications, findReferences, findSymbol, foldText, formatDeltaPanel, gitChurn, grammarKeyForExt, grammarKeysForExts, grammarReady, grepRepo, hasEmbedModel, have, headCommit, healthzUrl, hubThreshold, impactOf, implementationsOf, insertAfterSymbol, insertBeforeSymbol, intDot, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keptCodeFiles, keywords, languageOf, listMemories, loadEmbedModel, neighborhood, neighborsOf, pagerankOf, parseGitignore, parseRules, preloadArtifacts, preloadSession, probeEndpoint, pullGrammars, quantize, rankHotspots, rankedKeywords, readMemory, readPersistedIndex, readText, renderGraphJson, renderMermaid, renderMermaidClustered, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveEmbedEndpoint, resolveEmbedModelDir, resolveEmbedPullUrl, resolveGrammarsDir, resolveGrammarsPullTarget, resolveGrammarsTier, resolveImport, resolveRelationEdges, resolveRelations, resolveUniqueSymbol, reverseClosure, rewriteCommand, riskHotspots, roundHalfToEven, rrf, runCli, runExtractWorker, runMcpServer, scanRepo, scanRepoParallel, scanSummary, searchIndex, searchSemantic, serializeEmbeddings, sh, sha1, sharedGrammarsCacheDir, shortHash, slugify, subtokens, symbolComplexity, symbolId, symbolsInHunks, symbolsOverview, tagsQueryStatus, testsForModule, tierForPath, toCacheMap, tokenize, typeEntry, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, warmGrammars, wordpiece, workerCount, writeMemory };

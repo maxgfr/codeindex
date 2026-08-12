@@ -151,6 +151,10 @@ describe("playground command palette", () => {
     const search = runCommand(commands, session, "search", "client");
     expect(search.data.length).toBeGreaterThan(0);
     expect(search.data[0].file).toBeTruthy();
+    // A query that really matched carries no caveat — the banner and the
+    // "no exact match" meta line must stay off for an ordinary search.
+    expect(search.verdict).toBe("match");
+    expect(search.note).toBeUndefined();
 
     const grep = runCommand(commands, session, "grep", "export");
     expect(grep.data.length).toBeGreaterThan(0);
@@ -237,5 +241,38 @@ describe("playground command palette", () => {
     expect(() => runCommand(commands, session, "search", "")).toThrow(/needs a query/);
     expect(() => runCommand(commands, session, "symbols", "")).toThrow(/needs a repo-relative file path/);
     expect(() => runCommand(commands, session, "impact", "no/such/file.ts")).toThrow(/not a file or module/);
+  });
+});
+
+// The playground could not raise the result cap or turn the fuzzy fallback off:
+// every token after the command name went through as query text, so
+// `search --limit 50 foo` searched for the words "limit 50 foo" and the cap
+// stayed pinned at the engine default of 20. That made any playground-versus-CLI
+// comparison meaningless on a query with more than 20 hits.
+describe("search flags", () => {
+  it("parses --limit instead of searching for the word 'limit'", () => {
+    const capped = runCommand(commands, session, "search", "--limit 1 client");
+    expect(capped.data).toHaveLength(1);
+    // …and the query itself is what is left over, not the flag tokens.
+    expect(capped.data[0].file).toBe(runCommand(commands, session, "search", "client").data[0].file);
+  });
+
+  it("parses --no-fuzzy, and --exact drops the bridge-only rows", () => {
+    expect(runCommand(commands, session, "search", "clientt").data.length).toBeGreaterThan(0);
+    expect(runCommand(commands, session, "search", "clientt --no-fuzzy").data).toHaveLength(0);
+    expect(runCommand(commands, session, "search", "--exact clientt").data).toHaveLength(0);
+  });
+
+  it("refuses an unknown flag rather than searching for it", () => {
+    // "--smantic" returning nothing is indistinguishable from a real miss.
+    expect(() => runCommand(commands, session, "search", "--smantic client")).toThrow(/Unknown flag/);
+    expect(() => runCommand(commands, session, "search", "--limit abc client")).toThrow(/positive number/);
+  });
+
+  it("surfaces the verdict and the note for a phantom identifier", () => {
+    const result = runCommand(commands, session, "search", "clientt");
+    expect(result.verdict).toBe("weak");
+    expect(result.note).toContain("client");
+    expect(result.data.every((hit: { bridgedOnly?: true }) => hit.bridgedOnly)).toBe(true);
   });
 });

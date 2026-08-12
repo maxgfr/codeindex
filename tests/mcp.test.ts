@@ -144,7 +144,7 @@ describe("MCP server", () => {
 
     expect(res.get(1)!.result!.serverInfo!.name).toBe("codeindex");
     const toolNames = res.get(2)!.result!.tools!.map((t) => t.name);
-    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules"]);
+    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules"]);
 
     const summary = JSON.parse(res.get(3)!.result!.content![0]!.text) as { fileCount: number };
     expect(summary.fileCount).toBeGreaterThan(0);
@@ -1238,4 +1238,53 @@ describe("validateArgs", () => {
   it("ignores null, undefined and undeclared extras", () => {
     expect(validateArgs(schema, { limit: undefined, substring: null, future: "whatever" })).toBeUndefined();
   });
+});
+
+// The playground indexed socialgouv/egapro on a guessed `master` while the
+// symbol only existed on `alpha`, and `search` answered with twenty rows built
+// from the subtokens of an identifier that was not in the tree at all. Over
+// MCP that is worse than on a terminal: an agent reads the array and reports
+// the symbol as found. These pin the two halves of the fix — a flag that rides
+// inside the existing array for clients that never change, and a tool with a
+// stable shape for clients that can.
+describe("search diagnostics over MCP", () => {
+  const PHANTOM = fileURLToPath(new URL("./fixtures/phantom-search", import.meta.url));
+
+  it("keeps `search` a bare array, and carries the verdict in explain_search", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+      { method: "notifications/initialized" },
+      { id: 2, method: "tools/call", params: { name: "search", arguments: { repo: PHANTOM, query: "nullGipStep7" } } },
+      { id: 3, method: "tools/call", params: { name: "explain_search", arguments: { repo: PHANTOM, query: "nullGipStep7" } } },
+      { id: 4, method: "tools/call", params: { name: "explain_search", arguments: { repo: PHANTOM, query: "nullGipStep2" } } },
+      { id: 5, method: "tools/call", params: { name: "search", arguments: { repo: PHANTOM, query: "nullGipStep7", explain: true } } },
+    ]);
+
+    // Unchanged shape for every existing consumer.
+    const bare = JSON.parse(res.get(2)!.result!.content![0]!.text) as { file: string; bridgedOnly?: true }[];
+    expect(Array.isArray(bare)).toBe(true);
+    expect(bare.length).toBeGreaterThan(0);
+
+    const weak = JSON.parse(res.get(3)!.result!.content![0]!.text) as {
+      results: unknown[];
+      explain: { verdict: string; note?: string; wholeIdentifier?: { term: string; df: number } };
+    };
+    expect(weak.explain.verdict).toBe("weak");
+    expect(weak.explain.wholeIdentifier).toEqual({ term: "nullgipstep7", df: 0 });
+    expect(weak.explain.note).toContain("nullgipstep2");
+    // The rows are still there — the verdict qualifies them, it does not hide them.
+    expect(weak.results.length).toBeGreaterThan(0);
+    // A stable shape is the whole reason this is a separate tool, so it is the
+    // one that gets to declare structuredContent.
+    expect(res.get(3)!.result!.structuredContent).toBeDefined();
+
+    const strong = JSON.parse(res.get(4)!.result!.content![0]!.text) as { explain: { verdict: string; note?: string } };
+    expect(strong.explain.verdict).toBe("match");
+    expect(strong.explain.note).toBeUndefined();
+
+    // explain:true opts the same answer into the wrapper, without a new tool.
+    const wrapped = JSON.parse(res.get(5)!.result!.content![0]!.text) as { results: unknown[]; explain: { verdict: string } };
+    expect(wrapped.explain.verdict).toBe("weak");
+    expect(JSON.stringify(wrapped.results)).toBe(JSON.stringify(bare));
+  }, 20_000);
 });

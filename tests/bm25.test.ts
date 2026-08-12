@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { charTrigrams, diceCoefficient, searchIndex, subtokens } from "../src/bm25.js";
+import { charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens } from "../src/bm25.js";
 import { stemOf } from "../src/util.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
@@ -214,8 +214,103 @@ describe("searchIndex fuzzy trigram fallback (df==0 query terms)", () => {
     expect(JSON.stringify(withFuzzyExplicit)).toBe(json);
     expect(JSON.stringify(withFuzzyOff)).toBe(json);
     expect(json).not.toContain("fuzzyTerms");
+    // Same reason, same guarantee: `bridgedOnly` is set only when a result has
+    // NO verbatim match, so a genuine hit serialises to the bytes it always did.
+    expect(json).not.toContain("bridgedOnly");
     expect(withDefault[0]!.file).toBe("src/http/client.ts");
     expect(withDefault[0]!.matchedTerms).toEqual(["client", "http", "retry"]);
+  });
+});
+
+// The failure this whole diagnostic exists for, reproduced from the case that
+// exposed it: the codeindex playground indexed socialgouv/egapro on `master`
+// (guessed) while `nullGipStep2` only ever existed on `alpha` (the real default
+// branch). The search returned twenty confident-looking rows built from the
+// subtokens `null` and `gip`, and nothing anywhere said the identifier asked
+// for was absent.
+describe("query diagnostics", () => {
+  const PHANTOM = fileURLToPath(new URL("./fixtures/phantom-search", import.meta.url));
+
+  it("says an identifier is absent instead of passing its subtokens off as a hit", () => {
+    const { results, explain } = explainQuery(scanRepo(PHANTOM), "nullGipStep7");
+
+    // The rows are still returned — they are the nearest thing there is.
+    expect(results.length).toBeGreaterThan(0);
+    // …but the verdict refuses to call that a match.
+    expect(explain.verdict).toBe("weak");
+    // The whole identifier is subtokens()'s first output and the only term that
+    // answers "does this exist". df 0 is the entire finding.
+    expect(explain.wholeIdentifier).toEqual({ term: "nullgipstep7", df: 0 });
+    expect(explain.note).toContain("nullgipstep7");
+    // Name the parts that produced the rows, so they read as coincidence.
+    expect(explain.note).toMatch(/match only its parts/);
+    // And the near neighbour that DOES exist — the actual answer to the question.
+    expect(explain.note).toContain("nullgipstep2");
+  });
+
+  it("calls the same query a match once the identifier really is there", () => {
+    const { results, explain } = explainQuery(scanRepo(PHANTOM), "nullGipStep2");
+    expect(explain.verdict).toBe("match");
+    expect(explain.note).toBeUndefined();
+    expect(explain.wholeIdentifier).toEqual({ term: "nullgipstep2", df: 1 });
+    expect(results[0]!.file).toBe("src/gipGapFixtures.ts");
+    expect(results[0]!.bridgedOnly).toBeUndefined();
+  });
+
+  it("distinguishes a rescued typo from a real hit, and names what it fell back to", () => {
+    const { results, explain } = explainQuery(scanRepo(PHANTOM), "authh");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.bridgedOnly)).toBe(true);
+    expect(explain.bridgedOnlyResults).toBe(results.length);
+    expect(explain.verdict).toBe("weak");
+    expect(explain.terms[0]!.bridge).toMatchObject({ via: "trigram", to: ["auth"] });
+    expect(explain.note).toContain("auth");
+  });
+
+  it("attributes an inflection to the stem bridge, not the trigram one", () => {
+    const { explain } = explainQuery(scanRepo(PHANTOM), "caching");
+    expect(explain.terms[0]!.bridge).toEqual({ via: "stem", to: ["cache"], dice: 0.9 });
+  });
+
+  it("explains an all-stopword query rather than returning a bare empty array", () => {
+    const { results, explain } = explainQuery(scanRepo(PHANTOM), "how does the default value work");
+    expect(results).toEqual([]);
+    expect(explain.verdict).toBe("none");
+    expect(explain.terms).toEqual([]);
+    // The reason is the dropped tokens themselves — an empty array alone reads
+    // as "this repo has nothing", which is a different claim entirely.
+    expect(explain.droppedStopwords).toEqual(["how", "does", "the", "default", "value", "work"]);
+    expect(explain.note).toMatch(/stopword/);
+  });
+
+  it("reports a term that exists nowhere and bridges to nothing", () => {
+    const { results, explain } = explainQuery(scanRepo(PHANTOM), "zzzzqqqqwwww", { fuzzy: false });
+    expect(results).toEqual([]);
+    expect(explain.verdict).toBe("none");
+    expect(explain.unresolvedTerms).toEqual(["zzzzqqqqwwww"]);
+    expect(explain.note).toContain("zzzzqqqqwwww");
+  });
+
+  it("--exact drops the bridge-only rows and keeps the literal ones", () => {
+    const scan = scanRepo(PHANTOM);
+    expect(searchIndex(scan, "authh").length).toBeGreaterThan(0);
+    expect(searchIndex(scan, "authh", { exact: true })).toEqual([]);
+    // A verbatim subtoken match is a literal match and survives, by design:
+    // --exact removes the bridge, it does not require every term to match.
+    expect(searchIndex(scan, "nullGipStep7", { exact: true }).length).toBeGreaterThan(0);
+  });
+
+  it("explainQuery.results IS searchIndex — one code path, asserted not promised", () => {
+    const scan = scanRepo(PHANTOM);
+    for (const query of ["nullGipStep2", "nullGipStep7", "gip step", "authh", "cache"]) {
+      expect(JSON.stringify(explainQuery(scan, query).results)).toBe(JSON.stringify(searchIndex(scan, query)));
+    }
+  });
+
+  it("is deterministic across two independent scans", () => {
+    const a = explainQuery(scanRepo(PHANTOM), "nullGipStep7");
+    const b = explainQuery(scanRepo(PHANTOM), "nullGipStep7");
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
 

@@ -128,6 +128,24 @@ export function keywords(question: string): string[] {
   return out;
 }
 
+/**
+ * What `keywords` threw away, in order — the stopwords and 1-char fragments.
+ *
+ * The complement of `keywords`, and it exists so search can EXPLAIN an empty
+ * result. "how does the default value work" reduces to nothing at all: every
+ * token above is either a stopword or too short, so the query returns zero
+ * results for a reason no caller can see from the empty array alone. Kept here
+ * rather than in the search module so STOPWORDS stays defined exactly once.
+ */
+export function droppedKeywords(question: string): string[] {
+  const out: string[] = [];
+  for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
+    if (!raw) continue;
+    if (raw.length < 2 || STOPWORDS.has(raw.toLowerCase())) out.push(raw);
+  }
+  return out;
+}
+
 // Keywords ordered by how *distinctive* they are, most-specific first. Numbers
 // (status codes like 429), camelCase/snake_case identifiers, and long tokens
 // carry more signal than short generic words. Narrow search APIs (GitHub/GitLab

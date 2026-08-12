@@ -35,7 +35,7 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { impactOf, neighborsOf } from "./traverse.js";
 import { deltaFor, formatDeltaPanel } from "./delta.js";
-import { searchIndex } from "./bm25.js";
+import { explainQuery, searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, parseEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
@@ -171,6 +171,10 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
+  --exact             \`search\`: drop results that carry no verbatim term match
+                      (the ones the stem/trigram bridge produced)
+  --explain           \`search\`: emit { results, explain } — which terms matched,
+                      which bridged, and whether the query really found anything
   --semantic          \`search\`: RRF-fuse an embedding tier with lexical — the
                       HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
                       local static model (lexical-only when neither is available)
@@ -211,6 +215,8 @@ interface CliFlags {
   minCount?: number; // literals: total-occurrence floor for a duplication
   includeTests?: boolean; // literals: count test files too (off by default)
   fuzzy: boolean; // search: trigram fuzzy fallback for df==0 terms (default true)
+  exact?: boolean; // search: drop results carrying no verbatim term match
+  explain?: boolean; // search: emit { results, explain } instead of a bare array
   semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
   recall?: boolean; // callers: recall-oriented binding
   run?: boolean; // `embed serve`: actually run the docker command (default: print)
@@ -273,6 +279,8 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--config") flags.config = resolve(next());
     else if (a === "--limit") flags.limit = num();
     else if (a === "--no-fuzzy") flags.fuzzy = false;
+    else if (a === "--exact") flags.exact = true;
+    else if (a === "--explain") flags.explain = true;
     else if (a === "--semantic") flags.semantic = true;
     else if (a === "--recall") flags.recall = true;
     else if (a === "--run") flags.run = true;
@@ -725,10 +733,26 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan = readScan();
+    const searchOpts = {
+      limit: flags.limit,
+      fuzzy: flags.fuzzy,
+      ...(flags.exact ? { exact: true } : {}),
+      ...(flags.rank ? { rank: flags.rank } : {}),
+    };
+
+    // stdout stays pure JSON — a caller pipes it into jq. The verdict goes to
+    // stderr, the channel this command already uses to say a tier degraded.
+    // Emitted for the semantic tier too: whether an identifier exists in the
+    // indexed tree is a fact about the corpus, not about the ranking model.
+    const warnIfWeak = (): void => {
+      const { explain } = explainQuery(scan, flags.positional!, searchOpts);
+      if (explain.note) process.stderr.write(`codeindex: ${explain.note}\n`);
+    };
+
     if (flags.semantic) {
       const endpoint = resolveEmbedEndpoint();
       const lexical = (): void => {
-        const results = searchIndex(scan, flags.positional!, { limit: flags.limit, fuzzy: flags.fuzzy, ...(flags.rank ? { rank: flags.rank } : {}) });
+        const results = searchIndex(scan, flags.positional!, searchOpts);
         emit(JSON.stringify(results, null, 2) + "\n", flags.out);
       };
       if (endpoint) {
@@ -763,9 +787,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           emit(JSON.stringify(results, null, 2) + "\n", flags.out);
         }
       }
+      warnIfWeak();
     } else {
-      const results = searchIndex(scan, flags.positional, { limit: flags.limit, fuzzy: flags.fuzzy, ...(flags.rank ? { rank: flags.rank } : {}) });
-      emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+      const { results, explain } = explainQuery(scan, flags.positional, searchOpts);
+      // --explain is opt-in precisely so the default stdout stays a bare array,
+      // byte-identical to every release before this one.
+      emit(JSON.stringify(flags.explain ? { results, explain } : results, null, 2) + "\n", flags.out);
+      if (explain.note) process.stderr.write(`codeindex: ${explain.note}\n`);
     }
   } else if (cmd === "embed") {
     const sub = flags.positional;

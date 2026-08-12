@@ -2,7 +2,7 @@
 // render what comes back. No indexing happens here — that is all in worker.js,
 // which is why the palette stays responsive while a repo is being pulled.
 
-import { parseRepoInput } from "./sources.js";
+import { parseRepoInput, resolveDefaultBranch } from "./sources.js";
 import { toManifest } from "./local-folder.js";
 
 const $ = (id) => document.getElementById(id);
@@ -243,12 +243,24 @@ function onLoaded(summary) {
 
   const grammars = summary.grammars;
   els.tags.innerHTML = [
+    // Which tree the answers are about, first and always. Every query below is
+    // scoped to this ref, and a question whose answer only exists on another
+    // branch comes back empty — indistinguishable from "does not exist" unless
+    // the ref is on screen.
+    summary.ref ? tag("ref", `ref: ${summary.ref}`) : "",
     grammars.tier === "ast"
       ? tag("ok", `AST tier · ${grammars.loaded.join(", ")}`)
       : tag("warn", `regex tier${grammars.note ? ` · ${grammars.note}` : ""}`),
     summary.capped ? tag("warn", `capped by ${summary.cappedBy}`) : tag("ok", "capped: false"),
     ...topLanguages.map(([language, count]) => tag("", `${language} ${int(count)}`)),
-  ].join("");
+  ]
+    .filter(Boolean)
+    .join("");
+
+  // `HEAD` is correct but says nothing. Name the branch it stood for — after
+  // rendering, never before, because this costs a second call against the same
+  // 60-per-hour budget and must not delay a single result.
+  if (summary.ref === "HEAD" && summary.owner) nameDefaultBranch(summary);
 
   const parts = [
     `File list via ${summary.sourceLabel}.`,
@@ -275,6 +287,22 @@ function onLoaded(summary) {
     els.cmd.value = fromUrl;
     submitCommand();
   }
+}
+
+/**
+ * Replace the `HEAD` label with the branch name it resolved to, once GitHub
+ * says what that was. Fire-and-forget on purpose: the index is already built
+ * and every command already works, so a rate limit here costs a nicer label and
+ * nothing else. `HEAD` stays on screen when it cannot be answered — never a
+ * guess, and never a blank.
+ */
+async function nameDefaultBranch(summary) {
+  const branch = await resolveDefaultBranch(summary.owner, summary.repo);
+  if (!branch || summary.ref !== "HEAD") return;
+  summary.ref = branch;
+  summary.label = `${summary.owner}/${summary.repo}@${branch}`;
+  const pill = els.tags.querySelector(".pill.ref");
+  if (pill) pill.textContent = `ref: ${branch} (default)`;
 }
 
 // The overview page's stat tile: mono label above a large mono value.
@@ -420,7 +448,10 @@ function onResult({ id, command, result }) {
 
 function describeResult(result) {
   const data = result.data;
-  if (Array.isArray(data)) return `${int(data.length)} ${data.length === 1 ? "row" : "rows"}`;
+  // The meta line sits above everything and is read first, so a weak verdict
+  // has to reach it — not only the banner further down.
+  const caveat = result.verdict && result.verdict !== "match" ? " · no exact match" : "";
+  if (Array.isArray(data)) return `${int(data.length)} ${data.length === 1 ? "row" : "rows"}${caveat}`;
   if (result.kind === "binary") return `${int(data.byteLength)} bytes`;
   if (typeof data === "string") return `${int(data.length)} chars`;
   return "";
@@ -430,7 +461,7 @@ function renderResult(result, command) {
   if (showRaw) return codeBlock(rawText(result));
   switch (result.kind) {
     case "hits":
-      return renderHits(result.data);
+      return renderHits(result.data, result.note);
     case "grep":
       return renderGrep(result.data);
     case "symbols":
@@ -462,17 +493,33 @@ function table(headers, rows) {
   return element;
 }
 
-function renderHits(hits) {
-  if (!hits.length) return empty("No match.");
-  return table(
+function renderHits(hits, note) {
+  if (!hits.length) return empty(note ?? "No match.");
+  const rows = table(
     ["file", "score", "matched", "symbols"],
     hits.map((hit) => [
       [escapeHtml(hit.file) + (hit.line ? `<span class="num">:${hit.line}</span>` : ""), "path"],
       [hit.score, "num"],
-      [(hit.matchedFields ?? hit.matchedTerms ?? []).map((f) => `<span class="kind">${escapeHtml(f)}</span>`).join(""), "fields"],
+      [
+        (hit.matchedFields ?? hit.matchedTerms ?? []).map((f) => `<span class="kind">${escapeHtml(f)}</span>`).join("") +
+          // A row that matched nothing verbatim looks exactly like one that did,
+          // and outranks plenty of real hits. Say which it is, on the row.
+          (hit.bridgedOnly ? `<span class="kind bridged" title="no verbatim term match — a near match">near</span>` : ""),
+        "fields",
+      ],
       [escapeHtml((hit.topSymbols ?? []).join(", ")), "sym"],
     ]),
   );
+  if (!note) return rows;
+
+  // Above the table, deliberately: by the time the eye reaches row 1 it has
+  // already read the rows as an answer.
+  const wrap = document.createElement("div");
+  const banner = document.createElement("p");
+  banner.className = "verdict";
+  banner.textContent = note;
+  wrap.append(banner, rows);
+  return wrap;
 }
 
 function renderGrep(hits) {

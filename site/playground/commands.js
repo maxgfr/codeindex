@@ -31,6 +31,40 @@ export function buildCommandTable(engine, mount) {
     return value;
   };
 
+  /**
+   * Split the CLI flags this palette honours off the front/back of a query,
+   * returning the flags plus whatever is left as the actual query text.
+   *
+   * Typing `search --limit 50 foo` used to search for the literal words
+   * "limit 50 foo" — every token after the command name was passed through as
+   * query text — and the result cap stayed pinned at the engine default of 20
+   * with no way to raise it. That silently made playground and CLI results
+   * incomparable on any query with more than 20 hits.
+   *
+   * Deliberately tiny: only the flags that change what `search` RETURNS, and
+   * an unknown `--flag` is an error rather than a word to search for, because
+   * searching for "--smantic" and getting nothing is indistinguishable from a
+   * real miss.
+   */
+  const searchFlags = (args) => {
+    const tokens = (args ?? "").trim().split(/\s+/).filter(Boolean);
+    const opts = {};
+    const rest = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (token === "--no-fuzzy") opts.fuzzy = false;
+      else if (token === "--explain") opts.explain = true;
+      else if (token === "--exact") opts.exact = true;
+      else if (token === "--limit") {
+        const value = Number(tokens[++i]);
+        if (!Number.isFinite(value) || value <= 0) throw new Error("--limit needs a positive number.");
+        opts.limit = value;
+      } else if (token.startsWith("--")) throw new Error(`Unknown flag ${token}. Supported: --limit <n>, --no-fuzzy, --exact, --explain.`);
+      else rest.push(token);
+    }
+    return { opts, query: rest.join(" ") };
+  };
+
   // Map instances do not survive a structured clone in a readable shape, and
   // JSON.stringify renders them as {}. Convert before they leave the worker.
   const plain = (value) =>
@@ -45,9 +79,16 @@ export function buildCommandTable(engine, mount) {
       run: () => ({ kind: "json", data: engine.scanSummary(mount) }),
     },
     search: {
-      hint: "<query>",
+      hint: "<query> [--limit <n>] [--exact] [--no-fuzzy]",
       describe: "BM25 over symbol names, path segments, headings and summaries",
-      run: (session, args) => ({ kind: "hits", data: engine.searchIndex(session.artifacts.scan, arg(args, "a query")) }),
+      run: (session, args) => {
+        const { opts, query } = searchFlags(args);
+        const { results, explain } = engine.explainQuery(session.artifacts.scan, arg(query, "a query"), opts);
+        // The note is the difference between "here are your results" and "the
+        // identifier you asked for is not in this tree, here is what is near
+        // it". Passed up as data so the renderer can put it ABOVE the rows.
+        return { kind: "hits", data: results, note: explain.note, verdict: explain.verdict, ...(opts.explain ? { explain } : {}) };
+      },
     },
     grep: {
       hint: "<pattern>",
