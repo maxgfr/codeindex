@@ -48,7 +48,13 @@ describe("the engine's own sources stay indexable", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("yields symbols for every non-trivial engine module", () => {
+  // A WHOLE-REPO scan with AST extraction, so it is seconds rather than
+  // milliseconds and grows with the source tree. It sat just under vitest's
+  // 5s default until src/lsp/ pushed it to 5.2s on CI hardware and turned a
+  // green suite red for a reason that had nothing to do with the assertion.
+  // Budgeted explicitly: this test is allowed to be slow, it is not allowed to
+  // be flaky about it.
+  it("yields symbols for every non-trivial engine module", { timeout: 120_000 }, () => {
     const scan = scanRepo(ROOT, {});
     const empty = scan.files
       .filter((f) => f.rel.startsWith("src/") && f.rel.endsWith(".ts") && f.size > 2000 && f.symbols.length === 0)
