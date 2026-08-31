@@ -9,15 +9,19 @@ import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { readText } from "./walk.js";
 import type { CallerSite } from "./callers.js";
-import { callerIndexFor, uniqueDefsFor } from "./derived.js";
+import { callerIndexFor, fileByRelFor, symbolsByNameFor, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
+function* allSymbols(scan: RepoScan): Generator<CodeSymbol> {
+  for (const file of scan.files) yield* file.symbols;
+}
+
 // All symbols declared in one file, in declaration order — the fastest way to
 // understand a file without reading it.
 export function symbolsOverview(scan: RepoScan, rel: string): CodeSymbol[] {
-  const f = scan.files.find((x) => x.rel === rel);
+  const f = fileByRelFor(scan).get(rel);
   if (!f) return [];
   return [...f.symbols].filter((s) => !REFERENCE_KINDS.has(s.kind)).sort((a, b) => a.line - b.line || byStr(a.name, b.name));
 }
@@ -59,31 +63,46 @@ export function findSymbol(scan: RepoScan, namePath: string, opts: FindSymbolOpt
     opts.substring ? name.toLowerCase().includes(wanted.toLowerCase()) : name === wanted;
 
   const out: SymbolMatch[] = [];
-  for (const f of scan.files) {
-    for (const s of f.symbols) {
-      if (REFERENCE_KINDS.has(s.kind)) continue;
-      if (!matchName(s.name, leaf)) continue;
-      // Walk the parent chain (single level in practice — extractor records the
-      // enclosing symbol name) against the requested path suffix. Substring
-      // matching applies to the LAST segment only (Serena's contract): parent
-      // segments always match exactly.
-      if (parents.length) {
-        const parent = parents[parents.length - 1]!;
-        if (!s.parent || s.parent !== parent) continue;
-      }
-      out.push({ ...s });
+  const candidates: Iterable<CodeSymbol> = opts.substring
+    ? allSymbols(scan)
+    : symbolsByNameFor(scan).get(leaf) ?? [];
+  for (const s of candidates) {
+    if (REFERENCE_KINDS.has(s.kind)) continue;
+    if (!matchName(s.name, leaf)) continue;
+    // Walk the parent chain (single level in practice — extractor records the
+    // enclosing symbol name) against the requested path suffix. Substring
+    // matching applies to the LAST segment only (Serena's contract): parent
+    // segments always match exactly.
+    if (parents.length) {
+      const parent = parents[parents.length - 1]!;
+      if (!s.parent || s.parent !== parent) continue;
     }
+    out.push({ ...s });
   }
   out.sort(
     (a, b) => Number(b.name === leaf) - Number(a.name === leaf) || byStr(a.file, b.file) || a.line - b.line,
   );
   const capped = out.slice(0, opts.maxResults ?? 50);
   if (opts.includeBody) {
+    // Several overloads / methods commonly live in the same file. Read and
+    // split each source file once per query rather than once per matching
+    // declaration; result ownership and freshness semantics stay unchanged.
+    const linesByFile = new Map<string, string[]>();
+    const unreadableFiles = new Set<string>();
     for (const m of capped) {
       const end = m.endLine ?? m.line;
-      const content = readText(join(scan.root, m.file));
-      if (!content) continue;
-      m.body = content.split("\n").slice(m.line - 1, end).join("\n");
+      if (unreadableFiles.has(m.file)) continue;
+      let lines = linesByFile.get(m.file);
+      if (!lines) {
+        const content = readText(join(scan.root, m.file));
+        if (!content) {
+          unreadableFiles.add(m.file);
+          continue;
+        }
+        lines = content.split("\n");
+        linesByFile.set(m.file, lines);
+      }
+      m.body = lines.slice(m.line - 1, end).join("\n");
     }
   }
   // Applied LAST so it composes predictably: `concise` with `includeBody` keeps

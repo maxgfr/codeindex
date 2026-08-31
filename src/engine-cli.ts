@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
@@ -11,14 +11,14 @@ import {
   sharedGrammarsCacheDir,
 } from "./ast/loader.js";
 import { resolveGrammarsPullTarget, pullGrammars } from "./ast/grammars-pull.js";
-import { buildIndexArtifacts, buildArtifactsFromScan, type BuildIndexOptions, type IndexArtifacts } from "./pipeline.js";
+import { buildArtifactsFromScan, type BuildIndexOptions, type IndexArtifacts } from "./pipeline.js";
 import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
-import { scanRepo, scanSummary, type RepoScan } from "./scan.js";
+import { scanSummary, type RepoScan } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
-import { preloadSession, INDEX_DIR } from "./preload.js";
+import { preloadSessionLazy, INDEX_DIR } from "./preload.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
 import { computeImportPairs } from "./callers.js";
@@ -152,7 +152,8 @@ Commands:
               advertises a named subset (all | orient | find | impact | edit |
               risk, default all) — every advertised tool's schema costs an agent
               context on EVERY turn, and a tool left out is still answerable
-              when called by name
+              when called by name; --watch enables proactive invalidation for a
+              pinned repo while retaining per-request freshness verification
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -365,11 +366,13 @@ export function parseMcpFlags(argv: string[]): {
   serverInfo?: { name?: string };
   maxResponseBytes?: number;
   profile?: string;
+  watch?: boolean;
 } {
   let defaultRepo: string | undefined;
   let name: string | undefined;
   let maxResponseBytes: number | undefined;
   let profile: string | undefined;
+  let watch = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--repo") {
@@ -392,12 +395,15 @@ export function parseMcpFlags(argv: string[]): {
       // profile that silently advertised everything would look like it worked.
       toolsInProfiles(v);
       profile = v === "all" ? undefined : v;
+    } else if (a === "--watch") {
+      watch = true;
     } else {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
   if (defaultRepo && !existsSync(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
-  return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes, profile };
+  if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
+  return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes, profile, watch };
 }
 
 // Flags that consume the following argv element. Needed to hoist leading flags
@@ -426,6 +432,11 @@ const VALUE_FLAGS = new Set([
   "--workers",
   "--index",
   "--max-response-bytes",
+  "--base",
+  "--depth",
+  "--kind",
+  "--rank",
+  "--direction",
 ]);
 
 // Accept global flags BEFORE the subcommand as well as after, so
@@ -496,6 +507,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
 
   const flags = parseFlags(rest);
   if (!existsSync(flags.repo)) throw new Error(`--repo path does not exist: ${flags.repo}`);
+  if (!statSync(flags.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags.repo}`);
 
   // Warm ONLY the grammars for languages actually present, and only for commands
   // that scan the file tree. Scan-less commands (grep, churn, coupling,
@@ -513,8 +525,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       gitignore: flags.gitignore,
       ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
     });
-    await ensureGrammars(grammarKeysForExts(precomputedWalk.files.map((f) => f.ext)));
   }
+  let grammarsWarmed = false;
+  const warmPresentGrammars = async (): Promise<void> => {
+    if (grammarsWarmed || flags.noAst || !precomputedWalk) return;
+    await ensureGrammars(grammarKeysForExts(precomputedWalk.files.map((f) => f.ext)));
+    grammarsWarmed = true;
+  };
 
   // Read commands reuse a persisted index instead of rebuilding from scratch.
   //
@@ -531,21 +548,40 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   // uses either the scan or the artifacts, never both.
   const indexDir = flags.indexDir ?? INDEX_DIR;
   let preloadTried = false;
-  let preloaded: { scan: RepoScan; arts?: IndexArtifacts } | undefined;
-  const tryPreload = (): { scan: RepoScan; arts?: IndexArtifacts } | undefined => {
+  let preloadPromise: Promise<{
+    scan: RepoScan;
+    arts?: IndexArtifacts;
+    loadArtifacts?: () => IndexArtifacts | undefined;
+  } | undefined> | undefined;
+  let preloaded: { scan: RepoScan; arts?: IndexArtifacts; loadArtifacts?: () => IndexArtifacts | undefined } | undefined;
+  const tryPreload = async (): Promise<typeof preloaded> => {
+    if (preloadPromise) return preloadPromise;
     if (preloadTried) return preloaded;
     preloadTried = true;
     if (flags.noIndexCache) return undefined;
-    const p = preloadSession(flags.repo, scanOptions(flags, precomputedWalk), indexDir);
-    if (p) preloaded = { scan: p.scan, arts: p.arts };
-    return preloaded;
+    preloadPromise = preloadSessionLazy(flags.repo, scanOptions(flags, precomputedWalk), warmPresentGrammars, indexDir).then((p) => {
+      if (p) preloaded = { scan: p.scan, arts: p.arts, loadArtifacts: p.loadArtifacts };
+      return preloaded;
+    });
+    return preloadPromise;
   };
-  const readScan = (): RepoScan => tryPreload()?.scan ?? scanRepo(flags.repo, scanOptions(flags, precomputedWalk));
-  const readArtifacts = (): IndexArtifacts => {
-    const p = tryPreload();
+  let readScanPromise: Promise<RepoScan> | undefined;
+  const readScan = async (): Promise<RepoScan> => {
+    const preloadedScan = (await tryPreload())?.scan;
+    if (preloadedScan) return preloadedScan;
+    return (readScanPromise ??= warmPresentGrammars().then(() =>
+      scanRepoParallel(flags.repo, {
+        ...scanOptions(flags, precomputedWalk),
+        workers: flags.workers,
+      }),
+    ));
+  };
+  let readArtifactsPromise: Promise<IndexArtifacts> | undefined;
+  const readArtifacts = async (): Promise<IndexArtifacts> => {
+    const p = await tryPreload();
     if (p?.arts) return p.arts;
-    if (p) return buildArtifactsFromScan(p.scan, scanOptions(flags, precomputedWalk));
-    return buildIndexArtifacts(flags.repo, scanOptions(flags, precomputedWalk));
+    if (p) return (p.arts ??= p.loadArtifacts?.() ?? buildArtifactsFromScan(p.scan, scanOptions(flags, precomputedWalk)));
+    return (readArtifactsPromise ??= readScan().then((scan) => buildArtifactsFromScan(scan, scanOptions(flags, precomputedWalk))));
   };
 
   if (cmd === "index") {
@@ -589,6 +625,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     } catch {
       // no cache yet (or unreadable) — cold build
     }
+    await warmPresentGrammars();
     const scan = await scanRepoParallel(flags.repo, {
       ...scanOptions(flags, precomputedWalk),
       cache,
@@ -709,13 +746,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
   } else if (cmd === "graph") {
-    const { graph } = readArtifacts();
+    const { graph } = await readArtifacts();
     emit(renderGraphJson(graph), flags.out);
   } else if (cmd === "symbols") {
-    const { symbols } = readArtifacts();
+    const { symbols } = await readArtifacts();
     emit(renderSymbolsJson(symbols), flags.out);
   } else if (cmd === "scip") {
-    const scan = readScan();
+    const scan = await readScan();
     const bytes = renderScip(scan, { projectRoot: flags.projectRoot });
     const out = flags.out ?? resolve("index.scip");
     if (out === "-") process.stdout.write(Buffer.from(bytes));
@@ -724,13 +761,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       process.stderr.write(`codeindex: SCIP index → ${out} (${bytes.length} bytes)\n`);
     }
   } else if (cmd === "callers") {
-    const scan = readScan();
+    const scan = await readScan();
     const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
     const obj: Record<string, unknown> = {};
     for (const [name, entry] of index) obj[name] = entry;
     emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
   } else if (cmd === "hierarchy") {
-    const scan = readScan();
+    const scan = await readScan();
     const hierarchy = buildTypeHierarchy(scan, computeImportPairs(scan));
     if (flags.positional) {
       const entry = hierarchy.get(flags.positional);
@@ -743,7 +780,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     }
   } else if (cmd === "implementations") {
     if (!flags.positional) throw new Error("implementations needs a type name: cli.mjs implementations <Name> --repo <dir>");
-    const scan = readScan();
+    const scan = await readScan();
     const hierarchy = buildTypeHierarchy(scan, computeImportPairs(scan));
     if (!hierarchy.has(flags.positional)) throw new Error(`no type named ${flags.positional}`);
     emit(
@@ -752,7 +789,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     );
   } else if (cmd === "callgraph") {
     if (!flags.positional) throw new Error("callgraph needs a symbol: cli.mjs callgraph <Symbol> --repo <dir>");
-    const scan = readScan();
+    const scan = await readScan();
     const graph = buildSymbolGraph(scan, computeImportPairs(scan));
     const result = neighborhood(graph, flags.positional, {
       ...(flags.depth !== undefined ? { depth: flags.depth } : {}),
@@ -762,7 +799,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(JSON.stringify(result, null, 2) + "\n", flags.out);
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
-    const scan = readScan();
+    const scan = await readScan();
     const searchOpts = {
       limit: flags.limit,
       fuzzy: flags.fuzzy,
@@ -887,7 +924,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       }
       const model = loadEmbedModel(modelDir)!;
       mkdirSync(flags.out, { recursive: true });
-      const scan = readScan();
+      const scan = await readScan();
       const index = buildEmbeddingIndex(scan, model);
       writeFileSync(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
@@ -930,7 +967,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // A MALFORMED config is the one case that exits 1: here the config IS the
     // question being asked, so swallowing the parse error would answer it
     // wrongly. Everywhere else an unusable tier degrades on exit 0.
-    emit(JSON.stringify(await lspStatus(readScan(), flags.repo, flags.probe === true), null, 2) + "\n", flags.out);
+    emit(JSON.stringify(await lspStatus(await readScan(), flags.repo, flags.probe === true), null, 2) + "\n", flags.out);
   } else if (cmd === "grammars") {
     const sub = flags.positional;
     const cacheDir = sharedGrammarsCacheDir();
@@ -980,7 +1017,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));
-    const { graph } = readArtifacts();
+    const { graph } = await readArtifacts();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
@@ -1001,33 +1038,33 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
   } else if (cmd === "repomap") {
-    const { scan, graph } = readArtifacts();
+    const { scan, graph } = await readArtifacts();
     emit(renderRepoMap(scan, graph, { budgetTokens: flags.budgetTokens }), flags.out);
   } else if (cmd === "hotspots") {
-    const scan = readScan();
+    const scan = await readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
     emit(JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2) + "\n", flags.out);
   } else if (cmd === "coupling") {
     const { ok, couplings } = changeCoupling(flags.repo, { since: flags.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
   } else if (cmd === "deadcode") {
-    emit(JSON.stringify(findDeadCode(readScan()), null, 2) + "\n", flags.out);
+    emit(JSON.stringify(findDeadCode(await readScan()), null, 2) + "\n", flags.out);
   } else if (cmd === "literals") {
-    const report = findLiteralDuplications(readScan(), {
+    const report = findLiteralDuplications(await readScan(), {
       minFiles: flags.minFiles,
       minCount: flags.minCount,
       includeTests: flags.includeTests,
     });
     emit(JSON.stringify(report, null, 2) + "\n", flags.out);
   } else if (cmd === "complexity") {
-    const scan = readScan();
+    const scan = await readScan();
     emit(JSON.stringify(symbolComplexity(scan, flags.positional), null, 2) + "\n", flags.out);
   } else if (cmd === "risk") {
-    const scan = readScan();
+    const scan = await readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
     emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2) + "\n", flags.out);
   } else if (cmd === "delta") {
-    const { graph, symbols } = readArtifacts();
+    const { graph, symbols } = await readArtifacts();
     const res = deltaFor(flags.repo, graph, symbols, {
       base: flags.base,
       staged: flags.staged,
@@ -1037,19 +1074,19 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);
   } else if (cmd === "impact") {
     if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
-    const { graph } = readArtifacts();
+    const { graph } = await readArtifacts();
     const res = impactOf(graph, flags.positional, flags.depth ?? Infinity);
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "neighbors") {
     if (!flags.positional) throw new Error("neighbors needs a target: cli.mjs neighbors <file|module> --repo <dir>");
-    const { graph } = readArtifacts();
+    const { graph } = await readArtifacts();
     const kinds = flags.kind ? new Set(flags.kind.split(",").map((k) => k.trim()).filter(Boolean)) : undefined;
     const res = neighborsOf(graph, flags.positional, flags.depth ?? 1, kinds);
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "mermaid") {
-    const { graph } = readArtifacts();
+    const { graph } = await readArtifacts();
     emit(renderMermaid(graph, { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");

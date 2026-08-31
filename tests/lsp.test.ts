@@ -115,6 +115,20 @@ describe("URI mapping", () => {
     expect(relFromUri(root, fileUri(root, rel))).toBe(rel);
   });
 
+  it("round-trips canonical Windows file URIs", () => {
+    const root = "C:\\work\\repo";
+    const rel = "src\\a b.ts";
+    expect(fileUri(root, rel)).toBe("file:///C:/work/repo/src/a%20b.ts");
+    expect(relFromUri(root, "file:///C:/work/repo/src/a%20b.ts")).toBe("src/a b.ts");
+  });
+
+  it("emits and accepts canonical Windows UNC file URIs", () => {
+    const root = "\\\\server\\share\\repo";
+    const rel = "src\\a b.ts";
+    expect(fileUri(root, rel)).toBe("file://server/share/repo/src/a%20b.ts");
+    expect(relFromUri(root, "file://server/share/repo/src/a%20b.ts")).toBe("src/a b.ts");
+  });
+
   it("refuses a URI outside the repository rather than inventing a path", () => {
     // A definition in node_modules or the standard library is real, but has no
     // repo-relative path — reporting one would name a file that does not exist.

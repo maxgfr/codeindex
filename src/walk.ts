@@ -15,6 +15,14 @@ export const IGNORE_DIRS = new Set([
   "tmp", ".ultraindex", ".codeindex", "Pods", "DerivedData", ".terraform", "elm-stuff", ".dart_tool",
 ]);
 
+function isIgnoredDirectory(name: string, ignoreDirs: Set<string>): boolean {
+  // A process killed during an atomic symbolic edit can leave this directory
+  // beside the source. It contains a copy of that source and must never become
+  // a duplicate phantom file in the next index, even when the consumer repo
+  // has no matching .gitignore rule.
+  return ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
+}
+
 // Lockfiles: huge, machine-generated, and pure noise for a code/docs question —
 // they'd otherwise rank as keyword-dense "code" hits (e.g. package-lock.json
 // matching a dependency name). Skipped entirely.
@@ -149,7 +157,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       // false on its dirent and falls through to the stat-based
       // classification below, so a link named node_modules still classifies
       // by its target exactly as before.
-      if (entry.isDirectory() && ignoreDirs.has(name)) continue;
+      if (entry.isDirectory() && isIgnoredDirectory(name, ignoreDirs)) continue;
       let st;
       try {
         // Non-links: a single lstatSync supplies isDirectory/isFile/size/
@@ -162,7 +170,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         continue;
       }
       if (st.isDirectory()) {
-        if (ignoreDirs.has(name)) continue;
+        if (isIgnoredDirectory(name, ignoreDirs)) continue;
         // An in-repo DIRECTORY symlink is skipped entirely: its target is (or
         // will be) walked under its canonical name, and letting both paths race
         // through the cycle guard would keep whichever readdir served first —

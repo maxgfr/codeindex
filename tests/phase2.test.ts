@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { gitChurn, changedSince } from "../src/git.js";
 import { changeCoupling, rankHotspots } from "../src/coupling.js";
 import { renderRepoMap } from "../src/repomap.js";
 import { symbolsOverview, findSymbol, findReferences } from "../src/query.js";
-import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol, resolveUniqueSymbol } from "../src/edit.js";
+import { atomicWriteText, replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol, resolveUniqueSymbol } from "../src/edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "../src/memory.js";
 import { readText as engineRead } from "../src/walk.js";
 import { findDeadCode } from "../src/deadcode.js";
@@ -393,6 +393,50 @@ describe("symbolic editing", () => {
     expect(content).toContain("return b + a;");
     expect(content).toContain("return a - b;"); // neighbour untouched
     expect(content).not.toContain("return a + b;");
+  });
+
+  it("preserves source permissions across an atomic replacement", () => {
+    const root = makeRepo();
+    const source = join(root, "calc.ts");
+    chmodSync(source, 0o744);
+    replaceSymbolBody(scanRepo(root), "add", "export function add(): number {\n  return 3;\n}");
+    expect(statSync(source).mode & 0o777).toBe(0o744);
+  });
+
+  it("does not report a committed edit as failed when temp cleanup fails", () => {
+    const root = makeRepo();
+    const source = join(root, "calc.ts");
+    expect(() =>
+      atomicWriteText(source, "export const committed = true;\n", () => {
+        throw new Error("simulated cleanup failure");
+      }),
+    ).not.toThrow();
+    expect(engineRead(source)).toBe("export const committed = true;\n");
+  });
+
+  it("never indexes an orphaned symbolic-edit temp directory", () => {
+    const root = makeRepo();
+    const orphan = join(root, ".codeindex-edit-crashed");
+    mkdirSync(orphan);
+    writeFileSync(join(orphan, "calc.ts"), "export function phantom(): number { return 0; }\n");
+    const scan = scanRepo(root);
+    expect(scan.files.some((file) => file.rel.includes(".codeindex-edit-"))).toBe(false);
+    expect(findSymbol(scan, "phantom")).toEqual([]);
+  });
+
+  it("edits a symlink target without replacing the symlink", () => {
+    const root = makeRepo();
+    const target = join(root, "calc.ts");
+    const link = join(root, "linked.ts");
+    const scan = scanRepo(root);
+    symlinkSync(target, link);
+    const record = scan.files.find((file) => file.rel === "calc.ts")!;
+    record.rel = "linked.ts";
+    for (const symbol of record.symbols) symbol.file = "linked.ts";
+    replaceSymbolBody(scan, "add", "export function add(): number {\n  return 9;\n}", "linked.ts");
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(target);
+    expect(engineRead(target)).toContain("return 9;");
   });
 
   it("insertAfterSymbol keeps a blank line and insertBeforeSymbol pushes down", () => {

@@ -26,6 +26,8 @@ import type { FileRecord, Graph, SymbolIndex } from "./types.js";
 import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
 import type { IndexArtifacts } from "./pipeline.js";
 import { sha1 } from "./hash.js";
+import { walk, type WalkResult } from "./walk.js";
+import { classify } from "./classify.js";
 
 // The default index location, relative to the repo root.
 export const INDEX_DIR = ".codeindex";
@@ -45,6 +47,14 @@ export interface PersistedMeta {
   symbolsSha1?: string;
 }
 
+export interface PreloadedSession {
+  scan: RepoScan;
+  cacheMap: PersistedCacheMap;
+  arts?: IndexArtifacts;
+  /** Async preload callers defer the large graph/symbol JSON read until needed. */
+  loadArtifacts?: () => IndexArtifacts | undefined;
+}
+
 // A scan re-expressed as the `ScanOptions.cache` shape (the exact map the CLI
 // persists as cache.json): rel → (hash, record, size, mtimeMs), so the next
 // scanRepo can take the stat fastpath / hash-match reuse paths against it.
@@ -52,6 +62,22 @@ export function toCacheMap(scan: RepoScan): PersistedCacheMap {
   const m: PersistedCacheMap = new Map();
   for (const f of scan.files) m.set(f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: scan.mtimes.get(f.rel) });
   return m;
+}
+
+// Whether a persisted scan needs grammars BEFORE its next extraction pass.
+// Only code files reach tree-sitter. New/stat-changed code may need parsing;
+// docs/config changes and deletions do not. fullHash removes the stat proof, so
+// any present code file conservatively warms.
+export function needsGrammarWarm(
+  walked: WalkResult,
+  cache: PersistedCacheMap,
+  fullHash = false,
+): boolean {
+  const codeFiles = walked.files.filter((file) => classify(file.rel, file.ext) === "code");
+  return (fullHash && codeFiles.length > 0) || codeFiles.some((file) => {
+    const cached = cache.get(file.rel);
+    return !cached || cached.size !== file.size || cached.mtimeMs !== file.mtimeMs;
+  });
 }
 
 // Read <indexDir>/cache.json into the (cacheMap, meta) the preload needs.
@@ -156,4 +182,49 @@ export function preloadSession(
   // simply fails (arts undefined → rebuild on demand).
   const scan = scanRepo(repo, { ...opts, cache: persisted.cacheMap });
   return { scan, cacheMap: toCacheMap(scan), arts: preloadArtifacts(repo, scan, persisted.meta, indexDir) };
+}
+
+// Async variant for process boundaries that can defer grammar initialization.
+// First inspect the persisted records and walk metadata. The common unchanged
+// case loads no tree-sitter wasm; a new/stat-changed path warms BEFORE the one
+// extraction pass, so changed files land at the AST tier without a provisional
+// regex extraction followed by a second scan.
+export async function preloadSessionLazy(
+  repo: string,
+  opts: Omit<ScanOptions, "cache">,
+  warm: () => Promise<void>,
+  indexDir: string = INDEX_DIR,
+): Promise<PreloadedSession | undefined> {
+  const persisted = readPersistedIndex(repo, indexDir);
+  if (!persisted) return undefined;
+  const walked = opts.precomputedWalk ?? walk(repo, {
+    maxFileBytes: opts.maxBytes,
+    maxFiles: opts.maxFiles,
+    gitignore: opts.gitignore,
+    ignoreDirs: opts.ignoreDirs,
+  });
+  // Decide whether grammars are needed from metadata BEFORE extraction. The old
+  // flow first extracted every changed code file without grammars, discovered
+  // the scan was stale, then warmed and extracted those files again. A new or
+  // stat-changed path may need AST work; deletions, scope-only differences and
+  // an unchanged index do not. fullHash deliberately warms because equal stats
+  // are no longer a freshness proof in that mode.
+  const needsWarm = needsGrammarWarm(walked, persisted.cacheMap, opts.fullHash);
+  if (needsWarm) {
+    await warm();
+  }
+  const scan = scanRepo(repo, { ...opts, cache: persisted.cacheMap, precomputedWalk: walked });
+  let artifactsTried = false;
+  let artifacts: IndexArtifacts | undefined;
+  return {
+    scan,
+    cacheMap: toCacheMap(scan),
+    loadArtifacts: () => {
+      if (!artifactsTried) {
+        artifactsTried = true;
+        artifacts = preloadArtifacts(repo, scan, persisted.meta, indexDir);
+      }
+      return artifacts;
+    },
+  };
 }

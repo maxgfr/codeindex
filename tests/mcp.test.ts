@@ -18,6 +18,7 @@ import {
   validateArgs,
 } from "../src/mcp.js";
 import { parseMcpFlags } from "../src/engine-cli.js";
+import { sessionInvalidate } from "../src/mcp/session.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -31,7 +32,7 @@ const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const MODEL_DIR = fileURLToPath(new URL("./fixtures/embed-model", import.meta.url));
 
 interface RpcMsg {
-  id?: number;
+  id?: number | string | null;
   result?: {
     protocolVersion?: string;
     serverInfo?: { name: string; version?: string };
@@ -89,11 +90,9 @@ function mcpSession(
 }
 
 // Same harness but the requests go out as ONE JSON-RPC batch array line.
-function mcpBatch(requests: Record<string, unknown>[]): Promise<Map<number, RpcMsg>> {
+function mcpBatch(requests: Record<string, unknown>[]): Promise<RpcMsg[]> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [CLI, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
-    const expected = new Set(requests.filter((r) => r.id !== undefined).map((r) => r.id as number));
-    const got = new Map<number, RpcMsg>();
     let buf = "";
     const timer = setTimeout(() => {
       child.kill();
@@ -106,13 +105,10 @@ function mcpBatch(requests: Record<string, unknown>[]): Promise<Map<number, RpcM
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         if (!line.trim()) continue;
-        const msg = JSON.parse(line) as RpcMsg;
-        if (typeof msg.id === "number") got.set(msg.id, msg);
-        if (got.size === expected.size) {
-          clearTimeout(timer);
-          child.kill();
-          resolvePromise(got);
-        }
+        const msg = JSON.parse(line) as RpcMsg[];
+        clearTimeout(timer);
+        child.kill();
+        resolvePromise(msg);
       }
     });
     child.on("error", reject);
@@ -122,6 +118,226 @@ function mcpBatch(requests: Record<string, unknown>[]): Promise<Map<number, RpcM
 }
 
 describe("MCP server", () => {
+  it("does not let scan_summary cache a changed file at the regex tier", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "ci-mcp-lazy-grammar-"));
+    const repo = join(parent, "repo");
+    cpSync(REPO, repo, { recursive: true });
+    const source = join(repo, "src", "lazy.ts");
+    writeFileSync(source, "export class LazyService {\n  initialMethod(): number {\n    return 1;\n  }\n}\n");
+    execFileSync(process.execPath, [CLI, "index", "--repo", repo, "--out", join(repo, ".codeindex"), "--workers", "0"]);
+    const child = spawn(process.execPath, [CLI, "mcp", "--repo", repo], { stdio: ["pipe", "pipe", "inherit"] });
+    try {
+      const replies = await new Promise<Map<number, RpcMsg>>((resolvePromise, reject) => {
+        const got = new Map<number, RpcMsg>();
+        let buf = "";
+        const timer = setTimeout(() => reject(new Error("lazy grammar MCP session timed out")), 15_000);
+        const sendCall = (id: number, name: string, args: Record<string, unknown>): void => {
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }) + "\n");
+        };
+        child.stdout.on("data", (chunk: Buffer) => {
+          buf += chunk.toString();
+          let newline;
+          while ((newline = buf.indexOf("\n")) !== -1) {
+            const line = buf.slice(0, newline);
+            buf = buf.slice(newline + 1);
+            if (!line.trim()) continue;
+            const reply = JSON.parse(line) as RpcMsg;
+            if (typeof reply.id !== "number") continue;
+            got.set(reply.id, reply);
+            if (reply.id === 1) {
+              writeFileSync(source, "export class LazyService {\n  laterMethod(): number {\n    return 2;\n  }\n}\n");
+              sendCall(2, "scan_summary", {});
+            } else if (reply.id === 2) {
+              sendCall(3, "find_symbol", { namePath: "laterMethod" });
+            } else if (reply.id === 3) {
+              clearTimeout(timer);
+              resolvePromise(got);
+            }
+          }
+        });
+        child.on("error", reject);
+        sendCall(1, "find_symbol", { namePath: "initialMethod" });
+      });
+      const initial = JSON.parse(replies.get(1)!.result!.content![0]!.text) as { name: string }[];
+      const later = JSON.parse(replies.get(3)!.result!.content![0]!.text) as { name: string }[];
+      expect(initial.some((match) => match.name === "initialMethod")).toBe(true);
+      expect(later.some((match) => match.name === "laterMethod")).toBe(true);
+    } finally {
+      child.kill();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("invalidates a watched pinned session after a filesystem change", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "ci-mcp-watch-"));
+    const repo = join(parent, "repo");
+    cpSync(REPO, repo, { recursive: true });
+    const child = spawn(process.execPath, [CLI, "mcp", "--repo", repo, "--watch"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    try {
+      const replies = await new Promise<Map<number, RpcMsg>>((resolvePromise, reject) => {
+        const got = new Map<number, RpcMsg>();
+        let buf = "";
+        const timer = setTimeout(() => reject(new Error("watched MCP session timed out")), 15_000);
+        child.stdout.on("data", (chunk: Buffer) => {
+          buf += chunk.toString();
+          let newline;
+          while ((newline = buf.indexOf("\n")) !== -1) {
+            const line = buf.slice(0, newline);
+            buf = buf.slice(newline + 1);
+            if (!line.trim()) continue;
+            const reply = JSON.parse(line) as RpcMsg;
+            if (typeof reply.id !== "number") continue;
+            got.set(reply.id, reply);
+            if (reply.id === 1) {
+              writeFileSync(join(repo, "src", "watched.ts"), "export function watchedAdded(): number { return 1; }\n");
+              child.stdin.write(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 2,
+                  method: "tools/call",
+                  params: { name: "find_symbol", arguments: { namePath: "watchedAdded" } },
+                }) + "\n",
+              );
+            } else if (reply.id === 2) {
+              clearTimeout(timer);
+              resolvePromise(got);
+            }
+          }
+        });
+        child.on("error", reject);
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "find_symbol", arguments: { namePath: "fetchData" } },
+          }) + "\n",
+        );
+      });
+      const matches = JSON.parse(replies.get(2)!.result!.content![0]!.text) as { name: string }[];
+      expect(matches.some((match) => match.name === "watchedAdded")).toBe(true);
+    } finally {
+      child.kill();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("refreshes git commit metadata in watch mode without a worktree change", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "ci-mcp-watch-head-"));
+    const repo = join(parent, "repo");
+    cpSync(REPO, repo, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "codeindex@example.invalid"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "codeindex test"], { cwd: repo });
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "initial"], { cwd: repo });
+    const firstCommit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    // Prime the persisted artifacts so this covers both the in-memory graph and
+    // preloadSessionLazy's memoized graph.json loader after HEAD moves.
+    execFileSync(process.execPath, [CLI, "index", "--repo", repo, "--out", join(repo, ".codeindex")]);
+    const child = spawn(process.execPath, [CLI, "mcp", "--repo", repo, "--watch"], { stdio: ["pipe", "pipe", "pipe"] });
+    try {
+      const replies = await new Promise<Map<number, RpcMsg>>((resolvePromise, reject) => {
+        const got = new Map<number, RpcMsg>();
+        let buf = "";
+        const timer = setTimeout(() => reject(new Error("watched MCP HEAD test timed out")), 15_000);
+        const requestGraph = (id: number): void => {
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "graph", arguments: {} } }) + "\n");
+        };
+        child.stdout.on("data", (chunk: Buffer) => {
+          buf += chunk.toString();
+          let newline;
+          while ((newline = buf.indexOf("\n")) !== -1) {
+            const line = buf.slice(0, newline);
+            buf = buf.slice(newline + 1);
+            if (!line.trim()) continue;
+            const reply = JSON.parse(line) as RpcMsg;
+            if (typeof reply.id !== "number") continue;
+            got.set(reply.id, reply);
+            if (reply.id === 1) {
+              execFileSync("git", ["commit", "--allow-empty", "-qm", "metadata only"], { cwd: repo });
+              requestGraph(2);
+            } else if (reply.id === 2) {
+              clearTimeout(timer);
+              resolvePromise(got);
+            }
+          }
+        });
+        child.on("error", reject);
+        requestGraph(1);
+      });
+      const secondCommit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+      const firstGraph = JSON.parse(replies.get(1)!.result!.content![0]!.text) as { commit?: string };
+      const secondGraph = JSON.parse(replies.get(2)!.result!.content![0]!.text) as { commit?: string };
+      expect(firstGraph.commit).toBe(firstCommit);
+      expect(secondGraph.commit).toBe(secondCommit);
+      expect(secondGraph.commit).not.toBe(firstGraph.commit);
+    } finally {
+      child.kill();
+      rmSync(parent, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("rejects a null JSON-RPC member without terminating the server", () => {
+    const proc = spawnSync(process.execPath, [CLI, "mcp"], {
+      input: 'null\n{"jsonrpc":"2.0","id":1,"method":"ping"}\n',
+      encoding: "utf8",
+    });
+    expect(proc.status).toBe(0);
+    const replies = proc.stdout.trim().split("\n").map((line) => JSON.parse(line) as RpcMsg);
+    expect(replies[0]!.error).toMatchObject({ code: -32600 });
+    expect(replies[1]!.id).toBe(1);
+    expect(replies[1]!.result).toEqual({});
+  });
+
+  it("does not answer a JSON-RPC response message", () => {
+    const proc = spawnSync(process.execPath, [CLI, "mcp"], {
+      input: '{"jsonrpc":"2.0","id":99,"result":{}}\n{"jsonrpc":"2.0","id":1,"method":"ping"}\n',
+      encoding: "utf8",
+    });
+    expect(proc.status).toBe(0);
+    const replies = proc.stdout.trim().split("\n").map((line) => JSON.parse(line) as RpcMsg);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.id).toBe(1);
+  });
+
+  it("answers a request whose explicit id is null", () => {
+    const proc = spawnSync(process.execPath, [CLI, "mcp"], {
+      input: '{"jsonrpc":"2.0","id":null,"method":"ping"}\n',
+      encoding: "utf8",
+    });
+    expect(proc.status).toBe(0);
+    expect(JSON.parse(proc.stdout.trim())).toEqual({ jsonrpc: "2.0", id: null, result: {} });
+  });
+
+  it("rejects missing and non-directory repositories", async () => {
+    const missing = join(tmpdir(), `codeindex-missing-${Date.now()}`);
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "scan_summary", arguments: { repo: missing } } },
+      { id: 2, method: "tools/call", params: { name: "scan_summary", arguments: { repo: join(REPO, "README.md") } } },
+    ]);
+    expect(res.get(1)!.result!.isError).toBe(true);
+    expect(res.get(2)!.result!.isError).toBe(true);
+  });
+
+  it("honours numeric strings accepted by the tool schema", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: "1" } } },
+    ]);
+    const hits = JSON.parse(res.get(1)!.result!.content![0]!.text) as unknown[];
+    expect(hits).toHaveLength(1);
+  });
+
+  it("honours zero-valued limits instead of replacing them with defaults", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: 0 } } },
+    ]);
+    const hits = JSON.parse(res.get(1)!.result!.content![0]!.text) as unknown[];
+    expect(hits).toEqual([]);
+  });
+
   it("handshakes, lists tools, and executes tool calls", async () => {
     const res = await mcpSession([
       { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
@@ -253,8 +469,10 @@ describe("MCP server", () => {
       { id: 1, method: "ping" },
       { id: 2, method: "tools/list" },
     ]);
-    expect(res.get(1)!.result).toEqual({});
-    expect(res.get(2)!.result!.tools!.length).toBeGreaterThan(0);
+    expect(Array.isArray(res)).toBe(true);
+    expect(res).toHaveLength(2);
+    expect(res.find((reply) => reply.id === 1)!.result).toEqual({});
+    expect(res.find((reply) => reply.id === 2)!.result!.tools!.length).toBeGreaterThan(0);
   }, 20_000);
 });
 
@@ -1048,6 +1266,22 @@ describe("getScan — bounded LRU, not a single entry", () => {
     expect(getScan(two, {})).toBe(s2);
   });
 
+  it("invalidates one watched repo without evicting another repo", () => {
+    const one = tmpFixtureCopy("ci-scan-invalidate-a-");
+    const two = tmpFixtureCopy("ci-scan-invalidate-b-");
+    getScan(one, {});
+    const other = getScan(two, {});
+    sessionInvalidate(one, "src/client.ts");
+    expect(getScan(two, {})).toBe(other);
+  });
+
+  it("keeps memoized artifacts when an ignored background path changes", () => {
+    const repo = tmpFixtureCopy("ci-scan-invalidate-ignored-");
+    const artifacts = getArtifacts(repo, {});
+    sessionInvalidate(repo, "dist/generated.js");
+    expect(getArtifacts(repo, {})).toBe(artifacts);
+  });
+
   it("stays bounded: the oldest entry is evicted past the cap", () => {
     const repo = tmpFixtureCopy("ci-scan-lru-cap-");
     const oldest = getScan(repo, { scope: "src" });
@@ -1232,6 +1466,13 @@ describe("validateArgs", () => {
     expect(validateArgs(schema, { limit: "50" })).toBeUndefined();
   });
 
+  it("enforces declared numeric bounds for numbers and numeric strings", () => {
+    const bounded = { properties: { depth: { type: "number", minimum: 1, maximum: 5 } } };
+    expect(validateArgs(bounded, { depth: 0 })).toMatch(/at least 1/);
+    expect(validateArgs(bounded, { depth: "6" })).toMatch(/at most 5/);
+    expect(validateArgs(bounded, { depth: "5" })).toBeUndefined();
+  });
+
   it("names the offending argument and what it got", () => {
     expect(validateArgs(schema, { limit: "banana" })).toMatch(/`limit` must be a number/);
     expect(validateArgs(schema, { substring: "yes" })).toMatch(/`substring` must be a boolean, got string/);
@@ -1321,6 +1562,8 @@ describe("tool profiles and onboarding", () => {
     // "all" is the default and must stay expressible.
     expect(parseMcpFlags(["--tools", "all"]).profile).toBeUndefined();
     expect(parseMcpFlags(["--tools", "find,impact"]).profile).toBe("find,impact");
+    expect(parseMcpFlags(["--repo", REPO, "--watch"]).watch).toBe(true);
+    expect(() => parseMcpFlags(["--watch"])).toThrow(/requires --repo/);
   });
 
   it("onboard composes a brief and persists it as a memory", async () => {

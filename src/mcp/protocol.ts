@@ -44,7 +44,12 @@ export function validateArgs(
   schema: { properties?: Record<string, unknown> },
   args: Record<string, unknown>,
 ): string | undefined {
-  const props = (schema.properties ?? {}) as Record<string, { type?: string; items?: { type?: string } }>;
+  const props = (schema.properties ?? {}) as Record<string, {
+    type?: string;
+    items?: { type?: string };
+    minimum?: number;
+    maximum?: number;
+  }>;
   for (const [key, value] of Object.entries(args)) {
     if (value === undefined || value === null) continue;
     const spec = props[key];
@@ -52,9 +57,17 @@ export function validateArgs(
     const actual = Array.isArray(value) ? "array" : typeof value;
     if (spec.type === "number") {
       // A numeric string is accepted (num() coerces it); anything else is not.
-      if (actual === "number") continue;
-      if (actual === "string" && Number.isFinite(Number(value as string)) && (value as string).trim() !== "") continue;
-      return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
+      const numeric = actual === "number"
+        ? value as number
+        : actual === "string" && (value as string).trim() !== ""
+          ? Number(value as string)
+          : NaN;
+      if (!Number.isFinite(numeric)) {
+        return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
+      }
+      if (spec.minimum !== undefined && numeric < spec.minimum) return `\`${key}\` must be at least ${spec.minimum}`;
+      if (spec.maximum !== undefined && numeric > spec.maximum) return `\`${key}\` must be at most ${spec.maximum}`;
+      continue;
     }
     if (spec.type === "array") {
       if (actual !== "array") return `\`${key}\` must be an array of strings, got ${actual}`;

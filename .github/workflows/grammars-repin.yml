@@ -11,13 +11,10 @@ name: Grammars repin
 # bundle (`pnpm build` — web-tree-sitter's JS is inlined into engine.mjs by
 # tsup, so its wasm and its bundled runtime move together), then runs the full
 # gate (typecheck / test / reproducible-bundle). Only if every gate is green AND
-# something actually changed does it push the result straight to `main`. On any
-# failure the run simply goes red and the next cron retries — no branch, no PR.
-#
-# GITHUB_TOKEN is enough here: it can push to this repo, and GitHub's
-# anti-recursion rule means that push does NOT re-trigger CI/release workflows
-# (the gate already ran in this job before the push), so a grammar bump never
-# accidentally cuts a release.
+# something actually changed does it update a dedicated pull request. Grammar
+# bytes are part of the engine's versioned output: merging the `fix(grammars)`
+# commit therefore cuts a patch release and publishes a matching grammar asset,
+# instead of silently changing wasm under an existing ENGINE_VERSION.
 
 on:
   workflow_dispatch:
@@ -25,7 +22,9 @@ on:
     - cron: "41 3 * * *" # daily, 03:41 UTC (offset from other repos' crons)
 
 permissions:
+  actions: write
   contents: write
+  pull-requests: write
 
 jobs:
   repin:
@@ -55,7 +54,7 @@ jobs:
       - name: Stop if nothing changed
         id: diff
         run: |
-          if git diff --quiet -- package.json pnpm-lock.yaml scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars; then
+          if git diff --quiet -- package.json pnpm-lock.yaml scripts/engine.mjs scripts/engine.d.mts scripts/engine.browser.mjs scripts/engine.browser.d.mts scripts/cli.mjs scripts/grammars; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Grammars already up to date — nothing to re-pin."
           else
@@ -68,13 +67,14 @@ jobs:
           pnpm run typecheck
           pnpm test
 
-      - name: Commit re-pinned grammars
+      - name: Commit re-pinned grammars on the automation branch
         if: steps.diff.outputs.changed == 'true'
         run: |
+          git switch -c automation/grammars-repin
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json pnpm-lock.yaml scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs scripts/grammars
-          git commit -m "chore(grammars): bump tree-sitter grammars to latest and re-vendor wasm"
+          git add package.json pnpm-lock.yaml scripts/engine.mjs scripts/engine.d.mts scripts/engine.browser.mjs scripts/engine.browser.d.mts scripts/cli.mjs scripts/grammars
+          git commit -m "fix(grammars): bump tree-sitter grammars and re-vendor wasm"
 
       # Reproducible-bundle gate LAST, against the just-committed tree: it rebuilds
       # and `git diff --exit-code`s, proving the committed bytes are what source
@@ -84,6 +84,30 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         run: pnpm run check:build
 
-      - name: Push to main
+      - name: Push automation branch and open or refresh the pull request
         if: steps.diff.outputs.changed == 'true'
-        run: git push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REMOTE_SHA=$(git ls-remote --heads origin refs/heads/automation/grammars-repin | cut -f1)
+          if [ -n "$REMOTE_SHA" ]; then
+            git push "--force-with-lease=refs/heads/automation/grammars-repin:$REMOTE_SHA" origin HEAD:refs/heads/automation/grammars-repin
+          else
+            git push origin HEAD:refs/heads/automation/grammars-repin
+          fi
+          PR=$(gh pr list --head automation/grammars-repin --state open --json number --jq '.[0].number // empty')
+          if [ -n "$PR" ]; then
+            gh pr edit "$PR" \
+              --title "fix(grammars): bump tree-sitter grammars and re-vendor wasm" \
+              --body "Automated grammar repin. The full test and reproducible-build gates passed; merging creates a patch release so ENGINE_VERSION and the downloadable grammar asset remain aligned."
+          else
+            gh pr create \
+              --base main \
+              --head automation/grammars-repin \
+              --title "fix(grammars): bump tree-sitter grammars and re-vendor wasm" \
+              --body "Automated grammar repin. The full test and reproducible-build gates passed; merging creates a patch release so ENGINE_VERSION and the downloadable grammar asset remain aligned."
+          fi
+          # GITHUB_TOKEN-created PR events do not recursively start CI. An
+          # explicit workflow_dispatch is allowed and attaches the normal CI
+          # checks (including Node 18 smoke) to this branch's HEAD.
+          gh workflow run ci.yml --ref automation/grammars-repin

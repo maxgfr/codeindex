@@ -13,7 +13,7 @@
 // graph.json stays byte-compatible with ultraindex.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { familyOf, pickCandidate, type Cand } from "./calls.js";
+import { familyOf, pickCandidate } from "./calls.js";
 import { importPairsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 
@@ -80,6 +80,21 @@ export function buildCallerIndex(
       arr.push(s);
     }
   }
+  // The hot loop below resolves every call. Group definitions by language
+  // family once so it does not allocate a filtered + mapped candidate list for
+  // each site. CodeSymbol structurally contains Cand's file/lang fields, and
+  // pickCandidate returns the selected object unchanged.
+  const defsByFamily = new Map<string, Map<string, CodeSymbol[]>>();
+  for (const [name, sites] of defs) {
+    const families = new Map<string, CodeSymbol[]>();
+    for (const site of sites) {
+      const family = familyOf(site.lang);
+      let grouped = families.get(family);
+      if (!grouped) families.set(family, (grouped = []));
+      grouped.push(site);
+    }
+    defsByFamily.set(name, families);
+  }
   // Same-file binding also needs non-exported defs (a private helper shadows
   // an exported symbol of the same name elsewhere).
   const localDefs = new Map<string, Map<string, CodeSymbol>>();
@@ -111,9 +126,7 @@ export function buildCallerIndex(
           record(local, recall ? { file: f.rel, line: c.line, confidence: "corroborated" } : { file: f.rel, line: c.line });
         continue;
       }
-      const cands: Cand[] = (defs.get(c.name) ?? [])
-        .filter((d) => familyOf(d.lang) === family && d.file !== f.rel)
-        .map((d) => ({ file: d.file, lang: d.lang }));
+      const cands = (defsByFamily.get(c.name)?.get(family) ?? []).filter((d) => d.file !== f.rel);
       if (!cands.length) continue;
       const imported = cands.filter((d) => pairs.has(`${f.rel}|${d.file}`));
       const chosen =
@@ -129,7 +142,7 @@ export function buildCallerIndex(
             ? pickCandidate(f.rel, imported)
             : pickCandidate(f.rel, cands);
       if (!chosen) continue;
-      const def = defs.get(c.name)!.find((d) => d.file === chosen.file)!;
+      const def = chosen as CodeSymbol;
       record(
         def,
         recall

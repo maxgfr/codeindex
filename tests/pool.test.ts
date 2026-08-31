@@ -24,9 +24,17 @@ describe("parallel extraction — byte-identical to sequential (built CLI)", () 
   it("produces the same graph.json and symbols.json at --workers 0 and 4", () => {
     const dir = mkdtempSync(join(tmpdir(), "ci-par-"));
     try {
+      const repo = join(dir, "repo");
+      cpSync(REPO, repo, { recursive: true });
+      // Exercise a field that symbols.json does not carry. The original worker
+      // record forgot literals, so small fixtures without a reported duplicate
+      // made this byte-identity gate pass vacuously while real graphs diverged.
+      for (const name of ["literal-a.ts", "literal-b.ts", "literal-c.ts"]) {
+        writeFileSync(join(repo, "src", name), `export const value = "parallel-regression-value";\n`);
+      }
       const build = (out: string, workers: string): void => {
         mkdirSync(out, { recursive: true });
-        execFileSync(process.execPath, [CLI, "index", "--repo", REPO, "--out", out, "--workers", workers], {
+        execFileSync(process.execPath, [CLI, "index", "--repo", repo, "--out", out, "--workers", workers], {
           encoding: "utf8",
         });
       };
@@ -40,6 +48,7 @@ describe("parallel extraction — byte-identical to sequential (built CLI)", () 
       // A parallel build must actually have produced symbols — a silent
       // fallback to an empty index would otherwise pass the equality above.
       expect(Object.keys(JSON.parse(readFileSync(join(par, "symbols.json"), "utf8")).defs).length).toBeGreaterThan(0);
+      expect(readFileSync(join(par, "graph.json"), "utf8")).toContain("parallel-regression-value");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -74,6 +83,16 @@ describe("parallel extraction — byte-identical to sequential (built CLI)", () 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps a cold read command byte-identical when workers are enabled", () => {
+    const run = (workers: string): string =>
+      execFileSync(
+        process.execPath,
+        [CLI, "search", "client", "--repo", REPO, "--workers", workers, "--no-index-cache"],
+        { encoding: "utf8" },
+      );
+    expect(run("4")).toBe(run("0"));
   });
 
   it("rejects a negative --workers instead of silently guessing", () => {

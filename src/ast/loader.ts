@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -135,11 +135,13 @@ export function resolveGrammarsDir(opts?: { moduleDir?: string }): string | unde
 let runtimeReady = false;
 let parser: Parser | null = null;
 const loaded = new Map<string, Language>();
-const failed = new Set<string>();
+const failed = new Map<string, string>();
 
 // Load the runtime (once) and the requested grammar keys (each once). Idempotent
-// and safe to call repeatedly. A missing/broken wasm is remembered as failed so
-// the caller silently falls back to regex rather than retrying every file.
+// and safe to call repeatedly. A missing/broken wasm is remembered together
+// with the state that failed. If a browser mount, pull, or disk replacement
+// changes that state, the next call retries instead of poisoning the process
+// for its entire lifetime.
 export async function ensureGrammars(keys: Iterable<string>): Promise<void> {
   const { dirs } = resolveGrammarsTier();
   if (!dirs.length) return; // nothing resolvable (adjacent/env/cache all absent) → regex everywhere
@@ -158,16 +160,28 @@ export async function ensureGrammars(keys: Iterable<string>): Promise<void> {
     parser = new Parser();
   }
   for (const key of new Set(keys)) {
-    if (loaded.has(key) || failed.has(key)) continue;
+    if (loaded.has(key)) continue;
     const wasm = firstIn(`${key}.wasm`);
+    const fingerprint = wasm
+      ? (() => {
+          try {
+            const st = statSync(wasm);
+            return `${wasm}:${st.size}:${st.mtimeMs}`;
+          } catch {
+            return `${wasm}:unreadable`;
+          }
+        })()
+      : `missing:${dirs.join("|")}`;
+    if (failed.get(key) === fingerprint) continue;
     if (!wasm) {
-      failed.add(key);
+      failed.set(key, fingerprint);
       continue;
     }
     try {
       loaded.set(key, await Language.load(new Uint8Array(readFileSync(wasm))));
+      failed.delete(key);
     } catch {
-      failed.add(key);
+      failed.set(key, fingerprint);
     }
   }
 }

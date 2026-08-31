@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "2.28.0";
 declare const SCHEMA_VERSION = 5;
-declare const EXTRACTOR_VERSION = 13;
+declare const EXTRACTOR_VERSION = 14;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "extends" | "implements" | "use" | "mention";
 type Tier = 0 | 1 | 2;
@@ -1553,6 +1553,7 @@ interface McpServerOptions {
     defaultRepo?: string;
     maxResponseBytes?: number;
     profile?: string;
+    watch?: boolean;
 }
 declare function runMcpServer(opts?: McpServerOptions): Promise<void>;
 

@@ -27,18 +27,25 @@ interface FileEntry {
   kind: "file";
   size: number;
   mtimeMs: number;
+  mode: number;
   bytes?: Uint8Array; // absent = mounted from a manifest, contents not fetched yet
 }
 
 interface DirEntry {
   kind: "dir";
   mtimeMs: number;
+  mode: number;
   children: Set<string>;
 }
 
 type Entry = FileEntry | DirEntry;
 
-const entries = new Map<string, Entry>([[ROOT, { kind: "dir", mtimeMs: 0, children: new Set() }]]);
+const entries = new Map<string, Entry>([[ROOT, { kind: "dir", mtimeMs: 0, mode: 0o777, children: new Set() }]]);
+let logicalMtime = 0;
+
+function nextMtime(): number {
+  return ++logicalMtime;
+}
 
 // Absolute, normalized, no trailing slash (except the root itself).
 function key(path: string): string {
@@ -72,7 +79,7 @@ function ensureDir(path: string): DirEntry {
     if (existing.kind !== "dir") throw enotdir(path, "mkdir");
     return existing;
   }
-  const dir: DirEntry = { kind: "dir", mtimeMs: 0, children: new Set() };
+  const dir: DirEntry = { kind: "dir", mtimeMs: 0, mode: 0o777, children: new Set() };
   entries.set(k, dir);
   if (k !== ROOT) {
     const parent = ensureDir(dirname(k));
@@ -96,7 +103,9 @@ export interface MountedFile {
 /** Drop everything. Called between two repos so nothing leaks across sessions. */
 export function resetVfs(): void {
   entries.clear();
-  entries.set(ROOT, { kind: "dir", mtimeMs: 0, children: new Set() });
+  logicalMtime = 0;
+  tempCounter = 0;
+  entries.set(ROOT, { kind: "dir", mtimeMs: 0, mode: 0o777, children: new Set() });
 }
 
 /**
@@ -108,7 +117,7 @@ export function mountFiles(files: Iterable<MountedFile>): void {
   for (const f of files) {
     const k = key(f.path);
     ensureDir(dirname(k)).children.add(basename(k));
-    entries.set(k, { kind: "file", size: f.size, mtimeMs: 0, bytes: f.bytes });
+    entries.set(k, { kind: "file", size: f.size, mtimeMs: nextMtime(), mode: 0o666, bytes: f.bytes });
   }
 }
 
@@ -123,6 +132,7 @@ export function setFileBytes(path: string, bytes: Uint8Array): void {
   if (entry && entry.kind === "file") {
     entry.bytes = bytes;
     entry.size = bytes.byteLength;
+    entry.mtimeMs = nextMtime();
     return;
   }
   mountFiles([{ path: k, size: bytes.byteLength, bytes }]);
@@ -184,6 +194,7 @@ export interface Dirent {
 
 export interface Stats {
   size: number;
+  mode: number;
   mtimeMs: number;
   mtime: Date;
   isFile(): boolean;
@@ -216,6 +227,7 @@ function makeStats(entry: Entry): Stats {
   const size = entry.kind === "file" ? entry.size : 0;
   return {
     size,
+    mode: entry.mode,
     mtimeMs: entry.mtimeMs,
     mtime: new Date(entry.mtimeMs),
     isFile: () => entry.kind === "file",
@@ -287,6 +299,12 @@ export function writeFileSync(path: string, data: string | Uint8Array): void {
   setFileBytes(path, bytes);
 }
 
+export function chmodSync(path: string, mode: number): void {
+  const entry = entries.get(key(path));
+  if (!entry) throw enoent(path, "chmod");
+  entry.mode = mode;
+}
+
 export function mkdirSync(path: string, _options?: { recursive?: boolean }): string | undefined {
   ensureDir(path);
   return undefined;
@@ -333,6 +351,10 @@ export function renameSync(from: string, to: string): void {
   rmSync(fromKey, { force: true });
 }
 
+export function watch(): never {
+  throw new Error("recursive filesystem watching is unavailable in the browser VFS");
+}
+
 export default {
   existsSync,
   statSync,
@@ -341,8 +363,10 @@ export default {
   readdirSync,
   readFileSync,
   writeFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
   renameSync,
+  watch,
 };

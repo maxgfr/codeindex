@@ -21,10 +21,22 @@ export function availableParallelism(): number {
   return typeof navigator !== "undefined" && navigator?.hardwareConcurrency ? navigator.hardwareConcurrency : 1;
 }
 
+export function cpus(): Array<{
+  model: string;
+  speed: number;
+  times: { user: number; nice: number; sys: number; idle: number; irq: number };
+}> {
+  return Array.from({ length: availableParallelism() }, () => ({
+    model: "browser",
+    speed: 0,
+    times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 },
+  }));
+}
+
 export function platform(): string {
   return "browser";
 }
 
 export const EOL = "\n";
 
-export default { homedir, tmpdir, availableParallelism, platform, EOL };
+export default { homedir, tmpdir, availableParallelism, cpus, platform, EOL };

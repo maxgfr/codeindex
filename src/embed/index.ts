@@ -96,17 +96,16 @@ export function serializeEmbeddings(index: EmbeddingIndex): Uint8Array {
     count: index.records.length,
     records: index.records.map((r) => ({ file: r.file, symbol: r.symbol ?? "", line: r.line ?? 0 })),
   });
-  const headerBuf = Buffer.from(header, "utf8");
-  const body = Buffer.alloc(index.records.length * index.dim);
-  let off = 0;
+  const headerBuf = new TextEncoder().encode(header);
+  const bodyLength = index.records.length * index.dim;
+  const out = new Uint8Array(8 + headerBuf.length + bodyLength);
+  out.set([0x43, 0x49, 0x45, 0x31], 0); // CIE1
+  new DataView(out.buffer, out.byteOffset, out.byteLength).setUint32(4, headerBuf.length, true);
+  out.set(headerBuf, 8);
+  let off = 8 + headerBuf.length;
   for (const r of index.records) {
-    for (let d = 0; d < index.dim; d++) body.writeInt8(r.vec[d] ?? 0, off++);
+    for (let d = 0; d < index.dim; d++) out[off++] = r.vec[d] ?? 0;
   }
-  const out = Buffer.alloc(8 + headerBuf.length + body.length);
-  out.write(MAGIC, 0, "ascii");
-  out.writeUInt32LE(headerBuf.length, 4);
-  headerBuf.copy(out, 8);
-  body.copy(out, 8 + headerBuf.length);
   return out;
 }
 
@@ -115,12 +114,13 @@ export function serializeEmbeddings(index: EmbeddingIndex): Uint8Array {
 // on a bad magic (a corrupt or foreign file) so a caller fails loudly rather
 // than misreading arbitrary bytes.
 export function deserializeEmbeddings(bytes: Uint8Array): EmbeddingIndex {
-  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (buf.length < 8 || buf.toString("ascii", 0, 4) !== MAGIC) {
+  if (bytes.byteLength < 8 || String.fromCharCode(...bytes.subarray(0, 4)) !== MAGIC) {
     throw new Error("embeddings.bin: bad magic (not a codeindex embeddings artifact)");
   }
-  const headerLen = buf.readUInt32LE(4);
-  const header = JSON.parse(buf.toString("utf8", 8, 8 + headerLen)) as {
+  const data = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const headerLen = data.getUint32(4, true);
+  if (8 + headerLen > bytes.byteLength) throw new Error("embeddings.bin: truncated header");
+  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + headerLen))) as {
     embedVersion: number;
     modelId: string;
     dim: number;
@@ -129,9 +129,9 @@ export function deserializeEmbeddings(bytes: Uint8Array): EmbeddingIndex {
   };
   const bodyOff = 8 + headerLen;
   const { dim } = header;
+  if (bodyOff + header.records.length * dim > bytes.byteLength) throw new Error("embeddings.bin: truncated body");
   const records: EmbeddingRecord[] = header.records.map((m, i) => {
-    const vec = new Int8Array(dim);
-    for (let d = 0; d < dim; d++) vec[d] = buf.readInt8(bodyOff + i * dim + d);
+    const vec = new Int8Array(bytes.buffer.slice(bytes.byteOffset + bodyOff + i * dim, bytes.byteOffset + bodyOff + (i + 1) * dim));
     const rec: EmbeddingRecord = { file: m.file, vec };
     if (m.symbol) rec.symbol = m.symbol;
     if (m.line) rec.line = m.line;

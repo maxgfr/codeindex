@@ -4,8 +4,8 @@
 // from the deterministic index instead of a live language server. Line-span
 // granularity: the caller supplies the replacement body verbatim, including
 // its indentation (same contract as Serena's replace_symbol_body).
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { findSymbol } from "./query.js";
@@ -42,6 +42,47 @@ function readLines(abs: string): string[] {
   return readFileSync(abs, "utf8").split("\n");
 }
 
+// Write beside the resolved target and atomically rename over it where the
+// platform permits. Symlinks stay symlinks because their real target is edited.
+// As with every rename-based atomic replacement, the target receives a new
+// inode (hard links/open descriptors keep the old one). Windows locks and
+// file-writable/directory-read-only setups fall back to the historical in-place
+// write rather than turning a valid edit into EPERM. A killed process can leave
+// the hidden temp directory visible to git in a consumer repo; the scanner and
+// MCP watcher always ignore the prefix so it cannot become a phantom symbol.
+export function atomicWriteText(abs: string, content: string, cleanup: typeof rmSync = rmSync): void {
+  const target = realpathSync(abs);
+  const mode = statSync(target).mode;
+  let tempDir: string;
+  try {
+    tempDir = mkdtempSync(join(dirname(target), ".codeindex-edit-"));
+  } catch {
+    writeFileSync(target, content);
+    chmodSync(target, mode);
+    return;
+  }
+  const tempFile = join(tempDir, basename(target));
+  try {
+    writeFileSync(tempFile, content);
+    chmodSync(tempFile, mode);
+    try {
+      renameSync(tempFile, target);
+    } catch {
+      writeFileSync(target, content);
+      chmodSync(target, mode);
+    }
+  } finally {
+    // The target may already have been atomically replaced. Cleanup failure is
+    // therefore not an edit failure: reporting it as one invites a retry that
+    // can duplicate insert-before/after operations.
+    try {
+      cleanup(tempDir, { recursive: true, force: true });
+    } catch {
+      // The uniquely named orphan is harmless and can be removed later.
+    }
+  }
+}
+
 // Replace the symbol's whole declaration (lines start..endLine) with `body`.
 // The body is taken verbatim after trimming outer blank lines — supply it
 // fully indented for its context.
@@ -52,7 +93,7 @@ export function replaceSymbolBody(scan: RepoScan, namePath: string, body: string
   const lines = readLines(abs);
   const newLines = body.replace(/^\n+|\n+$/g, "").split("\n");
   lines.splice(sym.line - 1, end - sym.line + 1, ...newLines);
-  writeFileSync(abs, lines.join("\n"));
+  atomicWriteText(abs, lines.join("\n"));
   return { file: sym.file, startLine: sym.line, endLine: sym.line + newLines.length - 1, lines: newLines.length };
 }
 
@@ -73,7 +114,7 @@ function insertAt(
   block.push(...newLines);
   if (blankAfter && minGap && lines[index]?.trim() !== "") block.push("");
   lines.splice(index, 0, ...block);
-  writeFileSync(abs, lines.join("\n"));
+  atomicWriteText(abs, lines.join("\n"));
   return { file: sym.file, startLine: index + 1, endLine: index + block.length, lines: block.length };
 }
 

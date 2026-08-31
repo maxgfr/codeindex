@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -21,3 +22,20 @@ jobs:
       # The committed bundle (engine.mjs + engine.d.mts + grammars) must be
       # byte-reproducible from source — consumers vendor those exact bytes.
       - run: pnpm run check:build
+
+  smoke-node18:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      # The published artifacts are committed and dependency-free. Exercise
+      # those directly: the dev toolchain intentionally requires newer Node.
+      - name: Import library and run CLI on Node 18
+        run: |
+          node -e 'import("./scripts/engine.mjs").then(m => { if (typeof m.scanRepo !== "function") process.exit(1) })'
+          node scripts/cli.mjs scan --repo tests/fixtures/mini-repo --out /tmp/codeindex-node18-scan.json
+          node scripts/cli.mjs search client --repo tests/fixtures/mini-repo --out /tmp/codeindex-node18-search.json
+          test -s /tmp/codeindex-node18-scan.json
+          test -s /tmp/codeindex-node18-search.json

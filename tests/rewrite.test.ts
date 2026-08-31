@@ -172,6 +172,16 @@ describe("hoistLeadingFlags", () => {
     expect(hoistLeadingFlags(["--repo", "/x", "scan"])).toEqual(["scan", "--repo", "/x"]);
   });
 
+  it.each([
+    ["--base", "HEAD", "changed"],
+    ["--depth", "2", "impact"],
+    ["--kind", "import", "context"],
+    ["--rank", "lexical", "search"],
+    ["--direction", "both", "callgraph"],
+  ])("keeps %s with its value when placed before the command", (flag, value, command) => {
+    expect(hoistLeadingFlags([flag, value, command, "target"])).toEqual([command, flag, value, "target"]);
+  });
+
   it("handles the iterion inject_flag shape", () => {
     // `codeindex grep foo` + inject_flag "--max-hits 40" spliced after argv[0].
     expect(hoistLeadingFlags(["--max-hits", "40", "grep", "foo", "--scope", "src"])).toEqual([

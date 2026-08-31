@@ -9,7 +9,7 @@
 // (NOT `node scripts/engine.mjs mcp`: engine.mjs is a side-effect-free library
 // with no main-module guard — see src/engine.ts — so that command does nothing.
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
@@ -38,7 +38,7 @@ import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
-import { walk, type WalkResult } from "./walk.js";
+import { IGNORE_DIRS, walk, type WalkResult } from "./walk.js";
 import { toolsFor, OUTPUT_SCHEMAS } from "./mcp/tools.js";
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
@@ -53,11 +53,13 @@ import {
 import {
   getArtifacts,
   getScan,
+  getScanParallel,
   getScanSummary,
   memoizedEmbeddingIndex,
   memoizedEmbedModel,
   scanFingerprint,
   sessionClear,
+  sessionInvalidate,
   warmGrammarsForWalk,
   type SessionScanOptions,
 } from "./mcp/session.js";
@@ -78,6 +80,7 @@ export {
 export {
   getArtifacts,
   getScan,
+  getScanParallel,
   getScanSummary,
   memoizedEmbeddingIndex,
   memoizedEmbedModel,
@@ -95,18 +98,35 @@ interface RpcRequest {
   params?: Record<string, unknown>;
 }
 
+function isRpcRequest(value: unknown): value is RpcRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const req = value as Record<string, unknown>;
+  if (req.jsonrpc !== "2.0" || typeof req.method !== "string") return false;
+  return req.id === undefined || req.id === null || typeof req.id === "number" || typeof req.id === "string";
+}
+
+function isRpcResponse(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const response = value as Record<string, unknown>;
+  return response.jsonrpc === "2.0" && typeof response.method !== "string" && ("result" in response || "error" in response);
+}
+
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v ? v : undefined;
 }
 function strArray(v: unknown): string[] | undefined {
   return Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? (v as string[]) : undefined;
 }
-// A positive numeric argument. Also accepts the numeric STRING a JSON-Schema-less
+// A non-negative numeric argument. Also accepts the numeric STRING a JSON-Schema-less
 // client may send: `"50"` used to fall through to the default in silence, which
 // reads to the caller as the option being ignored.
 function num(v: unknown): number | undefined {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : undefined;
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+function positiveNum(v: unknown): number | undefined {
+  const n = num(v);
+  return n !== undefined && n > 0 ? n : undefined;
 }
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -121,8 +141,7 @@ const SCANLESS_TOOLS = new Set([
   "write_memory", "read_memory", "list_memories", "delete_memory",
   "embed_status",
   // scan_summary counts and classifies by path only — it never parses, so the
-  // grammar warm (a whole extra walk) would be pure overhead. When a scan is
-  // already cached getScanSummary reuses it, warm grammars included.
+  // grammar warm (a whole extra walk) would be pure overhead.
   "scan_summary",
 ]);
 
@@ -132,6 +151,11 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   // to one workspace, so agents need not know — or restate — the absolute path.
   const repo = str(args.repo) ?? defaultRepo;
   if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
+  try {
+    if (!statSync(repo).isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new Error(`repository root is not a readable directory: ${repo}`);
+  }
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // `search`'s optional structural prior; anything else falls back to the default.
   const rankArg = str(args.rank);
@@ -140,10 +164,21 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   // before any scan so extraction takes the AST tier; scan-less tools skip it.
   // ONE walk feeds both the warm and the scan below — see warmGrammarsForWalk.
   let walked: WalkResult | undefined;
+  let preparedScan: ReturnType<typeof getScan> | undefined;
   if (!SCANLESS_TOOLS.has(name)) {
+    // fs.watch is an eager invalidation hint, never a freshness oracle: an
+    // immediate request can beat event delivery. Always perform the normal
+    // walk/stat proof before trusting a warm scan.
     walked = walk(repo, {});
-    await warmGrammarsForWalk(walked);
+    preparedScan = await getScanParallel(
+      repo,
+      scanOpts,
+      walked,
+      () => (walked ? warmGrammarsForWalk(walked) : Promise.resolve()),
+    );
   }
+  const readScan = (): ReturnType<typeof getScan> => preparedScan ?? getScan(repo, scanOpts, walked);
+  const readArtifacts = () => getArtifacts(repo, scanOpts, walked, preparedScan);
 
   if (name === "scan_summary") {
     const s = getScanSummary(repo, scanOpts, walked);
@@ -154,10 +189,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     );
   }
   if (name === "graph") {
-    return renderGraphJson(getArtifacts(repo, scanOpts, walked).graph);
+    return renderGraphJson(readArtifacts().graph);
   }
   if (name === "symbols") {
-    const { symbols } = getArtifacts(repo, scanOpts, walked);
+    const { symbols } = readArtifacts();
     const lookup = str(args.name);
     if (lookup) {
       return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
@@ -170,7 +205,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // repo in the project's own benchmark). The memoized one is keyed on scan
     // object identity, which the session cache preserves across calls.
     // Recall mode is option-dependent, so it cannot use the memoized index.
-    const scan = getScan(repo, scanOpts, walked);
+    const scan = readScan();
     const index = args.recall === true ? buildCallerIndex(scan, undefined, { recall: true }) : callerIndexFor(scan);
     const lookup = str(args.name);
     if (lookup) {
@@ -194,23 +229,23 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "symbols_overview") {
     const file = str(args.file);
     if (!file) throw new Error("`file` is required");
-    return JSON.stringify(symbolsOverview(getScan(repo, scanOpts, walked), file), null, 2);
+    return JSON.stringify(symbolsOverview(readScan(), file), null, 2);
   }
   if (name === "find_symbol") {
     const namePath = str(args.namePath);
     if (!namePath) throw new Error("`namePath` is required");
-    const matches = findSymbol(getScan(repo, scanOpts, walked), namePath, {
+    const matches = findSymbol(readScan(), namePath, {
       substring: args.substring === true,
       includeBody: args.includeBody === true,
       concise: args.concise === true,
-      maxResults: num(args.maxResults),
+      maxResults: positiveNum(args.maxResults),
     });
     return JSON.stringify(matches, null, 2);
   }
   if (name === "find_references") {
     const symName = str(args.name);
     if (!symName) throw new Error("`name` is required");
-    const scan = getScan(repo, scanOpts, walked);
+    const scan = readScan();
     const statik = findReferences(scan, symName);
     // The static answer is computed FIRST and passed in, so the LSP tier is
     // structurally incapable of removing anything from it — it can only append
@@ -219,13 +254,13 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify(statik, null, 2);
   }
   if (name === "lsp_status") {
-    return JSON.stringify(await lspStatus(getScan(repo, scanOpts, walked), repo, args.probe === true), null, 2);
+    return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true), null, 2);
   }
   if (name === "replace_symbol_body" || name === "insert_after_symbol" || name === "insert_before_symbol") {
     const namePath = str(args.namePath);
     const body = typeof args.body === "string" ? args.body : undefined;
     if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
-    const scan = getScan(repo, scanOpts, walked);
+    const scan = readScan();
     const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
     const result = fn(scan, namePath, body, str(args.file));
     // A write WE just performed must not be trusted to the stat oracle: an
@@ -259,16 +294,16 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name === "dead_code") {
-    const all = findDeadCode(getScan(repo, scanOpts, walked));
+    const all = findDeadCode(readScan());
     const limit = num(args.limit);
     // Additive: without `limit` the payload is exactly what it always was.
     if (limit === undefined || all.length <= limit) return JSON.stringify(all, null, 2);
     return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
   }
   if (name === "duplicated_literals") {
-    const report = findLiteralDuplications(getScan(repo, scanOpts, walked), {
-      minFiles: num(args.minFiles),
-      minCount: num(args.minCount),
+    const report = findLiteralDuplications(readScan(), {
+      minFiles: positiveNum(args.minFiles),
+      minCount: positiveNum(args.minCount),
       includeTests: args.includeTests === true,
     });
     const limit = num(args.limit);
@@ -288,27 +323,27 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     );
   }
   if (name === "complexity") {
-    const scan = getScan(repo, scanOpts, walked);
+    const scan = readScan();
     if (args.risk === true) {
       // `since` was accepted by the CLI's `risk` but silently dropped here.
       const { churn, ok } = gitChurn(repo, { since: str(args.since) });
-      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, num(args.top)) }, null, 2);
+      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, positiveNum(args.top)) }, null, 2);
     }
-    return JSON.stringify(symbolComplexity(scan, str(args.file), num(args.top)), null, 2);
+    return JSON.stringify(symbolComplexity(scan, str(args.file), positiveNum(args.top)), null, 2);
   }
   if (name === "mermaid") {
-    const { graph } = getArtifacts(repo, scanOpts, walked);
-    return renderMermaid(graph, { module: str(args.module), maxEdges: num(args.maxEdges) });
+    const { graph } = readArtifacts();
+    return renderMermaid(graph, { module: str(args.module), maxEdges: positiveNum(args.maxEdges) });
   }
   if (name === "onboard") {
     // getArtifacts, not a fresh build: the session cache already holds the
     // graph, and onboarding is precisely the first call of a session — paying
     // for a second pass here is paying at the worst possible moment.
-    const scan = getScan(repo, scanOpts, walked);
-    const { graph } = getArtifacts(repo, scanOpts, walked);
+    const scan = readScan();
+    const { graph } = readArtifacts();
     return JSON.stringify(
       onboardBrief(scan, graph, {
-        ...(typeof args.budgetTokens === "number" ? { budgetTokens: args.budgetTokens } : {}),
+        ...(positiveNum(args.budgetTokens) !== undefined ? { budgetTokens: positiveNum(args.budgetTokens)! } : {}),
         ...(args.remember === false ? { remember: false } : {}),
       }),
       null,
@@ -316,11 +351,11 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     );
   }
   if (name === "repo_map") {
-    const { scan, graph } = getArtifacts(repo, scanOpts, walked);
-    return renderRepoMap(scan, graph, { budgetTokens: typeof args.budgetTokens === "number" ? args.budgetTokens : undefined });
+    const { scan, graph } = readArtifacts();
+    return renderRepoMap(scan, graph, { budgetTokens: positiveNum(args.budgetTokens) });
   }
   if (name === "hotspots") {
-    const scan = getScan(repo, scanOpts, walked);
+    const scan = readScan();
     const { churn, ok } = gitChurn(repo, { since: str(args.since) });
     return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2);
   }
@@ -338,15 +373,15 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const hits = grepRepo(repo, pattern, {
       globs: scope ? [...(globs ?? []), `${scope.replace(/\/+$/, "")}/**`] : globs,
       ignoreCase: args.ignoreCase === true,
-      maxHits: typeof args.maxHits === "number" ? args.maxHits : undefined,
+      maxHits: positiveNum(args.maxHits),
     });
     return JSON.stringify(hits, null, 2);
   }
   if (name === "search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
-    const scan = getScan(repo, scanOpts, walked);
-    const limit = typeof args.limit === "number" ? args.limit : undefined;
+    const scan = readScan();
+    const limit = num(args.limit);
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     const exactOpt = args.exact === true ? { exact: true as const } : {};
     if (args.semantic === true) {
@@ -405,8 +440,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "explain_search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
-    const scan = getScan(repo, scanOpts, walked);
-    const limit = typeof args.limit === "number" ? args.limit : undefined;
+    const scan = readScan();
+    const limit = num(args.limit);
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     // Always an object, which is exactly why this is a tool of its own rather
     // than another shape `search` can return: a stable shape is what lets it
@@ -436,7 +471,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify(status, null, 2);
   }
   if (name === "type_hierarchy") {
-    const hierarchy = hierarchyFor(getScan(repo, scanOpts, walked));
+    const hierarchy = hierarchyFor(readScan());
     const wanted = str(args.name);
     if (!wanted) {
       const obj: Record<string, unknown> = {};
@@ -450,7 +485,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "implementations") {
     const wanted = str(args.name);
     if (!wanted) throw new Error("`name` is required");
-    const hierarchy = hierarchyFor(getScan(repo, scanOpts, walked));
+    const hierarchy = hierarchyFor(readScan());
     if (!hierarchy.has(wanted)) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
     return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted) }, null, 2);
   }
@@ -459,8 +494,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     if (!symbol) throw new Error("`symbol` is required");
     const direction = str(args.direction);
     const dir: Direction = direction === "out" || direction === "in" ? direction : "both";
-    const result = neighborhood(symbolGraphFor(getScan(repo, scanOpts, walked)), symbol, {
-      ...(typeof args.depth === "number" ? { depth: args.depth } : {}),
+    const result = neighborhood(symbolGraphFor(readScan()), symbol, {
+      ...(positiveNum(args.depth) !== undefined ? { depth: positiveNum(args.depth)! } : {}),
       direction: dir,
     });
     if (!result.root.length) return JSON.stringify({ error: `no symbol named ${symbol}` }, null, 2);
@@ -482,7 +517,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     }
     if (payload === undefined) throw new Error("`rules` (or `configPath`) is required");
     const rules = parseRules(payload); // throws a descriptive error on a malformed payload
-    const { graph } = getArtifacts(repo, scanOpts, walked);
+    const { graph } = readArtifacts();
     return JSON.stringify(checkRules(graph, rules), null, 2);
   }
   throw new Error(`unknown tool: ${name}`);
@@ -507,6 +542,11 @@ export interface McpServerOptions {
   // what is ADVERTISED, not what is answerable: a tool left out of the profile
   // still works when called. Undefined = all tools, so no existing setup moves.
   profile?: string;
+  // Opt into proactive event-driven invalidation for a pinned repository.
+  // Every request still performs the normal freshness proof because event
+  // delivery can lag behind a request. Unsupported platforms warn and retain
+  // the same per-call freshness scan.
+  watch?: boolean;
 }
 
 export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
@@ -521,41 +561,96 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   // Rebuilt when negotiation lands: the pin cannot change mid-session, but the
   // fields we are allowed to advertise depend on the version.
   let tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
+  let watcher: FSWatcher | undefined;
+  if (opts.watch && opts.defaultRepo) {
+    try {
+      watcher = watchFs(opts.defaultRepo, { recursive: true }, (_event, filename) => {
+        const rel = filename?.toString().replaceAll("\\", "/") ?? "";
+        const ignored = rel.split("/").some((segment) =>
+          IGNORE_DIRS.has(segment) || segment.startsWith(".codeindex-edit-"),
+        );
+        if (ignored) return;
+        sessionInvalidate(opts.defaultRepo!, rel || undefined);
+      });
+      watcher.on("error", (error) => {
+        process.stderr.write(`codeindex: MCP watcher disabled (${error.message}); using freshness scans\n`);
+        watcher?.close();
+        watcher = undefined;
+        sessionInvalidate(opts.defaultRepo!);
+      });
+    } catch (error) {
+      process.stderr.write(
+        `codeindex: MCP watcher unavailable (${error instanceof Error ? error.message : String(error)}); using freshness scans\n`,
+      );
+    }
+  }
   // No startup warm: each scan-needing tool warms the present-language grammars
   // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
   // unused wasm, and a language first seen mid-session still gets warmed.
 
-  const send = (msg: Record<string, unknown>): void => {
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
+  const send = (msg: Record<string, unknown> | Record<string, unknown>[]): void => {
+    const wire = Array.isArray(msg)
+      ? msg.map((entry) => ({ jsonrpc: "2.0", ...entry }))
+      : { jsonrpc: "2.0", ...msg };
+    process.stdout.write(JSON.stringify(wire) + "\n");
   };
 
   const rl = createInterface({ input: process.stdin, terminal: false });
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      send({ id: null, error: { code: -32700, message: "parse error" } });
-      continue;
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        send({ id: null, error: { code: -32700, message: "parse error" } });
+        continue;
+      }
+      if (Array.isArray(parsed) && parsed.length === 0) {
+        send({ id: null, error: { code: -32600, message: "invalid request" } });
+        continue;
+      }
+      const dispatch = async (req: unknown): Promise<Record<string, unknown> | undefined> => {
+        // The server currently initiates no requests, but a peer response is
+        // still a response — JSON-RPC forbids replying to it with -32600.
+        if (isRpcResponse(req)) return undefined;
+        if (!isRpcRequest(req)) {
+          return { id: null, error: { code: -32600, message: "invalid request" } };
+        }
+        return handle(req);
+      };
+      if (Array.isArray(parsed)) {
+        const replies: Record<string, unknown>[] = [];
+        for (const req of parsed) {
+          const reply = await dispatch(req);
+          if (reply) replies.push(reply);
+        }
+        // A notification-only batch has no response. Any actual responses must
+        // share one JSON array, as required by JSON-RPC 2.0.
+        if (replies.length > 0) send(replies);
+      } else {
+        const reply = await dispatch(parsed);
+        if (reply) send(reply);
+      }
     }
-    // JSON-RPC 2.0 batch: answer each member (a batching client would
-    // otherwise hang forever on a silently dropped array).
-    const requests = Array.isArray(parsed) ? (parsed as RpcRequest[]) : [parsed as RpcRequest];
-    for (const req of requests) await handle(req);
+  } finally {
+    watcher?.close();
   }
 
-  async function handle(req: RpcRequest): Promise<void> {
-    if (req.id === undefined || req.id === null) return; // notification — no response
+  async function handle(req: RpcRequest): Promise<Record<string, unknown> | undefined> {
+    // Only an ABSENT id denotes a notification. Explicit null is discouraged
+    // by JSON-RPC but remains a request and must receive an id:null response.
+    const notification = !("id" in req);
+    const respond = (body: Record<string, unknown>): Record<string, unknown> | undefined =>
+      notification ? undefined : { id: req.id ?? null, ...body };
 
     try {
       if (req.method === "initialize") {
         protocolVersion = negotiateProtocol(req.params?.protocolVersion);
         tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
-        send({
-          id: req.id,
+        return respond({
           result: {
             protocolVersion,
             capabilities: { tools: {} },
@@ -563,9 +658,9 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
           },
         });
       } else if (req.method === "ping") {
-        send({ id: req.id, result: {} });
+        return respond({ result: {} });
       } else if (req.method === "tools/list") {
-        send({ id: req.id, result: { tools } });
+        return respond({ result: { tools } });
       } else if (req.method === "tools/call") {
         const params = req.params ?? {};
         const name = str(params.name) ?? "";
@@ -595,24 +690,22 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
             protocolVersion >= RICH_TOOLS_SINCE
               ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined)
               : undefined;
-          send({
-            id: req.id,
+          return respond({
             result: {
               content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
               ...(structured ? { structuredContent: structured } : {}),
             },
           });
         } catch (e) {
-          send({
-            id: req.id,
+          return respond({
             result: { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true },
           });
         }
       } else {
-        send({ id: req.id, error: { code: -32601, message: `method not found: ${req.method}` } });
+        return respond({ error: { code: -32601, message: `method not found: ${req.method}` } });
       }
     } catch (e) {
-      send({ id: req.id, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+      return respond({ error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
     }
   }
 }

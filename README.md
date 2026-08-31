@@ -716,6 +716,14 @@ codeindex mcp --repo /path/to/workspace
 An explicit per-call `repo` still wins, so a pinned server can still answer
 about another checkout. `--server-name <name>` overrides the announced
 `serverInfo.name` for hosts that embed the server under their own identity.
+Add `--watch` to a pinned server for proactive recursive filesystem
+invalidation. Every request still verifies freshness with the normal stat walk
+because a request can arrive before its filesystem event; the watcher is a hint,
+not a correctness oracle. Directories excluded by the scanner (`.git`, build
+outputs, dependency caches, `.codeindex`, edit temporaries, etc.) are ignored by
+the watcher too. Git commit metadata is still refreshed by the per-request
+check. When the platform cannot provide recursive watching, the server warns
+and continues with those normal freshness scans.
 
 **Prime the index first** and activation becomes a load, not a rebuild:
 `codeindex index --repo <dir> --out <dir>/.codeindex`. The first tool call
