@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.28.1](https://github.com/maxgfr/codeindex/compare/v2.28.0...v2.28.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* harden runtime and accelerate indexing ([#15](https://github.com/maxgfr/codeindex/issues/15)) ([bea4af3](https://github.com/maxgfr/codeindex/commit/bea4af3493d629438a586d2329d40ae5f68b638f))
+
 # [2.28.0](https://github.com/maxgfr/codeindex/compare/v2.27.1...v2.28.0) (2026-08-12)
 
 
