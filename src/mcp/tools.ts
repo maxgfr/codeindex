@@ -95,7 +95,7 @@ export const TOOLS = [
           description:
             "Return only name/kind/file/line — drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false).",
         },
-        maxResults: { type: "number", description: "Cap matches (default 50)" },
+        maxResults: { type: "number", minimum: 1, description: "Cap matches (default 50)" },
       },
       required: ["repo", "namePath"],
     },
@@ -139,7 +139,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         ...repoProp,
-        budgetTokens: { type: "number", description: "Token budget for the key-files section (default 900)" },
+        budgetTokens: { type: "number", minimum: 1, description: "Token budget for the key-files section (default 900)" },
         remember: { type: "boolean", description: "Persist the brief as the `onboarding` memory (default true)" },
       },
       required: ["repo"],
@@ -151,7 +151,7 @@ export const TOOLS = [
       "Token-budgeted map of the repository: the highest-PageRank files with their key exported signatures, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, budgetTokens: { type: "number", description: "Approximate token budget (default 1024)" } },
+      properties: { ...repoProp, budgetTokens: { type: "number", minimum: 1, description: "Approximate token budget (default 1024)" } },
       required: ["repo"],
     },
   },
@@ -252,7 +252,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         ...scopeProps,
-        limit: { type: "number", description: "Cap entries (default: all)" },
+        limit: { type: "number", minimum: 0, description: "Cap entries (default: all)" },
       },
       required: ["repo"],
     },
@@ -266,10 +266,10 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         ...scopeProps,
-        minFiles: { type: "number", description: "Distinct files a value must span (default 2)" },
-        minCount: { type: "number", description: "Total occurrences required (default 3)" },
+        minFiles: { type: "number", minimum: 1, description: "Distinct files a value must span (default 2)" },
+        minCount: { type: "number", minimum: 1, description: "Total occurrences required (default 3)" },
         includeTests: { type: "boolean", description: "Count test files too (default false)" },
-        limit: { type: "number", description: "Cap duplications (default: all)" },
+        limit: { type: "number", minimum: 0, description: "Cap duplications (default: all)" },
       },
       required: ["repo"],
     },
@@ -280,7 +280,13 @@ export const TOOLS = [
       "Cyclomatic-complexity estimates (branch-token counting over AST line spans), most-complex first. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, file: { type: "string" }, risk: { type: "boolean", description: "Return complexity × git-churn risk ranking instead" } },
+      properties: {
+        ...repoProp,
+        file: { type: "string" },
+        risk: { type: "boolean", description: "Return complexity × git-churn risk ranking instead" },
+        since: { type: "string", description: "Only count risk churn after this ref" },
+        top: { type: "number", minimum: 1, description: "Cap ranked symbols" },
+      },
       required: ["repo"],
     },
   },
@@ -290,7 +296,11 @@ export const TOOLS = [
       "Mermaid diagram of the module graph (renders inline in Claude/GitHub — no graph database). Optionally scoped to one module's neighborhood.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, module: { type: "string", description: "Module slug to focus on" } },
+      properties: {
+        ...repoProp,
+        module: { type: "string", description: "Module slug to focus on" },
+        maxEdges: { type: "number", minimum: 1, description: "Cap rendered edges" },
+      },
       required: ["repo"],
     },
   },
@@ -306,7 +316,7 @@ export const TOOLS = [
         scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
         globs: { type: "array", items: { type: "string" }, description: "Restrict to matching paths" },
         ignoreCase: { type: "boolean" },
-        maxHits: { type: "number" },
+        maxHits: { type: "number", minimum: 1 },
       },
       required: ["repo", "pattern"],
     },
@@ -321,7 +331,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", description: "Max results (default 20)" },
+        limit: { type: "number", minimum: 0, description: "Max results (default 20)" },
         fuzzy: {
           type: "boolean",
           description:
@@ -361,7 +371,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", description: "Max results (default 20)" },
+        limit: { type: "number", minimum: 0, description: "Max results (default 20)" },
         fuzzy: { type: "boolean", description: "Stem/trigram fallback for zero-document-frequency terms (default true)" },
         exact: { type: "boolean", description: "Drop results carrying no verbatim term match (default false)" },
       },
@@ -403,7 +413,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         symbol: { type: "string", description: "Symbol name to centre on" },
-        depth: { type: "number", description: "Hops to follow (default 2, max 5)" },
+        depth: { type: "number", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
         direction: { type: "string", description: "out | in | both (default both)" },
       },
       required: ["repo", "symbol"],

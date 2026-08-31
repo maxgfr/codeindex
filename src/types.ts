@@ -74,7 +74,7 @@ export const SCHEMA_VERSION = 5;
 // threshold. Config files (JSON/YAML/TOML) get the same collector, because the
 // dangerous duplications are the ones that cross a language boundary where no
 // compiler is looking.
-export const EXTRACTOR_VERSION = 13;
+export const EXTRACTOR_VERSION = 14;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

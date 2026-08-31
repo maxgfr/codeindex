@@ -127,5 +127,5 @@ describe("the `types` condition", () => {
     // by walking up from cwd (the repo root), while `-p` points tsc at the
     // scratch tsconfig/check.ts pair.
     execFileSync("npx", ["tsc", "-p", tmp], { cwd: REPO_ROOT, encoding: "utf8" });
-  });
+  }, 20_000);
 });

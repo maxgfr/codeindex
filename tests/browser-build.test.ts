@@ -184,4 +184,49 @@ describe("browser bundle", () => {
     const web = await indexInBrowser(diskRoot);
     expect(web.scan.commit).toBeUndefined();
   });
+
+  it("invalidates a cached scan after a same-size VFS edit", () => {
+    browser.resetVfs();
+    const before = new TextEncoder().encode("export const aa = 1;\n");
+    const after = new TextEncoder().encode("export const bb = 2;\n");
+    browser.mountFiles([{ path: "/repo/a.ts", size: before.byteLength, bytes: before }]);
+    const first = browser.scanRepo("/repo");
+    const cache = new Map(first.files.map((f: Bundle) => [f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: first.mtimes.get(f.rel) }]));
+
+    browser.setFileBytes("/repo/a.ts", after);
+    const second = browser.scanRepo("/repo", { cache });
+
+    expect(second.files[0].symbols.map((s: Bundle) => s.name)).toContain("bb");
+    expect(second.files[0].symbols.map((s: Bundle) => s.name)).not.toContain("aa");
+    expect(second.files[0].hash).not.toBe(first.files[0].hash);
+  });
+
+  it("round-trips embedding artifacts through the browser bundle", () => {
+    const index = {
+      embedVersion: 1,
+      modelId: "fixture",
+      dim: 3,
+      records: [{ file: "src/a.ts", symbol: "a", line: 2, vec: new Int8Array([-128, 0, 127]) }],
+    };
+    const bytes = browser.serializeEmbeddings(index);
+    const view = bytes.subarray(0);
+    const decoded = browser.deserializeEmbeddings(view);
+    expect(decoded).toEqual(index);
+  });
+
+  it("retries a grammar after it becomes available later", async () => {
+    browser.resetVfs();
+    const runtime = new Uint8Array(readFileSync(join(GRAMMARS, browser.RUNTIME_WASM)));
+    const first = await browser.loadGrammars(new Set([".scala"]), async (name: string) => {
+      if (name === "scala.wasm") throw new Error("not mounted yet");
+      return runtime;
+    });
+    expect(first.failed).toEqual(["scala"]);
+
+    const second = await browser.loadGrammars(new Set([".scala"]), async (name: string) => {
+      return new Uint8Array(readFileSync(join(GRAMMARS, name)));
+    });
+    expect(second.failed).toEqual([]);
+    expect(second.loaded).toEqual(["scala"]);
+  });
 });

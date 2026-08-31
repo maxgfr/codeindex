@@ -28,7 +28,7 @@
 // only (no module-evaluation-time cross-calls), which Node ESM and esbuild
 // resolve safely.
 import { join } from "node:path";
-import type { Edge } from "./types.js";
+import type { CodeSymbol, Edge, FileRecord } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { buildResolveContext, resolveImport, type ResolveContext } from "./resolve.js";
 import { uniqueSymbolDefs } from "./graph.js";
@@ -42,6 +42,8 @@ import { complexityOfSource } from "./complexity.js";
 import { readText } from "./walk.js";
 
 interface DerivedCache {
+  fileByRel?: Map<string, FileRecord>;
+  symbolsByName?: Map<string, CodeSymbol[]>;
   resolveCtx?: ResolveContext;
   importPairs?: Set<string>; // `${from}|${to}` resolved-import pairs
   uniqueDefs?: Map<string, string>; // uniqueSymbolDefs(scan)
@@ -60,6 +62,27 @@ function cacheFor(scan: RepoScan): DerivedCache {
   let c = caches.get(scan);
   if (!c) caches.set(scan, (c = {}));
   return c;
+}
+
+export function fileByRelFor(scan: RepoScan): Map<string, FileRecord> {
+  const c = cacheFor(scan);
+  return (c.fileByRel ??= new Map(scan.files.map((file) => [file.rel, file])));
+}
+
+export function symbolsByNameFor(scan: RepoScan): Map<string, CodeSymbol[]> {
+  const c = cacheFor(scan);
+  if (!c.symbolsByName) {
+    const byName = new Map<string, CodeSymbol[]>();
+    for (const file of scan.files) {
+      for (const symbol of file.symbols) {
+        const group = byName.get(symbol.name);
+        if (group) group.push(symbol);
+        else byName.set(symbol.name, [symbol]);
+      }
+    }
+    c.symbolsByName = byName;
+  }
+  return c.symbolsByName;
 }
 
 export function resolveContextFor(scan: RepoScan): ResolveContext {

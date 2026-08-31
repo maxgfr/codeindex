@@ -133,6 +133,7 @@ export function buildCodeRecord(
     record.truncated = code.truncated;
     record.relations = code.relations;
     record.terms = code.terms;
+    record.literals = code.literals;
   } else {
     record.title = basename(rel);
   }
@@ -296,44 +297,35 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
       continue;
     }
 
-    const record: FileRecord = {
-      rel: f.rel,
-      ext: f.ext,
-      size: f.size,
-      lines: countLines(content!),
-      hash,
-      kind,
-      lang,
-      headings: [],
-      symbols: [],
-      refs: [],
-    };
+    // Keep code extraction in ONE builder shared with worker threads. A second
+    // field-by-field copy here previously omitted `literals`, making parallel
+    // and sequential graph output diverge.
+    const record: FileRecord = kind === "code"
+      ? buildCodeRecord(f.rel, f.ext, f.size, content!, hash, lang, opts)
+      : {
+          rel: f.rel,
+          ext: f.ext,
+          size: f.size,
+          lines: countLines(content!),
+          hash,
+          kind,
+          lang,
+          headings: [],
+          symbols: [],
+          refs: [],
+        };
 
-    if (content) {
-      if (kind === "doc" && MARKDOWN_EXT.has(f.ext)) {
+    if (kind !== "code") {
+      if (content && kind === "doc" && MARKDOWN_EXT.has(f.ext)) {
         const md = extractMarkdown(content);
         record.title = md.title ?? basename(f.rel);
         record.summary = md.summary;
         record.headings = md.headings;
         record.refs = md.refs;
-      } else if (kind === "doc") {
+      } else if (content && kind === "doc") {
         // Non-markdown prose (.rst/.txt): title from basename, no link graph.
         record.title = basename(f.rel);
-      } else if (kind === "code") {
-        const code = extractCode(f.rel, f.ext, content, { maxCallsPerFile: opts.maxCallsPerFile });
-        record.title = basename(f.rel);
-        record.summary = code.summary;
-        record.symbols = code.symbols;
-        record.refs = code.refs;
-        record.pkg = code.pkg;
-        record.idents = code.idents;
-        record.calls = code.calls;
-        record.importedNames = code.importedNames;
-        record.truncated = code.truncated;
-        record.relations = code.relations;
-        record.terms = code.terms;
-        record.literals = code.literals;
-      } else if (kind === "config") {
+      } else if (content && kind === "config") {
         // Config files carry no symbols, but they DO carry values — and a value
         // duplicated across a language boundary is the one no compiler checks.
         record.title = basename(f.rel);
@@ -341,8 +333,6 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
       } else {
         record.title = basename(f.rel);
       }
-    } else {
-      record.title = basename(f.rel);
     }
 
     // Retain doc content for the graph's mention pass (docs only) so it is read

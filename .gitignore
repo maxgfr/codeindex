@@ -7,6 +7,7 @@ tests/.e2e-cache/
 scripts/embed-asset/model.json
 scripts/embed-asset/.venv/
 .codeindex/
+.codeindex-edit-*/
 
 # The EXTENDED tree-sitter grammar tier lives only in the GitHub release asset,
 # never in git: `node scripts/fetch-grammars.mjs --extended` regenerates it, and

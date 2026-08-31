@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import {
   extractTarInto,
   fetchExpectedSha256,
   fetchGrammarsTarball,
+  installGrammarCacheAtomically,
   resolveGrammarsPullTarget,
 } from "../src/ast/grammars-pull.js";
 import type { GrammarsPullTarget } from "../src/engine.js";
@@ -306,6 +307,90 @@ describe("tar extraction + path-traversal guard", () => {
 });
 
 describe("CLI grammars status + pull", () => {
+  it("restores the previous cache if the final install rename fails", () => {
+    const parent = mk("ci-gr-swap-");
+    const cache = join(parent, "cache");
+    const incoming = join(parent, "incoming");
+    const marker = join(parent, "marker.sha256");
+    mkdirSync(cache);
+    mkdirSync(incoming);
+    writeFileSync(join(cache, "web-tree-sitter.wasm"), "old");
+    writeFileSync(join(incoming, "web-tree-sitter.wasm"), "new");
+    writeFileSync(marker, "old-hash\n");
+    let calls = 0;
+    const failInstall = (from: string, to: string): void => {
+      calls++;
+      if (calls === 3) throw new Error("simulated rename failure");
+      renameSync(from, to);
+    };
+
+    expect(() => installGrammarCacheAtomically(incoming, cache, marker, "new-hash", failInstall)).toThrow(/simulated/);
+    expect(readFileSync(join(cache, "web-tree-sitter.wasm"), "utf8")).toBe("old");
+    expect(readFileSync(marker, "utf8")).toBe("old-hash\n");
+    expect(readFileSync(join(incoming, "web-tree-sitter.wasm"), "utf8")).toBe("new");
+  });
+
+  it("keeps a successful install when backup cleanup fails", () => {
+    const parent = mk("ci-gr-cleanup-");
+    const cache = join(parent, "cache");
+    const incoming = join(parent, "incoming");
+    const marker = join(parent, "marker.sha256");
+    mkdirSync(cache);
+    mkdirSync(incoming);
+    writeFileSync(join(cache, "web-tree-sitter.wasm"), "old");
+    writeFileSync(join(incoming, "web-tree-sitter.wasm"), "new");
+    writeFileSync(marker, "old-hash\n");
+
+    expect(() =>
+      installGrammarCacheAtomically(incoming, cache, marker, "new-hash", renameSync, () => {
+        throw new Error("simulated cleanup failure");
+      }),
+    ).not.toThrow();
+    expect(readFileSync(join(cache, "web-tree-sitter.wasm"), "utf8")).toBe("new");
+    expect(readFileSync(marker, "utf8")).toBe("new-hash\n");
+  });
+
+  it("removes a stale digest marker when the new cache has no checksum", () => {
+    const parent = mk("ci-gr-unverified-");
+    const cache = join(parent, "cache");
+    const incoming = join(parent, "incoming");
+    const marker = join(parent, "marker.sha256");
+    mkdirSync(cache);
+    mkdirSync(incoming);
+    writeFileSync(join(cache, "web-tree-sitter.wasm"), "old");
+    writeFileSync(join(incoming, "web-tree-sitter.wasm"), "unverified-new");
+    writeFileSync(marker, "old-hash\n");
+
+    installGrammarCacheAtomically(incoming, cache, marker, undefined);
+    expect(readFileSync(join(cache, "web-tree-sitter.wasm"), "utf8")).toBe("unverified-new");
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("restores every possible backup and preserves the rest when rollback is incomplete", () => {
+    const parent = mk("ci-gr-rollback-partial-");
+    const cache = join(parent, "cache");
+    const incoming = join(parent, "incoming");
+    const marker = join(parent, "marker.sha256");
+    mkdirSync(cache);
+    mkdirSync(incoming);
+    writeFileSync(join(cache, "web-tree-sitter.wasm"), "old");
+    writeFileSync(join(incoming, "web-tree-sitter.wasm"), "new");
+    writeFileSync(marker, "old-hash\n");
+    const failInstallAndMarkerRestore = (from: string, to: string): void => {
+      if (from === incoming || from.endsWith("previous-marker")) throw new Error(`simulated rename failure: ${from}`);
+      renameSync(from, to);
+    };
+
+    expect(() =>
+      installGrammarCacheAtomically(incoming, cache, marker, "new-hash", failInstallAndMarkerRestore),
+    ).toThrow(/rollback failed/);
+    // The cache restoration must still run after marker restoration failed.
+    expect(readFileSync(join(cache, "web-tree-sitter.wasm"), "utf8")).toBe("old");
+    const swap = readdirSync(parent).find((entry) => entry.startsWith(".grammars-swap-"));
+    expect(swap).toBeDefined();
+    expect(readFileSync(join(parent, swap!, "previous-marker"), "utf8")).toBe("old-hash\n");
+  });
+
   it("`grammars status` reports the adjacent tier + shape from the shipped bundle", async () => {
     const { stdout, status } = await runCli(["grammars", "status"], { ...process.env, ...NEUTRAL });
     expect(status).toBe(0);

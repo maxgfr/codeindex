@@ -17,7 +17,7 @@
 // Sequential fallback is always available and always correct: any failure to
 // resolve, spawn, or agree returns undefined and the caller scans as before.
 import { existsSync, statSync } from "node:fs";
-import { availableParallelism } from "node:os";
+import * as os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -74,6 +74,7 @@ function resolveEngineUrl(): string | undefined {
 // of a very large repo can legitimately take minutes, and tripping this only
 // costs a fallback to the sequential scan.
 const WORKER_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_MIN_PARALLEL_JOBS = 200;
 
 // How many workers to run. `CODEINDEX_WORKERS` wins when set; 0 or 1 means
 // sequential. Default leaves a core for the main thread and caps at 8 — past
@@ -84,7 +85,7 @@ export function workerCount(requested?: number): number {
   if (raw !== undefined) return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
   let cores = 1;
   try {
-    cores = availableParallelism();
+    cores = typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
   } catch {
     cores = 1;
   }
@@ -264,6 +265,8 @@ export async function scanRepoParallel(
     jobs.push({ abs: f.abs, rel: f.rel, ext: f.ext });
   }
   if (jobs.length === 0) return scanRepo(root, scanOpts);
+  const workersForced = opts.workers !== undefined || (process.env["CODEINDEX_WORKERS"] ?? "") !== "";
+  if (!workersForced && jobs.length < DEFAULT_MIN_PARALLEL_JOBS) return scanRepo(root, scanOpts);
 
   const grammarKeys = grammarKeysForExts(walked.files.map((f) => f.ext));
   const extracted = await extractInParallel(jobs, grammarKeys, count, { maxCallsPerFile: opts.maxCallsPerFile });

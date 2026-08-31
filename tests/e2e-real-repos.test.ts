@@ -91,6 +91,17 @@ const REPOS: RealRepo[] = [
     crossEdge: [/^crates\/core\//, /^crates\/(?!core\/)/],
     budgetMs: 120_000,
   },
+  {
+    // Large Gradle multi-project: Java + Kotlin across config/core/web modules.
+    // Added after the stabilization audit as an independent real-world proof,
+    // not one of the repositories used to design the fixes.
+    slug: "spring-projects/spring-security",
+    sha: "61feae94a04ab78ede3aa7c5c97b1b0e993cca48",
+    maxDanglingRatio: 0.001, // measured baseline: 0/48,146 edges
+    primaryLang: "java",
+    crossEdge: [/^config\//, /^core\//],
+    budgetMs: 120_000,
+  },
 ];
 
 // Shallow-fetch the pinned commit into the cache; re-runs are offline.

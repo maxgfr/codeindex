@@ -9,7 +9,8 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { buildArtifactsFromScan, type IndexArtifacts } from "../pipeline.js";
 import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummary } from "../scan.js";
-import { preloadSession, toCacheMap, type PersistedCacheEntry, type PersistedCacheMap } from "../preload.js";
+import { scanRepoParallel } from "../pool.js";
+import { needsGrammarWarm, preloadSession, preloadSessionLazy, toCacheMap, type PersistedCacheEntry, type PersistedCacheMap } from "../preload.js";
 import { walk, type WalkResult } from "../walk.js";
 import { ensureGrammars, grammarKeysForExts } from "../ast/loader.js";
 import { resolveEmbedModelDir, loadEmbedModel, type StaticEmbedModel } from "../embed/model.js";
@@ -115,6 +116,7 @@ interface SessionEntry {
   scan: RepoScan;
   cacheMap: SessionCacheMap;
   arts?: IndexArtifacts;
+  loadArtifacts?: () => IndexArtifacts | undefined;
 }
 
 // A SMALL bounded LRU — never an unbounded map.
@@ -148,6 +150,20 @@ function sessionPut(entry: SessionEntry): SessionEntry {
 // and serve a stale scan.
 export function sessionClear(): void {
   sessionCaches.length = 0;
+}
+
+// Invalidate only the watched repository while retaining its incremental
+// records and every other repo in the LRU. Removing one known path defeats the
+// same-size/same-mtime fastpath for that file; an unknown filename keeps the
+// entry but drops all record fastpaths. The next request still walks/stats and
+// proves the complete repository state before returning anything.
+export function sessionInvalidate(repo: string, rel?: string): void {
+  const prefix = repo + "\0";
+  for (const entry of sessionCaches) {
+    if (!entry.key.startsWith(prefix)) continue;
+    if (rel) entry.cacheMap.delete(rel);
+    else entry.cacheMap.clear();
+  }
 }
 
 // Fixed property order (and JSON.stringify dropping undefined) keeps the key
@@ -193,13 +209,14 @@ export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: Wa
       // changes headCommit without altering any file's size or mtime, so
       // contentUnchanged stays true while the cached scan's commit went stale.
       // `fresh` recomputed it just now (exactly what a cold process reports), so
-      // sync it onto the returned object; otherwise scan_summary would emit the
-      // OLD commit a from-scratch scanRepo never would. Mutate the SAME object
-      // rather than clone — cloning would forfeit the identity the artifacts and
-      // derived.ts WeakMap key on. Safe: no artifact carries commit (graph /
-      // symbols render byte-identically regardless), so nothing memoized here
-      // depends on this field.
-      if (hit.scan.commit !== fresh.commit) hit.scan.commit = fresh.commit;
+      // sync it onto the returned object; otherwise graph/scan metadata would
+      // expose the old HEAD. Mutate the SAME scan object to preserve derived
+      // indexes, but rebuild artifacts because Graph itself carries `commit`.
+      if (hit.scan.commit !== fresh.commit) {
+        hit.scan.commit = fresh.commit;
+        hit.arts = undefined;
+        hit.loadArtifacts = undefined;
+      }
       return hit.scan;
     }
     sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
@@ -211,7 +228,12 @@ export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: Wa
   // the cold path EXACTLY as before.
   const preloaded = preloadSession(repo, { ...opts, precomputedWalk: walked });
   if (preloaded) {
-    sessionPut({ key, scan: preloaded.scan, cacheMap: preloaded.cacheMap, arts: preloaded.arts });
+    sessionPut({
+      key,
+      scan: preloaded.scan,
+      cacheMap: preloaded.cacheMap,
+      arts: preloaded.arts,
+    });
     return preloaded.scan;
   }
   const scan = scanRepo(repo, { ...opts, precomputedWalk: walked });
@@ -219,36 +241,100 @@ export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: Wa
   return scan;
 }
 
+// Async cold-start companion used by the MCP request boundary. Existing warm
+// entries and persisted indexes keep their proven cache paths; only a genuinely
+// cold repo is extracted across workers. The resulting scan is inserted into
+// the same LRU, so every synchronous query helper below observes one object and
+// all derived WeakMap caches retain their identity semantics.
+export async function getScanParallel(
+  repo: string,
+  opts: SessionScanOptions = {},
+  walked?: WalkResult,
+  warm: () => Promise<void> = async () => {},
+): Promise<RepoScan> {
+  const key = sessionKey(repo, opts);
+  const existing = sessionCaches.find((entry) => entry.key === key);
+  if (existing) {
+    const originalCache = existing.cacheMap;
+    const reuseUnchanged = (fresh: RepoScan): RepoScan => {
+      if (fresh.cacheDirty) existing.cacheMap = toCacheMap(fresh);
+      if (existing.scan.commit !== fresh.commit) {
+        existing.scan.commit = fresh.commit;
+        existing.arts = undefined;
+        existing.loadArtifacts = undefined;
+      }
+      sessionGet(key);
+      return existing.scan;
+    };
+
+    // A metadata change in a code file requires grammars, but not a throwaway
+    // provisional extraction. Warm first and perform exactly one parallel scan.
+    if (walked && needsGrammarWarm(walked, originalCache, opts.fullHash)) {
+      await warm();
+      const fresh = await scanRepoParallel(repo, { ...opts, cache: originalCache, precomputedWalk: walked });
+      if (fresh.contentUnchanged) return reuseUnchanged(fresh);
+      sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
+      return fresh;
+    }
+
+    const provisional = scanRepo(repo, { ...opts, cache: originalCache, precomputedWalk: walked });
+    if (provisional.contentUnchanged) {
+      return reuseUnchanged(provisional);
+    }
+    // With a walk, the metadata proof above established that only docs/config,
+    // deletions or scope changed; the provisional scan is already final. The
+    // no-walk fallback retains the conservative warm + rescan contract.
+    if (walked) {
+      sessionPut({ key, scan: provisional, cacheMap: toCacheMap(provisional) });
+      return provisional;
+    }
+    await warm();
+    const scan = await scanRepoParallel(repo, { ...opts, cache: originalCache, precomputedWalk: walked });
+    sessionPut({ key, scan, cacheMap: toCacheMap(scan) });
+    return scan;
+  }
+
+  const preloaded = await preloadSessionLazy(repo, { ...opts, precomputedWalk: walked }, warm);
+  if (preloaded) {
+    sessionPut({
+      key,
+      scan: preloaded.scan,
+      cacheMap: preloaded.cacheMap,
+      arts: preloaded.arts,
+      loadArtifacts: preloaded.loadArtifacts,
+    });
+    return preloaded.scan;
+  }
+
+  await warm();
+  const scan = await scanRepoParallel(repo, { ...opts, precomputedWalk: walked });
+  sessionPut({ key, scan, cacheMap: toCacheMap(scan) });
+  return scan;
+}
+
 // The scan_summary numbers, without paying for a scan.
 //
 // A file count and a language histogram come from the walk plus the path-based
-// classifiers — no read, no hash, no tree-sitter. When this session already
-// holds a scan for the same (repo, opts) we derive from it instead (identical
-// numbers, and it keeps a warm session warm); otherwise scanSummary walks once.
+// classifiers — no read, no hash, no tree-sitter. Always use that path-only
+// operation, even when the session holds a scan: refreshing a changed file from
+// this grammar-free path would replace an AST record with a regex-tier record.
 // The summary is NEVER written into the session cache: it carries no
 // FileRecords, so caching it would starve every record-shaped tool that ran next.
 export function getScanSummary(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): ScanSummary {
-  if (sessionCaches.some((e) => e.key === sessionKey(repo, opts))) {
-    const scan = getScan(repo, opts, walked);
-    return {
-      root: scan.root,
-      commit: scan.commit,
-      fileCount: scan.files.length,
-      languages: scan.languages,
-      capped: scan.capped,
-      excluded: scan.excluded,
-    };
-  }
+  // Never refresh a record-shaped session here: this path intentionally loads
+  // no grammar, so extracting a changed file would poison later AST queries
+  // with a regex-tier record. The path-only summary is already the cheap and
+  // exact operation this tool needs.
   return scanSummary(repo, { ...opts, precomputedWalk: walked });
 }
 
 // Lazy pipeline memoized on scan OBJECT IDENTITY: graph-shaped tools reuse the
 // artifacts exactly as long as getScan keeps returning the same scan object.
 // Exported for tests.
-export function getArtifacts(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): IndexArtifacts {
-  const scan = getScan(repo, opts, walked);
+export function getArtifacts(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult, prepared?: RepoScan): IndexArtifacts {
+  const scan = prepared ?? getScan(repo, opts, walked);
   const entry = sessionCaches.find((e) => e.scan === scan);
-  if (entry) return (entry.arts ??= buildArtifactsFromScan(scan, opts));
+  if (entry) return (entry.arts ??= entry.loadArtifacts?.() ?? buildArtifactsFromScan(scan, opts));
   // Defensive fallback (getScan always leaves an entry holding `scan`).
   return buildArtifactsFromScan(scan, opts);
 }

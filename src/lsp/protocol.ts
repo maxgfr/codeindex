@@ -128,14 +128,20 @@ export function createFramer(): { push(chunk: Uint8Array | string): LspMessage[]
 
 /** `file:///abs/path` for a repo-relative path, percent-encoding each segment. */
 export function fileUri(root: string, rel: string): string {
-  const abs = `${root.replace(/\/+$/, "")}/${rel.replace(/^\/+/, "")}`;
+  const rootPath = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const relPath = rel.replace(/\\/g, "/").replace(/^\/+/, "");
+  const abs = `${rootPath}/${relPath}`;
+  if (abs.startsWith("//")) {
+    const [host = "", ...segments] = abs.slice(2).split("/");
+    return `file://${encodeURIComponent(host)}/${segments.map(encodeURIComponent).join("/")}`;
+  }
   const drive = /^([A-Za-z]):/.exec(abs);
   const path = drive ? `/${abs}` : abs;
   return (
     "file://" +
     path
       .split("/")
-      .map((segment, i) => (i === 0 ? segment : encodeURIComponent(segment)))
+      .map((segment, i) => (i === 0 || (i === 1 && /^[A-Za-z]:$/.test(segment)) ? segment : encodeURIComponent(segment)))
       .join("/")
   );
 }
@@ -143,11 +149,22 @@ export function fileUri(root: string, rel: string): string {
 /** The inverse, or undefined when the URI points outside the repository. */
 export function relFromUri(root: string, uri: string): string | undefined {
   if (!uri.startsWith("file://")) return undefined;
-  let path = decodeURIComponent(uri.slice("file://".length));
+  let path: string;
+  try {
+    const encoded = uri.slice("file://".length);
+    // A non-empty URI authority is a Windows UNC host. Local paths start with
+    // '/', including canonical drive URIs (`file:///C:/...`).
+    path = decodeURIComponent(encoded.startsWith("/") ? encoded : `//${encoded}`).replace(/\\/g, "/");
+  } catch {
+    return undefined;
+  }
   if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
-  const base = root.replace(/\/+$/, "");
-  if (path === base) return "";
-  if (!path.startsWith(`${base}/`)) return undefined;
+  const base = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const windows = /^[A-Za-z]:/.test(base) || base.startsWith("//");
+  const comparablePath = windows ? path.toLowerCase() : path;
+  const comparableBase = windows ? base.toLowerCase() : base;
+  if (comparablePath === comparableBase) return "";
+  if (!comparablePath.startsWith(`${comparableBase}/`)) return undefined;
   return path.slice(base.length + 1);
 }
 

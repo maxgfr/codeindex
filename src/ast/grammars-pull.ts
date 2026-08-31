@@ -188,6 +188,89 @@ export interface GrammarsPullResult {
   message: string;
 }
 
+type Rename = (from: string, to: string) => void;
+
+// Swap a fully validated temporary extraction into place with rollback. The
+// previous cache and checksum marker remain on the same filesystem inside a
+// swap directory until both new objects have been installed successfully.
+// `rename` is injectable only so the failure boundary can be regression-tested.
+export function installGrammarCacheAtomically(
+  tempDir: string,
+  cacheDir: string,
+  markerPath: string,
+  expectedSha256: string | undefined,
+  rename: Rename = renameSync,
+  cleanup: typeof rmSync = rmSync,
+): void {
+  const parent = dirname(cacheDir);
+  const swapDir = mkdtempSync(join(parent, ".grammars-swap-"));
+  const previousCache = join(swapDir, "previous-cache");
+  const previousMarker = join(swapDir, "previous-marker");
+  const nextMarker = join(swapDir, "next-marker");
+  let cacheBackedUp = false;
+  let markerBackedUp = false;
+  let cacheInstalled = false;
+  let markerInstalled = false;
+  try {
+    if (expectedSha256) writeFileSync(nextMarker, expectedSha256 + "\n");
+    if (existsSync(cacheDir)) {
+      rename(cacheDir, previousCache);
+      cacheBackedUp = true;
+    }
+    if (existsSync(markerPath)) {
+      rename(markerPath, previousMarker);
+      markerBackedUp = true;
+    }
+    rename(tempDir, cacheDir);
+    cacheInstalled = true;
+    // No sidecar means the new cache is deliberately unverified: leave no old
+    // digest marker that could falsely certify these different bytes.
+    if (expectedSha256) {
+      rename(nextMarker, markerPath);
+      markerInstalled = true;
+    }
+  } catch (error) {
+    const rollbackErrors: unknown[] = [];
+    const attempt = (operation: () => void): void => {
+      try {
+        operation();
+      } catch (rollback) {
+        rollbackErrors.push(rollback);
+      }
+    };
+    if (markerInstalled && existsSync(markerPath)) attempt(() => rmSync(markerPath, { force: true }));
+    if (cacheInstalled && existsSync(cacheDir)) attempt(() => rmSync(cacheDir, { recursive: true, force: true }));
+    if (markerBackedUp && existsSync(previousMarker)) attempt(() => rename(previousMarker, markerPath));
+    if (cacheBackedUp && existsSync(previousCache)) attempt(() => rename(previousCache, cacheDir));
+    // Only discard the swap directory when every backup was restored. On an
+    // incomplete rollback it is the last recoverable copy of the old cache.
+    if (rollbackErrors.length === 0) {
+      try {
+        rmSync(swapDir, { recursive: true, force: true });
+      } catch {
+        // Preserve the original installation error.
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      const rollbackError = rollbackErrors[0];
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; rollback failed: ${
+          rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+        } (backup preserved at ${swapDir})`,
+      );
+    }
+    throw error;
+  }
+  // Cleanup is not part of the transaction. Once both renames succeeded the
+  // new cache is live; an antivirus/indexer holding the backup directory must
+  // not turn a successful install into a destructive rollback.
+  try {
+    cleanup(swapDir, { recursive: true, force: true });
+  } catch {
+    // A later pull may leave/reuse no data from this uniquely named orphan.
+  }
+}
+
 // The whole `grammars pull` mechanic — resolve target, fetch the sha256 sidecar,
 // skip when the cache already holds that exact digest, download, then install
 // ATOMICALLY (extract into a tmp sibling, verify the runtime wasm landed, swap
@@ -249,10 +332,8 @@ export async function pullGrammars(
     if (!existsSync(join(tmp, "web-tree-sitter.wasm"))) {
       throw new Error("archive is missing web-tree-sitter.wasm");
     }
-    if (existsSync(cacheDir)) rmSync(cacheDir, { recursive: true, force: true });
-    renameSync(tmp, cacheDir);
+    installGrammarCacheAtomically(tmp, cacheDir, markerPath, expected);
     tmp = undefined;
-    if (expected) writeFileSync(markerPath, expected + "\n");
   } catch (e) {
     if (tmp) {
       try {
