@@ -16,10 +16,13 @@ compares](#how-it-compares).
 
 ## What it does
 
-- **Walk** a repo deterministically: ignore lists, binary/lockfile skips, a size
-  cap, symlink-cycle guard. No file-count cap unless you ask for one
-  (`--max-files`), and asking sets the `capped` flag — never a silent
-  truncation.
+- **Walk** a repo deterministically: ignore lists, `.gitignore` and
+  `.git/info/exclude`, binary/lockfile skips, a size cap, symlink-cycle guard.
+  Nested repositories (a subdirectory with its own `.git` — linked worktrees,
+  vendored clones, submodules) are skipped like git does, and `.git` itself is
+  never walked even when `--ignore-dir` replaces the default ignore list. No
+  file-count cap unless you ask for one (`--max-files`), and asking sets the
+  `capped` flag — never a silent truncation.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
   imports, headings, hashes — with an incremental cache fastpath. Extraction
   runs across worker threads by default (`--workers`, `CODEINDEX_WORKERS`);

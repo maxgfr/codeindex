@@ -353,10 +353,28 @@ var init_ignore = __esm({
 });
 
 // src/walk.ts
-import { readdirSync, statSync, lstatSync, readFileSync, realpathSync } from "fs";
-import { join, sep, extname } from "path";
+import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, existsSync } from "fs";
+import { join, resolve, sep, extname } from "path";
 function isIgnoredDirectory(name2, ignoreDirs) {
-  return ignoreDirs.has(name2) || name2.startsWith(".codeindex-edit-");
+  return name2 === GIT_ENTRY || ignoreDirs.has(name2) || name2.startsWith(".codeindex-edit-");
+}
+function readInfoExclude(root, entries) {
+  const marker = entries.find((e) => e.name === GIT_ENTRY);
+  if (!marker) return "";
+  let gitDir = join(root, GIT_ENTRY);
+  try {
+    if (!marker.isDirectory()) {
+      const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(gitDir, "utf8"));
+      if (!m) return "";
+      gitDir = resolve(root, m[1]);
+      const common = join(gitDir, "commondir");
+      if (existsSync(common)) gitDir = resolve(gitDir, readFileSync(common, "utf8").trim());
+    }
+    const exclude = join(gitDir, "info", "exclude");
+    return existsSync(exclude) ? readText(exclude) : "";
+  } catch {
+    return "";
+  }
 }
 function walk(root, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
@@ -396,7 +414,15 @@ function walk(root, opts = {}) {
     } catch {
       continue;
     }
+    if (frame.rel && entries.some((e) => e.name === GIT_ENTRY)) {
+      excluded++;
+      continue;
+    }
     let rules = frame.rules;
+    if (useGitignore && !frame.rel) {
+      const parsed = parseGitignore(readInfoExclude(frame.dir, entries), "");
+      if (parsed.length) rules = [...rules, ...parsed];
+    }
     if (useGitignore && entries.some((e) => e.name === ".gitignore")) {
       const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel);
       if (parsed.length) rules = [...rules, ...parsed];
@@ -406,6 +432,7 @@ function walk(root, opts = {}) {
       const abs = join(frame.dir, name2);
       const rel2 = frame.rel ? `${frame.rel}/${name2}` : name2;
       const isLink = entry.isSymbolicLink();
+      if (name2 === GIT_ENTRY) continue;
       if (entry.isDirectory() && isIgnoredDirectory(name2, ignoreDirs)) continue;
       let st;
       try {
@@ -477,7 +504,7 @@ function readText(abs) {
     return "";
   }
 }
-var IGNORE_DIRS, LOCKFILES, BINARY_EXT, DEFAULT_MAX_FILES;
+var IGNORE_DIRS, GIT_ENTRY, LOCKFILES, BINARY_EXT, DEFAULT_MAX_FILES;
 var init_walk = __esm({
   "src/walk.ts"() {
     "use strict";
@@ -516,6 +543,7 @@ var init_walk = __esm({
       "elm-stuff",
       ".dart_tool"
     ]);
+    GIT_ENTRY = ".git";
     LOCKFILES = /* @__PURE__ */ new Set([
       "package-lock.json",
       "npm-shrinkwrap.json",
@@ -1983,13 +2011,13 @@ async function Module2(moduleArg = {}) {
       }
       readAsync = /* @__PURE__ */ __name(async (url) => {
         if (isFileURI(url)) {
-          return new Promise((resolve5, reject) => {
+          return new Promise((resolve6, reject) => {
             var xhr = new XMLHttpRequest();
             xhr.open("GET", url, true);
             xhr.responseType = "arraybuffer";
             xhr.onload = () => {
               if (xhr.status == 200 || xhr.status == 0 && xhr.response) {
-                resolve5(xhr.response);
+                resolve6(xhr.response);
                 return;
               }
               reject(xhr.status);
@@ -2185,9 +2213,9 @@ async function Module2(moduleArg = {}) {
     __name(receiveInstantiationResult, "receiveInstantiationResult");
     var info2 = getWasmImports();
     if (Module["instantiateWasm"]) {
-      return new Promise((resolve5, reject) => {
+      return new Promise((resolve6, reject) => {
         Module["instantiateWasm"](info2, (mod, inst) => {
-          resolve5(receiveInstance(mod, inst));
+          resolve6(receiveInstance(mod, inst));
         });
       });
     }
@@ -3518,8 +3546,8 @@ async function Module2(moduleArg = {}) {
   if (runtimeInitialized) {
     moduleRtn = Module;
   } else {
-    moduleRtn = new Promise((resolve5, reject) => {
-      readyPromiseResolve = resolve5;
+    moduleRtn = new Promise((resolve6, reject) => {
+      readyPromiseResolve = resolve6;
       readyPromiseReject = reject;
     });
   }
@@ -5749,7 +5777,7 @@ ${JSON.stringify(symbolNames, null, 2)}`);
 });
 
 // src/ast/loader.ts
-import { readFileSync as readFileSync2, existsSync, statSync as statSync2 } from "fs";
+import { readFileSync as readFileSync2, existsSync as existsSync2, statSync as statSync2 } from "fs";
 import { homedir } from "os";
 import { dirname, join as join2 } from "path";
 import { fileURLToPath } from "url";
@@ -5767,10 +5795,10 @@ function resolveGrammarsTier(opts = {}) {
     tier,
     dir,
     cacheDir,
-    dirs: [dir, ...existsSync(join2(dir, "..", EXTENDED_DIR)) ? [join2(dir, "..", EXTENDED_DIR)] : []]
+    dirs: [dir, ...existsSync2(join2(dir, "..", EXTENDED_DIR)) ? [join2(dir, "..", EXTENDED_DIR)] : []]
   });
   const legacy = process.env.CODEINDEX_GRAMMAR_DIR ?? process.env.ULTRAINDEX_GRAMMAR_DIR;
-  if (legacy && legacy.trim() && existsSync(legacy)) return withDirs("env", legacy);
+  if (legacy && legacy.trim() && existsSync2(legacy)) return withDirs("env", legacy);
   const here = opts.moduleDir ?? dirname(fileURLToPath(import.meta.url));
   const adjacent = [
     join2(here, "grammars"),
@@ -5779,10 +5807,10 @@ function resolveGrammarsTier(opts = {}) {
     // dev: src/ast → <repo>/scripts/grammars
     join2(here, "..", "scripts", "grammars")
   ];
-  for (const c2 of adjacent) if (existsSync(c2)) return withDirs("adjacent", c2);
+  for (const c2 of adjacent) if (existsSync2(c2)) return withDirs("adjacent", c2);
   const env = process.env.CODEINDEX_GRAMMARS_DIR;
-  if (env && env.trim() && existsSync(env)) return withDirs("env", env);
-  if (existsSync(cacheDir)) return withDirs("cache", cacheDir);
+  if (env && env.trim() && existsSync2(env)) return withDirs("env", env);
+  if (existsSync2(cacheDir)) return withDirs("cache", cacheDir);
   return { tier: "none", cacheDir, dirs: [] };
 }
 function resolveGrammarsDir(opts) {
@@ -5794,7 +5822,7 @@ async function ensureGrammars(keys) {
   const firstIn = (name2) => {
     for (const d of dirs) {
       const p = join2(d, name2);
-      if (existsSync(p)) return p;
+      if (existsSync2(p)) return p;
     }
     return void 0;
   };
@@ -8381,7 +8409,7 @@ var init_preload = __esm({
 });
 
 // src/pool.ts
-import { existsSync as existsSync2, statSync as statSync3 } from "fs";
+import { existsSync as existsSync3, statSync as statSync3 } from "fs";
 import * as os from "os";
 import { dirname as dirname2, join as join4 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
@@ -8391,7 +8419,7 @@ function resolveEngineUrl() {
     const here = fileURLToPath2(import.meta.url);
     if (here.endsWith("engine.mjs")) return pathToFileURL(here).href;
     const adjacent = join4(dirname2(here), "engine.mjs");
-    if (existsSync2(adjacent)) return pathToFileURL(adjacent).href;
+    if (existsSync3(adjacent)) return pathToFileURL(adjacent).href;
     return void 0;
   } catch {
     return void 0;
@@ -8445,7 +8473,7 @@ runExtractWorker(workerData.input, (o) => parentPort.postMessage(o)).catch((e) =
   try {
     const outputs = await Promise.all(
       shards.map(
-        (jobsForShard) => new Promise((resolve5, reject) => {
+        (jobsForShard) => new Promise((resolve6, reject) => {
           const w = new Worker(bootstrap, {
             eval: true,
             workerData: { input: { jobs: jobsForShard, grammarKeys: wanted, maxCallsPerFile: opts.maxCallsPerFile } }
@@ -8459,7 +8487,7 @@ runExtractWorker(workerData.input, (o) => parentPort.postMessage(o)).catch((e) =
             fn();
           };
           w.once("message", (m) => {
-            settle(() => resolve5(m));
+            settle(() => resolve6(m));
             void w.terminate();
           });
           w.once("error", (e) => settle(() => reject(e)));
@@ -11029,7 +11057,7 @@ var init_memory = __esm({
 });
 
 // src/workspaces.ts
-import { existsSync as existsSync5, readdirSync as readdirSync3, statSync as statSync6 } from "fs";
+import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync6 } from "fs";
 import { join as join14 } from "path";
 function readJson(path, label, warnings) {
   const raw = readText(path);
@@ -11082,7 +11110,7 @@ function wsGlobToRegExp(pat) {
 }
 function probeNodePkg(root, dir, kind, warnings) {
   const path = join14(root, dir, "package.json");
-  if (!existsSync5(path)) return void 0;
+  if (!existsSync6(path)) return void 0;
   const manifest = `${dir}/package.json`;
   const pkg = readJson(path, manifest, warnings);
   const out2 = {
@@ -11096,7 +11124,7 @@ function probeNodePkg(root, dir, kind, warnings) {
 }
 function probeCargo(root, dir) {
   const path = join14(root, dir, "Cargo.toml");
-  if (!existsSync5(path)) return void 0;
+  if (!existsSync6(path)) return void 0;
   const body2 = tomlSectionBody(readText(path), "package");
   const out2 = {
     name: tomlString(body2, "name") ?? dir,
@@ -11110,18 +11138,18 @@ function probeCargo(root, dir) {
 }
 function probeGoMod(root, dir) {
   const path = join14(root, dir, "go.mod");
-  if (!existsSync5(path)) return void 0;
+  if (!existsSync6(path)) return void 0;
   const name2 = readText(path).match(/^module\s+(\S+)/m)?.[1] ?? dir;
   return { name: name2, dir, kind: "go", manifest: `${dir}/go.mod` };
 }
 function probeMaven(root, dir) {
   const path = join14(root, dir, "pom.xml");
-  if (!existsSync5(path)) return void 0;
+  if (!existsSync6(path)) return void 0;
   return { name: ownArtifactId(readText(path)) ?? dir, dir, kind: "maven", manifest: `${dir}/pom.xml` };
 }
 function probePyproject(root, dir) {
   const path = join14(root, dir, "pyproject.toml");
-  if (!existsSync5(path)) return void 0;
+  if (!existsSync6(path)) return void 0;
   const toml = readText(path);
   const project = tomlSectionBody(toml, "project");
   const poetry = tomlSectionBody(toml, "tool.poetry");
@@ -11137,7 +11165,7 @@ function probePyproject(root, dir) {
 }
 function probeComposer(root, dir, warnings) {
   const path = join14(root, dir, "composer.json");
-  if (!existsSync5(path)) return void 0;
+  if (!existsSync6(path)) return void 0;
   const manifest = `${dir}/composer.json`;
   const pkg = readJson(path, manifest, warnings);
   const out2 = {
@@ -11151,7 +11179,7 @@ function probeComposer(root, dir, warnings) {
 }
 function probeNxProject(root, dir, warnings) {
   const path = join14(root, dir, "project.json");
-  if (!existsSync5(path)) return void 0;
+  if (!existsSync6(path)) return void 0;
   const manifest = `${dir}/project.json`;
   const proj = readJson(path, manifest, warnings);
   return {
@@ -11163,7 +11191,7 @@ function probeNxProject(root, dir, warnings) {
 }
 function probeGradle(root, dir) {
   for (const f of ["build.gradle", "build.gradle.kts"]) {
-    if (existsSync5(join14(root, dir, f))) {
+    if (existsSync6(join14(root, dir, f))) {
       return { name: dir, dir, kind: "gradle", manifest: `${dir}/${f}` };
     }
   }
@@ -12151,7 +12179,7 @@ var init_grep = __esm({
 
 // src/embed/model.ts
 import { createHash as createHash3 } from "crypto";
-import { existsSync as existsSync6, readFileSync as readFileSync8 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync8 } from "fs";
 import { join as join16 } from "path";
 function resolveEmbedModelDir(repo) {
   const env = process.env.CODEINDEX_EMBED_DIR;
@@ -12160,7 +12188,7 @@ function resolveEmbedModelDir(repo) {
   if (repo) candidates.push(join16(repo, ".codeindex", DEFAULT_EMBED_DIRNAME));
   candidates.push(join16(process.cwd(), ".codeindex", DEFAULT_EMBED_DIRNAME));
   for (const c2 of candidates) {
-    if (existsSync6(join16(c2, "model.json"))) return c2;
+    if (existsSync7(join16(c2, "model.json"))) return c2;
   }
   return void 0;
 }
@@ -12194,7 +12222,7 @@ function parseEmbedModel(raw, source) {
 function loadEmbedModel(dir) {
   if (!dir) return void 0;
   const path = join16(dir, "model.json");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   const raw = JSON.parse(readFileSync8(path, "utf8"));
   return parseEmbedModel(raw, path);
 }
@@ -12629,12 +12657,12 @@ var init_coupling = __esm({
 });
 
 // src/onboard.ts
-import { existsSync as existsSync7, readFileSync as readFileSync9 } from "fs";
-import { join as join17, resolve as resolve2 } from "path";
+import { existsSync as existsSync8, readFileSync as readFileSync9 } from "fs";
+import { join as join17, resolve as resolve3 } from "path";
 function tagline(root) {
   for (const name2 of README_NAMES) {
     const path = join17(root, name2);
-    if (!existsSync7(path)) continue;
+    if (!existsSync8(path)) continue;
     let text;
     try {
       text = readFileSync9(path, "utf8");
@@ -12654,7 +12682,7 @@ function tagline(root) {
 }
 function onboardBrief(scan2, graph, opts = {}) {
   const lines = [];
-  const name2 = resolve2(scan2.root).replace(/\/+$/, "").split("/").pop() || "repository";
+  const name2 = resolve3(scan2.root).replace(/\/+$/, "").split("/").pop() || "repository";
   lines.push(`# ${name2}`, "");
   const summary = tagline(scan2.root);
   if (summary) lines.push(summary, "");
@@ -12856,13 +12884,13 @@ async function openLspSession(transport, options) {
   const request = (method, params, budget = timeoutMs) => {
     if (dead) return Promise.reject(dead);
     const id = nextId++;
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve6, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new LspTimeout(method, budget));
       }, budget);
       timer.unref?.();
-      pending.set(id, { resolve: resolve5, reject, timer });
+      pending.set(id, { resolve: resolve6, reject, timer });
       transport.write(encodeMessage({ jsonrpc: "2.0", id, method, params }));
     });
   };
@@ -12951,19 +12979,19 @@ var init_client = __esm({
 });
 
 // src/lsp/config.ts
-import { existsSync as existsSync8, readFileSync as readFileSync10 } from "fs";
-import { join as join18, resolve as resolve3 } from "path";
+import { existsSync as existsSync9, readFileSync as readFileSync10 } from "fs";
+import { join as join18, resolve as resolve4 } from "path";
 function resolveLspConfigPath(repo) {
   const env = process.env.CODEINDEX_LSP_CONFIG;
   if (env !== void 0) {
     const trimmed = env.trim();
     if (!trimmed || trimmed === "0" || trimmed.toLowerCase() === "off") return { path: void 0, source: "none" };
-    return { path: resolve3(trimmed), source: "env" };
+    return { path: resolve4(trimmed), source: "env" };
   }
   const inRepo = join18(repo, LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (existsSync8(inRepo)) return { path: inRepo, source: "repo" };
+  if (existsSync9(inRepo)) return { path: inRepo, source: "repo" };
   const inCwd = join18(process.cwd(), LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (inCwd !== inRepo && existsSync8(inCwd)) return { path: inCwd, source: "cwd" };
+  if (inCwd !== inRepo && existsSync9(inCwd)) return { path: inCwd, source: "cwd" };
   return { path: void 0, source: "none" };
 }
 function parseLspConfig(payload) {
@@ -13002,7 +13030,7 @@ function parseLspConfig(payload) {
 }
 function loadLspConfig(repo) {
   const { path } = resolveLspConfigPath(repo);
-  if (!path || !existsSync8(path)) return void 0;
+  if (!path || !existsSync9(path)) return void 0;
   let payload;
   try {
     payload = JSON.parse(readFileSync10(path, "utf8"));
@@ -13580,7 +13608,7 @@ var init_viz = __esm({
 });
 
 // src/mcp/protocol.ts
-import { existsSync as existsSync9 } from "fs";
+import { existsSync as existsSync10 } from "fs";
 import { join as join20 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 function validateArgs(schema, args2) {
@@ -13636,7 +13664,7 @@ function capResponse(text, tool, repo, maxBytes) {
       maxBytes,
       reason: "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
       narrower: NARROWER[tool] ?? "narrow the request with `scope`, `include`/`exclude`, or a `limit`",
-      ...artifact && existsSync9(artifact) ? { artifact, artifactNote: "The full result is already on disk here \u2014 read it directly if you need all of it." } : artifact ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join20(repo, INDEX_DIR)}\` to get this as a file.` } : {}
+      ...artifact && existsSync10(artifact) ? { artifact, artifactNote: "The full result is already on disk here \u2014 read it directly if you need all of it." } : artifact ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join20(repo, INDEX_DIR)}\` to get this as a file.` } : {}
     },
     null,
     2
@@ -15367,7 +15395,7 @@ init_extract();
 init_web_tree_sitter();
 init_loader();
 init_sort();
-import { existsSync as existsSync3, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
 import { join as join5 } from "path";
 var queries = /* @__PURE__ */ new Map();
 function queryFor(key, language) {
@@ -15376,7 +15404,7 @@ function queryFor(key, language) {
   let compiled = null;
   for (const dir of resolveGrammarsTier().dirs) {
     const path = join5(dir, `${key}.tags.scm`);
-    if (!existsSync3(path)) continue;
+    if (!existsSync4(path)) continue;
     try {
       compiled = new Query(language, readFileSync4(path, "utf8"));
     } catch {
@@ -15388,7 +15416,7 @@ function queryFor(key, language) {
   return compiled;
 }
 function tagsQueryStatus(key) {
-  const present = resolveGrammarsTier().dirs.some((d) => existsSync3(join5(d, `${key}.tags.scm`)));
+  const present = resolveGrammarsTier().dirs.some((d) => existsSync4(join5(d, `${key}.tags.scm`)));
   if (!present) return { present: false, compiled: false };
   const language = languageFor(key);
   if (!language) return { present: true, compiled: false };
@@ -15441,8 +15469,8 @@ init_loader();
 // src/ast/grammars-pull.ts
 init_types();
 import { createHash as createHash2 } from "crypto";
-import { existsSync as existsSync4, mkdirSync, mkdtempSync, readFileSync as readFileSync5, renameSync, rmSync, writeFileSync } from "fs";
-import { dirname as dirname3, join as join6, resolve, sep as sep2 } from "path";
+import { existsSync as existsSync5, mkdirSync, mkdtempSync, readFileSync as readFileSync5, renameSync, rmSync, writeFileSync } from "fs";
+import { dirname as dirname3, join as join6, resolve as resolve2, sep as sep2 } from "path";
 import { gunzipSync } from "zlib";
 var DEFAULT_GRAMMARS_URL = `https://github.com/maxgfr/codeindex/releases/download/v${ENGINE_VERSION}/grammars-${ENGINE_VERSION}.tar.gz`;
 function resolveGrammarsPullTarget() {
@@ -15513,13 +15541,13 @@ function safeRelPath(name2) {
   return out2.length ? out2.join("/") : null;
 }
 function extractTarInto(rawTar, destDir) {
-  const root = resolve(destDir);
+  const root = resolve2(destDir);
   const written = [];
   for (const entry of readTar(asBuffer(rawTar))) {
     if (entry.type !== "0" && entry.type !== "\0") continue;
     const rel2 = safeRelPath(entry.name);
     if (rel2 === null) throw new Error(`refusing unsafe tar entry: ${entry.name}`);
-    const dest = resolve(destDir, rel2);
+    const dest = resolve2(destDir, rel2);
     if (dest !== root && !dest.startsWith(root + sep2)) {
       throw new Error(`tar entry escapes destination: ${entry.name}`);
     }
@@ -15546,11 +15574,11 @@ function installGrammarCacheAtomically(tempDir, cacheDir, markerPath, expectedSh
   let markerInstalled = false;
   try {
     if (expectedSha256) writeFileSync(nextMarker, expectedSha256 + "\n");
-    if (existsSync4(cacheDir)) {
+    if (existsSync5(cacheDir)) {
       rename(cacheDir, previousCache);
       cacheBackedUp = true;
     }
-    if (existsSync4(markerPath)) {
+    if (existsSync5(markerPath)) {
       rename(markerPath, previousMarker);
       markerBackedUp = true;
     }
@@ -15569,10 +15597,10 @@ function installGrammarCacheAtomically(tempDir, cacheDir, markerPath, expectedSh
         rollbackErrors.push(rollback);
       }
     };
-    if (markerInstalled && existsSync4(markerPath)) attempt(() => rmSync(markerPath, { force: true }));
-    if (cacheInstalled && existsSync4(cacheDir)) attempt(() => rmSync(cacheDir, { recursive: true, force: true }));
-    if (markerBackedUp && existsSync4(previousMarker)) attempt(() => rename(previousMarker, markerPath));
-    if (cacheBackedUp && existsSync4(previousCache)) attempt(() => rename(previousCache, cacheDir));
+    if (markerInstalled && existsSync5(markerPath)) attempt(() => rmSync(markerPath, { force: true }));
+    if (cacheInstalled && existsSync5(cacheDir)) attempt(() => rmSync(cacheDir, { recursive: true, force: true }));
+    if (markerBackedUp && existsSync5(previousMarker)) attempt(() => rename(previousMarker, markerPath));
+    if (cacheBackedUp && existsSync5(previousCache)) attempt(() => rename(previousCache, cacheDir));
     if (rollbackErrors.length === 0) {
       try {
         rmSync(swapDir, { recursive: true, force: true });
@@ -15607,7 +15635,7 @@ async function pullGrammars(cacheDir, opts = {}) {
   }
   const runtime = join6(cacheDir, "web-tree-sitter.wasm");
   const markerPath = join6(dirname3(cacheDir), `${ENGINE_VERSION}.sha256`);
-  if (existsSync4(runtime) && expected && existsSync4(markerPath)) {
+  if (existsSync5(runtime) && expected && existsSync5(markerPath)) {
     let marker = "";
     try {
       marker = readFileSync5(markerPath, "utf8").trim();
@@ -15637,7 +15665,7 @@ async function pullGrammars(cacheDir, opts = {}) {
     mkdirSync(dirname3(cacheDir), { recursive: true });
     tmp = mkdtempSync(join6(dirname3(cacheDir), ".grammars-tmp-"));
     extractGrammarsTarball(bytes, tmp);
-    if (!existsSync4(join6(tmp, "web-tree-sitter.wasm"))) {
+    if (!existsSync5(join6(tmp, "web-tree-sitter.wasm"))) {
       throw new Error("archive is missing web-tree-sitter.wasm");
     }
     installGrammarCacheAtomically(tmp, cacheDir, markerPath, expected);
@@ -16417,8 +16445,8 @@ init_util();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync10, mkdirSync as mkdirSync3, readFileSync as readFileSync13, statSync as statSync9, writeFileSync as writeFileSync4 } from "fs";
-import { join as join23, resolve as resolve4 } from "path";
+import { existsSync as existsSync11, mkdirSync as mkdirSync3, readFileSync as readFileSync13, statSync as statSync9, writeFileSync as writeFileSync4 } from "fs";
+import { join as join23, resolve as resolve5 } from "path";
 init_pipeline();
 init_hash();
 init_graph_json();
@@ -16568,6 +16596,7 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --no-gitignore      Do not honor .gitignore files (default: honored)
   --ignore-dir <name> Directory names to skip (repeatable) \u2014 REPLACES the
                       default ignored-directory set, never merges with it
+                      (\`.git\` stays skipped regardless)
   --max-files <n>     Cap walked files (default: none \u2014 the whole tree is
                       indexed; a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
@@ -16622,10 +16651,10 @@ function parseFlags(args2) {
       if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
       return n;
     };
-    if (a === "--repo") flags2.repo = resolve4(next());
+    if (a === "--repo") flags2.repo = resolve5(next());
     else if (a === "--out") {
       const v = next();
-      flags2.out = v === "-" ? "-" : resolve4(v);
+      flags2.out = v === "-" ? "-" : resolve5(v);
     } else if (a === "--project-root") flags2.projectRoot = next();
     else if (a === "--include") flags2.include.push(next());
     else if (a === "--exclude") flags2.exclude.push(next());
@@ -16650,7 +16679,7 @@ function parseFlags(args2) {
       if (!Number.isInteger(n) || n < 0) throw new Error(`--workers expects a non-negative integer, got "${raw}"`);
       flags2.workers = n;
     } else if (a === "--since") flags2.since = next();
-    else if (a === "--config") flags2.config = resolve4(next());
+    else if (a === "--config") flags2.config = resolve5(next());
     else if (a === "--limit") flags2.limit = num2();
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
     else if (a === "--exact") flags2.exact = true;
@@ -16709,7 +16738,7 @@ function parseMcpFlags(argv) {
     if (a === "--repo") {
       const v = argv[++i2];
       if (!v) throw new Error("--repo requires a directory");
-      defaultRepo = resolve4(v);
+      defaultRepo = resolve5(v);
     } else if (a === "--server-name") {
       const v = argv[++i2];
       if (!v) throw new Error("--server-name requires a value");
@@ -16730,7 +16759,7 @@ function parseMcpFlags(argv) {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
-  if (defaultRepo && !existsSync10(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  if (defaultRepo && !existsSync11(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
   return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes, profile, watch };
 }
@@ -16806,7 +16835,7 @@ async function runCli(rawArgv) {
     return;
   }
   const flags2 = parseFlags(rest);
-  if (!existsSync10(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
+  if (!existsSync11(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
   if (!statSync9(flags2.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags2.repo}`);
   const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags2.positional !== "build");
   let precomputedWalk;
@@ -16965,7 +16994,7 @@ async function runCli(rawArgv) {
   } else if (cmd === "scip") {
     const scan2 = await readScan();
     const bytes = renderScip(scan2, { projectRoot: flags2.projectRoot });
-    const out2 = flags2.out ?? resolve4("index.scip");
+    const out2 = flags2.out ?? resolve5("index.scip");
     if (out2 === "-") process.stdout.write(Buffer.from(bytes));
     else {
       writeFileSync4(out2, bytes);
@@ -17161,7 +17190,7 @@ async function runCli(rawArgv) {
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const present = (name2) => info2.dirs.some((d) => existsSync10(join23(d, name2)));
+      const present = (name2) => info2.dirs.some((d) => existsSync11(join23(d, name2)));
       const runtimePresent = present("web-tree-sitter.wasm");
       const target = resolveGrammarsPullTarget();
       const resolvedIn = (keys) => [...keys].filter((k) => present(`${k}.wasm`)).sort();
