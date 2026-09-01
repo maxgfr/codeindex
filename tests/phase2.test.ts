@@ -498,6 +498,22 @@ describe("dead code, complexity, mermaid", () => {
     expect(dead.find((d) => d.name === "neverCalled")!.tier).toBe("unreferenced");
   });
 
+  it("findDeadCode spares a called export whose name is also exported by another file", () => {
+    // Two files export `helper`; each has its own caller. The caller index
+    // keeps the first-sorted def under the bare name and the second under
+    // "helper@b/helper.ts" — the second used to be reported dead because the
+    // bare key was consulted first and pointed at the other file's def.
+    const root = mkdtempSync(join(tmpdir(), "ci-dead-homonym-"));
+    mkdirSync(join(root, "a"));
+    mkdirSync(join(root, "b"));
+    writeFileSync(join(root, "a", "helper.ts"), "export function helper(): number {\n  return 1;\n}\n");
+    writeFileSync(join(root, "b", "helper.ts"), "export function helper(): number {\n  return 2;\n}\n");
+    writeFileSync(join(root, "a", "use.ts"), 'import { helper } from "./helper";\nexport const x = helper();\n');
+    writeFileSync(join(root, "b", "use.ts"), 'import { helper } from "./helper";\nexport const y = helper();\n');
+    const dead = findDeadCode(scanRepo(root));
+    expect(dead.filter((d) => d.name === "helper")).toEqual([]);
+  });
+
   it("symbolComplexity counts branches; riskHotspots multiplies by churn", () => {
     const root = makeRepo();
     const scan = scanRepo(root);

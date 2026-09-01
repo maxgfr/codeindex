@@ -36,7 +36,12 @@ export function findDeadCode(scan: RepoScan): DeadSymbol[] {
   for (const f of scan.files) {
     for (const s of f.symbols) {
       if (!consider(s)) continue;
-      const entry = callers.get(s.name) ?? callers.get(`${s.name}@${s.file}`);
+      // The qualified key FIRST: when several files export the same name, the
+      // bare key holds the first-sorted def's entry, and the others live under
+      // "name@file" only. Looking the bare key up first would answer with a
+      // homonym from another file, fail the file check below, and flag a
+      // symbol that IS called as dead.
+      const entry = callers.get(`${s.name}@${s.file}`) ?? callers.get(s.name);
       const hasCallers = !!entry && entry.def.file === s.file && entry.callers.length > 0;
       if (hasCallers) continue;
       const referenced = (refs.get(s.name)?.size ?? 0) > 0;
