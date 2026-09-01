@@ -108,6 +108,28 @@ const REGEX_NODE = /(^|_)(regex|regular_expression)(_pattern|_literal)?$/;
 // concatenated source is not a value anything else can equal — storing it
 // would invent duplications that do not exist.
 const STRING_PART = /(^|_)(fragment|content|escape_sequence|character)$/;
+
+// Type-class bits for collectAll's visitor, memoized per node type (see
+// typeFlagsOf). The regexes above stay the single source of truth.
+const T_REF_IDENT = 1;
+const T_COMMENT = 2;
+const T_STRING = 4;
+const T_NUMBER = 8;
+const T_REGEX = 16;
+const typeFlags = new Map<string, number>();
+function typeFlagsOf(type: string): number {
+  let flags = typeFlags.get(type);
+  if (flags === undefined) {
+    flags =
+      (REF_IDENT_TYPE.test(type) ? T_REF_IDENT : 0) |
+      (COMMENT_NODE.test(type) ? T_COMMENT : 0) |
+      (STRING_NODE.test(type) ? T_STRING : 0) |
+      (NUMBER_NODE.test(type) ? T_NUMBER : 0) |
+      (REGEX_NODE.test(type) ? T_REGEX : 0);
+    typeFlags.set(type, flags);
+  }
+  return flags;
+}
 function isPlainString(node: TSNode): boolean {
   return node.namedChildren.every((c) => STRING_PART.test(c.type));
 }
@@ -164,17 +186,21 @@ function collectAll(
   const visit = (node: TSNode): void => {
     const type = node.type;
     const kids = node.namedChildren;
+    // The five type-class tests below are pure functions of the node type, and
+    // a grammar has a few hundred types at most — memoized once per type
+    // instead of five regex runs on every node of every file.
+    const flags = typeFlagsOf(type);
 
     // --- distinctive referenced identifiers (leaves only) ---
-    if (kids.length === 0 && REF_IDENT_TYPE.test(type)) {
+    if (kids.length === 0 && flags & T_REF_IDENT) {
       const text = node.text;
       if (REF_IDENT_TEXT.test(text) && !defNames.has(text)) identsFound.add(text);
     }
 
     // --- prose: comments and short string literals ---
-    if (COMMENT_NODE.test(type)) {
+    if (flags & T_COMMENT) {
       for (const line of node.text.split(/\r?\n/)) addTerms(stripCommentMarkers(line));
-    } else if (kids.length === 0 && STRING_NODE.test(type) && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
+    } else if (kids.length === 0 && flags & T_STRING && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
       addTerms(node.text.replace(/^['"`]+|['"`]+$/g, ""));
     }
 
@@ -184,10 +210,10 @@ function collectAll(
     // lives in a `string_fragment` child, so a leaf-only guard sees no strings
     // at all in the very languages this analysis is most needed for.
     if (!literals.full) {
-      const line = node.startPosition.row + 1;
-      if (STRING_NODE.test(type) && isPlainString(node)) literals.addString(node.text, line);
-      else if (kids.length === 0 && NUMBER_NODE.test(type)) literals.add("number", node.text.trim(), line);
-      else if (REGEX_NODE.test(type)) literals.add("regex", node.text, line);
+      if (flags & T_STRING) {
+        if (isPlainString(node)) literals.addString(node.text, node.startPosition.row + 1);
+      } else if (kids.length === 0 && flags & T_NUMBER) literals.add("number", node.text.trim(), node.startPosition.row + 1);
+      else if (flags & T_REGEX) literals.add("regex", node.text, node.startPosition.row + 1);
     }
 
     // --- call sites ---
