@@ -70,6 +70,24 @@ export interface ResolveContext {
   phpPsr4: { prefix: string; dir: string }[]; // composer PSR-4 namespace prefix -> dir, longest first
   csharpNamespaces: Map<string, string[]>; // C# namespace -> files declaring it (sorted)
   warnings: string[]; // build-time config issues (e.g. an unparseable tsconfig)
+  // Memo of JS/TS resolutions keyed by "<importing dir>\0<spec>" — resolveJs is
+  // a pure function of those two (its tsconfig scope, workspace and probe
+  // logic only ever look at the importer's DIRECTORY), and a package's files
+  // import the same handful of specifiers over and over. Each hit skips ~20
+  // normalize+probe rounds. Optional so a hand-built context still works.
+  jsMemo?: Map<string, Resolution>;
+  // Per-directory sorted file lists by extension ("<ext>\0<dir>"), for the
+  // Go-package / Java-wildcard "first file in the directory" rule.
+  dirFilesMemo?: Map<string, string[]>;
+}
+
+// Files of `dir` ending in `ext`, sorted — computed once per (ext, dir).
+function filesInDir(ctx: ResolveContext, dir: string, ext: string): string[] {
+  const memo = (ctx.dirFilesMemo ??= new Map());
+  const key = ext + "\0" + dir;
+  let list = memo.get(key);
+  if (!list) memo.set(key, (list = (ctx.filesByDir.get(dir) ?? []).filter((f) => f.endsWith(ext)).sort()));
+  return list;
 }
 
 // Extensions walk() skips (images, fonts, media, maps). An import of one of these
@@ -724,7 +742,7 @@ function resolveGo(fromRel: string, spec: string, ctx: ResolveContext): Resoluti
   // .go file in that dir as the representative node.
   const probePkg = (dir: string): Resolution => {
     const d = norm(dir).replace(/^\.$/, "");
-    const inDir = (ctx.filesByDir.get(d) ?? []).filter((f) => f.endsWith(".go")).sort();
+    const inDir = filesInDir(ctx, d, ".go");
     return inDir.length
       ? { kind: "resolved", target: inDir[0]! }
       : { kind: "dangling", reason: "missing-package" };
@@ -843,7 +861,7 @@ function resolveJava(spec: string, ctx: ResolveContext): Resolution {
       // lexicographically-first .java file (the Go-package pattern).
       if (p.endsWith("/*") || p === "*") {
         const dir = p === "*" ? "" : p.slice(0, -2);
-        const inDir = (ctx.filesByDir.get(dir) ?? []).filter((f) => f.endsWith(".java")).sort();
+        const inDir = filesInDir(ctx, dir, ".java");
         if (inDir.length) return inDir[0];
         continue;
       }
@@ -937,7 +955,16 @@ export function resolveImport(
   if (dot !== -1 && ASSET_EXT.has(spec.slice(dot).toLowerCase().replace(/[?#].*$/, ""))) {
     return { kind: "external" };
   }
-  if (JS_TS.has(ext) || SFC_HTML.has(ext)) return resolveJs(fromRel, spec, ctx);
+  if (JS_TS.has(ext) || SFC_HTML.has(ext)) {
+    const dir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
+    const key = dir + "\0" + spec;
+    const memo = (ctx.jsMemo ??= new Map());
+    let r = memo.get(key);
+    if (!r) memo.set(key, (r = resolveJs(fromRel, spec, ctx)));
+    // A copy per caller: Resolution is a flat record, and a shared object would
+    // let one consumer's edit reach every later import of the same spec.
+    return { ...r };
+  }
   if (PY.has(ext)) return resolvePython(fromRel, spec, ctx);
   if (ext === ".go") return resolveGo(fromRel, spec, ctx);
   if (ext === ".rs") return resolveRust(fromRel, spec, ctx);

@@ -9,7 +9,7 @@ import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { readText } from "./walk.js";
 import type { CallerSite } from "./callers.js";
-import { callerIndexFor, fileByRelFor, symbolsByNameFor, uniqueDefsFor } from "./derived.js";
+import { callerIndexFor, fileByRelFor, identSetsFor, symbolsByNameFor, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
@@ -151,14 +151,17 @@ export function findReferences(scan: RepoScan, name: string): SymbolReferences {
   const referencingFiles = new Set<string>();
   const unique = uniqueDefsFor(scan);
   const defFile = unique.get(name);
+  // Per-file identifier Sets are memoized per scan (src/derived.ts) and the
+  // doc pattern is compiled once — the loop used to run Array.includes over
+  // every code file's identifiers and build a RegExp per doc, per query.
+  const idents = identSetsFor(scan);
+  const mention = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
   for (const f of scan.files) {
     if (f.rel === defFile) continue;
-    if (f.kind === "code" && f.idents?.includes(name)) referencingFiles.add(f.rel);
+    if (f.kind === "code" && idents.get(f.rel)?.has(name)) referencingFiles.add(f.rel);
     else if (f.kind === "doc") {
       const content = scan.docText.get(f.rel);
-      if (content && new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(content)) {
-        referencingFiles.add(f.rel);
-      }
+      if (content && mention.test(content)) referencingFiles.add(f.rel);
     }
   }
   for (const site of callSites) referencingFiles.add(site.file);

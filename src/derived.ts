@@ -54,6 +54,19 @@ interface DerivedCache {
   symbolGraph?: SymbolGraph;
   fileComplexity?: Map<string, number>; // rel → whole-file branch count + 1 (code files)
   importPagerank?: Map<string, number>; // rel → PageRank over the resolved import graph
+  docMentions?: Map<string, DocMentions>; // doc rel → unique symbol names it mentions, with counts
+  identSets?: Map<string, Set<string>>; // code rel → its distinctive identifiers, as a Set
+}
+
+export interface DocMentions {
+  // name → occurrences, in first-occurrence order (the order both consumers
+  // iterated the raw token stream in).
+  counts: Map<string, number>;
+  // True when the text came from the scan's retained docText; false when it
+  // had to be re-read from disk. The graph's mention pass accepts both, the
+  // symbol-refs pass only retained text — the split each consumer applied
+  // when it tokenized on its own.
+  retained: boolean;
 }
 
 const caches = new WeakMap<RepoScan, DerivedCache>();
@@ -135,6 +148,44 @@ export function uniqueDefsFor(scan: RepoScan): Map<string, string> {
 export function symbolRefsFor(scan: RepoScan): Map<string, Set<string>> {
   const c = cacheFor(scan);
   return (c.symbolRefs ??= computeSymbolRefs(scan));
+}
+
+// Which unique symbol names each doc file mentions, tokenized ONCE per scan.
+// buildGraph (mention edges) and computeSymbolRefs (symbols.json refs) both
+// split every doc on the same non-identifier regex and looked each token up
+// in the same unique-defs map; this shares that pass. Only names present in
+// uniqueDefsFor(scan) are kept — the only tokens either consumer ever used.
+export function docMentionsFor(scan: RepoScan): Map<string, DocMentions> {
+  const c = cacheFor(scan);
+  if (c.docMentions) return c.docMentions;
+  const unique = uniqueDefsFor(scan);
+  const out = new Map<string, DocMentions>();
+  if (unique.size) {
+    for (const f of scan.files) {
+      if (f.kind !== "doc") continue;
+      const retained = scan.docText.get(f.rel);
+      // Fall back to disk only when a doc somehow was not retained — the
+      // graph's mention pass always did; the refs pass records the miss.
+      const content = retained ?? readText(join(scan.root, f.rel));
+      if (!content) continue;
+      const counts = new Map<string, number>();
+      for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
+        if (unique.has(tok)) counts.set(tok, (counts.get(tok) ?? 0) + 1);
+      }
+      out.set(f.rel, { counts, retained: retained !== undefined });
+    }
+  }
+  return (c.docMentions = out);
+}
+
+// Each code file's distinctive identifiers as a Set — findReferences tested
+// membership with Array.includes on every file for every query.
+export function identSetsFor(scan: RepoScan): Map<string, Set<string>> {
+  const c = cacheFor(scan);
+  if (c.identSets) return c.identSets;
+  const out = new Map<string, Set<string>>();
+  for (const f of scan.files) if (f.kind === "code" && f.idents?.length) out.set(f.rel, new Set(f.idents));
+  return (c.identSets = out);
 }
 
 // Default (precision) caller index only. Recall-mode indexes are option-

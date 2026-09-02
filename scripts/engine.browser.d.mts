@@ -526,6 +526,8 @@ interface ResolveContext {
     }[];
     csharpNamespaces: Map<string, string[]>;
     warnings: string[];
+    jsMemo?: Map<string, Resolution>;
+    dirFilesMemo?: Map<string, string[]>;
 }
 declare function buildResolveContext(scan: RepoScan): ResolveContext;
 declare function resolveDocLink(fromRel: string, spec: string, ctx: ResolveContext): Resolution;

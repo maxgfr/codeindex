@@ -13,6 +13,61 @@ import { byStr } from "./sort.js";
 // mention says something references the name, not that it would break.
 const DEPENDS_KINDS = new Set(["import", "use", "call"]);
 
+// Adjacency, built ONCE per edge list and kept as long as the list itself.
+// Both traversals rebuilt their maps — and re-sorted every neighbour list —
+// on every call, while a consumer such as the change-risk scorer (delta.ts)
+// asks impactOf() once per changed file of every module. Keyed on the edge
+// ARRAY's identity (a Graph's `edges` is never rebuilt in place); the length
+// check guards the one cheap-to-detect mutation. Lists are pre-sorted with the
+// comparator the per-call sort used, on the same insertion order, so the
+// traversal visits exactly the same sequence.
+const dependentsMemo = new WeakMap<Edge[], { length: number; map: Map<string, Edge[]> }>();
+function dependentsOf(edges: Edge[]): Map<string, Edge[]> {
+  const hit = dependentsMemo.get(edges);
+  if (hit && hit.length === edges.length) return hit.map;
+  const map = new Map<string, Edge[]>(); // target file → incoming depends-on edges
+  for (const e of edges) {
+    if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
+    let arr = map.get(e.to);
+    if (!arr) map.set(e.to, (arr = []));
+    arr.push(e);
+  }
+  for (const arr of map.values()) arr.sort((a, b) => byStr(a.from, b.from));
+  dependentsMemo.set(edges, { length: edges.length, map });
+  return map;
+}
+
+interface Adjacency {
+  out: Map<string, Edge[]>; // from → edges, sorted by `to`
+  inn: Map<string, Edge[]>; // to → edges, sorted by `from`
+  degree: Map<string, number>;
+  threshold: number; // hubThreshold over this view's degree distribution
+}
+const adjacencyMemo = new WeakMap<Edge[], { length: number; views: Map<string, Adjacency> }>();
+function adjacencyOf(edges: Edge[], kinds?: Set<string>): Adjacency {
+  const viewKey = kinds ? [...kinds].sort(byStr).join(",") : "*";
+  let entry = adjacencyMemo.get(edges);
+  if (!entry || entry.length !== edges.length) adjacencyMemo.set(edges, (entry = { length: edges.length, views: new Map() }));
+  const cached = entry.views.get(viewKey);
+  if (cached) return cached;
+  const out = new Map<string, Edge[]>();
+  const inn = new Map<string, Edge[]>();
+  const degree = new Map<string, number>();
+  for (const e of edges) {
+    if (e.dangling) continue;
+    if (kinds && !kinds.has(e.kind)) continue;
+    (out.get(e.from) ?? out.set(e.from, []).get(e.from)!).push(e);
+    (inn.get(e.to) ?? inn.set(e.to, []).get(e.to)!).push(e);
+    degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+    degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+  }
+  for (const arr of out.values()) arr.sort((a, b) => byStr(a.to, b.to));
+  for (const arr of inn.values()) arr.sort((a, b) => byStr(a.from, b.from));
+  const adj = { out, inn, degree, threshold: hubThreshold([...degree.values()]) };
+  entry.views.set(viewKey, adj);
+  return adj;
+}
+
 // The hub-gating threshold over a degree distribution: max(50, p99). p99 = the
 // degree at index min(n-1, floor(0.99n)) of the ASCENDING degree array (numeric
 // sort — deterministic without byStr).
@@ -47,20 +102,14 @@ export interface ImpactResult {
 // Reverse dependency closure: every file that transitively IMPORTS, USES, or
 // CALLS one of `seeds`, out to `depth` hops (default: the full closure).
 export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity): Map<string, number> {
-  const dependents = new Map<string, Edge[]>(); // target file → incoming depends-on edges
-  for (const e of edges) {
-    if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
-    let arr = dependents.get(e.to);
-    if (!arr) dependents.set(e.to, (arr = []));
-    arr.push(e);
-  }
+  const dependents = dependentsOf(edges);
   const depthOf = new Map<string, number>();
   const seen = new Set<string>(seeds);
   let frontier = [...seeds];
   for (let d = 1; d <= depth && frontier.length; d++) {
     const next: string[] = [];
     for (const node of frontier) {
-      for (const e of (dependents.get(node) ?? []).slice().sort((a, b) => byStr(a.from, b.from))) {
+      for (const e of dependents.get(node) ?? []) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);
         depthOf.set(e.from, d);
@@ -110,21 +159,10 @@ export interface NeighborResult {
 // distribution feeding the hub gate is measured over that same filtered
 // subgraph, so the gate reflects the view the caller asked for.
 function bfs(edges: Edge[], start: string, depth: number, kinds?: Set<string>): NeighborLink[] {
-  const out = new Map<string, Edge[]>();
-  const inn = new Map<string, Edge[]>();
-  const degree = new Map<string, number>();
-  for (const e of edges) {
-    if (e.dangling) continue;
-    if (kinds && !kinds.has(e.kind)) continue;
-    (out.get(e.from) ?? out.set(e.from, []).get(e.from)!).push(e);
-    (inn.get(e.to) ?? inn.set(e.to, []).get(e.to)!).push(e);
-    degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
-    degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
-  }
   // A non-start node at or above the threshold is EMITTED as a link but never
   // expanded THROUGH. Only bites at depth ≥ 2 — depth-1 links all come from
   // `start`, which always expands.
-  const threshold = hubThreshold([...degree.values()]);
+  const { out, inn, degree, threshold } = adjacencyOf(edges, kinds);
   const seen = new Set<string>([start]);
   const links: NeighborLink[] = [];
   let frontier = [start];
@@ -132,13 +170,13 @@ function bfs(edges: Edge[], start: string, depth: number, kinds?: Set<string>): 
     const next: string[] = [];
     for (const node of frontier) {
       if (node !== start && (degree.get(node) ?? 0) >= threshold) continue;
-      for (const e of (out.get(node) ?? []).slice().sort((a, b) => byStr(a.to, b.to))) {
+      for (const e of out.get(node) ?? []) {
         if (seen.has(e.to)) continue;
         links.push({ node: e.to, direction: "out", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
         seen.add(e.to);
         next.push(e.to);
       }
-      for (const e of (inn.get(node) ?? []).slice().sort((a, b) => byStr(a.from, b.from))) {
+      for (const e of inn.get(node) ?? []) {
         if (seen.has(e.from)) continue;
         links.push({ node: e.from, direction: "in", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
         seen.add(e.from);

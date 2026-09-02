@@ -2,7 +2,7 @@ import { SCHEMA_VERSION } from "../types.js";
 import type { SymbolIndex } from "../types.js";
 import type { RepoScan } from "../scan.js";
 import { byStr } from "../sort.js";
-import { uniqueDefsFor } from "../derived.js";
+import { docMentionsFor, uniqueDefsFor } from "../derived.js";
 
 // Files that REFERENCE each unique exported symbol — code files via their AST
 // identifiers, doc files via naming the symbol. Feeds symbols.json `refs` so
@@ -18,6 +18,10 @@ export function computeSymbolRefs(scan: RepoScan): Map<string, Set<string>> {
     if (!set) refs.set(name, (set = new Set()));
     set.add(file);
   };
+  // Doc tokens come from the per-scan memo shared with buildGraph's mention
+  // pass (src/derived.ts). Only RETAINED docText counts here, as before — a
+  // doc the memo had to re-read from disk is skipped.
+  const mentions = docMentionsFor(scan);
   for (const f of scan.files) {
     if (f.kind === "code" && f.idents) {
       for (const id of f.idents) {
@@ -25,9 +29,9 @@ export function computeSymbolRefs(scan: RepoScan): Map<string, Set<string>> {
         if (target && target !== f.rel) add(id, f.rel);
       }
     } else if (f.kind === "doc") {
-      const content = scan.docText.get(f.rel);
-      if (!content) continue;
-      for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
+      const m = mentions.get(f.rel);
+      if (!m || !m.retained) continue;
+      for (const tok of m.counts.keys()) {
         const target = unique.get(tok);
         if (target && target !== f.rel) add(tok, f.rel);
       }
