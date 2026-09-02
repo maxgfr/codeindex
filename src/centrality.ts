@@ -83,15 +83,33 @@ export function betweennessOf(ids: string[], edges: Edge[]): Map<string, number>
   }
   const adj = nbSets.map((s) => [...s].sort((x, y) => x - y));
 
-  const cb = new Array<number>(n).fill(0);
+  const cb = new Float64Array(n);
+  // Per-source scratch, allocated ONCE. The previous per-source `new Array(n)`
+  // ×3 plus n fresh predecessor arrays made Brandes O(n²) in allocations AND
+  // in initialisation, whatever the graph looks like — and an import graph is
+  // mostly small components, so a source's BFS touches a few dozen nodes
+  // while its setup touched all 3 000. Only the nodes a BFS visited (`stack`)
+  // are reset for the next source, so each source costs its component, not
+  // the graph. Float64Array holds exactly the doubles the plain arrays held,
+  // and every accumulation runs in the same order, so scores are bit-identical.
+  const stack: number[] = [];
+  const queue: number[] = [];
+  const pred: number[][] = Array.from({ length: n }, () => []);
+  const sigma = new Float64Array(n);
+  const dist = new Int32Array(n).fill(-1);
+  const delta = new Float64Array(n);
   for (let s = 0; s < n; s++) {
-    const stack: number[] = [];
-    const pred: number[][] = Array.from({ length: n }, () => []);
-    const sigma = new Array<number>(n).fill(0);
-    const dist = new Array<number>(n).fill(-1);
+    for (const v of stack) {
+      sigma[v] = 0;
+      dist[v] = -1;
+      delta[v] = 0;
+      pred[v]!.length = 0;
+    }
+    stack.length = 0;
+    queue.length = 0;
     sigma[s] = 1;
     dist[s] = 0;
-    const queue: number[] = [s];
+    queue.push(s);
     for (let qi = 0; qi < queue.length; qi++) {
       const v = queue[qi]!;
       stack.push(v);
@@ -106,7 +124,6 @@ export function betweennessOf(ids: string[], edges: Edge[]): Map<string, number>
         }
       }
     }
-    const delta = new Array<number>(n).fill(0);
     for (let si = stack.length - 1; si >= 0; si--) {
       const w = stack[si]!;
       for (const v of pred[w]!) delta[v]! += (sigma[v]! / sigma[w]!) * (1 + delta[w]!);

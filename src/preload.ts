@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { ENGINE_VERSION, EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { FileRecord, Graph, SymbolIndex } from "./types.js";
 import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
+import { scanRepoParallel } from "./pool.js";
 import type { IndexArtifacts } from "./pipeline.js";
 import { sha1 } from "./hash.js";
 import { walk, type WalkResult } from "./walk.js";
@@ -189,9 +190,18 @@ export function preloadSession(
 // case loads no tree-sitter wasm; a new/stat-changed path warms BEFORE the one
 // extraction pass, so changed files land at the AST tier without a provisional
 // regex extraction followed by a second scan.
+//
+// The one extraction pass runs through scanRepoParallel: a persisted index
+// whose code files drifted (a branch switch, a pull) used to re-extract every
+// changed file on the main thread, so `--workers` / CODEINDEX_WORKERS silently
+// meant nothing to a read command as soon as a `.codeindex/` existed. With a
+// cache, the pool only ships the files the stat fastpath cannot serve, and
+// scanRepo consumes the records exactly as the sequential loop would have
+// built them (pool.ts) — an unchanged index still loads no wasm and spawns
+// nothing.
 export async function preloadSessionLazy(
   repo: string,
-  opts: Omit<ScanOptions, "cache">,
+  opts: Omit<ScanOptions, "cache"> & { workers?: number },
   warm: () => Promise<void>,
   indexDir: string = INDEX_DIR,
 ): Promise<PreloadedSession | undefined> {
@@ -213,7 +223,7 @@ export async function preloadSessionLazy(
   if (needsWarm) {
     await warm();
   }
-  const scan = scanRepo(repo, { ...opts, cache: persisted.cacheMap, precomputedWalk: walked });
+  const scan = await scanRepoParallel(repo, { ...opts, cache: persisted.cacheMap, precomputedWalk: walked });
   let artifactsTried = false;
   let artifacts: IndexArtifacts | undefined;
   return {
