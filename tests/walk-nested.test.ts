@@ -117,3 +117,44 @@ describe(".git is skipped whatever ignoreDirs says", () => {
     expect(rels(root, { ignoreDirs: [], gitignore: false }).some((r) => r.startsWith(`${GIT}/`))).toBe(false);
   });
 });
+
+// The boundary must be a REPOSITORY, not merely the name `.git`. Git accepts a
+// `.git` FILE only when it reads "gitdir: <path>" and rejects anything else
+// ("fatal: invalid gitfile format"); treating such a file as a repo silently
+// dropped its whole subtree from the index.
+describe("only a VALID .git marker is a repository boundary", () => {
+  const invalid = ["not a gitfile at all\n", "", "gitdir\n", "# gitdir: x\n"];
+
+  it("keeps the subtree when the .git file is not a gitfile", () => {
+    for (const body of invalid) {
+      const root = mkdtempSync(join(tmpdir(), "ci-badgit-"));
+      mkfile(root, "top.ts");
+      mkfile(root, "sub/kept.ts");
+      mkfile(root, `sub/${GIT}`, body);
+      expect(rels(root), JSON.stringify(body)).toEqual(["sub/kept.ts", "top.ts"]);
+      // The bogus marker itself is still never indexed as a source file, and
+      // nothing was counted as an excluded repository boundary.
+      expect(walk(root).excluded, JSON.stringify(body)).toBe(0);
+    }
+  });
+
+  it("still stops at a valid gitfile beside an invalid one", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-mixedgit-"));
+    mkfile(root, "top.ts");
+    mkfile(root, "bogus/kept.ts");
+    mkfile(root, `bogus/${GIT}`, "junk\n");
+    mkfile(root, "real/hidden.ts");
+    mkfile(root, `real/${GIT}`, "gitdir: /nowhere\n");
+    const walked = walk(root);
+    expect(walked.files.map((f) => f.rel).sort()).toEqual(["bogus/kept.ts", "top.ts"]);
+    expect(walked.excluded).toBe(1);
+  });
+
+  it("a directory named .git is a boundary whatever it contains", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-gitdir-"));
+    mkfile(root, "top.ts");
+    mkfile(root, "clone/inner.ts");
+    mkfile(root, `clone/${GIT}/HEAD`, "ref: refs/heads/main\n");
+    expect(rels(root)).toEqual(["top.ts"]);
+  });
+});

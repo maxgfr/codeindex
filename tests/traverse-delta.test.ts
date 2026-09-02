@@ -254,3 +254,54 @@ describe("renderMermaidClustered", () => {
     expect(renderMermaidClustered(graph)).toEqual(renderMermaidClustered(graph));
   });
 });
+
+// A Graph's edge arrays are PUBLIC and mutable. The traversals memoize the
+// adjacency they derive from them, so the memo must notice a caller editing an
+// edge IN PLACE — same array identity, same length, different target. It did
+// not, and handed back the pre-edit answer.
+describe("traversal caches follow in-place edge edits", () => {
+  const build = (): Graph => {
+    const edges: Edge[] = [
+      { from: "a.ts", to: "b.ts", kind: "import", weight: 1 },
+      { from: "d.ts", to: "a.ts", kind: "import", weight: 1 },
+    ];
+    return {
+      schemaVersion: 5,
+      version: "test",
+      fileCount: 4,
+      languages: {},
+      files: ["a.ts", "b.ts", "c.ts", "d.ts"].map((rel) => ({
+        id: rel, kind: "file" as const, rel, fileKind: "code", lang: "typescript",
+        module: "root", title: rel, symbols: [], lines: 1, degIn: 0, degOut: 0, pagerank: 0,
+      })),
+      modules: [],
+      fileEdges: edges,
+      moduleEdges: [],
+    } as unknown as Graph;
+  };
+
+  it("impactOf sees an edge retargeted in place", () => {
+    const graph = build();
+    expect(impactOf(graph, "b.ts")!.files.map((f) => f.rel)).toEqual(["a.ts", "d.ts"]);
+    for (const e of graph.fileEdges) if (e.to === "b.ts") e.to = "c.ts";
+    expect(impactOf(graph, "b.ts")!.files.map((f) => f.rel)).toEqual([]);
+    expect(impactOf(graph, "c.ts")!.files.map((f) => f.rel)).toEqual(["a.ts", "d.ts"]);
+  });
+
+  it("neighborsOf sees an edge retargeted in place", () => {
+    const graph = build();
+    expect(neighborsOf(graph, "a.ts", 1)!.links.map((l) => l.node).sort()).toEqual(["b.ts", "d.ts"]);
+    for (const e of graph.fileEdges) if (e.to === "b.ts") e.to = "c.ts";
+    expect(neighborsOf(graph, "a.ts", 1)!.links.map((l) => l.node).sort()).toEqual(["c.ts", "d.ts"]);
+  });
+
+  it("notices a kind or weight change that keeps every endpoint", () => {
+    const graph = build();
+    const kinds = new Set(["import"]);
+    expect(neighborsOf(graph, "a.ts", 1, kinds)!.links.length).toBe(2);
+    for (const e of graph.fileEdges) e.kind = "mention";
+    expect(neighborsOf(graph, "a.ts", 1, kinds)!.links.length).toBe(0);
+    for (const e of graph.fileEdges) e.weight = 4;
+    expect(neighborsOf(graph, "a.ts", 1)!.links.every((l) => l.weight === 4)).toBe(true);
+  });
+});

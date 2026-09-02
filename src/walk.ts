@@ -31,24 +31,45 @@ function isIgnoredDirectory(name: string, ignoreDirs: Set<string>): boolean {
   return name === GIT_ENTRY || ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
 }
 
-// Locate this checkout's `info/exclude` — git's per-clone, never-committed
-// ignore file (the walker honored only .gitignore, so local junk a developer
-// excluded there was still indexed). A directory `.git` holds it directly; a
-// gitfile points at the real git dir, and a linked worktree's git dir further
-// points at the shared common dir (`commondir` file), which is where git keeps
-// `info/` for every worktree. Returns "" when absent or unreadable.
-function readInfoExclude(root: string, entries: readonly Dirent[]): string {
+// The git directory a `.git` entry in `dir` points at, or undefined when there
+// is none — or when the entry is NOT a valid repository marker.
+//
+// Git's own rule, and the reason validity is checked rather than assumed: a
+// DIRECTORY named `.git` is the git dir; a FILE named `.git` marks a repo only
+// when it reads `gitdir: <path>` (git rejects anything else outright, "fatal:
+// invalid gitfile format"). A file named `.git` holding something else — a
+// truncated write, an unrelated file that happens to carry the name — is not a
+// repository, and treating it as one silently dropped its whole subtree from
+// the index. Silent truncation is the one failure this walk does not allow.
+//
+// Symlinks are followed (git supports a symlinked `.git`): a link's dirent is
+// neither file nor directory, so its target decides.
+//
+// The returned dir is the COMMON one where relevant: a linked worktree's git
+// dir points at the shared common dir via its `commondir` file, and that is
+// where git keeps `info/` for every worktree.
+function gitDirOf(dir: string, entries: readonly Dirent[]): string | undefined {
   const marker = entries.find((e) => e.name === GIT_ENTRY);
-  if (!marker) return "";
-  let gitDir = join(root, GIT_ENTRY);
+  if (!marker) return undefined;
+  const path = join(dir, GIT_ENTRY);
   try {
-    if (!marker.isDirectory()) {
-      const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(gitDir, "utf8"));
-      if (!m) return "";
-      gitDir = resolve(root, m[1]!);
-      const common = join(gitDir, "commondir");
-      if (existsSync(common)) gitDir = resolve(gitDir, readFileSync(common, "utf8").trim());
-    }
+    if (marker.isDirectory() || (!marker.isFile() && statSync(path).isDirectory())) return path;
+    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(path, "utf8"));
+    if (!m) return undefined; // not a gitfile — not a repository marker
+    const gitDir = resolve(dir, m[1]!);
+    const common = join(gitDir, "commondir");
+    return existsSync(common) ? resolve(gitDir, readFileSync(common, "utf8").trim()) : gitDir;
+  } catch {
+    return undefined;
+  }
+}
+
+// This checkout's `info/exclude` — git's per-clone, never-committed ignore file
+// (the walker honored only .gitignore, so local junk a developer excluded there
+// was still indexed). Returns "" when absent or unreadable.
+function readInfoExclude(gitDir: string | undefined): string {
+  if (!gitDir) return "";
+  try {
     const exclude = join(gitDir, "info", "exclude");
     return existsSync(exclude) ? readText(exclude) : "";
   } catch {
@@ -176,14 +197,16 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     } catch {
       continue;
     }
-    // Nested-repository boundary: a subdirectory with its own `.git` (directory
-    // or gitfile) is another repo — a linked worktree under .claude/worktrees/,
-    // a vendored clone, a submodule. Its files belong to THAT repo's index, and
-    // walking them here produced thousands of phantom duplicates of the same
-    // sources (a repo with four worktrees indexed five copies of itself); git
-    // itself never lists them. Decided on the dirents already listed — zero
-    // extra syscalls — and structural: independent of the gitignore layer.
-    if (frame.rel && entries.some((e) => e.name === GIT_ENTRY)) {
+    // Resolved at most once per directory, and only when a `.git` entry is
+    // actually listed — so an ordinary directory costs one name comparison.
+    const gitDir = entries.some((e) => e.name === GIT_ENTRY) ? gitDirOf(frame.dir, entries) : undefined;
+    // Nested-repository boundary: a subdirectory that IS another repo — a
+    // linked worktree under .claude/worktrees/, a vendored clone, a submodule.
+    // Its files belong to THAT repo's index, and walking them here produced
+    // thousands of phantom duplicates of the same sources (a repo with four
+    // worktrees indexed five copies of itself); git itself never lists them.
+    // Structural: independent of the gitignore layer.
+    if (frame.rel && gitDir) {
       excluded++;
       continue;
     }
@@ -191,7 +214,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     if (useGitignore && !frame.rel) {
       // `.git/info/exclude` sits BEFORE every .gitignore in git's own
       // precedence (a .gitignore rule can still negate it — later rules win).
-      const parsed = parseGitignore(readInfoExclude(frame.dir, entries), "");
+      const parsed = parseGitignore(readInfoExclude(gitDir), "");
       if (parsed.length) rules = [...rules, ...parsed];
     }
     if (useGitignore && entries.some((e) => e.name === ".gitignore")) {
