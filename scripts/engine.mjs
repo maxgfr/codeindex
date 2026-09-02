@@ -363,10 +363,15 @@ function gitDirOf(dir, entries) {
   if (!marker) return void 0;
   const path = join(dir, GIT_ENTRY);
   try {
-    if (marker.isDirectory() || !marker.isFile() && statSync(path).isDirectory()) return path;
-    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(path, "utf8"));
-    if (!m) return void 0;
-    const gitDir = resolve(dir, m[1]);
+    if (marker.isDirectory()) return path;
+    const st = statSync(path);
+    if (st.isDirectory()) return path;
+    if (!st.isFile() || st.size > MAX_GITFILE_BYTES) return void 0;
+    const content = readFileSync(path, "utf8");
+    if (!content.startsWith(GITFILE_PREFIX)) return void 0;
+    const target = content.slice(GITFILE_PREFIX.length).replace(/\s+$/, "");
+    if (!target) return void 0;
+    const gitDir = resolve(dir, target);
     const common = join(gitDir, "commondir");
     return existsSync(common) ? resolve(gitDir, readFileSync(common, "utf8").trim()) : gitDir;
   } catch {
@@ -511,7 +516,7 @@ function readText(abs) {
     return "";
   }
 }
-var IGNORE_DIRS, GIT_ENTRY, LOCKFILES, BINARY_EXT, DEFAULT_MAX_FILES;
+var IGNORE_DIRS, GIT_ENTRY, GITFILE_PREFIX, MAX_GITFILE_BYTES, LOCKFILES, BINARY_EXT, DEFAULT_MAX_FILES;
 var init_walk = __esm({
   "src/walk.ts"() {
     "use strict";
@@ -551,6 +556,8 @@ var init_walk = __esm({
       ".dart_tool"
     ]);
     GIT_ENTRY = ".git";
+    GITFILE_PREFIX = "gitdir: ";
+    MAX_GITFILE_BYTES = 4096;
     LOCKFILES = /* @__PURE__ */ new Set([
       "package-lock.json",
       "npm-shrinkwrap.json",

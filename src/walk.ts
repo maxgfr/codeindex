@@ -31,19 +31,36 @@ function isIgnoredDirectory(name: string, ignoreDirs: Set<string>): boolean {
   return name === GIT_ENTRY || ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
 }
 
+// A gitfile's mandatory opening bytes. Git's parser (read_gitfile_gently)
+// compares the first 8 bytes against exactly this — verified against real git:
+// `gitdir:` without the space, leading whitespace, or the line appearing
+// anywhere but the start are all rejected as "invalid gitfile format".
+const GITFILE_PREFIX = "gitdir: ";
+// A real gitfile is one short line. The cap keeps a file that merely CARRIES the
+// name `.git` — a stray archive, a truncated dump — from being read whole just
+// to discover it is not a gitfile.
+const MAX_GITFILE_BYTES = 4096;
+
 // The git directory a `.git` entry in `dir` points at, or undefined when there
-// is none — or when the entry is NOT a valid repository marker.
+// is none, or when the entry is not a repository marker.
 //
-// Git's own rule, and the reason validity is checked rather than assumed: a
-// DIRECTORY named `.git` is the git dir; a FILE named `.git` marks a repo only
-// when it reads `gitdir: <path>` (git rejects anything else outright, "fatal:
-// invalid gitfile format"). A file named `.git` holding something else — a
-// truncated write, an unrelated file that happens to carry the name — is not a
-// repository, and treating it as one silently dropped its whole subtree from
-// the index. Silent truncation is the one failure this walk does not allow.
+// Why validity is checked instead of assumed: the boundary used to trigger on
+// the NAME alone, so a file named `.git` holding anything else — a truncated
+// write, an unrelated file carrying the name, a dangling symlink — silently
+// dropped its whole subtree from the index. Silent truncation is the one
+// failure this walk does not allow.
 //
-// Symlinks are followed (git supports a symlinked `.git`): a link's dirent is
-// neither file nor directory, so its target decides.
+// A DIRECTORY named `.git` is the git dir. A FILE is a marker only when it
+// opens with `gitdir: ` (above); the rest, trailing whitespace trimmed, is the
+// path. Symlinks are followed — git supports a symlinked `.git`, and a link's
+// dirent is neither file nor directory, so its target decides.
+//
+// DELIBERATE DEVIATION: git additionally requires the TARGET to look like a
+// repository (HEAD, objects/, refs/) and reports "not a git repository" when it
+// does not. This walk stops at a well-formed marker whatever its target, and
+// the tests pin that: a stale gitfile left by a pruned or moved worktree still
+// sits on a full checkout, and indexing it would duplicate the parent's sources
+// — exactly what the boundary exists to prevent.
 //
 // The returned dir is the COMMON one where relevant: a linked worktree's git
 // dir points at the shared common dir via its `commondir` file, and that is
@@ -53,10 +70,15 @@ function gitDirOf(dir: string, entries: readonly Dirent[]): string | undefined {
   if (!marker) return undefined;
   const path = join(dir, GIT_ENTRY);
   try {
-    if (marker.isDirectory() || (!marker.isFile() && statSync(path).isDirectory())) return path;
-    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(path, "utf8"));
-    if (!m) return undefined; // not a gitfile — not a repository marker
-    const gitDir = resolve(dir, m[1]!);
+    if (marker.isDirectory()) return path; // a plain clone — decided on the dirent, no syscall
+    const st = statSync(path); // a file, or a symlink resolved through its target
+    if (st.isDirectory()) return path;
+    if (!st.isFile() || st.size > MAX_GITFILE_BYTES) return undefined;
+    const content = readFileSync(path, "utf8");
+    if (!content.startsWith(GITFILE_PREFIX)) return undefined; // not a gitfile — not a marker
+    const target = content.slice(GITFILE_PREFIX.length).replace(/\s+$/, "");
+    if (!target) return undefined;
+    const gitDir = resolve(dir, target);
     const common = join(gitDir, "commondir");
     return existsSync(common) ? resolve(gitDir, readFileSync(common, "utf8").trim()) : gitDir;
   } catch {

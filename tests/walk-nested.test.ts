@@ -2,7 +2,7 @@
 // (linked worktrees, vendored clones, submodules) are skipped like git does,
 // and `.git/info/exclude` is honored. Fixtures are built in a temp dir because
 // git refuses to track a path named `.git`.
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -123,7 +123,18 @@ describe(".git is skipped whatever ignoreDirs says", () => {
 // ("fatal: invalid gitfile format"); treating such a file as a repo silently
 // dropped its whole subtree from the index.
 describe("only a VALID .git marker is a repository boundary", () => {
-  const invalid = ["not a gitfile at all\n", "", "gitdir\n", "# gitdir: x\n"];
+  // Every body here is rejected by real git as "invalid gitfile format" — the
+  // prefix must be exactly `gitdir: `, at the very start (verified against git).
+  const invalid = [
+    "not a gitfile at all\n",
+    "",
+    "gitdir\n",
+    "# gitdir: x\n",
+    "gitdir:/nowhere\n", // no space after the colon
+    "  gitdir: /nowhere\n", // leading whitespace
+    "junk\ngitdir: /nowhere\n", // not the first line
+    "gitdir: \n", // prefix but no path
+  ];
 
   it("keeps the subtree when the .git file is not a gitfile", () => {
     for (const body of invalid) {
@@ -156,5 +167,42 @@ describe("only a VALID .git marker is a repository boundary", () => {
     mkfile(root, "clone/inner.ts");
     mkfile(root, `clone/${GIT}/HEAD`, "ref: refs/heads/main\n");
     expect(rels(root)).toEqual(["top.ts"]);
+  });
+
+  it("a gitfile without a trailing newline is still a marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-nonl-"));
+    mkfile(root, "top.ts");
+    mkfile(root, "wt/inner.ts");
+    mkfile(root, `wt/${GIT}`, "gitdir: /nowhere"); // git accepts this
+    expect(rels(root)).toEqual(["top.ts"]);
+  });
+
+  // `.git` may legitimately be a symlink; the dirent of a link is neither file
+  // nor directory, so the target has to decide.
+  it("resolves a symlinked .git through its target, and ignores a broken one", () => {
+    // Targets live OUTSIDE the walked tree, so only the boundary decisions show.
+    const store = mkdtempSync(join(tmpdir(), "ci-gitlink-store-"));
+    mkfile(store, "gitdir/HEAD", "ref: refs/heads/main\n");
+    mkfile(store, "pointer", "gitdir: /nowhere\n");
+    const root = mkdtempSync(join(tmpdir(), "ci-gitlink-"));
+    mkfile(root, "top.ts");
+    // Symlink to a git DIRECTORY → boundary.
+    mkfile(root, "linked/inner.ts");
+    symlinkSync(join(store, "gitdir"), join(root, "linked", GIT));
+    // Symlink to a valid gitFILE → boundary.
+    mkfile(root, "linkfile/inner.ts");
+    symlinkSync(join(store, "pointer"), join(root, "linkfile", GIT));
+    // Dangling symlink → NOT a repository, so the subtree is kept.
+    mkfile(root, "broken/kept.ts");
+    symlinkSync(join(root, "gone"), join(root, "broken", GIT));
+    expect(rels(root)).toEqual(["broken/kept.ts", "top.ts"]);
+  });
+
+  it("does not read a huge file that merely carries the name .git", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-biggit-"));
+    mkfile(root, "top.ts");
+    mkfile(root, "sub/kept.ts");
+    mkfile(root, `sub/${GIT}`, "x".repeat(200_000));
+    expect(rels(root)).toEqual(["sub/kept.ts", "top.ts"]);
   });
 });

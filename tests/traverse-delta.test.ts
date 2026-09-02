@@ -295,6 +295,13 @@ describe("traversal caches follow in-place edge edits", () => {
     expect(neighborsOf(graph, "a.ts", 1)!.links.map((l) => l.node).sort()).toEqual(["c.ts", "d.ts"]);
   });
 
+  it("notices an edge REPLACED in the array, not only one edited in place", () => {
+    const graph = build();
+    expect(neighborsOf(graph, "a.ts", 1)!.links.map((l) => l.node).sort()).toEqual(["b.ts", "d.ts"]);
+    graph.fileEdges[0] = { ...graph.fileEdges[0]!, to: "c.ts" };
+    expect(neighborsOf(graph, "a.ts", 1)!.links.map((l) => l.node).sort()).toEqual(["c.ts", "d.ts"]);
+  });
+
   it("notices a kind or weight change that keeps every endpoint", () => {
     const graph = build();
     const kinds = new Set(["import"]);
