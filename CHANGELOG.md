@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.28.2](https://github.com/maxgfr/codeindex/compare/v2.28.1...v2.28.2) (2026-09-02)
+
+
+### Performance Improvements
+
+* walker boundaries, batched worker dispatch, hot-path memos ([#16](https://github.com/maxgfr/codeindex/issues/16)) ([39aa752](https://github.com/maxgfr/codeindex/commit/39aa7524b55196e547b436c0a50ee7eca25ec146))
+
 ## [2.28.1](https://github.com/maxgfr/codeindex/compare/v2.28.0...v2.28.1) (2026-08-31)
 
 
