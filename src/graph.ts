@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { ENGINE_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { Edge, FileNode, Graph, ModuleNode } from "./types.js";
 import type { RepoScan } from "./scan.js";
@@ -6,8 +5,7 @@ import type { ModuleInfo } from "./modules.js";
 import { resolveDocLink, resolveImport, type ResolveContext } from "./resolve.js";
 import { resolveCallEdges } from "./calls.js";
 import { resolveRelationEdges } from "./relations.js";
-import { publishImportPairs, uniqueDefsFor } from "./derived.js";
-import { readText } from "./walk.js";
+import { docMentionsFor, publishImportPairs, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 
 // A symbol name distinctive enough to anchor a doc→code "mention" edge without
@@ -157,20 +155,13 @@ export function buildGraph(
     }
   }
   if (unique.size) {
-    for (const f of scan.files) {
-      if (f.kind !== "doc") continue;
-      // Reuse the content the scan already read (falling back to disk only if a
-      // doc somehow was not retained) — no second read of every doc file.
-      const content = scan.docText.get(f.rel) ?? readText(join(scan.root, f.rel));
-      if (!content) continue;
-      const tokens = new Map<string, number>();
-      for (const tok of content.split(/[^A-Za-z0-9_]+/)) {
-        if (unique.has(tok)) tokens.set(tok, (tokens.get(tok) ?? 0) + 1);
-      }
-      for (const [name, count] of tokens) {
+    // Doc tokens come from the per-scan memo (src/derived.ts): the retained
+    // docText, tokenized once and shared with the symbols.json refs pass.
+    for (const [rel, { counts }] of docMentionsFor(scan)) {
+      for (const [name, count] of counts) {
         const target = unique.get(name)!;
-        if (target === f.rel) continue;
-        collect(fileEdgeMap, { from: f.rel, to: target, kind: "mention", weight: Math.min(count, 5) });
+        if (target === rel) continue;
+        collect(fileEdgeMap, { from: rel, to: target, kind: "mention", weight: Math.min(count, 5) });
       }
     }
   }

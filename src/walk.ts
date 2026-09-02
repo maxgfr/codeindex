@@ -1,5 +1,5 @@
-import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, type Dirent } from "node:fs";
-import { join, relative, sep, extname } from "node:path";
+import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, existsSync, type Dirent } from "node:fs";
+import { join, resolve, sep, extname } from "node:path";
 import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
 
 // Directories that never carry signal for a documentation/code question and
@@ -15,12 +15,45 @@ export const IGNORE_DIRS = new Set([
   "tmp", ".ultraindex", ".codeindex", "Pods", "DerivedData", ".terraform", "elm-stuff", ".dart_tool",
 ]);
 
+// The VCS entry that marks a repository root: a directory for a normal clone,
+// a "gitdir: <path>" FILE for a linked worktree or a submodule.
+const GIT_ENTRY = ".git";
+
 function isIgnoredDirectory(name: string, ignoreDirs: Set<string>): boolean {
-  // A process killed during an atomic symbolic edit can leave this directory
-  // beside the source. It contains a copy of that source and must never become
-  // a duplicate phantom file in the next index, even when the consumer repo
-  // has no matching .gitignore rule.
-  return ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
+  // `.git` is structural, not a preference: VCS internals (objects, packs,
+  // hooks) never carry signal, so it stays ignored even when a caller-supplied
+  // `ignoreDirs` replaces the default set without listing it — `--ignore-dir
+  // foo` used to pull thousands of loose objects into the index.
+  // A process killed during an atomic symbolic edit can leave the
+  // `.codeindex-edit-*` directory beside the source. It contains a copy of that
+  // source and must never become a duplicate phantom file in the next index,
+  // even when the consumer repo has no matching .gitignore rule.
+  return name === GIT_ENTRY || ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
+}
+
+// Locate this checkout's `info/exclude` — git's per-clone, never-committed
+// ignore file (the walker honored only .gitignore, so local junk a developer
+// excluded there was still indexed). A directory `.git` holds it directly; a
+// gitfile points at the real git dir, and a linked worktree's git dir further
+// points at the shared common dir (`commondir` file), which is where git keeps
+// `info/` for every worktree. Returns "" when absent or unreadable.
+function readInfoExclude(root: string, entries: readonly Dirent[]): string {
+  const marker = entries.find((e) => e.name === GIT_ENTRY);
+  if (!marker) return "";
+  let gitDir = join(root, GIT_ENTRY);
+  try {
+    if (!marker.isDirectory()) {
+      const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(readFileSync(gitDir, "utf8"));
+      if (!m) return "";
+      gitDir = resolve(root, m[1]!);
+      const common = join(gitDir, "commondir");
+      if (existsSync(common)) gitDir = resolve(gitDir, readFileSync(common, "utf8").trim());
+    }
+    const exclude = join(gitDir, "info", "exclude");
+    return existsSync(exclude) ? readText(exclude) : "";
+  } catch {
+    return "";
+  }
 }
 
 // Lockfiles: huge, machine-generated, and pure noise for a code/docs question —
@@ -48,7 +81,8 @@ export interface WalkOptions {
   // every consumer; pass false to index generated/ignored trees deliberately.
   gitignore?: boolean;
   // Directory names to skip, REPLACING the default set entirely (not merging
-  // with it). IGNORE_DIRS is a public export, so consumers compose
+  // with it) — except `.git`, which is skipped whatever the list says.
+  // IGNORE_DIRS is a public export, so consumers compose
   // `[...IGNORE_DIRS, "extra"]` — or filter it — themselves; replace is the
   // simplest contract. Deliberate scope boundary: grep.ts (the ripgrep
   // universe) and the MCP server keep the DEFAULT set — recall consumers
@@ -68,8 +102,10 @@ export interface WalkResult {
   files: WalkedFile[];
   capped: boolean; // true when the maxFiles cap was hit and the walk stopped early
   // Files that were SEEN and rejected by the size/lockfile/binary/minified/
-  // gitignore rules. Ignored DIRECTORIES (node_modules, gitignored trees…)
-  // are not counted — their contents were never even listed.
+  // gitignore rules, plus one per nested-repository boundary the walk stopped
+  // at (a subdirectory carrying its own `.git`). Ignored DIRECTORIES
+  // (node_modules, gitignored trees…) are not counted — their contents were
+  // never even listed.
   excluded: number;
 }
 
@@ -140,7 +176,24 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     } catch {
       continue;
     }
+    // Nested-repository boundary: a subdirectory with its own `.git` (directory
+    // or gitfile) is another repo — a linked worktree under .claude/worktrees/,
+    // a vendored clone, a submodule. Its files belong to THAT repo's index, and
+    // walking them here produced thousands of phantom duplicates of the same
+    // sources (a repo with four worktrees indexed five copies of itself); git
+    // itself never lists them. Decided on the dirents already listed — zero
+    // extra syscalls — and structural: independent of the gitignore layer.
+    if (frame.rel && entries.some((e) => e.name === GIT_ENTRY)) {
+      excluded++;
+      continue;
+    }
     let rules = frame.rules;
+    if (useGitignore && !frame.rel) {
+      // `.git/info/exclude` sits BEFORE every .gitignore in git's own
+      // precedence (a .gitignore rule can still negate it — later rules win).
+      const parsed = parseGitignore(readInfoExclude(frame.dir, entries), "");
+      if (parsed.length) rules = [...rules, ...parsed];
+    }
     if (useGitignore && entries.some((e) => e.name === ".gitignore")) {
       const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel);
       if (parsed.length) rules = [...rules, ...parsed];
@@ -152,6 +205,10 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       // The dirent type IS the lstat type (Node lstats internally when the
       // filesystem can't supply it), so no lstat is needed to detect links.
       const isLink = entry.isSymbolicLink();
+      // The root's own `.git` entry, whatever its type: the directory is VCS
+      // internals, the gitfile of a linked worktree or submodule is a one-line
+      // pointer — neither is source, and git lists neither.
+      if (name === GIT_ENTRY) continue;
       // Ignored-directory boundary (node_modules, .git…): skip on the dirent
       // type alone — ZERO stat syscalls. A symlink reports isDirectory()
       // false on its dirent and falls through to the stat-based

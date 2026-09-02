@@ -115,7 +115,23 @@ function isFunctionValued(signature: string | undefined): boolean {
   return false;
 }
 
-function holderFor(symbols: CodeSymbol[], line: number): CodeSymbol | undefined {
+// A file's symbols that can hold a literal at all — the kind, function-valued
+// and span filters are properties of the SYMBOL, so they are applied once per
+// file here rather than once per (literal × symbol) inside holderFor, which
+// ran the signature regex L×S times on a file with L literals and S symbols.
+// Order is preserved, so holderFor's innermost-wins tie-break is unchanged.
+function holderCandidates(symbols: CodeSymbol[]): CodeSymbol[] {
+  const out: CodeSymbol[] = [];
+  for (const s of symbols) {
+    if (!HOLDER_KINDS.has(s.kind)) continue;
+    if (isFunctionValued(s.signature)) continue;
+    if ((s.endLine ?? s.line) - s.line > MAX_HOLDER_SPAN) continue;
+    out.push(s);
+  }
+  return out;
+}
+
+function holderFor(candidates: CodeSymbol[], line: number): CodeSymbol | undefined {
   // A literal sitting inside a constant's declaration span IS that constant's
   // value. This span join needs no new extraction: both tiers already report a
   // symbol's line, and the AST tier reports endLine. It is also why the feature
@@ -130,11 +146,8 @@ function holderFor(symbols: CodeSymbol[], line: number): CodeSymbol | undefined 
   // fact that a helper already exists. `holderExported` keeps the distinction
   // visible instead of encoding it as absence.
   let best: CodeSymbol | undefined;
-  for (const s of symbols) {
-    if (!HOLDER_KINDS.has(s.kind)) continue;
-    if (isFunctionValued(s.signature)) continue;
+  for (const s of candidates) {
     const end = s.endLine ?? s.line;
-    if (end - s.line > MAX_HOLDER_SPAN) continue;
     if (line < s.line || line > end) continue;
     // Innermost wins: a const nested in an exported object literal is the
     // tighter holder.
@@ -154,13 +167,14 @@ export function findLiteralDuplications(scan: RepoScan, opts: LiteralsOptions = 
   for (const f of scan.files) {
     if (!f.literals?.length) continue;
     if (!opts.includeTests && isTestPath(f.rel)) continue;
+    let holders: CodeSymbol[] | undefined; // this file's holder candidates, built on first use
     for (const lit of f.literals) {
       if (opts.kinds && !opts.kinds.has(lit.kind)) continue;
       if (!isDistinctive(lit.value, lit.kind)) continue;
       const key = `${lit.kind}\u0000${lit.value}`;
       let g = groups.get(key);
       if (!g) groups.set(key, (g = { value: lit.value, kind: lit.kind, sites: [] }));
-      const holder = holderFor(f.symbols, lit.line);
+      const holder = holderFor((holders ??= holderCandidates(f.symbols)), lit.line);
       g.sites.push(
         holder
           ? { file: f.rel, line: lit.line, holder: holder.name, holderExported: holder.exported }

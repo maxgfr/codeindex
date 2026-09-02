@@ -89,35 +89,52 @@ const REEXPORT_EXTS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".m
 // Template literals are treated as plain strings: an `${…}` expression cannot
 // legally contain an unterminated comment, so nesting adds nothing here.
 export function blankComments(src: string): string {
-  const out = src.split("");
-  let i = 0;
+  // One pass over char codes, copying the kept stretches as slices and the
+  // comments as runs of spaces (newlines inside a block comment are kept so
+  // offsets AND line numbers survive). The previous per-character
+  // `split("")`/`join("")` allocated one string per byte of every file — the
+  // single largest non-parser cost of extraction.
   const n = src.length;
+  let out = "";
+  let kept = 0; // start of the stretch not yet copied into `out`
+  let i = 0;
   while (i < n) {
-    const c = src[i]!;
-    const next = src[i + 1];
-    if (c === "/" && next === "/") {
-      while (i < n && src[i] !== "\n") {
-        out[i] = " ";
-        i++;
+    const c = src.charCodeAt(i);
+    if (c === SLASH) {
+      const next = src.charCodeAt(i + 1);
+      if (next === SLASH) {
+        out += src.slice(kept, i);
+        const start = i;
+        while (i < n && src.charCodeAt(i) !== NEWLINE) i++;
+        out += " ".repeat(i - start);
+        kept = i;
+        continue;
       }
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] !== "\n") out[i] = " ";
-        i++;
+      if (next === STAR) {
+        out += src.slice(kept, i);
+        let run = 0;
+        while (i < n && !(src.charCodeAt(i) === STAR && src.charCodeAt(i + 1) === SLASH)) {
+          if (src.charCodeAt(i) === NEWLINE) {
+            out += " ".repeat(run) + "\n";
+            run = 0;
+          } else run++;
+          i++;
+        }
+        // Blank the closing delimiter too, or `*/` would read as code.
+        if (i < n) run++;
+        if (i + 1 < n) run++;
+        out += " ".repeat(run);
+        i += 2;
+        kept = Math.min(i, n);
+        continue;
       }
-      // Blank the closing delimiter too, or `*/` would read as code.
-      if (i < n) out[i] = " ";
-      if (i + 1 < n) out[i + 1] = " ";
-      i += 2;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      const quote = c;
       i++;
-      while (i < n && src[i] !== quote) {
-        if (src[i] === "\\") i++; // skip the escaped char
+      continue;
+    }
+    if (c === DQUOTE || c === SQUOTE || c === BACKTICK) {
+      i++;
+      while (i < n && src.charCodeAt(i) !== c) {
+        if (src.charCodeAt(i) === BACKSLASH) i++; // skip the escaped char
         i++;
       }
       i++;
@@ -125,8 +142,16 @@ export function blankComments(src: string): string {
     }
     i++;
   }
-  return out.join("");
+  return kept === 0 ? src : out + src.slice(kept);
 }
+
+const SLASH = 47; // "/"
+const STAR = 42; // "*"
+const NEWLINE = 10; // "\n"
+const DQUOTE = 34; // '"'
+const SQUOTE = 39; // "'"
+const BACKTICK = 96; // "`"
+const BACKSLASH = 92; // "\\"
 
 // Per-file re-export ceiling. Raised from 60: this engine's own public barrel
 // (src/engine.ts) declares ~200 names, so 60 hid two thirds of its API — and it
@@ -160,7 +185,25 @@ export function extractReexports(rel: string, content: string, localSymbols: Cod
   const lang = /\.(ts|tsx|mts|cts)$/.test(rel) ? "typescript" : "javascript";
   const out: CodeSymbol[] = [];
   const seen = new Set<string>();
-  const lineAt = (idx: number): number => content.slice(0, idx).split(/\r?\n/).length;
+  // 1-based line of a character offset. Line starts are computed lazily, once
+  // per file — the previous `slice(0, idx).split(...)` re-scanned the whole
+  // prefix for every re-exported name, quadratic on a 200-name barrel.
+  let lineStarts: number[] | undefined;
+  const lineAt = (idx: number): number => {
+    if (!lineStarts) {
+      lineStarts = [0];
+      for (let i = 0; i < content.length; i++) if (content.charCodeAt(i) === 10) lineStarts.push(i + 1);
+    }
+    // Binary search: number of line starts ≤ idx.
+    let lo = 0;
+    let hi = lineStarts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (lineStarts[mid]! <= idx) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
   // Keyed on the whole CodeSymbol (not just kind) so the alias branch below
   // can also cite the resolved declaration's own line/endLine, not just mirror
   // its kind.

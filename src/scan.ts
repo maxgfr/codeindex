@@ -51,8 +51,9 @@ export interface ScanOptions {
   scope?: string;
   // Honor .gitignore files (default true — see WalkOptions.gitignore).
   gitignore?: boolean;
-  // Directory names to skip — REPLACES the default set (see
-  // WalkOptions.ignoreDirs; compose with the IGNORE_DIRS export to extend it).
+  // Directory names to skip — REPLACES the default set, except `.git` which is
+  // always skipped (see WalkOptions.ignoreDirs; compose with the IGNORE_DIRS
+  // export to extend it).
   ignoreDirs?: string[];
   maxBytes?: number;
   maxFiles?: number;

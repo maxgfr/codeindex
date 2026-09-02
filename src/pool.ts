@@ -153,66 +153,144 @@ export async function extractInParallel(
   // whole run back to sequential — losing parallelism on exactly the tier where
   // it is cheapest.
   const wanted = grammarKeys.filter((k) => grammarReady(k)).sort();
+  const workers = Math.min(count, jobs.length);
 
-  // Round-robin over the path-sorted job list, so every shard sees the same
-  // language mix and no shard loads a grammar the others don't.
-  const shards: Job[][] = Array.from({ length: Math.min(count, jobs.length) }, () => []);
-  jobs.forEach((j, i) => shards[i % shards.length]!.push(j));
-
+  // Jobs are handed out in BATCHES, on demand, from the path-sorted queue —
+  // not pre-split into one static shard per worker. Static shards assume equal
+  // workers; on a heterogeneous CPU (Apple's 4 performance + 6 efficiency
+  // cores, most laptops today) the shards that land on slow cores finish
+  // last and the whole index waits for them: measured on a 2 358-file repo,
+  // eight equal shards ran at 1 ms/file each where one worker alone managed
+  // 0.45 ms/file, and eight workers barely beat four. A worker that finishes
+  // its batch simply asks for the next, so fast cores take more of the queue.
+  // Batches shrink as the queue drains (guided scheduling) so the tail is at
+  // most one small batch on the slowest core. Records are keyed by path and
+  // scanRepo orders them, so WHICH worker built a record never shows.
+  //
+  // The bootstrap warms the grammars once (an empty batch), announces the set
+  // it got ready, then extracts each batch it is sent through the SAME
+  // runExtractWorker a one-shot worker used — the per-record contract has not
+  // moved.
   const bootstrap =
     `import { runExtractWorker } from ${JSON.stringify(engineUrl)};\n` +
     `import { parentPort, workerData } from "node:worker_threads";\n` +
-    `runExtractWorker(workerData.input, (o) => parentPort.postMessage(o))` +
-    `.catch((e) => parentPort.postMessage({ error: String(e) }));\n`;
+    `const base = workerData.input;\n` +
+    `const post = (o) => parentPort.postMessage(o);\n` +
+    `const fail = (e) => post({ error: String(e) });\n` +
+    `runExtractWorker({ ...base, jobs: [] }, post).then(() => {\n` +
+    `  parentPort.on("message", (m) => {\n` +
+    `    if (m.done) { parentPort.close(); return; }\n` +
+    `    runExtractWorker({ ...base, jobs: m.jobs }, post).catch(fail);\n` +
+    `  });\n` +
+    `}).catch(fail);\n`;
 
+  const out = new Map<string, ExtractedRecord>();
+  let next = 0; // index of the first job not yet dispatched
+  const takeBatch = (): Job[] => {
+    const remaining = jobs.length - next;
+    if (remaining <= 0) return [];
+    const size = Math.max(MIN_BATCH_JOBS, Math.ceil(remaining / (workers * BATCHES_PER_WORKER)));
+    const batch = jobs.slice(next, next + size);
+    next += batch.length;
+    return batch;
+  };
+
+  const spawned: Worker[] = [];
   try {
-    const outputs = await Promise.all(
-      shards.map(
-        (jobsForShard) =>
-          new Promise<WorkerOutput | { error: string }>((resolve, reject) => {
+    await Promise.all(
+      Array.from(
+        { length: workers },
+        () =>
+          new Promise<void>((resolve, reject) => {
             const w = new Worker(bootstrap, {
               eval: true,
-              workerData: { input: { jobs: jobsForShard, grammarKeys: wanted, maxCallsPerFile: opts.maxCallsPerFile } },
+              workerData: { input: { jobs: [], grammarKeys: wanted, maxCallsPerFile: opts.maxCallsPerFile } },
             });
+            spawned.push(w);
+            let finished = false;
             // A worker that neither answers nor errors would hang the whole
             // index, since Promise.all waits forever. The bound is a deadlock
             // guard, not a performance knob — tripping it costs a fallback to
-            // the sequential scan, which is always correct.
-            const timer = setTimeout(() => {
-              reject(new Error("extraction worker timed out"));
-              void w.terminate();
-            }, WORKER_TIMEOUT_MS);
+            // the sequential scan, which is always correct. Re-armed on every
+            // message, so it bounds one batch, not the whole run.
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const arm = (): void => {
+              if (timer) clearTimeout(timer);
+              timer = setTimeout(() => {
+                settle(() => reject(new Error("extraction worker timed out")));
+                void w.terminate();
+              }, WORKER_TIMEOUT_MS);
+            };
             const settle = (fn: () => void): void => {
-              clearTimeout(timer);
+              if (timer) clearTimeout(timer);
+              finished = true;
               fn();
             };
-            w.once("message", (m: WorkerOutput | { error: string }) => {
-              settle(() => resolve(m));
-              void w.terminate();
+            arm();
+            // Two batches in flight per worker: the next one is already queued
+            // in the worker's mailbox when it posts a result, so it never idles
+            // on the main thread's turn to deserialize records and answer.
+            let inflight = 0;
+            const dispatch = (): boolean => {
+              const batch = takeBatch();
+              if (batch.length === 0) return false;
+              inflight++;
+              w.postMessage({ jobs: batch });
+              return true;
+            };
+            w.on("message", (m: WorkerOutput | { error: string }) => {
+              if (finished) return;
+              if ("error" in m) {
+                settle(() => reject(new Error(m.error)));
+                void w.terminate();
+                return;
+              }
+              // A worker that readied a different grammar set would produce
+              // regex-tier records for some language — discard the whole run
+              // rather than emit a mix of tiers.
+              if (m.ready.slice().sort().join(",") !== wanted.join(",")) {
+                settle(() => reject(new Error("extraction worker grammar tier mismatch")));
+                void w.terminate();
+                return;
+              }
+              for (const r of m.records) out.set(r.rel, { size: r.size, mtimeMs: r.mtimeMs, record: r.record });
+              if (inflight === 0) dispatch(); // the readiness message: prime a second batch
+              else inflight--;
+              dispatch();
+              if (inflight === 0) {
+                settle(() => resolve());
+                w.postMessage({ done: true });
+                void w.terminate();
+                return;
+              }
+              arm();
             });
             w.once("error", (e) => settle(() => reject(e)));
             w.once("exit", (code) => {
               // Already-settled rejects are no-ops; terminate() itself exits non-zero.
-              if (code !== 0) settle(() => reject(new Error(`extraction worker exited with ${code}`)));
+              if (!finished && code !== 0) settle(() => reject(new Error(`extraction worker exited with ${code}`)));
             });
           }),
       ),
     );
-
-    const out = new Map<string, ExtractedRecord>();
-    for (const o of outputs) {
-      if ("error" in o) return undefined;
-      // A worker that readied a different grammar set would have produced
-      // regex-tier records for some language — discard the whole run rather
-      // than emit a mix of tiers.
-      if (o.ready.slice().sort().join(",") !== wanted.join(",")) return undefined;
-      for (const r of o.records) out.set(r.rel, { size: r.size, mtimeMs: r.mtimeMs, record: r.record });
-    }
+    // Every job was dispatched and every dispatched batch came back (a worker
+    // only resolves once the queue is empty, and only after its own batch
+    // returned) — but a vanished file is dropped by the worker and re-read on
+    // the main thread, so the map may legitimately be smaller than `jobs`.
     return out;
   } catch {
+    // One failure discards the whole run: stop the others now rather than let
+    // them drain a queue nobody will read.
+    for (const w of spawned) void w.terminate();
     return undefined;
   }
 }
+
+// Guided-scheduling knobs: a batch is `remaining / (workers × BATCHES_PER_WORKER)`
+// jobs, never fewer than MIN_BATCH_JOBS. The first batches are large (little
+// message traffic), the last ones small (little tail).
+const BATCHES_PER_WORKER = 4;
+const MIN_BATCH_JOBS = 4;
 
 // scanRepo, with the code files extracted across workers.
 //
