@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.28.3](https://github.com/maxgfr/codeindex/compare/v2.28.2...v2.28.3) (2026-09-03)
+
+
+### Bug Fixes
+
+* validate the .git marker, and stop serving stale traversal caches ([#17](https://github.com/maxgfr/codeindex/issues/17)) ([9ff08f6](https://github.com/maxgfr/codeindex/commit/9ff08f641059396557f82e121e67301097e00bd2)), closes [#16](https://github.com/maxgfr/codeindex/issues/16)
+
 ## [2.28.2](https://github.com/maxgfr/codeindex/compare/v2.28.1...v2.28.2) (2026-09-02)
 
 
