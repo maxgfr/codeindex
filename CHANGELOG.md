@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.28.4](https://github.com/maxgfr/codeindex/compare/v2.28.3...v2.28.4) (2026-09-03)
+
+
+### Bug Fixes
+
+* **walk:** match git when trimming a gitfile path ([#18](https://github.com/maxgfr/codeindex/issues/18)) ([847010f](https://github.com/maxgfr/codeindex/commit/847010f5fe75104690165f131b066f7b4cff8959))
+
 ## [2.28.3](https://github.com/maxgfr/codeindex/compare/v2.28.2...v2.28.3) (2026-09-03)
 
 
