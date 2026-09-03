@@ -369,7 +369,7 @@ function gitDirOf(dir, entries) {
     if (!st.isFile() || st.size > MAX_GITFILE_BYTES) return void 0;
     const content = readFileSync(path, "utf8");
     if (!content.startsWith(GITFILE_PREFIX)) return void 0;
-    const target = content.slice(GITFILE_PREFIX.length).replace(/\s+$/, "");
+    const target = content.slice(GITFILE_PREFIX.length).replace(/[\r\n]+$/, "");
     if (!target) return void 0;
     const gitDir = resolve(dir, target);
     const common = join(gitDir, "commondir");

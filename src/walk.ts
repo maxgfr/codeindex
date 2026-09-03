@@ -76,7 +76,13 @@ function gitDirOf(dir: string, entries: readonly Dirent[]): string | undefined {
     if (!st.isFile() || st.size > MAX_GITFILE_BYTES) return undefined;
     const content = readFileSync(path, "utf8");
     if (!content.startsWith(GITFILE_PREFIX)) return undefined; // not a gitfile — not a marker
-    const target = content.slice(GITFILE_PREFIX.length).replace(/\s+$/, "");
+    // Only the line ending is stripped, never trailing spaces or tabs: git
+    // trims exactly `\n` and `\r`, so a git directory whose name ENDS in a
+    // space is reachable through a gitfile — verified against real git, which
+    // accepts `gitdir: <dir >` and rejects the same path trimmed. Trimming
+    // whitespace here silently resolved such a repo to the wrong directory,
+    // and its `info/exclude` was then never found.
+    const target = content.slice(GITFILE_PREFIX.length).replace(/[\r\n]+$/, "");
     if (!target) return undefined;
     const gitDir = resolve(dir, target);
     const common = join(gitDir, "commondir");
