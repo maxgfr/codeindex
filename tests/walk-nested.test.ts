@@ -198,11 +198,34 @@ describe("only a VALID .git marker is a repository boundary", () => {
     expect(rels(root)).toEqual(["broken/kept.ts", "top.ts"]);
   });
 
-  it("does not read a huge file that merely carries the name .git", () => {
+  // The cap is only observable on a marker that WOULD otherwise parse: a
+  // garbage file is kept either way, so asserting on one proves nothing about
+  // reading. An oversized but well-formed gitfile is the case the cap decides.
+  it("ignores a marker too large to be a gitfile, and keeps its subtree", () => {
     const root = mkdtempSync(join(tmpdir(), "ci-biggit-"));
     mkfile(root, "top.ts");
     mkfile(root, "sub/kept.ts");
-    mkfile(root, `sub/${GIT}`, "x".repeat(200_000));
+    mkfile(root, `sub/${GIT}`, "gitdir: /nowhere" + "\n".repeat(5000));
     expect(rels(root)).toEqual(["sub/kept.ts", "top.ts"]);
+    // …while the same body under the cap IS a marker.
+    const small = mkdtempSync(join(tmpdir(), "ci-smallgit-"));
+    mkfile(small, "top.ts");
+    mkfile(small, "sub/inner.ts");
+    mkfile(small, `sub/${GIT}`, "gitdir: /nowhere" + "\n".repeat(100));
+    expect(rels(small)).toEqual(["top.ts"]);
+  });
+
+  // Git trims exactly `\n`/`\r` from a gitfile's path — never spaces or tabs.
+  // A git directory whose NAME ends in a space is therefore reachable, and
+  // trimming whitespace resolved it to a different directory whose
+  // `info/exclude` was never found.
+  it("keeps trailing spaces in the gitdir path, as git does", () => {
+    const store = mkdtempSync(join(tmpdir(), "ci-spacegit-")) + "/store ";
+    mkfile(store, "info/exclude", "dropped.ts\n");
+    const root = mkdtempSync(join(tmpdir(), "ci-spaceroot-"));
+    mkfile(root, "kept.ts");
+    mkfile(root, "dropped.ts");
+    writeFileSync(join(root, GIT), `gitdir: ${store}\n`);
+    expect(rels(root)).toEqual(["kept.ts"]);
   });
 });
