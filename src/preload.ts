@@ -21,8 +21,10 @@
 // ran — 6.3s on a 7k-file repo with a fresh index sitting right next to it.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ENGINE_VERSION, EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
-import type { FileRecord, Graph, SymbolIndex } from "./types.js";
+import { ENGINE_VERSION, SCHEMA_VERSION } from "./types.js";
+import type { Graph, SymbolIndex } from "./types.js";
+import { parseCacheEntries, type PersistedCacheEntry, type PersistedCacheMap } from "./cache.js";
+export type { PersistedCacheEntry, PersistedCacheMap } from "./cache.js";
 import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
 import type { IndexArtifacts } from "./pipeline.js";
@@ -32,9 +34,6 @@ import { classify } from "./classify.js";
 
 // The default index location, relative to the repo root.
 export const INDEX_DIR = ".codeindex";
-
-export type PersistedCacheEntry = { hash: string; record: FileRecord; size?: number; mtimeMs?: number };
-export type PersistedCacheMap = Map<string, PersistedCacheEntry>;
 
 // ADDITIVE cache.json meta describing the artifacts a prior `index` run wrote
 // (see engine-cli.ts's CacheMeta). Old caches lacking these keys simply never
@@ -98,11 +97,10 @@ export function readPersistedIndex(
   } catch {
     return undefined;
   }
-  if (!parsed || parsed.schemaVersion !== SCHEMA_VERSION || parsed.extractorVersion !== EXTRACTOR_VERSION || !parsed.files) {
-    return undefined;
-  }
+  const cacheMap = parseCacheEntries(parsed);
+  if (!parsed || !cacheMap) return undefined;
   return {
-    cacheMap: new Map(Object.entries(parsed.files)),
+    cacheMap,
     meta: {
       engineVersion: parsed.engineVersion,
       commit: parsed.commit,

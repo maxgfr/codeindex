@@ -12,6 +12,8 @@ import { findDeadCode } from "../src/deadcode.js";
 import { searchIndex } from "../src/bm25.js";
 import { computeImportPairs } from "../src/callers.js";
 import { riskHotspots } from "../src/complexity.js";
+import { symbolsByNameFor } from "../src/derived.js";
+import type { CodeSymbol } from "../src/types.js";
 
 function makeRepo(): string {
   const root = mkdtempSync(join(tmpdir(), "ci-derived-"));
@@ -25,6 +27,25 @@ function makeRepo(): string {
 }
 
 describe("per-scan derived cache", () => {
+  it("reference definitions preserve homonyms, filtering and ordering without exposing the name-index array", () => {
+    const scan = scanRepo(makeRepo());
+    const f = scan.files.find((f) => f.rel === "widget.ts")!;
+    const symbol: CodeSymbol = { name: "shared", kind: "function", file: f.rel, line: 20, exported: true, lang: "typescript" };
+    f.symbols.push(symbol, { ...symbol, line: 10 }, { ...symbol, kind: "reexport" },
+      { ...symbol, kind: "reexport-all" }, { ...symbol, kind: "default" });
+    const other = scan.files.find((f) => f.rel === "app.ts")!;
+    other.symbols.push({ ...symbol, file: other.rel, line: 3 });
+    const cached = symbolsByNameFor(scan).get("shared")!;
+    const original = [...cached];
+    const first = findReferences(scan, "shared");
+    expect(first.defs.map((s) => [s.file, s.line])).toEqual([["app.ts", 3], ["widget.ts", 10], ["widget.ts", 20]]);
+    const expected = JSON.stringify(first);
+    first.defs.length = 0;
+    expect(cached).toEqual(original);
+    expect(JSON.stringify(findReferences(scan, "shared"))).toBe(expected);
+    expect(findReferences(scan, "absentSymbol")).toEqual({ defs: [], callSites: [], referencingFiles: [] });
+  });
+
   it("repeat findReferences / searchIndex / findDeadCode on one scan are byte-equal to a fresh-scan run", () => {
     const root = makeRepo();
     const scan = scanRepo(root);

@@ -133,12 +133,9 @@ export interface SymbolReferences {
 // Who references this symbol? Merges the caller index (line-precise) with the
 // identifier/mention pass (file-level), each tier labeled by its field.
 export function findReferences(scan: RepoScan, name: string): SymbolReferences {
-  const defs: CodeSymbol[] = [];
-  for (const f of scan.files) {
-    for (const s of f.symbols) {
-      if (s.name === name && !REFERENCE_KINDS.has(s.kind)) defs.push(s);
-    }
-  }
+  // Share the name index with findSymbol. filter creates an owned array before
+  // sorting, so callers cannot change the cached declaration order or contents.
+  const defs = (symbolsByNameFor(scan).get(name) ?? []).filter((s) => !REFERENCE_KINDS.has(s.kind));
   defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
 
   const index = callerIndexFor(scan);

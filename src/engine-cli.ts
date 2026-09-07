@@ -19,6 +19,7 @@ import { renderScip } from "./render/scip.js";
 import { scanSummary, type RepoScan } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
 import { preloadSessionLazy, INDEX_DIR } from "./preload.js";
+import { parseCacheEntries } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
 import { computeImportPairs } from "./callers.js";
@@ -618,8 +619,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         extractorVersion: number;
         files: Record<string, CacheEntry>;
       } & CacheMeta;
-      if (parsed.schemaVersion === SCHEMA_VERSION && parsed.extractorVersion === EXTRACTOR_VERSION) {
-        cache = new Map(Object.entries(parsed.files));
+      cache = parseCacheEntries(parsed);
+      if (cache) {
         meta = {
           engineVersion: parsed.engineVersion,
           commit: parsed.commit,

@@ -227,6 +227,14 @@ interface ScanSummary {
 declare function scanSummary(root: string, opts?: ScanOptions): ScanSummary;
 declare function scanRepo(root: string, opts?: ScanOptions): RepoScan;
 
+type PersistedCacheEntry = {
+    hash: string;
+    record: FileRecord;
+    size?: number;
+    mtimeMs?: number;
+};
+type PersistedCacheMap = Map<string, PersistedCacheEntry>;
+
 interface BuildIndexOptions extends ScanOptions {
     meta?: {
         version?: string;
@@ -243,13 +251,6 @@ declare function buildIndexArtifacts(repo: string, opts?: BuildIndexOptions): In
 declare function buildArtifactsFromScan(scan: RepoScan, opts?: BuildIndexOptions): IndexArtifacts;
 
 declare const INDEX_DIR = ".codeindex";
-type PersistedCacheEntry = {
-    hash: string;
-    record: FileRecord;
-    size?: number;
-    mtimeMs?: number;
-};
-type PersistedCacheMap = Map<string, PersistedCacheEntry>;
 interface PersistedMeta {
     engineVersion?: string;
     commit?: string;

@@ -1042,6 +1042,25 @@ function primeIndex(repo: string): void {
 }
 
 describe("MCP persisted-index preload (session seeding from .codeindex)", () => {
+  it("rejects incomplete cache records and serves the same references as a cold server", async () => {
+    const repo = tmpFixtureCopy("ci-preload-invalid-record-");
+    const request = [
+      { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+      { method: "notifications/initialized" },
+      { id: 2, method: "tools/call", params: { name: "find_references", arguments: { repo, name: "HttpClient" } } },
+    ];
+    const cold = (await mcpSession(request)).get(2)!;
+    expect(cold.result?.isError).not.toBe(true);
+    expect(cold.result?.content?.[0]?.text).toContain("HttpClient");
+    primeIndex(repo);
+    const path = join(repo, ".codeindex", "cache.json");
+    const cache = JSON.parse(readFileSync(path, "utf8"));
+    cache.files["src/client.ts"].record = {};
+    writeFileSync(path, JSON.stringify(cache));
+    const recovered = (await mcpSession(request)).get(2)!;
+    expect(recovered).toEqual(cold);
+  });
+
   it("seeds the session scan + artifacts from a primed .codeindex — byte-equal to a fresh build", () => {
     const repo = tmpFixtureCopy("ci-preload-");
     const pristine = tmpFixtureCopy("ci-preload-fresh-");
