@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.29.0](https://github.com/maxgfr/codeindex/compare/v2.28.6...v2.29.0) (2026-09-07)
+
+
+### Features
+
+* **engine:** harden runtime and validate LSP, benchmarks and Docker ([b0f41c1](https://github.com/maxgfr/codeindex/commit/b0f41c1e07d298d9eb59842e1efc17104e9f7166))
+
 ## [2.28.6](https://github.com/maxgfr/codeindex/compare/v2.28.5...v2.28.6) (2026-09-07)
 
 
