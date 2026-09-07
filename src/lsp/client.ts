@@ -12,7 +12,7 @@
 // does not own the user's buffers, so it opens files read-only and never sends
 // didChange. Anything richer belongs in an editor, not in an indexer.
 
-import { createFramer, encodeMessage, fileUri, locationsToRefs, type LspMessage, type LspRef } from "./protocol.js";
+import { createFramer, encodeMessage, fileUri, locationsToRefs, incomingCallsToSites, uniqueIncomingCalls, type LspMessage, type LspRef, type LspIncomingCall } from "./protocol.js";
 
 export interface LspTransport {
   write(chunk: string): void;
@@ -35,6 +35,7 @@ export interface LspCapabilities {
   definition: boolean;
   implementation: boolean;
   typeHierarchy: boolean;
+  callHierarchy: boolean;
 }
 
 export interface LspSession {
@@ -42,6 +43,7 @@ export interface LspSession {
   didOpen(rel: string, text: string, languageId: string): void;
   references(rel: string, line: number, character: number): Promise<LspRef[]>;
   definition(rel: string, line: number, character: number): Promise<LspRef[]>;
+  incomingCalls(rel: string, line: number, character: number): Promise<LspIncomingCall[]>;
   shutdown(): Promise<void>;
 }
 
@@ -50,6 +52,14 @@ export class LspTimeout extends Error {
   constructor(method: string, ms: number) {
     super(`${method} exceeded ${ms}ms`);
     this.name = "LspTimeout";
+  }
+}
+
+/** Earlier prepared items remain usable evidence when a later request fails. */
+export class LspIncomingCallsError extends Error {
+  constructor(error: unknown, readonly calls: LspIncomingCall[]) {
+    super(error instanceof Error ? error.message : String(error), { cause: error });
+    this.name = "LspIncomingCallsError";
   }
 }
 
@@ -133,6 +143,7 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
           references: { dynamicRegistration: false },
           definition: { dynamicRegistration: false, linkSupport: true },
           implementation: { dynamicRegistration: false, linkSupport: true },
+          callHierarchy: { dynamicRegistration: false },
         },
       },
       ...(options.initializationOptions !== undefined ? { initializationOptions: options.initializationOptions } : {}),
@@ -155,6 +166,7 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
     definition: provides("definitionProvider"),
     implementation: provides("implementationProvider"),
     typeHierarchy: provides("typeHierarchyProvider"),
+    callHierarchy: provides("callHierarchyProvider"),
   };
 
   const positionOf = (rel: string, line: number, character: number): unknown => ({
@@ -186,6 +198,23 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
     async definition(rel, line, character) {
       if (!capabilities.definition) return [];
       return locationsToRefs(options.root, await request("textDocument/definition", positionOf(rel, line, character)));
+    },
+
+    async incomingCalls(rel, line, character) {
+      if (!capabilities.callHierarchy) return [];
+      const items = await request("textDocument/prepareCallHierarchy", positionOf(rel, line, character));
+      if (!Array.isArray(items)) return [];
+      const calls: LspIncomingCall[] = [];
+      try {
+        for (const item of items) {
+          if (!item || typeof item !== "object") continue;
+          // Send the complete item back: opaque `data` is server-owned state.
+          calls.push(...incomingCallsToSites(options.root, await request("callHierarchy/incomingCalls", { item })));
+        }
+      } catch (error) {
+        throw new LspIncomingCallsError(error, uniqueIncomingCalls(calls));
+      }
+      return uniqueIncomingCalls(calls);
     },
 
     async shutdown() {

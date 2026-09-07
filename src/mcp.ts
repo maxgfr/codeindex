@@ -14,7 +14,7 @@ import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { buildCallerIndex } from "./callers.js";
+import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
 import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
 import { implementationsOf } from "./relations.js";
 import { neighborhood, type Direction } from "./symbolgraph.js";
@@ -28,7 +28,8 @@ import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
-import { lspStatus, referencesWithLsp } from "./lsp/index.js";
+import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
+import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
@@ -39,7 +40,7 @@ import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
 import { IGNORE_DIRS, walk, type WalkResult } from "./walk.js";
-import { toolsFor, OUTPUT_SCHEMAS } from "./mcp/tools.js";
+import { toolsFor, OUTPUT_SCHEMAS, profileNames } from "./mcp/tools.js";
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
   RICH_TOOLS_SINCE,
@@ -195,9 +196,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const { symbols } = readArtifacts();
     const lookup = str(args.name);
     if (lookup) {
-      return JSON.stringify({ name: lookup, defs: symbols.defs[lookup] ?? [], refs: symbols.refs[lookup] ?? [] }, null, 2);
+      const defs = symbols.defs[lookup] ?? [];
+      return JSON.stringify({ name: lookup, defs: args.concise === true ? defs.map((s) => symbolLocation(s, lookup)) : defs, refs: symbols.refs[lookup] ?? [] }, null, 2);
     }
-    return JSON.stringify(symbols, null, 2);
+    return JSON.stringify(args.concise === true ? conciseSymbolIndex(symbols) : symbols, null, 2);
   }
   if (name === "callers") {
     // callerIndexFor, not buildCallerIndex: the public builder is unmemoized, so
@@ -205,15 +207,21 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // repo in the project's own benchmark). The memoized one is keyed on scan
     // object identity, which the session cache preserves across calls.
     // Recall mode is option-dependent, so it cannot use the memoized index.
+    const lookup = str(args.name);
+    if (args.lsp === true && !lookup) throw new Error("callers with lsp:true requires `name` (or name@file)");
     const scan = readScan();
     const index = args.recall === true ? buildCallerIndex(scan, undefined, { recall: true }) : callerIndexFor(scan);
-    const lookup = str(args.name);
     if (lookup) {
-      const entry = index.get(lookup);
-      return JSON.stringify(entry ?? { error: `no tracked callers for "${lookup}"` }, null, 2);
+      const entry = lookupCallerEntry(index, lookup);
+      if (entry) {
+        const result = args.lsp === true ? await callersWithLsp(scan, repo, lookup, entry) : entry;
+        return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
+      }
+      const absent = { error: `no tracked callers for "${lookup}"` };
+      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lookup, absent) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
-    for (const [k, v] of index) obj[k] = v;
+    for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(v) : v;
     return JSON.stringify(obj, null, 2);
   }
   if (name === "workspaces") {
@@ -229,7 +237,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "symbols_overview") {
     const file = str(args.file);
     if (!file) throw new Error("`file` is required");
-    return JSON.stringify(symbolsOverview(readScan(), file), null, 2);
+    const overview = symbolsOverview(readScan(), file);
+    return JSON.stringify(args.concise === true ? overview.map((s) => symbolLocation(s, s.name)) : overview, null, 2);
   }
   if (name === "find_symbol") {
     const namePath = str(args.namePath);
@@ -250,8 +259,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // The static answer is computed FIRST and passed in, so the LSP tier is
     // structurally incapable of removing anything from it — it can only append
     // a labelled `lsp` block. Absent config → no block at all, byte-compat.
-    if (args.lsp === true) return JSON.stringify(await referencesWithLsp(scan, repo, symName, statik), null, 2);
-    return JSON.stringify(statik, null, 2);
+    const result = args.lsp === true ? await referencesWithLsp(scan, repo, symName, statik) : statik;
+    return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
   }
   if (name === "lsp_status") {
     return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true), null, 2);
@@ -655,6 +664,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
             protocolVersion,
             capabilities: { tools: {} },
             serverInfo,
+            instructions: `Available tool profiles: ${profileNames().join(", ")}. Active profile: ${opts.profile ?? "all"}. Configure profiles with --tools <profile[,profile]>. Profiles select advertised tools; known tools remain callable.`,
           },
         });
       } else if (req.method === "ping") {

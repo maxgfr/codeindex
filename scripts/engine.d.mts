@@ -1069,54 +1069,6 @@ interface OnboardBrief {
  */
 declare function onboardBrief(scan: RepoScan, graph: Graph, opts?: OnboardOptions): OnboardBrief;
 
-interface LspServerConfig {
-    /** Stable id, used in `source` labels and in `lsp status`. */
-    id: string;
-    /** Engine `lang` strings (see src/lang/registry.ts), not LSP language ids. */
-    languages: string[];
-    /** What `didOpen` announces. Defaults to the first entry of `languages`. */
-    languageId?: string;
-    command: string;
-    args?: string[];
-    env?: Record<string, string>;
-    initializationOptions?: unknown;
-    /** Per-request budget, ms (default 5000). */
-    timeoutMs?: number;
-    /** How long `initialize` may take, ms (default 15000). */
-    startupTimeoutMs?: number;
-}
-interface LspConfig {
-    version: 1;
-    servers: LspServerConfig[];
-}
-type LspConfigSource = "env" | "repo" | "cwd" | "none";
-interface ResolvedLspConfigPath {
-    path: string | undefined;
-    source: LspConfigSource;
-}
-/**
- * Resolution ladder, mirroring resolveEmbedModelDir: an explicit env var wins
- * outright, then the repo, then the working directory.
- *
- * `CODEINDEX_LSP_CONFIG` set to an empty string, `0` or `off` DISABLES the tier
- * even when a repo config exists — the escape hatch for a CI job that must not
- * spawn anything, without deleting a file the rest of the team relies on.
- */
-declare function resolveLspConfigPath(repo: string): ResolvedLspConfigPath;
-/** Validate a parsed payload, throwing with the field that is wrong. */
-declare function parseLspConfig(payload: unknown): LspConfig;
-/**
- * The config for a repository, or undefined when the tier was not asked for.
- *
- * NEVER THROWS on an absent file — absent is the normal case and must cost
- * nothing. A file that exists but is malformed DOES throw, because at that
- * point someone asked for the tier and silently ignoring their config is worse
- * than failing: they would spend the afternoon wondering why nothing improved.
- */
-declare function loadLspConfig(repo: string): LspConfig | undefined;
-/** The server that claims a language, or undefined. First match wins. */
-declare function serverForLang(config: LspConfig, lang: string): LspServerConfig | undefined;
-
 interface LspMessage {
     jsonrpc: "2.0";
     id?: number | string;
@@ -1134,6 +1086,13 @@ interface LspRef {
     file: string;
     line: number;
     character?: number;
+}
+/** A call site, distinct from the declaration of the function making it. */
+interface LspIncomingCall extends LspRef {
+    caller: LspRef & {
+        name: string;
+        kind: number;
+    };
 }
 /**
  * The largest frame this client will assemble, in bytes.
@@ -1192,12 +1151,14 @@ interface LspCapabilities {
     definition: boolean;
     implementation: boolean;
     typeHierarchy: boolean;
+    callHierarchy: boolean;
 }
 interface LspSession {
     readonly capabilities: LspCapabilities;
     didOpen(rel: string, text: string, languageId: string): void;
     references(rel: string, line: number, character: number): Promise<LspRef[]>;
     definition(rel: string, line: number, character: number): Promise<LspRef[]>;
+    incomingCalls(rel: string, line: number, character: number): Promise<LspIncomingCall[]>;
     shutdown(): Promise<void>;
 }
 /** Thrown when a request outlives its budget. Named so callers can tell it apart. */
@@ -1205,6 +1166,54 @@ declare class LspTimeout extends Error {
     constructor(method: string, ms: number);
 }
 declare function openLspSession(transport: LspTransport, options: LspSessionOptions): Promise<LspSession>;
+
+interface LspServerConfig {
+    /** Stable id, used in `source` labels and in `lsp status`. */
+    id: string;
+    /** Engine `lang` strings (see src/lang/registry.ts), not LSP language ids. */
+    languages: string[];
+    /** What `didOpen` announces. Defaults to each declaration's language. */
+    languageId?: string;
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+    initializationOptions?: unknown;
+    /** Per-request budget, ms (default 5000). */
+    timeoutMs?: number;
+    /** How long `initialize` may take, ms (default 15000). */
+    startupTimeoutMs?: number;
+}
+interface LspConfig {
+    version: 1;
+    servers: LspServerConfig[];
+}
+type LspConfigSource = "env" | "repo" | "cwd" | "none";
+interface ResolvedLspConfigPath {
+    path: string | undefined;
+    source: LspConfigSource;
+}
+/**
+ * Resolution ladder, mirroring resolveEmbedModelDir: an explicit env var wins
+ * outright, then the repo, then the working directory.
+ *
+ * `CODEINDEX_LSP_CONFIG` set to an empty string, `0` or `off` DISABLES the tier
+ * even when a repo config exists — the escape hatch for a CI job that must not
+ * spawn anything, without deleting a file the rest of the team relies on.
+ */
+declare function resolveLspConfigPath(repo: string): ResolvedLspConfigPath;
+/** Validate a parsed payload, throwing with the field that is wrong. */
+declare function parseLspConfig(payload: unknown): LspConfig;
+/**
+ * The config for a repository, or undefined when the tier was not asked for.
+ *
+ * NEVER THROWS on an absent file — absent is the normal case and must cost
+ * nothing. A file that exists but is malformed DOES throw, because at that
+ * point someone asked for the tier and silently ignoring their config is worse
+ * than failing: they would spend the afternoon wondering why nothing improved.
+ */
+declare function loadLspConfig(repo: string): LspConfig | undefined;
+/** The server that claims a language, or undefined. First match wins. */
+declare function serverForLang(config: LspConfig, lang: string): LspServerConfig | undefined;
 
 interface LspAgreement {
     /** Files both tiers report — corroborated by two independent methods. */
@@ -1243,6 +1252,17 @@ declare function columnOfSymbol(root: string, rel: string, line: number, name: s
 /** Cross the two answers into the agreement matrix, deterministically. */
 declare function agreementOf(refs: LspRef[], statik: SymbolReferences): LspAgreement;
 
+interface LspCallersBlock {
+    server: string;
+    ok: boolean;
+    reason?: string;
+    calls: LspIncomingCall[];
+    agreement: LspAgreement;
+}
+type LspCallers<T extends object> = T & {
+    lsp?: LspCallersBlock;
+};
+
 interface LspServerStatus {
     id: string;
     languages: string[];
@@ -1253,12 +1273,7 @@ interface LspServerStatus {
     filesInRepo: number;
     /** --probe only: did `initialize` succeed, and what did it advertise. */
     reachable?: boolean;
-    capabilities?: {
-        references: boolean;
-        definition: boolean;
-        implementation: boolean;
-        typeHierarchy: boolean;
-    };
+    capabilities?: LspCapabilities;
     error?: string;
 }
 interface LspStatus {
@@ -1289,6 +1304,8 @@ declare function lspStatus(scan: RepoScan, repo: string, probe?: boolean): Promi
  * statically, silently and correctly.
  */
 declare function referencesWithLsp(scan: RepoScan, repo: string, name: string, statik: SymbolReferences): Promise<LspReferences>;
+/** Incoming calls may exist even when the static caller index has no entry. */
+declare function callersWithLsp<T extends object>(scan: RepoScan, repo: string, name: string, statik: T): Promise<LspCallers<T>>;
 
 declare function spawnLspTransport(server: LspServerConfig, cwd: string): LspTransport | undefined;
 
@@ -1570,4 +1587,4 @@ declare function byKey<T>(keyOf: (x: T) => string): (a: T, b: T) => number;
 
 declare function runCli(rawArgv: string[]): Promise<void>;
 
-export { type ArchRule, type BuildIndexOptions, type BuiltinRule, CORE_GRAMMARS, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type ChangedSymbol, type ClusteredMermaidOptions, type ClusteredMermaidResult, type CodeInfo, type CodeLiteral, type CodeSymbol, type CouplingOptions, DEFAULT_DELTA_DEPTH, DEFAULT_GRAMMARS_URL, DEFAULT_MAX_FILES, type DeadSymbol, type DeltaChange, type DeltaError, type DeltaModule, type DeltaOptions, type DeltaResult, type DiffFile, type DiffSpec, type Direction, EMBED_VERSION, ENGINE_VERSION, EXTENDED_GRAMMARS, EXTRACTOR_VERSION, EXT_GRAMMAR, type Edge, type EdgeKind, type EditResult, type EmbedEndpointOptions, type EmbedPullTarget, type EmbeddingIndex, type EmbeddingRecord, type EmbeddingUnit, type ExplainedSearch, type ExtractedRecord, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type GrammarsPullResult, type GrammarsPullTarget, type GrammarsTier, type GrammarsTierName, type Graph, type GrepOptions, type HierarchyRef, type Hotspot, type Hunk, INDEX_DIR, type IgnoreRule, type ImpactResult, type ImpactedFile, type IndexArtifacts, type LiteralDuplication, type LiteralFamily, type LiteralSite, type LiteralsOptions, type LiteralsReport, type LspAgreement, type LspBlock, type LspCapabilities, type LspConfig, type LspConfigSource, type LspMessage, type LspRef, type LspReferences, type LspServerConfig, type LspServerStatus, type LspSession, type LspSessionOptions, type LspStatus, LspTimeout, type LspTransport, MARKDOWN_EXT, MAX_FRAME_BYTES, type MarkdownInfo, type McpServerOptions, type MermaidOptions, type ModuleInfo, type ModuleNode, type NeighborLink, type NeighborResult, type Neighborhood, type OnboardBrief, type OnboardOptions, type PersistedCacheEntry, type PersistedCacheMap, type PersistedMeta, type QueryExplanation, type QueryVerdict, RISK_WEIGHTS, type RawCallerIndex, type RawCallerSite, type RawRef, type RawRelation, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type ResolvedRelation, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type ScanSummary, type SearchHit, type SearchOptions, type SearchResult, type SemanticSearchOptions, type SemanticSearchResult, type ShResult, type StaticEmbedModel, type SurpriseEdge, type SymbolComplexity, type SymbolEdge, type SymbolEdgeKind, type SymbolGraph, type SymbolIndex, type SymbolMatch, type SymbolNode, type SymbolReferences, type TagDefinition, type TagsQueryStatus, type TermDiagnostic, type TestMap, type Tier, type TypeHierarchyEntry, type WalkOptions, type WalkResult, type WalkedFile, type WarmGrammarsOptions, type WarmGrammarsResult, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, agreementOf, allGrammarKeys, applyCentrality, basicTokenize, betweennessOf, buildArtifactsFromScan, buildCallerIndex, buildCodeRecord, buildEmbeddingIndex, buildEndpointIndex, buildGraph, buildIndexArtifacts, buildModules, buildRawCallerIndex, buildResolveContext, buildSymbolGraph, buildSymbolIndex, buildTypeHierarchy, byKey, byStr, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, columnOfSymbol, communityOf, compileGlobs, complexityOfSource, computeDelta, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, createFramer, deleteMemory, deltaFor, deserializeEmbeddings, detectCommunities, detectWorkspaces, diffFiles, diffHunks, embedEndpointUrl, embedViaEndpoint, embeddingUnits, enclosingSymbol, encode, encodeMessage, encodeQueryViaEndpoint, ensureGrammars, escapeRegExp, explainQuery, extToLang, extractAst, extractCode, extractGrammarsTarball, extractInParallel, extractMarkdown, extractSymbols, extractTags, extractTarInto, fetchExpectedSha256, fetchGrammarsTarball, fileUri, findDeadCode, findLiteralDuplications, findReferences, findSymbol, foldText, formatDeltaPanel, gitChurn, grammarKeyForExt, grammarKeysForExts, grammarReady, grepRepo, hasEmbedModel, have, headCommit, healthzUrl, hubThreshold, impactOf, implementationsOf, insertAfterSymbol, insertBeforeSymbol, intDot, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keptCodeFiles, keywords, languageOf, listMemories, loadEmbedModel, loadLspConfig, locationsToRefs, lspStatus, lspUnavailable, neighborhood, neighborsOf, onboardBrief, openLspSession, pagerankOf, parseGitignore, parseLspConfig, parseRules, preloadArtifacts, preloadSession, probeEndpoint, pullGrammars, quantize, rankHotspots, rankedKeywords, readMemory, readPersistedIndex, readText, referencesWithLsp, relFromUri, renderGraphJson, renderMermaid, renderMermaidClustered, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveEmbedEndpoint, resolveEmbedModelDir, resolveEmbedPullUrl, resolveGrammarsDir, resolveGrammarsPullTarget, resolveGrammarsTier, resolveImport, resolveLspConfigPath, resolveRelationEdges, resolveRelations, resolveUniqueSymbol, reverseClosure, rewriteCommand, riskHotspots, roundHalfToEven, rrf, runCli, runExtractWorker, runMcpServer, scanRepo, scanRepoParallel, scanSummary, searchIndex, searchSemantic, serializeEmbeddings, serverForLang, sh, sha1, sharedGrammarsCacheDir, shortHash, slugify, spawnLspTransport, subtokens, symbolComplexity, symbolId, symbolsInHunks, symbolsOverview, tagsQueryStatus, testsForModule, tierForPath, toCacheMap, tokenize, typeEntry, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, warmGrammars, wordpiece, workerCount, writeMemory };
+export { type ArchRule, type BuildIndexOptions, type BuiltinRule, CORE_GRAMMARS, type CallerEntry, type CallerIndex, type CallerIndexOptions, type CallerSite, type ChangeCoupling, type ChangedSymbol, type ClusteredMermaidOptions, type ClusteredMermaidResult, type CodeInfo, type CodeLiteral, type CodeSymbol, type CouplingOptions, DEFAULT_DELTA_DEPTH, DEFAULT_GRAMMARS_URL, DEFAULT_MAX_FILES, type DeadSymbol, type DeltaChange, type DeltaError, type DeltaModule, type DeltaOptions, type DeltaResult, type DiffFile, type DiffSpec, type Direction, EMBED_VERSION, ENGINE_VERSION, EXTENDED_GRAMMARS, EXTRACTOR_VERSION, EXT_GRAMMAR, type Edge, type EdgeKind, type EditResult, type EmbedEndpointOptions, type EmbedPullTarget, type EmbeddingIndex, type EmbeddingRecord, type EmbeddingUnit, type ExplainedSearch, type ExtractedRecord, type FileCategory, type FileKind, type FileNode, type FileRecord, type FindSymbolOptions, type ForbiddenEdgeRule, type GrammarsPullResult, type GrammarsPullTarget, type GrammarsTier, type GrammarsTierName, type Graph, type GrepOptions, type HierarchyRef, type Hotspot, type Hunk, INDEX_DIR, type IgnoreRule, type ImpactResult, type ImpactedFile, type IndexArtifacts, type LiteralDuplication, type LiteralFamily, type LiteralSite, type LiteralsOptions, type LiteralsReport, type LspAgreement, type LspBlock, type LspCallers, type LspCallersBlock, type LspCapabilities, type LspConfig, type LspConfigSource, type LspIncomingCall, type LspMessage, type LspRef, type LspReferences, type LspServerConfig, type LspServerStatus, type LspSession, type LspSessionOptions, type LspStatus, LspTimeout, type LspTransport, MARKDOWN_EXT, MAX_FRAME_BYTES, type MarkdownInfo, type McpServerOptions, type MermaidOptions, type ModuleInfo, type ModuleNode, type NeighborLink, type NeighborResult, type Neighborhood, type OnboardBrief, type OnboardOptions, type PersistedCacheEntry, type PersistedCacheMap, type PersistedMeta, type QueryExplanation, type QueryVerdict, RISK_WEIGHTS, type RawCallerIndex, type RawCallerSite, type RawRef, type RawRelation, type RenderScipOptions, type RepoMapOptions, type RepoScan, type Resolution, type ResolveContext, type ResolvedRelation, type RiskHotspot, type RuleSeverity, type RuleViolation, SCHEMA_VERSION, type ScanOptions, type ScanSummary, type SearchHit, type SearchOptions, type SearchResult, type SemanticSearchOptions, type SemanticSearchResult, type ShResult, type StaticEmbedModel, type SurpriseEdge, type SymbolComplexity, type SymbolEdge, type SymbolEdgeKind, type SymbolGraph, type SymbolIndex, type SymbolMatch, type SymbolNode, type SymbolReferences, type TagDefinition, type TagsQueryStatus, type TermDiagnostic, type TestMap, type Tier, type TypeHierarchyEntry, type WalkOptions, type WalkResult, type WalkedFile, type WarmGrammarsOptions, type WarmGrammarsResult, type WorkspaceInfo, type WorkspaceKind, type WorkspacePackage, agreementOf, allGrammarKeys, applyCentrality, basicTokenize, betweennessOf, buildArtifactsFromScan, buildCallerIndex, buildCodeRecord, buildEmbeddingIndex, buildEndpointIndex, buildGraph, buildIndexArtifacts, buildModules, buildRawCallerIndex, buildResolveContext, buildSymbolGraph, buildSymbolIndex, buildTypeHierarchy, byKey, byStr, callersWithLsp, categorize, changeCoupling, changedSince, checkRules, classify, clip, clipInline, columnOfSymbol, communityOf, compileGlobs, complexityOfSource, computeDelta, computeImportPairs, computeSurprises, computeSymbolRefs, computeTestMap, createFramer, deleteMemory, deltaFor, deserializeEmbeddings, detectCommunities, detectWorkspaces, diffFiles, diffHunks, embedEndpointUrl, embedViaEndpoint, embeddingUnits, enclosingSymbol, encode, encodeMessage, encodeQueryViaEndpoint, ensureGrammars, escapeRegExp, explainQuery, extToLang, extractAst, extractCode, extractGrammarsTarball, extractInParallel, extractMarkdown, extractSymbols, extractTags, extractTarInto, fetchExpectedSha256, fetchGrammarsTarball, fileUri, findDeadCode, findLiteralDuplications, findReferences, findSymbol, foldText, formatDeltaPanel, gitChurn, grammarKeyForExt, grammarKeysForExts, grammarReady, grepRepo, hasEmbedModel, have, headCommit, healthzUrl, hubThreshold, impactOf, implementationsOf, insertAfterSymbol, insertBeforeSymbol, intDot, isCode, isDoc, isGitWorktree, isIgnored, isSurprising, isTestFile, isTestPath, keptCodeFiles, keywords, languageOf, listMemories, loadEmbedModel, loadLspConfig, locationsToRefs, lspStatus, lspUnavailable, neighborhood, neighborsOf, onboardBrief, openLspSession, pagerankOf, parseGitignore, parseLspConfig, parseRules, preloadArtifacts, preloadSession, probeEndpoint, pullGrammars, quantize, rankHotspots, rankedKeywords, readMemory, readPersistedIndex, readText, referencesWithLsp, relFromUri, renderGraphJson, renderMermaid, renderMermaidClustered, renderRepoMap, renderScip, renderSymbolsJson, replaceSymbolBody, resolveBaseRef, resolveCallEdges, resolveDocLink, resolveEmbedEndpoint, resolveEmbedModelDir, resolveEmbedPullUrl, resolveGrammarsDir, resolveGrammarsPullTarget, resolveGrammarsTier, resolveImport, resolveLspConfigPath, resolveRelationEdges, resolveRelations, resolveUniqueSymbol, reverseClosure, rewriteCommand, riskHotspots, roundHalfToEven, rrf, runCli, runExtractWorker, runMcpServer, scanRepo, scanRepoParallel, scanSummary, searchIndex, searchSemantic, serializeEmbeddings, serverForLang, sh, sha1, sharedGrammarsCacheDir, shortHash, slugify, spawnLspTransport, subtokens, symbolComplexity, symbolId, symbolsInHunks, symbolsOverview, tagsQueryStatus, testsForModule, tierForPath, toCacheMap, tokenize, typeEntry, uniqueSymbolDefs, untestedModules, untrackedFiles, walk, warmGrammars, wordpiece, workerCount, writeMemory };

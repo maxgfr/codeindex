@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -12,8 +14,8 @@ import { describe, expect, it } from "vitest";
 const BENCH = fileURLToPath(new URL("../scripts/bench/bench.mjs", import.meta.url));
 const FIXTURE = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 
-function runBench(args: string[]): string {
-  return execFileSync(process.execPath, [BENCH, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+function runBench(args: string[], env: NodeJS.ProcessEnv = process.env): string {
+  return execFileSync(process.execPath, [BENCH, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env });
 }
 
 // Split a markdown table row into trimmed cells: ["", "mini-repo", …, ""].
@@ -147,7 +149,6 @@ describe("bench harness smoke", () => {
 // pinning: it says so honestly when the compiler-derived corpus is absent, and
 // when a corpus IS present it drives a real MCP session and grades real answers.
 describe("answer-quality scenario", () => {
-  const CORPUS = fileURLToPath(new URL("./quality/answer-cases.json", import.meta.url));
 
   it("renders one honest n/a row rather than skipping when no corpus exists", { timeout: 60_000 }, () => {
     // Point the harness at a repo the corpus cannot possibly cover.
@@ -160,7 +161,8 @@ describe("answer-quality scenario", () => {
   it("grades a real MCP answer end to end against a hand-written corpus", { timeout: 180_000 }, () => {
     // A stand-in for the scip-typescript corpus, so the plumbing — session,
     // adapter, path extraction, grading — is proven without the toolchain.
-    const previous = existsSync(CORPUS) ? readFileSync(CORPUS, "utf8") : undefined;
+    const dir = mkdtempSync(join(tmpdir(), "codeindex-bench-corpus-"));
+    const CORPUS = join(dir, "cases.json");
     writeFileSync(
       CORPUS,
       JSON.stringify({
@@ -172,7 +174,7 @@ describe("answer-quality scenario", () => {
       }),
     );
     try {
-      const md = runBench(["--repo-dir", FIXTURE, "--runs", "1", "--scenario", "answers", "--no-competitors"]);
+      const md = runBench(["--repo-dir", FIXTURE, "--runs", "1", "--scenario", "answers", "--no-competitors"], { ...process.env, CODEINDEX_ANSWER_CORPUS: CORPUS });
       const section = md.split("## Answer quality")[1]!.split("\n## ")[0]!;
       const row = section.split("\n").find((l) => l.startsWith("| mini-repo | codeindex |"));
       expect(row, section).toBeTruthy();
@@ -182,8 +184,7 @@ describe("answer-quality scenario", () => {
       expect(cells[4]).toBe("1"); // correct — one file, the right one
       expect(cells[6]).toBe("0"); // missed
     } finally {
-      if (previous === undefined) rmSync(CORPUS, { force: true });
-      else writeFileSync(CORPUS, previous);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -38,8 +38,43 @@ export function resolveUniqueSymbol(scan: RepoScan, namePath: string, file?: str
   throw new Error(`"${namePath}" is ambiguous (${matches.length} matches: ${list}) — qualify with \`file\` or a Parent/name path`);
 }
 
-function readLines(abs: string): string[] {
-  return readFileSync(abs, "utf8").split("\n");
+// Editing uses the same BOM/Latin-1 conventions as the scanner and preserves
+// them on disk. New body text adopts the source's newline convention.
+function readDocument(abs: string): { lines: string[]; encode: (lines: string[]) => Buffer } {
+  const bytes = readFileSync(abs);
+  let encoding: "utf8" | "utf16le" | "latin1" = "utf8";
+  let bom = Buffer.alloc(0);
+  let payload = bytes;
+  let bigEndian = false;
+  if (bytes[0] === 0xff && bytes[1] === 0xfe || bytes[0] === 0xfe && bytes[1] === 0xff) {
+    encoding = "utf16le";
+    bom = bytes.subarray(0, 2);
+    payload = Buffer.from(bytes.subarray(2));
+    if (payload.length % 2) throw new Error("cannot edit malformed UTF-16 source: odd byte length");
+    bigEndian = bytes[0] === 0xfe;
+    if (bigEndian) payload.swap16();
+  } else if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    bom = bytes.subarray(0, 3);
+    payload = bytes.subarray(3);
+  } else if (bytes.toString("utf8").includes("�")) encoding = "latin1";
+  const text = payload.toString(encoding);
+  const newline = text.match(/\r?\n/)?.[0] ?? "\n";
+  return {
+    lines: text.replace(/\r\n/g, "\n").split("\n"),
+    encode(lines) {
+      const next = lines.join(newline);
+      if (encoding === "latin1" && [...next].some((char) => char.codePointAt(0)! > 255)) {
+        throw new Error("replacement contains characters outside the source's Latin-1 encoding");
+      }
+      const result = Buffer.from(next, encoding);
+      if (bigEndian) result.swap16();
+      return Buffer.concat([bom, result]);
+    },
+  };
+}
+
+function bodyLines(body: string): string[] {
+  return body.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "").split("\n");
 }
 
 // Write beside the resolved target and atomically rename over it where the
@@ -51,6 +86,10 @@ function readLines(abs: string): string[] {
 // the hidden temp directory visible to git in a consumer repo; the scanner and
 // MCP watcher always ignore the prefix so it cannot become a phantom symbol.
 export function atomicWriteText(abs: string, content: string, cleanup: typeof rmSync = rmSync): void {
+  atomicWrite(abs, content, cleanup);
+}
+
+function atomicWrite(abs: string, content: string | Buffer, cleanup: typeof rmSync = rmSync): void {
   const target = realpathSync(abs);
   const mode = statSync(target).mode;
   let tempDir: string;
@@ -90,10 +129,11 @@ export function replaceSymbolBody(scan: RepoScan, namePath: string, body: string
   const sym = resolveUniqueSymbol(scan, namePath, file);
   const end = sym.endLine ?? sym.line;
   const abs = join(scan.root, sym.file);
-  const lines = readLines(abs);
-  const newLines = body.replace(/^\n+|\n+$/g, "").split("\n");
+  const document = readDocument(abs);
+  const lines = document.lines;
+  const newLines = bodyLines(body);
   lines.splice(sym.line - 1, end - sym.line + 1, ...newLines);
-  atomicWriteText(abs, lines.join("\n"));
+  atomicWrite(abs, document.encode(lines));
   return { file: sym.file, startLine: sym.line, endLine: sym.line + newLines.length - 1, lines: newLines.length };
 }
 
@@ -106,15 +146,16 @@ function insertAt(
   blankAfter: boolean,
 ): EditResult {
   const abs = join(scan.root, sym.file);
-  const lines = readLines(abs);
+  const document = readDocument(abs);
+  const lines = document.lines;
   const minGap = SEPARATED_KINDS.has(sym.kind) ? 1 : 0;
-  const newLines = body.replace(/^\n+|\n+$/g, "").split("\n");
+  const newLines = bodyLines(body);
   const block: string[] = [];
   if (blankBefore && minGap && lines[index - 1]?.trim() !== "") block.push("");
   block.push(...newLines);
   if (blankAfter && minGap && lines[index]?.trim() !== "") block.push("");
   lines.splice(index, 0, ...block);
-  atomicWriteText(abs, lines.join("\n"));
+  atomicWrite(abs, document.encode(lines));
   return { file: sym.file, startLine: index + 1, endLine: index + block.length, lines: block.length };
 }
 

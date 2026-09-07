@@ -410,8 +410,9 @@ holder.
 ## Docker
 
 `ghcr.io/maxgfr/codeindex` ships the same zero-dependency bundle (`engine.mjs`
-+ `cli.mjs` + the AST grammars) with nothing else inside — just `node` and the
-files above, no `npm install`. Multi-arch (`linux/amd64`, `linux/arm64`),
++ `cli.mjs` + the AST grammars), Node and Git, with no `npm install`. Git
+supports revision metadata and the `churn`, `coupling` and `delta` commands.
+Multi-arch (`linux/amd64`, `linux/arm64`),
 built and pushed on release. Mount the repo to index at `/work`:
 
 ```sh
@@ -432,6 +433,19 @@ Runs as an MCP server over stdio the same way as the npm CLI (see
 ```sh
 docker run -i --rm -v "$PWD":/work ghcr.io/maxgfr/codeindex mcp
 ```
+
+The image runs as `node` and trusts `/work` as a Git safe directory so a host
+mount with a different owner remains usable. To test local engine and embedding
+builds, including offline semantic search:
+
+```sh
+docker build -t codeindex:qa .
+docker build -t codeindex-embed:qa docker/embed
+node scripts/test-docker.mjs codeindex:qa codeindex-embed:qa
+```
+
+The [engine validation report](docs/engine-validation-2026-09-07.md) records the
+tested architecture and runtime checks.
 
 ## Search
 
@@ -620,7 +634,8 @@ the repository and get its answer *alongside* the static one:
     "id": "ts",
     "languages": ["typescript", "tsx", "javascript"],
     "command": "typescript-language-server",
-    "args": ["--stdio"]
+    "args": ["--stdio"],
+    "initializationOptions": { "tsserver": { "useSyntaxServer": "never" } }
   }]
 }
 ```
@@ -629,6 +644,12 @@ the repository and get its answer *alongside* the static one:
 codeindex lsp status --repo .           # config, PATH resolution, files claimed
 codeindex lsp status --repo . --probe   # also start each server, read its real capabilities
 ```
+
+The TypeScript example disables its separate syntax server because codeindex
+opens short-lived query sessions. Otherwise an early reference request can be
+answered before the semantic project is ready and return only the declaration.
+Other servers use their own initialization options; codeindex does not infer a
+server configuration from its binary name.
 
 `find_references` then takes `lsp: true` and appends an `lsp` block:
 
@@ -644,8 +665,9 @@ codeindex lsp status --repo . --probe   # also start each server, read its real 
 
 **It annotates, it never replaces.** The three static tiers come back
 byte-identical, and the product is the agreement matrix: `lspOnly` is where the
-static tier under-recalled, and **`staticOnly` is where the homonyms are** — the
-only evidence the static tier over-reported, which a replace-merge would delete.
+static tier and server disagree, while `staticOnly` can indicate a homonym or
+an incomplete language-server answer. These are investigation leads, not proof
+that either tier is wrong.
 A language server that has not finished indexing returns a partial answer with
 no error, which a union makes visible and a replace would silently hide.
 
@@ -660,7 +682,35 @@ Three deliberate constraints:
   `typescript-language-server` happened to be installed would make the same repo
   answer differently per machine.
 - **Every failure degrades to the static answer on exit 0**, with a stated
-  reason: absent config, absent binary, missing capability, crash, timeout.
+  reason for unavailable configured servers. For compatibility, references
+  without any configuration retain their original static-only shape; the new
+  callers option explicitly reports missing configuration.
+
+### Type-aware callers
+
+`callers` accepts `lsp: true` in MCP, with a required `name`, or a symbol
+positional in the CLI:
+
+```sh
+codeindex callers greet --repo .
+codeindex callers greet@src/greet.ts --repo . --lsp
+```
+
+The normal `def` and `callers` stay present. An additive `lsp` block contains
+`server`, `ok`, optional `reason`, `calls` and `agreement`. Each call records its
+call-site `file`, 1-based `line`, 0-based UTF-16 `character`, and the enclosing
+`caller` location/name/LSP kind. Agreement compares call-site files, excluding
+declaration-only files. `lsp status --probe` reports `callHierarchy`; servers
+without it return the static answer and an explanation. A known declaration
+can have LSP callers even when no static callers were tracked: the existing
+static `error` notice then remains beside the successful `lsp` block.
+
+Both references and callers route each declaration to its configured language
+server, so a TypeScript/Python homonym does not send Python source to the
+TypeScript server. Calls require `prepareCallHierarchy` and `incomingCalls`;
+reference occurrences alone are not classified as calls. Missing configuration,
+unsupported capabilities, process/pipe failures and timeouts keep the static
+answer. Results already received survive a later failure with `ok: false`.
 
 ## Use as an MCP server
 
@@ -689,6 +739,20 @@ claude mcp add codeindex -- codeindex mcp
 and persists it as the `onboarding` memory, so the second session reads instead
 of rebuilding.
 
+### Smaller read responses
+
+MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`
+accept `concise: true`. Declarations are reduced to `name/kind/file/line` while
+result membership, order, reference groups, call-site locations, confidence
+labels and LSP metadata stay intact. Defaults retain their full existing shape.
+`symbols` keeps its name-keyed groups and references for full-index requests.
+The option is a query projection; it never changes persisted artifacts.
+
+Symbolic edits preserve supported source encodings (UTF-8/BOM, UTF-16 LE/BE,
+Latin-1) and line endings. Malformed UTF-16 and replacements that cannot be
+represented in a Latin-1 source fail before writing. Memory notes stay under
+`.codeindex/memories`; linked storage paths are refused rather than followed.
+
 ### Advertising fewer tools
 
 Every advertised tool's full JSON Schema sits in an agent's context on **every
@@ -701,6 +765,8 @@ codeindex mcp --tools orient,impact # compose profiles with a comma
 ```
 
 Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`.
+The MCP initialization response names the available profiles and active selection
+in its `instructions`, so a client can discover this configuration in-session.
 It trims what is **advertised**, not what is answerable: a tool left out of the
 profile still works when called by name, so a narrowed server loses no
 capability. An unknown profile fails at startup rather than quietly advertising

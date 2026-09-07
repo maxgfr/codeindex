@@ -91,7 +91,7 @@ function codeindexAdapter(opts) {
   return {
     key: "codeindex",
     perRepoSupport: () => null, // all 7 repos
-    spawn(dir) { return { cmd: process.execPath, args: [cli, "mcp"], cwd: dir }; },
+    spawn(dir) { return { cmd: process.execPath, args: [cli, "mcp"], cwd: dir, env: benchEnv() }; },
     // Prime a persisted index the MCP server preloads on activation — the same
     // untimed one-time build the other servers do (graphify update). --out
     // <dir>/.codeindex is exactly where mcp.ts's preload looks.
@@ -108,7 +108,7 @@ function codeindexAdapter(opts) {
           ? (ctx) => ({ name: "find_symbol", arguments: { repo: ctx.dir, namePath: ctx.symbol } })
           : undefined,
         refs: m.has("find_references")
-          ? (ctx) => ({ name: "find_references", arguments: { repo: ctx.dir, name: ctx.symbol } })
+          ? (ctx) => ({ name: "find_references", arguments: { repo: ctx.dir, name: ctx.symbol, ...(ctx.lsp ? { lsp: true } : {}) } })
           : undefined,
         overview: m.has("symbols_overview")
           ? (ctx) => ({ name: "symbols_overview", arguments: { repo: ctx.dir, file: ctx.file } })

@@ -184,6 +184,7 @@ export function renderJson(report, env) {
       note: s.note ?? null,
       headers: s.headers,
       rows: s.rows.map((row) => row.map(cellJson)),
+      ...(s.evidence ? { evidence: s.evidence } : {}),
     })),
   };
 }

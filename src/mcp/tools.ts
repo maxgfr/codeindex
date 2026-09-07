@@ -7,6 +7,7 @@
 import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protocol.js";
 
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
+const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
   include: { type: "array", items: { type: "string" }, description: "Include globs" },
@@ -32,7 +33,7 @@ export const TOOLS = [
       "Where is a symbol defined and which files reference it? Returns the definition sites (file, line, kind, exported) and referencing files. Omit `name` for the full symbol index.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Symbol name to look up" } },
+      properties: { ...repoProp, ...conciseProp, name: { type: "string", description: "Symbol name to look up" } },
       required: ["repo"],
     },
   },
@@ -44,7 +45,9 @@ export const TOOLS = [
       type: "object",
       properties: {
         ...repoProp,
+        ...conciseProp,
         name: { type: "string", description: "Symbol name to look up" },
+        lsp: { type: "boolean", description: "Append incoming calls from configured language servers and agreement with static callers. Requires name; name@file disambiguates. Unsupported servers and failures keep the static answer with a stated reason (default false)." },
         recall: {
           type: "boolean",
           description:
@@ -75,7 +78,7 @@ export const TOOLS = [
       "All symbols declared in ONE file (name, kind, line span, exported, parent), in declaration order — the fastest way to understand a file without reading it.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, file: { type: "string", description: "Repo-relative file path" } },
+      properties: { ...repoProp, ...conciseProp, file: { type: "string", description: "Repo-relative file path" } },
       required: ["repo", "file"],
     },
   },
@@ -109,10 +112,11 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         name: { type: "string", description: "Symbol name" },
+        ...conciseProp,
         lsp: {
           type: "boolean",
           description:
-            "Also ask a configured language server (see lsp_status) and append an `lsp` block: its references plus an `agreement` matrix (both / lspOnly / staticOnly). The three static tiers are unchanged either way. `staticOnly` is where the homonyms are. No config, no binary, a crash or a timeout all degrade to the static answer with a stated reason (default false).",
+            "Also ask a configured language server (see lsp_status) and append an `lsp` block: its references plus an `agreement` matrix (both / lspOnly / staticOnly). The three static tiers are unchanged either way. `staticOnly` can indicate homonyms or an incomplete language-server answer. No config, no binary, a crash or a timeout all degrade to the static answer with a stated reason (default false).",
         },
       },
       required: ["repo", "name"],
@@ -524,6 +528,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   callers: {
     oneOf: [
       { type: "object", additionalProperties: anyObj },
+      { type: "object", properties: { def: anyObj, callers: { type: "array", items: anyObj }, lsp: anyObj }, required: ["def", "callers"] },
       { type: "object", properties: { error: { type: "string" } }, required: ["error"] },
     ],
   },

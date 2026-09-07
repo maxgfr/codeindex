@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-08-12T13:54:50.212Z",
-  "tool": "scip-typescript",
+  "generatedAt": "2026-09-07T13:14:26.457Z",
+  "tool": "scip-typescript 0.4.0",
   "cases": [
     {
       "repo": "socialgouv/code-du-travail-numerique",
@@ -150,6 +150,156 @@
       "repo": "socialgouv/code-du-travail-numerique",
       "symbol": "AbsenceStoreError",
       "declaredIn": "packages/code-du-travail-frontend/src/modules/outils/indemnite-depart/steps/Absences/store/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABORT",
+      "declaredIn": "packages/next/src/experimental/testmode/proxy/types.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABORT_ONCE",
+      "declaredIn": "packages/next/src/server/app-render/app-render.tsx",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABSOLUTE_URL_RE",
+      "declaredIn": "packages/eslint-plugin-next/src/rules/no-location-assign-relative-destination.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABSOLUTE_URL_REGEX",
+      "declaredIn": "packages/next/src/shared/lib/utils.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ABeeZee",
+      "declaredIn": "packages/font/src/google/index.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BEFORE_REFRESH",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILDING_INDICATOR_HIDE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILDING_INDICATOR_SHOW",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILD_ERROR",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_BUILD_OK",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_CACHE_INDICATOR",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEBUG_INFO",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DESCRIPTOR_ID_PREFIX",
+      "declaredIn": "packages/next/src/server/app-render/action-handler.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_CONFIG",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_PANEL_POSITION",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_POSITION",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOLS_SCALE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEVTOOL_UPDATE_ROUTE_STATE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEV_INDICATOR",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_DEV_INDICATOR_SET",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_ERROR_OVERLAY_CLOSE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_ERROR_OVERLAY_OPEN",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_ERROR_OVERLAY_TOGGLE",
+      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_HEADER",
+      "declaredIn": "packages/next/src/client/components/app-router-headers.ts",
+      "distractors": []
+    },
+    {
+      "repo": "vercel/next.js",
+      "symbol": "ACTION_HMR_REFRESH",
+      "declaredIn": "packages/next/src/client/components/router-reducer/router-reducer-types.ts",
       "distractors": []
     },
     {
@@ -303,154 +453,315 @@
       "distractors": []
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ABORT",
-      "declaredIn": "packages/next/src/experimental/testmode/proxy/types.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "AppRouter",
+      "declaredIn": "packages/api/src/root.ts",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/expo/src/utils/api.tsx",
+        "apps/nextjs/src/trpc/react.tsx",
+        "apps/nextjs/src/trpc/server.tsx",
+        "apps/tanstack-start/src/routes/__root.tsx",
+        "packages/api/src/index.ts"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ABORT_ONCE",
-      "declaredIn": "packages/next/src/server/app-render/app-render.tsx",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Auth",
+      "declaredIn": "packages/auth/src/index.ts",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "packages/api/src/trpc.ts"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ABSOLUTE_URL_RE",
-      "declaredIn": "packages/eslint-plugin-next/src/rules/no-location-assign-relative-destination.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Button",
+      "declaredIn": "packages/ui/src/button.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/auth-showcase.tsx",
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/component/auth-showcase.tsx",
+        "apps/tanstack-start/src/routes/index.tsx",
+        "packages/ui/src/theme.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ABSOLUTE_URL_REGEX",
-      "declaredIn": "packages/next/src/shared/lib/utils.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "CreatePostSchema",
+      "declaredIn": "packages/db/src/schema.ts",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx",
+        "packages/api/src/router/post.ts"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ABeeZee",
-      "declaredIn": "packages/font/src/google/index.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenu",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "packages/ui/src/theme.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_BEFORE_REFRESH",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuContent",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "packages/ui/src/theme.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_BUILDING_INDICATOR_HIDE",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuItem",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "packages/ui/src/theme.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_BUILDING_INDICATOR_SHOW",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "DropdownMenuTrigger",
+      "declaredIn": "packages/ui/src/dropdown-menu.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "packages/ui/src/theme.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_BUILD_ERROR",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Field",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_BUILD_OK",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "FieldContent",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_CACHE_INDICATOR",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "FieldError",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEBUG_INFO",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "FieldGroup",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DESCRIPTOR_ID_PREFIX",
-      "declaredIn": "packages/next/src/server/app-render/action-handler.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "FieldLabel",
+      "declaredIn": "packages/ui/src/field.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEVTOOLS_CONFIG",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "HydrateClient",
+      "declaredIn": "apps/nextjs/src/trpc/server.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/page.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEVTOOLS_PANEL_POSITION",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Input",
+      "declaredIn": "packages/ui/src/input.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEVTOOLS_POSITION",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Label",
+      "declaredIn": "packages/ui/src/label.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "packages/ui/src/field.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEVTOOLS_SCALE",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "RouterInputs",
+      "declaredIn": "packages/api/src/index.ts",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/expo/src/utils/api.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEVTOOL_UPDATE_ROUTE_STATE",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "RouterOutputs",
+      "declaredIn": "packages/api/src/index.ts",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/expo/src/app/index.tsx",
+        "apps/expo/src/utils/api.tsx",
+        "apps/nextjs/src/app/_components/posts.tsx",
+        "apps/tanstack-start/src/routes/index.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEV_INDICATOR",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Separator",
+      "declaredIn": "packages/ui/src/separator.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "packages/ui/src/field.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_DEV_INDICATOR_SET",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "TRPCReactProvider",
+      "declaredIn": "apps/nextjs/src/trpc/react.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/layout.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_ERROR_OVERLAY_CLOSE",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "ThemeProvider",
+      "declaredIn": "packages/ui/src/theme.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/layout.tsx",
+        "apps/tanstack-start/src/routes/__root.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_ERROR_OVERLAY_OPEN",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "ThemeToggle",
+      "declaredIn": "packages/ui/src/theme.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/layout.tsx",
+        "apps/tanstack-start/src/routes/__root.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_ERROR_OVERLAY_TOGGLE",
-      "declaredIn": "packages/next/src/next-devtools/dev-overlay/shared.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "Toaster",
+      "declaredIn": "packages/ui/src/toast.tsx",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/layout.tsx",
+        "apps/tanstack-start/src/routes/__root.tsx"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_HEADER",
-      "declaredIn": "packages/next/src/client/components/app-router-headers.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "appRouter",
+      "declaredIn": "packages/api/src/root.ts",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/app/api/trpc/[trpc]/route.ts",
+        "apps/nextjs/src/trpc/server.tsx",
+        "apps/tanstack-start/src/routes/api/trpc.$.ts",
+        "packages/api/src/index.ts"
+      ]
     },
     {
-      "repo": "vercel/next.js",
-      "symbol": "ACTION_HMR_REFRESH",
-      "declaredIn": "packages/next/src/client/components/router-reducer/router-reducer-types.ts",
-      "distractors": []
+      "repo": "t3-oss/create-t3-turbo",
+      "symbol": "authEnv",
+      "declaredIn": "packages/auth/env.ts",
+      "distractors": [],
+      "kind": "references",
+      "referencedIn": [
+        "apps/nextjs/src/env.ts",
+        "apps/tanstack-start/src/env.ts"
+      ]
     }
-  ]
+  ],
+  "unavailable": [
+    {
+      "repo": "socialgouv/code-du-travail-numerique",
+      "reason": "not refreshed in bounded generation; prior compiler cases retained with original provenance"
+    },
+    {
+      "repo": "nrwl/nx-examples",
+      "reason": "not selected for this bounded corpus generation"
+    },
+    {
+      "repo": "vercel/next.js",
+      "reason": "not refreshed in bounded generation; prior compiler cases retained with original provenance"
+    }
+  ],
+  "revisions": {
+    "t3-oss/create-t3-turbo": "8f945b7bb3bfb3ca8358d48b1ff0214079bc11ee"
+  },
+  "provenance": {
+    "t3-oss/create-t3-turbo": {
+      "generatedAt": "2026-09-07T13:14:26.457Z",
+      "tool": "scip-typescript 0.4.0",
+      "revision": "8f945b7bb3bfb3ca8358d48b1ff0214079bc11ee",
+      "refreshed": true
+    },
+    "socialgouv/code-du-travail-numerique": {
+      "generatedAt": "2026-08-12T13:54:50.212Z",
+      "tool": "scip-typescript",
+      "refreshed": false
+    },
+    "vercel/next.js": {
+      "generatedAt": "2026-08-12T13:54:50.212Z",
+      "tool": "scip-typescript",
+      "refreshed": false
+    }
+  }
 }

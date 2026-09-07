@@ -1,0 +1,1991 @@
+{
+  "generatedAt": "2026-09-07T13:24:28.811Z",
+  "node": "v24.19.0",
+  "corpus": {
+    "tool": "scip-typescript 0.4.0",
+    "generatedAt": "2026-09-07T13:14:26.457Z",
+    "revisions": {
+      "t3-oss/create-t3-turbo": "8f945b7bb3bfb3ca8358d48b1ff0214079bc11ee"
+    },
+    "provenance": {
+      "t3-oss/create-t3-turbo": {
+        "generatedAt": "2026-09-07T13:14:26.457Z",
+        "tool": "scip-typescript 0.4.0",
+        "revision": "8f945b7bb3bfb3ca8358d48b1ff0214079bc11ee",
+        "refreshed": true
+      },
+      "socialgouv/code-du-travail-numerique": {
+        "generatedAt": "2026-08-12T13:54:50.212Z",
+        "tool": "scip-typescript",
+        "refreshed": false
+      },
+      "vercel/next.js": {
+        "generatedAt": "2026-08-12T13:54:50.212Z",
+        "tool": "scip-typescript",
+        "refreshed": false
+      }
+    },
+    "unavailable": [
+      {
+        "repo": "socialgouv/code-du-travail-numerique",
+        "reason": "not refreshed in bounded generation; prior compiler cases retained with original provenance"
+      },
+      {
+        "repo": "nrwl/nx-examples",
+        "reason": "not selected for this bounded corpus generation"
+      },
+      {
+        "repo": "vercel/next.js",
+        "reason": "not refreshed in bounded generation; prior compiler cases retained with original provenance"
+      }
+    ]
+  },
+  "lspConfig": {
+    "version": 1,
+    "servers": [
+      {
+        "id": "typescript",
+        "languages": [
+          "typescript",
+          "javascript"
+        ],
+        "command": "/tmp/codeindex-answer-tools/node_modules/.bin/typescript-language-server",
+        "args": [
+          "--stdio"
+        ],
+        "timeoutMs": 5000,
+        "startupTimeoutMs": 15000,
+        "initializationOptions": {
+          "tsserver": {
+            "useSyntaxServer": "never"
+          }
+        }
+      }
+    ]
+  },
+  "toolVersions": {
+    "languageServer": "5.1.3",
+    "workspaceTypeScript": "5.9.3",
+    "scipTypeScript": "0.4.0",
+    "serena": "1.6.1"
+  },
+  "rows": [
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "server": "codeindex",
+      "lsp": false,
+      "kind": "location",
+      "ok": true,
+      "grades": {
+        "correct": 25,
+        "incomplete": 0,
+        "wrong": 0,
+        "empty": 0
+      },
+      "asked": 25,
+      "measured": 25,
+      "unavailable": 0,
+      "tokens": 89,
+      "precision": 1,
+      "recall": 1,
+      "ms": 7.564000000002125,
+      "records": [
+        {
+          "symbol": "ApiAuthSplatRoute",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/tanstack-start/src/routeTree.gen.ts"
+          ],
+          "ms": 13.536624999997002,
+          "bytes": 669,
+          "response": "[\n  {\n    \"name\": \"ApiAuthSplatRoute\",\n    \"kind\": \"const\",\n    \"file\": \"apps/tanstack-start/src/routeTree.gen.ts\",\n    \"line\": 26,\n    \"endLine\": 30,\n    \"signature\": \"ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({ id: '/api/auth/$', path: '/api/auth/$', getParentRoute: () => rootRouteImport, } as any)\",\n    \"exported\": false,\n    \"lang\": \"typescript\"\n  },\n  {\n    \"name\": \"ApiAuthSplatRoute\",\n    \"kind\": \"property\",\n    \"file\": \"apps/tanstack-start/src/routeTree.gen.ts\",\n    \"line\": 58,\n    \"endLine\": 58,\n    \"parent\": \"RootRouteChildren\",\n    \"signature\": \"ApiAuthSplatRoute: typeof ApiAuthSplatRoute\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "ApiTrpcSplatRoute",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/tanstack-start/src/routeTree.gen.ts"
+          ],
+          "ms": 8.40887500000099,
+          "bytes": 669,
+          "response": "[\n  {\n    \"name\": \"ApiTrpcSplatRoute\",\n    \"kind\": \"const\",\n    \"file\": \"apps/tanstack-start/src/routeTree.gen.ts\",\n    \"line\": 21,\n    \"endLine\": 25,\n    \"signature\": \"ApiTrpcSplatRoute = ApiTrpcSplatRouteImport.update({ id: '/api/trpc/$', path: '/api/trpc/$', getParentRoute: () => rootRouteImport, } as any)\",\n    \"exported\": false,\n    \"lang\": \"typescript\"\n  },\n  {\n    \"name\": \"ApiTrpcSplatRoute\",\n    \"kind\": \"property\",\n    \"file\": \"apps/tanstack-start/src/routeTree.gen.ts\",\n    \"line\": 59,\n    \"endLine\": 59,\n    \"parent\": \"RootRouteChildren\",\n    \"signature\": \"ApiTrpcSplatRoute: typeof ApiTrpcSplatRoute\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "AppRouter",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/api/src/root.ts"
+          ],
+          "ms": 10.084208000000217,
+          "bytes": 277,
+          "response": "[\n  {\n    \"name\": \"AppRouter\",\n    \"kind\": \"type\",\n    \"file\": \"packages/api/src/root.ts\",\n    \"line\": 11,\n    \"endLine\": 11,\n    \"signature\": \"type AppRouter = typeof appRouter;\",\n    \"doc\": \"export type definition of API\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "Auth",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/auth/src/index.ts"
+          ],
+          "ms": 8.387666000002355,
+          "bytes": 236,
+          "response": "[\n  {\n    \"name\": \"Auth\",\n    \"kind\": \"type\",\n    \"file\": \"packages/auth/src/index.ts\",\n    \"line\": 51,\n    \"endLine\": 51,\n    \"signature\": \"type Auth = ReturnType<typeof initAuth>;\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "Button",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/button.tsx"
+          ],
+          "ms": 7.564000000002125,
+          "bytes": 371,
+          "response": "[\n  {\n    \"name\": \"Button\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/button.tsx\",\n    \"line\": 38,\n    \"endLine\": 57,\n    \"signature\": \"function Button({ className, variant, size, asChild = false, ...props }: React.ComponentProps<\\\"button\\\"> & VariantProps<typeof buttonVariants> & { asChild?: boolean; })\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "CreatePost",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/expo/src/app/index.tsx"
+          ],
+          "ms": 7.078583000002254,
+          "bytes": 229,
+          "response": "[\n  {\n    \"name\": \"CreatePost\",\n    \"kind\": \"function\",\n    \"file\": \"apps/expo/src/app/index.tsx\",\n    \"line\": 41,\n    \"endLine\": 99,\n    \"signature\": \"function CreatePost()\",\n    \"exported\": false,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "CreatePostSchema",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/db/src/schema.ts"
+          ],
+          "ms": 7.441625000003114,
+          "bytes": 368,
+          "response": "[\n  {\n    \"name\": \"CreatePostSchema\",\n    \"kind\": \"const\",\n    \"file\": \"packages/db/src/schema.ts\",\n    \"line\": 16,\n    \"endLine\": 23,\n    \"signature\": \"CreatePostSchema = createInsertSchema(Post, { title: z.string().max(256), content: z.string().max(256), }).omit({ id: true, createdAt: true, updatedAt: true, })\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenu",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 7.605082999998558,
+          "bytes": 307,
+          "response": "[\n  {\n    \"name\": \"DropdownMenu\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 12,\n    \"endLine\": 16,\n    \"signature\": \"function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuCheckboxItem",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 9.23241599999892,
+          "bytes": 370,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuCheckboxItem\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 88,\n    \"endLine\": 112,\n    \"signature\": \"function DropdownMenuCheckboxItem({ className, children, checked, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuContent",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 9.51154200000019,
+          "bytes": 351,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuContent\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 37,\n    \"endLine\": 55,\n    \"signature\": \"function DropdownMenuContent({ className, sideOffset = 4, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuGroup",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 8.766292000000249,
+          "bytes": 318,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuGroup\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 57,\n    \"endLine\": 63,\n    \"signature\": \"function DropdownMenuGroup({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Group>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuItem",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 7.6044590000019525,
+          "bytes": 420,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuItem\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 65,\n    \"endLine\": 86,\n    \"signature\": \"function DropdownMenuItem({ className, inset, variant = \\\"default\\\", ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean; variant?: \\\"default\\\" | \\\"destructive\\\"; })\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuLabel",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.392166000001453,
+          "bytes": 361,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuLabel\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 149,\n    \"endLine\": 167,\n    \"signature\": \"function DropdownMenuLabel({ className, inset, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Label> & { inset?: boolean; })\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuPortal",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.830167000000074,
+          "bytes": 321,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuPortal\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 18,\n    \"endLine\": 24,\n    \"signature\": \"function DropdownMenuPortal({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuRadioGroup",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.443165999997291,
+          "bytes": 335,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuRadioGroup\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 114,\n    \"endLine\": 123,\n    \"signature\": \"function DropdownMenuRadioGroup({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuRadioItem",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 7.796542000000045,
+          "bytes": 353,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuRadioItem\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 125,\n    \"endLine\": 147,\n    \"signature\": \"function DropdownMenuRadioItem({ className, children, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuSeparator",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.622916000000259,
+          "bytes": 343,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuSeparator\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 169,\n    \"endLine\": 180,\n    \"signature\": \"function DropdownMenuSeparator({ className, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Separator>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuShortcut",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.8020829999986745,
+          "bytes": 311,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuShortcut\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 182,\n    \"endLine\": 196,\n    \"signature\": \"function DropdownMenuShortcut({ className, ...props }: React.ComponentProps<\\\"span\\\">)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuSub",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.590374999999767,
+          "bytes": 314,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuSub\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 198,\n    \"endLine\": 202,\n    \"signature\": \"function DropdownMenuSub({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuSubContent",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.192000000002736,
+          "bytes": 346,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuSubContent\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 228,\n    \"endLine\": 242,\n    \"signature\": \"function DropdownMenuSubContent({ className, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuSubTrigger",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.63262499999837,
+          "bytes": 386,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuSubTrigger\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 204,\n    \"endLine\": 226,\n    \"signature\": \"function DropdownMenuSubTrigger({ className, inset, children, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & { inset?: boolean; })\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "DropdownMenuTrigger",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx"
+          ],
+          "ms": 6.368624999999156,
+          "bytes": 324,
+          "response": "[\n  {\n    \"name\": \"DropdownMenuTrigger\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n    \"line\": 26,\n    \"endLine\": 35,\n    \"signature\": \"function DropdownMenuTrigger({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "Field",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/field.tsx"
+          ],
+          "ms": 6.714292000000569,
+          "bytes": 336,
+          "response": "[\n  {\n    \"name\": \"Field\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/field.tsx\",\n    \"line\": 88,\n    \"endLine\": 102,\n    \"signature\": \"function Field({ className, orientation = \\\"vertical\\\", ...props }: React.ComponentProps<\\\"div\\\"> & VariantProps<typeof fieldVariants>)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "FieldContent",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/field.tsx"
+          ],
+          "ms": 8.192416000001685,
+          "bytes": 286,
+          "response": "[\n  {\n    \"name\": \"FieldContent\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/field.tsx\",\n    \"line\": 104,\n    \"endLine\": 118,\n    \"signature\": \"function FieldContent({ className, ...props }: React.ComponentProps<\\\"div\\\">)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        },
+        {
+          "symbol": "FieldDescription",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/field.tsx"
+          ],
+          "ms": 9.07916699999987,
+          "bytes": 292,
+          "response": "[\n  {\n    \"name\": \"FieldDescription\",\n    \"kind\": \"function\",\n    \"file\": \"packages/ui/src/field.tsx\",\n    \"line\": 154,\n    \"endLine\": 170,\n    \"signature\": \"function FieldDescription({ className, ...props }: React.ComponentProps<\\\"p\\\">)\",\n    \"exported\": true,\n    \"lang\": \"typescript\"\n  }\n]"
+        }
+      ]
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "server": "codeindex",
+      "lsp": false,
+      "kind": "references",
+      "ok": true,
+      "grades": {
+        "correct": 20,
+        "incomplete": 4,
+        "wrong": 1,
+        "empty": 0
+      },
+      "asked": 25,
+      "measured": 25,
+      "unavailable": 0,
+      "tokens": 121,
+      "precision": 0.9053333333333334,
+      "recall": 0.96,
+      "ms": 7.6322499999987485,
+      "records": [
+        {
+          "symbol": "AppRouter",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 0.8333333333333334,
+          "recall": 1,
+          "hits": 5,
+          "returned": 6,
+          "expected": 5,
+          "files": [
+            "apps/expo/src/utils/api.tsx",
+            "apps/nextjs/src/trpc/react.tsx",
+            "apps/nextjs/src/trpc/server.tsx",
+            "apps/tanstack-start/src/lib/trpc.ts",
+            "apps/tanstack-start/src/routes/__root.tsx",
+            "packages/api/src/index.ts"
+          ],
+          "ms": 18.779624999999214,
+          "bytes": 599,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"AppRouter\",\n      \"kind\": \"type\",\n      \"file\": \"packages/api/src/root.ts\",\n      \"line\": 11,\n      \"endLine\": 11,\n      \"signature\": \"type AppRouter = typeof appRouter;\",\n      \"doc\": \"export type definition of API\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/expo/src/utils/api.tsx\",\n    \"apps/nextjs/src/trpc/react.tsx\",\n    \"apps/nextjs/src/trpc/server.tsx\",\n    \"apps/tanstack-start/src/lib/trpc.ts\",\n    \"apps/tanstack-start/src/routes/__root.tsx\",\n    \"packages/api/src/index.ts\"\n  ]\n}"
+        },
+        {
+          "symbol": "Auth",
+          "measured": true,
+          "grade": "wrong",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "README.md"
+          ],
+          "ms": 8.401417000000947,
+          "bytes": 336,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Auth\",\n      \"kind\": \"type\",\n      \"file\": \"packages/auth/src/index.ts\",\n      \"line\": 51,\n      \"endLine\": 51,\n      \"signature\": \"type Auth = ReturnType<typeof initAuth>;\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"README.md\"\n  ]\n}"
+        },
+        {
+          "symbol": "Button",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 5,
+          "returned": 5,
+          "expected": 5,
+          "files": [
+            "apps/nextjs/src/app/_components/auth-showcase.tsx",
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/component/auth-showcase.tsx",
+            "apps/tanstack-start/src/routes/index.tsx",
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 7.6322499999987485,
+          "bytes": 700,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Button\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/button.tsx\",\n      \"line\": 38,\n      \"endLine\": 57,\n      \"signature\": \"function Button({ className, variant, size, asChild = false, ...props }: React.ComponentProps<\\\"button\\\"> & VariantProps<typeof buttonVariants> & { asChild?: boolean; })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/auth-showcase.tsx\",\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/component/auth-showcase.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\",\n    \"packages/ui/src/theme.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "CreatePostSchema",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 3,
+          "returned": 3,
+          "expected": 3,
+          "files": [
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx",
+            "packages/api/src/router/post.ts"
+          ],
+          "ms": 7.484042000000045,
+          "bytes": 587,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"CreatePostSchema\",\n      \"kind\": \"const\",\n      \"file\": \"packages/db/src/schema.ts\",\n      \"line\": 16,\n      \"endLine\": 23,\n      \"signature\": \"CreatePostSchema = createInsertSchema(Post, { title: z.string().max(256), content: z.string().max(256), }).omit({ id: true, createdAt: true, updatedAt: true, })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\",\n    \"packages/api/src/router/post.ts\"\n  ]\n}"
+        },
+        {
+          "symbol": "DropdownMenu",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 10.330583000002662,
+          "bytes": 423,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenu\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 12,\n      \"endLine\": 16,\n      \"signature\": \"function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "DropdownMenuContent",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 7.870541999996931,
+          "bytes": 467,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenuContent\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 37,\n      \"endLine\": 55,\n      \"signature\": \"function DropdownMenuContent({ className, sideOffset = 4, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "DropdownMenuItem",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 8.611958000001323,
+          "bytes": 536,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenuItem\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 65,\n      \"endLine\": 86,\n      \"signature\": \"function DropdownMenuItem({ className, inset, variant = \\\"default\\\", ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean; variant?: \\\"default\\\" | \\\"destructive\\\"; })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "DropdownMenuTrigger",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 8.436749999997119,
+          "bytes": 440,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenuTrigger\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 26,\n      \"endLine\": 35,\n      \"signature\": \"function DropdownMenuTrigger({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "Field",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx"
+          ],
+          "ms": 9.834958999999799,
+          "bytes": 516,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Field\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 88,\n      \"endLine\": 102,\n      \"signature\": \"function Field({ className, orientation = \\\"vertical\\\", ...props }: React.ComponentProps<\\\"div\\\"> & VariantProps<typeof fieldVariants>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "FieldContent",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx"
+          ],
+          "ms": 6.5630830000009155,
+          "bytes": 466,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldContent\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 104,\n      \"endLine\": 118,\n      \"signature\": \"function FieldContent({ className, ...props }: React.ComponentProps<\\\"div\\\">)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "FieldError",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx"
+          ],
+          "ms": 7.237124999999651,
+          "bytes": 546,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldError\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 202,\n      \"endLine\": 249,\n      \"signature\": \"function FieldError({ className, children, errors: maybeErrors, ...props }: React.ComponentProps<\\\"div\\\"> & { errors?: ({ message?: string } | undefined)[]; })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "FieldGroup",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx"
+          ],
+          "ms": 9.874291999996785,
+          "bytes": 460,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldGroup\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 48,\n      \"endLine\": 62,\n      \"signature\": \"function FieldGroup({ className, ...props }: React.ComponentProps<\\\"div\\\">)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "FieldLabel",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx"
+          ],
+          "ms": 9.67674999999872,
+          "bytes": 467,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldLabel\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 120,\n      \"endLine\": 136,\n      \"signature\": \"function FieldLabel({ className, ...props }: React.ComponentProps<typeof Label>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "HydrateClient",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/nextjs/src/app/page.tsx"
+          ],
+          "ms": 7.390583000000333,
+          "bytes": 393,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"HydrateClient\",\n      \"kind\": \"function\",\n      \"file\": \"apps/nextjs/src/trpc/server.tsx\",\n      \"line\": 35,\n      \"endLine\": 42,\n      \"signature\": \"function HydrateClient(props: { children: React.ReactNode })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/page.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "Input",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx"
+          ],
+          "ms": 6.990458000000217,
+          "bytes": 457,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Input\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/input.tsx\",\n      \"line\": 3,\n      \"endLine\": 21,\n      \"signature\": \"function Input({ className, type, ...props }: React.ComponentProps<\\\"input\\\">)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "Label",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 0.5,
+          "recall": 1,
+          "hits": 1,
+          "returned": 2,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx",
+            "packages/ui/src/field.tsx"
+          ],
+          "ms": 7.08941699999923,
+          "bytes": 445,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Label\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/label.tsx\",\n      \"line\": 7,\n      \"endLine\": 21,\n      \"signature\": \"function Label({ className, ...props }: React.ComponentProps<typeof LabelPrimitive.Root>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/dropdown-menu.tsx\",\n    \"packages/ui/src/field.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "RouterInputs",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/expo/src/utils/api.tsx"
+          ],
+          "ms": 8.0212500000016,
+          "bytes": 420,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"RouterInputs\",\n      \"kind\": \"type\",\n      \"file\": \"packages/api/src/index.ts\",\n      \"line\": 11,\n      \"endLine\": 11,\n      \"signature\": \"type RouterInputs = inferRouterInputs<AppRouter>;\",\n      \"doc\": \"Inference helpers for input types\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/expo/src/utils/api.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "RouterOutputs",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 4,
+          "returned": 4,
+          "expected": 4,
+          "files": [
+            "apps/expo/src/app/index.tsx",
+            "apps/expo/src/utils/api.tsx",
+            "apps/nextjs/src/app/_components/posts.tsx",
+            "apps/tanstack-start/src/routes/index.tsx"
+          ],
+          "ms": 7.257666000001336,
+          "bytes": 556,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"RouterOutputs\",\n      \"kind\": \"type\",\n      \"file\": \"packages/api/src/index.ts\",\n      \"line\": 19,\n      \"endLine\": 19,\n      \"signature\": \"type RouterOutputs = inferRouterOutputs<AppRouter>;\",\n      \"doc\": \"Inference helpers for output types\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/expo/src/app/index.tsx\",\n    \"apps/expo/src/utils/api.tsx\",\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "Separator",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 0.5,
+          "recall": 1,
+          "hits": 1,
+          "returned": 2,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/dropdown-menu.tsx",
+            "packages/ui/src/field.tsx"
+          ],
+          "ms": 6.777874999999767,
+          "bytes": 510,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Separator\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/separator.tsx\",\n      \"line\": 7,\n      \"endLine\": 25,\n      \"signature\": \"function Separator({ className, orientation = \\\"horizontal\\\", decorative = true, ...props }: React.ComponentProps<typeof SeparatorPrimitive.Root>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/dropdown-menu.tsx\",\n    \"packages/ui/src/field.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "TRPCReactProvider",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/nextjs/src/app/layout.tsx"
+          ],
+          "ms": 6.956041999997979,
+          "bytes": 402,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"TRPCReactProvider\",\n      \"kind\": \"function\",\n      \"file\": \"apps/nextjs/src/trpc/react.tsx\",\n      \"line\": 32,\n      \"endLine\": 63,\n      \"signature\": \"function TRPCReactProvider(props: { children: React.ReactNode })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "ThemeProvider",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/layout.tsx",
+            "apps/tanstack-start/src/routes/__root.tsx"
+          ],
+          "ms": 6.408707999999024,
+          "bytes": 441,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"ThemeProvider\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/theme.tsx\",\n      \"line\": 108,\n      \"endLine\": 144,\n      \"signature\": \"function ThemeProvider({ children }: React.PropsWithChildren)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\",\n    \"apps/tanstack-start/src/routes/__root.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "ThemeToggle",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/layout.tsx",
+            "apps/tanstack-start/src/routes/__root.tsx"
+          ],
+          "ms": 6.812041999997746,
+          "bytes": 400,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"ThemeToggle\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/theme.tsx\",\n      \"line\": 154,\n      \"endLine\": 184,\n      \"signature\": \"function ThemeToggle()\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\",\n    \"apps/tanstack-start/src/routes/__root.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "Toaster",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/app/layout.tsx",
+            "apps/tanstack-start/src/routes/__root.tsx"
+          ],
+          "ms": 6.3964169999999285,
+          "bytes": 406,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Toaster\",\n      \"kind\": \"const\",\n      \"file\": \"packages/ui/src/toast.tsx\",\n      \"line\": 8,\n      \"endLine\": 25,\n      \"signature\": \"Toaster = ({ ...props }: ToasterProps)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\",\n    \"apps/tanstack-start/src/routes/__root.tsx\"\n  ]\n}"
+        },
+        {
+          "symbol": "appRouter",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 0.8,
+          "recall": 1,
+          "hits": 4,
+          "returned": 5,
+          "expected": 4,
+          "files": [
+            "apps/nextjs/src/app/api/trpc/[trpc]/route.ts",
+            "apps/nextjs/src/trpc/server.tsx",
+            "apps/tanstack-start/src/lib/trpc.ts",
+            "apps/tanstack-start/src/routes/api/trpc.$.ts",
+            "packages/api/src/index.ts"
+          ],
+          "ms": 8.950166000002355,
+          "bytes": 569,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"appRouter\",\n      \"kind\": \"const\",\n      \"file\": \"packages/api/src/root.ts\",\n      \"line\": 5,\n      \"endLine\": 8,\n      \"signature\": \"appRouter = createTRPCRouter({ auth: authRouter, post: postRouter, })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/api/trpc/[trpc]/route.ts\",\n    \"apps/nextjs/src/trpc/server.tsx\",\n    \"apps/tanstack-start/src/lib/trpc.ts\",\n    \"apps/tanstack-start/src/routes/api/trpc.$.ts\",\n    \"packages/api/src/index.ts\"\n  ]\n}"
+        },
+        {
+          "symbol": "authEnv",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 2,
+          "returned": 2,
+          "expected": 2,
+          "files": [
+            "apps/nextjs/src/env.ts",
+            "apps/tanstack-start/src/env.ts"
+          ],
+          "ms": 8.421249999999418,
+          "bytes": 513,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"authEnv\",\n      \"kind\": \"function\",\n      \"file\": \"packages/auth/env.ts\",\n      \"line\": 4,\n      \"endLine\": 19,\n      \"signature\": \"function authEnv()\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [\n    {\n      \"file\": \"apps/nextjs/src/env.ts\",\n      \"line\": 8\n    },\n    {\n      \"file\": \"apps/tanstack-start/src/env.ts\",\n      \"line\": 9\n    }\n  ],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/env.ts\",\n    \"apps/tanstack-start/src/env.ts\"\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "server": "codeindex",
+      "lsp": true,
+      "kind": "references",
+      "ok": true,
+      "grades": {
+        "correct": 8,
+        "incomplete": 3,
+        "wrong": 0,
+        "empty": 14
+      },
+      "asked": 25,
+      "measured": 25,
+      "unavailable": 0,
+      "tokens": 268,
+      "precision": 0.44,
+      "recall": 0.34600000000000003,
+      "ms": 832.1137500000041,
+      "records": [
+        {
+          "symbol": "AppRouter",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 1,
+          "recall": 0.2,
+          "hits": 1,
+          "returned": 1,
+          "expected": 5,
+          "files": [
+            "packages/api/src/index.ts"
+          ],
+          "agreement": {
+            "both": [
+              "packages/api/src/index.ts",
+              "packages/api/src/root.ts"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/expo/src/utils/api.tsx",
+              "apps/nextjs/src/trpc/react.tsx",
+              "apps/nextjs/src/trpc/server.tsx",
+              "apps/tanstack-start/src/lib/trpc.ts",
+              "apps/tanstack-start/src/routes/__root.tsx"
+            ]
+          },
+          "ms": 2143.4211670000004,
+          "bytes": 1603,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"AppRouter\",\n      \"kind\": \"type\",\n      \"file\": \"packages/api/src/root.ts\",\n      \"line\": 11,\n      \"endLine\": 11,\n      \"signature\": \"type AppRouter = typeof appRouter;\",\n      \"doc\": \"export type definition of API\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/expo/src/utils/api.tsx\",\n    \"apps/nextjs/src/trpc/react.tsx\",\n    \"apps/nextjs/src/trpc/server.tsx\",\n    \"apps/tanstack-start/src/lib/trpc.ts\",\n    \"apps/tanstack-start/src/routes/__root.tsx\",\n    \"packages/api/src/index.ts\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 3,\n        \"character\": 14\n      },\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 11,\n        \"character\": 38\n      },\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 19,\n        \"character\": 40\n      },\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 21,\n        \"character\": 14\n      },\n      {\n        \"file\": \"packages/api/src/root.ts\",\n        \"line\": 11,\n        \"character\": 12\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/api/src/index.ts\",\n        \"packages/api/src/root.ts\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/expo/src/utils/api.tsx\",\n        \"apps/nextjs/src/trpc/react.tsx\",\n        \"apps/nextjs/src/trpc/server.tsx\",\n        \"apps/tanstack-start/src/lib/trpc.ts\",\n        \"apps/tanstack-start/src/routes/__root.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "Auth",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 1,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/auth/src/index.ts"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "README.md"
+            ]
+          },
+          "ms": 2629.469750000004,
+          "bytes": 788,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Auth\",\n      \"kind\": \"type\",\n      \"file\": \"packages/auth/src/index.ts\",\n      \"line\": 51,\n      \"endLine\": 51,\n      \"signature\": \"type Auth = ReturnType<typeof initAuth>;\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"README.md\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/auth/src/index.ts\",\n        \"line\": 51,\n        \"character\": 12\n      },\n      {\n        \"file\": \"packages/auth/src/index.ts\",\n        \"line\": 52,\n        \"character\": 22\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/auth/src/index.ts\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"README.md\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "Button",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 1,
+          "recall": 0.2,
+          "hits": 1,
+          "returned": 1,
+          "expected": 5,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "packages/ui/src/button.tsx",
+              "packages/ui/src/theme.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/auth-showcase.tsx",
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/component/auth-showcase.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 860.3559170000008,
+          "bytes": 1607,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Button\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/button.tsx\",\n      \"line\": 38,\n      \"endLine\": 57,\n      \"signature\": \"function Button({ className, variant, size, asChild = false, ...props }: React.ComponentProps<\\\"button\\\"> & VariantProps<typeof buttonVariants> & { asChild?: boolean; })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/auth-showcase.tsx\",\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/component/auth-showcase.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\",\n    \"packages/ui/src/theme.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/button.tsx\",\n        \"line\": 38,\n        \"character\": 16\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 7,\n        \"character\": 9\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 160,\n        \"character\": 9\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 169,\n        \"character\": 10\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/button.tsx\",\n        \"packages/ui/src/theme.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/auth-showcase.tsx\",\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/component/auth-showcase.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "CreatePostSchema",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 3,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/db/src/schema.ts"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx",
+              "packages/api/src/router/post.ts"
+            ]
+          },
+          "ms": 1527.374708000003,
+          "bytes": 1057,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"CreatePostSchema\",\n      \"kind\": \"const\",\n      \"file\": \"packages/db/src/schema.ts\",\n      \"line\": 16,\n      \"endLine\": 23,\n      \"signature\": \"CreatePostSchema = createInsertSchema(Post, { title: z.string().max(256), content: z.string().max(256), }).omit({ id: true, createdAt: true, updatedAt: true, })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\",\n    \"packages/api/src/router/post.ts\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/db/src/schema.ts\",\n        \"line\": 16,\n        \"character\": 13\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/db/src/schema.ts\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\",\n        \"packages/api/src/router/post.ts\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "DropdownMenu",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "packages/ui/src/dropdown-menu.tsx",
+              "packages/ui/src/theme.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": []
+          },
+          "ms": 685.4877919999999,
+          "bytes": 1108,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenu\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 12,\n      \"endLine\": 16,\n      \"signature\": \"function DropdownMenu({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n        \"line\": 12,\n        \"character\": 16\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 9,\n        \"character\": 2\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 158,\n        \"character\": 5\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 182,\n        \"character\": 6\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/dropdown-menu.tsx\",\n        \"packages/ui/src/theme.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": []\n    }\n  }\n}"
+        },
+        {
+          "symbol": "DropdownMenuContent",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "packages/ui/src/dropdown-menu.tsx",
+              "packages/ui/src/theme.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": []
+          },
+          "ms": 680.2740420000046,
+          "bytes": 1153,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenuContent\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 37,\n      \"endLine\": 55,\n      \"signature\": \"function DropdownMenuContent({ className, sideOffset = 4, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n        \"line\": 37,\n        \"character\": 16\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 10,\n        \"character\": 2\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 171,\n        \"character\": 7\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 181,\n        \"character\": 8\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/dropdown-menu.tsx\",\n        \"packages/ui/src/theme.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": []\n    }\n  }\n}"
+        },
+        {
+          "symbol": "DropdownMenuItem",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "packages/ui/src/dropdown-menu.tsx",
+              "packages/ui/src/theme.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": []
+          },
+          "ms": 689.3239580000009,
+          "bytes": 1649,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenuItem\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 65,\n      \"endLine\": 86,\n      \"signature\": \"function DropdownMenuItem({ className, inset, variant = \\\"default\\\", ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean; variant?: \\\"default\\\" | \\\"destructive\\\"; })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n        \"line\": 65,\n        \"character\": 16\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 11,\n        \"character\": 2\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 172,\n        \"character\": 9\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 174,\n        \"character\": 10\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 175,\n        \"character\": 9\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 177,\n        \"character\": 10\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 178,\n        \"character\": 9\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 180,\n        \"character\": 10\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/dropdown-menu.tsx\",\n        \"packages/ui/src/theme.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": []\n    }\n  }\n}"
+        },
+        {
+          "symbol": "DropdownMenuTrigger",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "packages/ui/src/dropdown-menu.tsx",
+              "packages/ui/src/theme.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": []
+          },
+          "ms": 741.0354579999985,
+          "bytes": 1126,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"DropdownMenuTrigger\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n      \"line\": 26,\n      \"endLine\": 35,\n      \"signature\": \"function DropdownMenuTrigger({ ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/theme.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/dropdown-menu.tsx\",\n        \"line\": 26,\n        \"character\": 16\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 12,\n        \"character\": 2\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 159,\n        \"character\": 7\n      },\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 170,\n        \"character\": 8\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/dropdown-menu.tsx\",\n        \"packages/ui/src/theme.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": []\n    }\n  }\n}"
+        },
+        {
+          "symbol": "Field",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/field.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 832.1137500000041,
+          "bytes": 943,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Field\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 88,\n      \"endLine\": 102,\n      \"signature\": \"function Field({ className, orientation = \\\"vertical\\\", ...props }: React.ComponentProps<\\\"div\\\"> & VariantProps<typeof fieldVariants>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 88,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/field.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "FieldContent",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/field.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 947.4462500000009,
+          "bytes": 894,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldContent\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 104,\n      \"endLine\": 118,\n      \"signature\": \"function FieldContent({ className, ...props }: React.ComponentProps<\\\"div\\\">)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 104,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/field.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "FieldError",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/field.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 910.0043749999968,
+          "bytes": 974,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldError\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 202,\n      \"endLine\": 249,\n      \"signature\": \"function FieldError({ className, children, errors: maybeErrors, ...props }: React.ComponentProps<\\\"div\\\"> & { errors?: ({ message?: string } | undefined)[]; })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 202,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/field.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "FieldGroup",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/field.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 778.7021250000034,
+          "bytes": 887,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldGroup\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 48,\n      \"endLine\": 62,\n      \"signature\": \"function FieldGroup({ className, ...props }: React.ComponentProps<\\\"div\\\">)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 48,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/field.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "FieldLabel",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/field.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 693.2744160000002,
+          "bytes": 895,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"FieldLabel\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/field.tsx\",\n      \"line\": 120,\n      \"endLine\": 136,\n      \"signature\": \"function FieldLabel({ className, ...props }: React.ComponentProps<typeof Label>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 120,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/field.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "HydrateClient",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/nextjs/src/app/page.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "apps/nextjs/src/app/page.tsx",
+              "apps/nextjs/src/trpc/server.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": []
+          },
+          "ms": 2393.618499999997,
+          "bytes": 1084,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"HydrateClient\",\n      \"kind\": \"function\",\n      \"file\": \"apps/nextjs/src/trpc/server.tsx\",\n      \"line\": 35,\n      \"endLine\": 42,\n      \"signature\": \"function HydrateClient(props: { children: React.ReactNode })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/page.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"apps/nextjs/src/app/page.tsx\",\n        \"line\": 3,\n        \"character\": 9\n      },\n      {\n        \"file\": \"apps/nextjs/src/app/page.tsx\",\n        \"line\": 15,\n        \"character\": 5\n      },\n      {\n        \"file\": \"apps/nextjs/src/app/page.tsx\",\n        \"line\": 39,\n        \"character\": 6\n      },\n      {\n        \"file\": \"apps/nextjs/src/trpc/server.tsx\",\n        \"line\": 35,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"apps/nextjs/src/app/page.tsx\",\n        \"apps/nextjs/src/trpc/server.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": []\n    }\n  }\n}"
+        },
+        {
+          "symbol": "Input",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/input.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 664.6499160000021,
+          "bytes": 883,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Input\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/input.tsx\",\n      \"line\": 3,\n      \"endLine\": 21,\n      \"signature\": \"function Input({ className, type, ...props }: React.ComponentProps<\\\"input\\\">)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/input.tsx\",\n        \"line\": 3,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/input.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "Label",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/field.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "packages/ui/src/field.tsx",
+              "packages/ui/src/label.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "packages/ui/src/dropdown-menu.tsx"
+            ]
+          },
+          "ms": 677.0583750000005,
+          "bytes": 1165,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Label\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/label.tsx\",\n      \"line\": 7,\n      \"endLine\": 21,\n      \"signature\": \"function Label({ className, ...props }: React.ComponentProps<typeof LabelPrimitive.Root>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/dropdown-menu.tsx\",\n    \"packages/ui/src/field.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 8,\n        \"character\": 9\n      },\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 123,\n        \"character\": 31\n      },\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 125,\n        \"character\": 5\n      },\n      {\n        \"file\": \"packages/ui/src/label.tsx\",\n        \"line\": 7,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/field.tsx\",\n        \"packages/ui/src/label.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"packages/ui/src/dropdown-menu.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "RouterInputs",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 1,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/api/src/index.ts"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/expo/src/utils/api.tsx"
+            ]
+          },
+          "ms": 1498.7309579999928,
+          "bytes": 886,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"RouterInputs\",\n      \"kind\": \"type\",\n      \"file\": \"packages/api/src/index.ts\",\n      \"line\": 11,\n      \"endLine\": 11,\n      \"signature\": \"type RouterInputs = inferRouterInputs<AppRouter>;\",\n      \"doc\": \"Inference helpers for input types\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/expo/src/utils/api.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 11,\n        \"character\": 5\n      },\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 23,\n        \"character\": 14\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/api/src/index.ts\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/expo/src/utils/api.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "RouterOutputs",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 4,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/api/src/index.ts"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/expo/src/app/index.tsx",
+              "apps/expo/src/utils/api.tsx",
+              "apps/nextjs/src/app/_components/posts.tsx",
+              "apps/tanstack-start/src/routes/index.tsx"
+            ]
+          },
+          "ms": 1486.0689589999965,
+          "bytes": 1166,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"RouterOutputs\",\n      \"kind\": \"type\",\n      \"file\": \"packages/api/src/index.ts\",\n      \"line\": 19,\n      \"endLine\": 19,\n      \"signature\": \"type RouterOutputs = inferRouterOutputs<AppRouter>;\",\n      \"doc\": \"Inference helpers for output types\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/expo/src/app/index.tsx\",\n    \"apps/expo/src/utils/api.tsx\",\n    \"apps/nextjs/src/app/_components/posts.tsx\",\n    \"apps/tanstack-start/src/routes/index.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 19,\n        \"character\": 5\n      },\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 23,\n        \"character\": 28\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/api/src/index.ts\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/expo/src/app/index.tsx\",\n        \"apps/expo/src/utils/api.tsx\",\n        \"apps/nextjs/src/app/_components/posts.tsx\",\n        \"apps/tanstack-start/src/routes/index.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "Separator",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/field.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "packages/ui/src/field.tsx",
+              "packages/ui/src/separator.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "packages/ui/src/dropdown-menu.tsx"
+            ]
+          },
+          "ms": 675.3108749999956,
+          "bytes": 1131,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Separator\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/separator.tsx\",\n      \"line\": 7,\n      \"endLine\": 25,\n      \"signature\": \"function Separator({ className, orientation = \\\"horizontal\\\", decorative = true, ...props }: React.ComponentProps<typeof SeparatorPrimitive.Root>)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"packages/ui/src/dropdown-menu.tsx\",\n    \"packages/ui/src/field.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 9,\n        \"character\": 9\n      },\n      {\n        \"file\": \"packages/ui/src/field.tsx\",\n        \"line\": 189,\n        \"character\": 7\n      },\n      {\n        \"file\": \"packages/ui/src/separator.tsx\",\n        \"line\": 7,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/field.tsx\",\n        \"packages/ui/src/separator.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"packages/ui/src/dropdown-menu.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "TRPCReactProvider",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/nextjs/src/app/layout.tsx"
+          ],
+          "agreement": {
+            "both": [
+              "apps/nextjs/src/app/layout.tsx",
+              "apps/nextjs/src/trpc/react.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": []
+          },
+          "ms": 2471.7517080000034,
+          "bytes": 1101,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"TRPCReactProvider\",\n      \"kind\": \"function\",\n      \"file\": \"apps/nextjs/src/trpc/react.tsx\",\n      \"line\": 32,\n      \"endLine\": 63,\n      \"signature\": \"function TRPCReactProvider(props: { children: React.ReactNode })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"apps/nextjs/src/app/layout.tsx\",\n        \"line\": 9,\n        \"character\": 9\n      },\n      {\n        \"file\": \"apps/nextjs/src/app/layout.tsx\",\n        \"line\": 61,\n        \"character\": 11\n      },\n      {\n        \"file\": \"apps/nextjs/src/app/layout.tsx\",\n        \"line\": 61,\n        \"character\": 47\n      },\n      {\n        \"file\": \"apps/nextjs/src/trpc/react.tsx\",\n        \"line\": 32,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"apps/nextjs/src/app/layout.tsx\",\n        \"apps/nextjs/src/trpc/react.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": []\n    }\n  }\n}"
+        },
+        {
+          "symbol": "ThemeProvider",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/theme.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/layout.tsx",
+              "apps/tanstack-start/src/routes/__root.tsx"
+            ]
+          },
+          "ms": 731.4395839999997,
+          "bytes": 859,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"ThemeProvider\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/theme.tsx\",\n      \"line\": 108,\n      \"endLine\": 144,\n      \"signature\": \"function ThemeProvider({ children }: React.PropsWithChildren)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\",\n    \"apps/tanstack-start/src/routes/__root.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 108,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/theme.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/layout.tsx\",\n        \"apps/tanstack-start/src/routes/__root.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "ThemeToggle",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/theme.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/layout.tsx",
+              "apps/tanstack-start/src/routes/__root.tsx"
+            ]
+          },
+          "ms": 751.2954170000012,
+          "bytes": 818,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"ThemeToggle\",\n      \"kind\": \"function\",\n      \"file\": \"packages/ui/src/theme.tsx\",\n      \"line\": 154,\n      \"endLine\": 184,\n      \"signature\": \"function ThemeToggle()\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\",\n    \"apps/tanstack-start/src/routes/__root.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/theme.tsx\",\n        \"line\": 154,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/theme.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/layout.tsx\",\n        \"apps/tanstack-start/src/routes/__root.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "Toaster",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/ui/src/toast.tsx"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/layout.tsx",
+              "apps/tanstack-start/src/routes/__root.tsx"
+            ]
+          },
+          "ms": 728.0516250000001,
+          "bytes": 822,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"Toaster\",\n      \"kind\": \"const\",\n      \"file\": \"packages/ui/src/toast.tsx\",\n      \"line\": 8,\n      \"endLine\": 25,\n      \"signature\": \"Toaster = ({ ...props }: ToasterProps)\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/layout.tsx\",\n    \"apps/tanstack-start/src/routes/__root.tsx\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/ui/src/toast.tsx\",\n        \"line\": 8,\n        \"character\": 13\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/ui/src/toast.tsx\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/layout.tsx\",\n        \"apps/tanstack-start/src/routes/__root.tsx\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "appRouter",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 1,
+          "recall": 0.25,
+          "hits": 1,
+          "returned": 1,
+          "expected": 4,
+          "files": [
+            "packages/api/src/index.ts"
+          ],
+          "agreement": {
+            "both": [
+              "packages/api/src/index.ts",
+              "packages/api/src/root.ts"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/app/api/trpc/[trpc]/route.ts",
+              "apps/nextjs/src/trpc/server.tsx",
+              "apps/tanstack-start/src/lib/trpc.ts",
+              "apps/tanstack-start/src/routes/api/trpc.$.ts"
+            ]
+          },
+          "ms": 1534.0095409999994,
+          "bytes": 1338,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"appRouter\",\n      \"kind\": \"const\",\n      \"file\": \"packages/api/src/root.ts\",\n      \"line\": 5,\n      \"endLine\": 8,\n      \"signature\": \"appRouter = createTRPCRouter({ auth: authRouter, post: postRouter, })\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/app/api/trpc/[trpc]/route.ts\",\n    \"apps/nextjs/src/trpc/server.tsx\",\n    \"apps/tanstack-start/src/lib/trpc.ts\",\n    \"apps/tanstack-start/src/routes/api/trpc.$.ts\",\n    \"packages/api/src/index.ts\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/api/src/index.ts\",\n        \"line\": 21,\n        \"character\": 25\n      },\n      {\n        \"file\": \"packages/api/src/root.ts\",\n        \"line\": 5,\n        \"character\": 13\n      },\n      {\n        \"file\": \"packages/api/src/root.ts\",\n        \"line\": 11,\n        \"character\": 31\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/api/src/index.ts\",\n        \"packages/api/src/root.ts\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/app/api/trpc/[trpc]/route.ts\",\n        \"apps/nextjs/src/trpc/server.tsx\",\n        \"apps/tanstack-start/src/lib/trpc.ts\",\n        \"apps/tanstack-start/src/routes/api/trpc.$.ts\"\n      ]\n    }\n  }\n}"
+        },
+        {
+          "symbol": "authEnv",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "agreement": {
+            "both": [
+              "packages/auth/env.ts"
+            ],
+            "lspOnly": [],
+            "staticOnly": [
+              "apps/nextjs/src/env.ts",
+              "apps/tanstack-start/src/env.ts"
+            ]
+          },
+          "ms": 1446.333666999999,
+          "bytes": 900,
+          "response": "{\n  \"defs\": [\n    {\n      \"name\": \"authEnv\",\n      \"kind\": \"function\",\n      \"file\": \"packages/auth/env.ts\",\n      \"line\": 4,\n      \"endLine\": 19,\n      \"signature\": \"function authEnv()\",\n      \"exported\": true,\n      \"lang\": \"typescript\"\n    }\n  ],\n  \"callSites\": [\n    {\n      \"file\": \"apps/nextjs/src/env.ts\",\n      \"line\": 8\n    },\n    {\n      \"file\": \"apps/tanstack-start/src/env.ts\",\n      \"line\": 9\n    }\n  ],\n  \"referencingFiles\": [\n    \"apps/nextjs/src/env.ts\",\n    \"apps/tanstack-start/src/env.ts\"\n  ],\n  \"lsp\": {\n    \"server\": \"typescript\",\n    \"ok\": true,\n    \"refs\": [\n      {\n        \"file\": \"packages/auth/env.ts\",\n        \"line\": 4,\n        \"character\": 16\n      }\n    ],\n    \"agreement\": {\n      \"both\": [\n        \"packages/auth/env.ts\"\n      ],\n      \"lspOnly\": [],\n      \"staticOnly\": [\n        \"apps/nextjs/src/env.ts\",\n        \"apps/tanstack-start/src/env.ts\"\n      ]\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "repo": "t3-oss/create-t3-turbo",
+      "server": "serena",
+      "lsp": false,
+      "kind": "references",
+      "ok": true,
+      "grades": {
+        "correct": 8,
+        "incomplete": 3,
+        "wrong": 0,
+        "empty": 14
+      },
+      "asked": 25,
+      "measured": 25,
+      "unavailable": 0,
+      "tokens": 95,
+      "precision": 0.44,
+      "recall": 0.34600000000000003,
+      "ms": 529.413625000001,
+      "records": [
+        {
+          "symbol": "AppRouter",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 1,
+          "recall": 0.2,
+          "hits": 1,
+          "returned": 1,
+          "expected": 5,
+          "files": [
+            "packages/api/src/index.ts"
+          ],
+          "ms": 1634.3919590000005,
+          "bytes": 862,
+          "response": "{\"packages/api/src/index.ts\": {\"File\": [{\"name_path\": \"index\", \"body_location\": {\"start_line\": 0, \"end_line\": 24}, \"content_around_reference\": \"...   1:\\n  >   2:import type { AppRouter } from \\\"./root\\\";\\n...   3:\"}, {\"name_path\": \"index\", \"body_location\": {\"start_line\": 0, \"end_line\": 24}, \"content_around_reference\": \"...  19:\\n  >  20:export { type AppRouter, appRouter } from \\\"./root\\\";\\n...  21:export { createTRPCContext } from \\\"./trpc\\\";\"}], \"Variable\": [{\"name_path\": \"RouterInputs\", \"body_location\": {\"start_line\": 10, \"end_line\": 10}, \"content_around_reference\": \"...   9: */\\n  >  10:type RouterInputs = inferRouterInputs<AppRouter>;\\n...  11:\"}, {\"name_path\": \"RouterOutputs\", \"body_location\": {\"start_line\": 18, \"end_line\": 18}, \"content_around_reference\": \"...  17: */\\n  >  18:type RouterOutputs = inferRouterOutputs<AppRouter>;\\n...  19:\"}]}}"
+        },
+        {
+          "symbol": "Auth",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 1,
+          "files": [],
+          "ms": 1212.5533330000035,
+          "bytes": 284,
+          "response": "{\"packages/auth/src/index.ts\": {\"Variable\": [{\"name_path\": \"Session\", \"body_location\": {\"start_line\": 51, \"end_line\": 51}, \"content_around_reference\": \"...  50:export type Auth = ReturnType<typeof initAuth>;\\n  >  51:export type Session = Auth[\\\"$Infer\\\"][\\\"Session\\\"];\\n...  52:\"}]}}"
+        },
+        {
+          "symbol": "Button",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 1,
+          "recall": 0.2,
+          "hits": 1,
+          "returned": 1,
+          "expected": 5,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 580.445624999993,
+          "bytes": 707,
+          "response": "{\"packages/ui/src/theme.tsx\": {\"File\": [{\"name_path\": \"theme\", \"body_location\": {\"start_line\": 0, \"end_line\": 185}, \"content_around_reference\": \"...   5:\\n  >   6:import { Button } from \\\"./button\\\";\\n...   7:import {\"}], \"Function\": [{\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 158:      <DropdownMenuTrigger asChild>\\n  > 159:        <Button\\n... 160:          variant=\\\"outline\\\"\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 167:          <span className=\\\"sr-only\\\">Toggle theme</span>\\n  > 168:        </Button>\\n... 169:      </DropdownMenuTrigger>\"}]}}"
+        },
+        {
+          "symbol": "CreatePostSchema",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 3,
+          "files": [],
+          "ms": 1322.6112500000017,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "DropdownMenu",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 548.903084000005,
+          "bytes": 641,
+          "response": "{\"packages/ui/src/theme.tsx\": {\"File\": [{\"name_path\": \"theme\", \"body_location\": {\"start_line\": 0, \"end_line\": 185}, \"content_around_reference\": \"...   7:import {\\n  >   8:  DropdownMenu,\\n...   9:  DropdownMenuContent,\"}], \"Function\": [{\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 156:  return (\\n  > 157:    <DropdownMenu>\\n... 158:      <DropdownMenuTrigger asChild>\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 180:      </DropdownMenuContent>\\n  > 181:    </DropdownMenu>\\n... 182:  );\"}]}}"
+        },
+        {
+          "symbol": "DropdownMenuContent",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 126.11704199999804,
+          "bytes": 743,
+          "response": "{\"packages/ui/src/theme.tsx\": {\"File\": [{\"name_path\": \"theme\", \"body_location\": {\"start_line\": 0, \"end_line\": 185}, \"content_around_reference\": \"...   8:  DropdownMenu,\\n  >   9:  DropdownMenuContent,\\n...  10:  DropdownMenuItem,\"}], \"Function\": [{\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 169:      </DropdownMenuTrigger>\\n  > 170:      <DropdownMenuContent align=\\\"end\\\">\\n... 171:        <DropdownMenuItem onClick={() => setTheme(\\\"light\\\")}>\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 179:        </DropdownMenuItem>\\n  > 180:      </DropdownMenuContent>\\n... 181:    </DropdownMenu>\"}]}}"
+        },
+        {
+          "symbol": "DropdownMenuItem",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 124.62179199999082,
+          "bytes": 1725,
+          "response": "{\"packages/ui/src/theme.tsx\": {\"File\": [{\"name_path\": \"theme\", \"body_location\": {\"start_line\": 0, \"end_line\": 185}, \"content_around_reference\": \"...   9:  DropdownMenuContent,\\n  >  10:  DropdownMenuItem,\\n...  11:  DropdownMenuTrigger,\"}], \"Function\": [{\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 170:      <DropdownMenuContent align=\\\"end\\\">\\n  > 171:        <DropdownMenuItem onClick={() => setTheme(\\\"light\\\")}>\\n... 172:          Light\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 172:          Light\\n  > 173:        </DropdownMenuItem>\\n... 174:        <DropdownMenuItem onClick={() => setTheme(\\\"dark\\\")}>\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 173:        </DropdownMenuItem>\\n  > 174:        <DropdownMenuItem onClick={() => setTheme(\\\"dark\\\")}>\\n... 175:          Dark\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 175:          Dark\\n  > 176:        </DropdownMenuItem>\\n... 177:        <DropdownMenuItem onClick={() => setTheme(\\\"auto\\\")}>\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 176:        </DropdownMenuItem>\\n  > 177:        <DropdownMenuItem onClick={() => setTheme(\\\"auto\\\")}>\\n... 178:          System\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 178:          System\\n  > 179:        </DropdownMenuItem>\\n... 180:      </DropdownMenuContent>\"}]}}"
+        },
+        {
+          "symbol": "DropdownMenuTrigger",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/theme.tsx"
+          ],
+          "ms": 130.27174999999988,
+          "bytes": 704,
+          "response": "{\"packages/ui/src/theme.tsx\": {\"File\": [{\"name_path\": \"theme\", \"body_location\": {\"start_line\": 0, \"end_line\": 185}, \"content_around_reference\": \"...  10:  DropdownMenuItem,\\n  >  11:  DropdownMenuTrigger,\\n...  12:} from \\\"./dropdown-menu\\\";\"}], \"Function\": [{\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 157:    <DropdownMenu>\\n  > 158:      <DropdownMenuTrigger asChild>\\n... 159:        <Button\"}, {\"name_path\": \"ThemeToggle\", \"body_location\": {\"start_line\": 153, \"end_line\": 183}, \"content_around_reference\": \"... 168:        </Button>\\n  > 169:      </DropdownMenuTrigger>\\n... 170:      <DropdownMenuContent align=\\\"end\\\">\"}]}}"
+        },
+        {
+          "symbol": "Field",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 112.89091699999699,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "FieldContent",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 130.127542000002,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "FieldError",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 117.96079199999804,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "FieldGroup",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 114.02016699999513,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "FieldLabel",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 125.68395900000178,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "HydrateClient",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/nextjs/src/app/page.tsx"
+          ],
+          "ms": 2178.928749999992,
+          "bytes": 715,
+          "response": "{\"apps/nextjs/src/app/page.tsx\": {\"File\": [{\"name_path\": \"page\", \"body_location\": {\"start_line\": 0, \"end_line\": 42}, \"content_around_reference\": \"...   1:\\n  >   2:import { HydrateClient, prefetch, trpc } from \\\"~/trpc/server\\\";\\n...   3:import { AuthShowcase } from \\\"./_components/auth-showcase\\\";\"}], \"Function\": [{\"name_path\": \"HomePage\", \"body_location\": {\"start_line\": 10, \"end_line\": 40}, \"content_around_reference\": \"...  13:  return (\\n  >  14:    <HydrateClient>\\n...  15:      <main className=\\\"container h-screen py-16\\\">\"}, {\"name_path\": \"HomePage\", \"body_location\": {\"start_line\": 10, \"end_line\": 40}, \"content_around_reference\": \"...  37:      </main>\\n  >  38:    </HydrateClient>\\n...  39:  );\"}]}}"
+        },
+        {
+          "symbol": "Input",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 529.413625000001,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "Label",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/field.tsx"
+          ],
+          "ms": 128.5051250000106,
+          "bytes": 713,
+          "response": "{\"packages/ui/src/field.tsx\": {\"File\": [{\"name_path\": \"field\", \"body_location\": {\"start_line\": 0, \"end_line\": 250}, \"content_around_reference\": \"...   6:import { cn } from \\\"@acme/ui\\\";\\n  >   7:import { Label } from \\\"@acme/ui/label\\\";\\n...   8:import { Separator } from \\\"@acme/ui/separator\\\";\"}], \"Function\": [{\"name_path\": \"FieldLabel\", \"body_location\": {\"start_line\": 119, \"end_line\": 135}, \"content_around_reference\": \"... 121:  ...props\\n  > 122:}: React.ComponentProps<typeof Label>) {\\n... 123:  return (\"}, {\"name_path\": \"FieldLabel\", \"body_location\": {\"start_line\": 119, \"end_line\": 135}, \"content_around_reference\": \"... 123:  return (\\n  > 124:    <Label\\n... 125:      data-slot=\\\"field-label\\\"\"}]}}"
+        },
+        {
+          "symbol": "RouterInputs",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 1,
+          "files": [],
+          "ms": 1464.2667499999952,
+          "bytes": 266,
+          "response": "{\"packages/api/src/index.ts\": {\"File\": [{\"name_path\": \"index\", \"body_location\": {\"start_line\": 0, \"end_line\": 24}, \"content_around_reference\": \"...  21:export { createTRPCContext } from \\\"./trpc\\\";\\n  >  22:export type { RouterInputs, RouterOutputs };\\n...  23:\"}]}}"
+        },
+        {
+          "symbol": "RouterOutputs",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 4,
+          "files": [],
+          "ms": 123.75420899999153,
+          "bytes": 266,
+          "response": "{\"packages/api/src/index.ts\": {\"File\": [{\"name_path\": \"index\", \"body_location\": {\"start_line\": 0, \"end_line\": 24}, \"content_around_reference\": \"...  21:export { createTRPCContext } from \\\"./trpc\\\";\\n  >  22:export type { RouterInputs, RouterOutputs };\\n...  23:\"}]}}"
+        },
+        {
+          "symbol": "Separator",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "packages/ui/src/field.tsx"
+          ],
+          "ms": 546.724749999994,
+          "bytes": 513,
+          "response": "{\"packages/ui/src/field.tsx\": {\"File\": [{\"name_path\": \"field\", \"body_location\": {\"start_line\": 0, \"end_line\": 250}, \"content_around_reference\": \"...   7:import { Label } from \\\"@acme/ui/label\\\";\\n  >   8:import { Separator } from \\\"@acme/ui/separator\\\";\\n...   9:\"}], \"Function\": [{\"name_path\": \"FieldSeparator\", \"body_location\": {\"start_line\": 171, \"end_line\": 199}, \"content_around_reference\": \"... 187:    >\\n  > 188:      <Separator className=\\\"absolute inset-0 top-1/2\\\" />\\n... 189:      {children && (\"}]}}"
+        },
+        {
+          "symbol": "TRPCReactProvider",
+          "measured": true,
+          "grade": "correct",
+          "precision": 1,
+          "recall": 1,
+          "hits": 1,
+          "returned": 1,
+          "expected": 1,
+          "files": [
+            "apps/nextjs/src/app/layout.tsx"
+          ],
+          "ms": 2010.1586670000106,
+          "bytes": 848,
+          "response": "{\"apps/nextjs/src/app/layout.tsx\": {\"File\": [{\"name_path\": \"layout\", \"body_location\": {\"start_line\": 0, \"end_line\": 71}, \"content_around_reference\": \"...   7:import { env } from \\\"~/env\\\";\\n  >   8:import { TRPCReactProvider } from \\\"~/trpc/react\\\";\\n...   9:\"}], \"Function\": [{\"name_path\": \"RootLayout\", \"body_location\": {\"start_line\": 49, \"end_line\": 69}, \"content_around_reference\": \"...  59:        <ThemeProvider>\\n  >  60:          <TRPCReactProvider>{props.children}</TRPCReactProvider>\\n...  61:          <div className=\\\"absolute right-4 bottom-4\\\">\"}, {\"name_path\": \"RootLayout\", \"body_location\": {\"start_line\": 49, \"end_line\": 69}, \"content_around_reference\": \"...  59:        <ThemeProvider>\\n  >  60:          <TRPCReactProvider>{props.children}</TRPCReactProvider>\\n...  61:          <div className=\\\"absolute right-4 bottom-4\\\">\"}]}}"
+        },
+        {
+          "symbol": "ThemeProvider",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 575.390584000008,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "ThemeToggle",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 110.22204199999396,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "Toaster",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 116.61883300000045,
+          "bytes": 2,
+          "response": "{}"
+        },
+        {
+          "symbol": "appRouter",
+          "measured": true,
+          "grade": "incomplete",
+          "precision": 1,
+          "recall": 0.25,
+          "hits": 1,
+          "returned": 1,
+          "expected": 4,
+          "files": [
+            "packages/api/src/index.ts"
+          ],
+          "ms": 1342.722333999991,
+          "bytes": 533,
+          "response": "{\"packages/api/src/root.ts\": {\"Variable\": [{\"name_path\": \"AppRouter\", \"body_location\": {\"start_line\": 10, \"end_line\": 10}, \"content_around_reference\": \"...   9:// export type definition of API\\n  >  10:export type AppRouter = typeof appRouter;\\n...  11:\"}]}, \"packages/api/src/index.ts\": {\"File\": [{\"name_path\": \"index\", \"body_location\": {\"start_line\": 0, \"end_line\": 24}, \"content_around_reference\": \"...  19:\\n  >  20:export { type AppRouter, appRouter } from \\\"./root\\\";\\n...  21:export { createTRPCContext } from \\\"./trpc\\\";\"}]}}"
+        },
+        {
+          "symbol": "authEnv",
+          "measured": true,
+          "grade": "empty",
+          "precision": 0,
+          "recall": 0,
+          "hits": 0,
+          "returned": 0,
+          "expected": 2,
+          "files": [],
+          "ms": 885.6611249999987,
+          "bytes": 2,
+          "response": "{}"
+        }
+      ]
+    }
+  ],
+  "compilerGeneratedConfigs": {
+    "tsconfig.json": "{}",
+    "tooling/github/tsconfig.json": "{}",
+    "tooling/typescript/tsconfig.json": "{}"
+  },
+  "sourceWorktree": "Tracked files match pinned commit; scip --infer-tsconfig created the three empty untracked configs recorded here before all measurements."
+}

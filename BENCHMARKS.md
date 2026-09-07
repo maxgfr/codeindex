@@ -2,6 +2,27 @@
 
 Reproducible harness (`scripts/bench/`) comparing codeindex against universal-ctags, Serena (LSP over MCP) and Graphify. Timings are the median of 5 runs with one warmup discarded; a cell reading `n/a (reason)` means that tool was not measurable in this session.
 
+## Answer coverage refresh — 2026-09-07
+
+This section is a new answer-only measurement; the other tables below retain their historical dates. Latency here is the median across questions in one initialized MCP session, with one request per question, rather than five repeated timing samples.
+
+Repo: `t3-oss/create-t3-turbo` at `8f945b7bb3bfb3ca8358d48b1ff0214079bc11ee`. SCIP TypeScript0.4.0; TypeScript5.9.3; TypeScript Language Server5.1.3; Serena1.6.1.
+
+| Question | Server | Asked | Exact | Partial | Wrong | Empty | Precision | Recall | Tokens | Median ms |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| location | codeindex | 25 | 25 | 0 | 0 | 0 | 100.0% | 100.0% | 89 | 7.6 |
+| references | codeindex | 25 | 20 | 4 | 1 | 0 | 90.5% | 96.0% | 121 | 7.6 |
+| references | codeindex + LSP | 25 | 8 | 3 | 0 | 14 | 44.0% | 34.6% | 268 | 832.1 |
+| references | serena | 25 | 8 | 3 | 0 | 14 | 44.0% | 34.6% | 95 | 529.4 |
+
+References mean distinct files with non-definition SCIP occurrences of the unique compiler symbol, excluding the declaration file for every tool. They do not prove calls. Precision/recall are per-question macro averages; tokens are full default response bytes/4. The grader is shared with oracle tests and source path inventory is independent of codeindex.
+
+LSP setup explicitly sets `initializationOptions.tsserver.useSyntaxServer` to `never`. With the default auto syntax server, short-lived queries returned only same-file references before the semantic server loaded its project (25 empty external-file answers). Disabling syntax fallback makes the measured LSP reference file sets match Serena for every question. The remaining cross-package gaps are shared language-server results, preserved rather than hidden.
+
+This bounded refresh keeps the 50 prior declaration questions for unselected repositories with original provenance; only t3’s 25 declaration+25 reference questions were regenerated. [Raw answers, agreement evidence, configuration, versions and compiler/source provenance](docs/engine-validation-2026-09-07.answers.json).
+
+Tracked source files match the pinned revision. SCIP `--infer-tsconfig` created three empty `{}` configs before every measurement: root `tsconfig.json`, `tooling/github/tsconfig.json`, and `tooling/typescript/tsconfig.json`; the raw report records their exact contents.
+
 ## Methodology & fairness
 
 The tools compared here are architecturally different, not just differently

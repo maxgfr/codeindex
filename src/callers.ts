@@ -47,6 +47,12 @@ export interface CallerEntry {
 // serializing the index is deterministic without re-sorting).
 export type CallerIndex = Map<string, CallerEntry>;
 
+/** Resolve the explicit name@file form for every entry, including the first
+ * homonym that the historical index stores under its unqualified name. */
+export function lookupCallerEntry(index: CallerIndex, name: string): CallerEntry | undefined {
+  return index.get(name) ?? [...index.values()].find((entry) => `${entry.def.name}@${entry.def.file}` === name);
+}
+
 // `${from}|${to}` pairs of resolved imports — the same corroboration set the
 // graph builder feeds resolveCallEdges. Computed (and memoized) per scan in
 // src/derived.ts; callers that already ran the graph can pass their own set

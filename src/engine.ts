@@ -201,14 +201,14 @@ export type { OnboardOptions, OnboardBrief } from "./onboard.js";
 // this repo's own graph and checking the import closure. That is what makes
 // "the LSP tier cannot change graph.json/symbols.json bytes" a property of the
 // module graph rather than a promise in a comment.
-export { lspStatus, referencesWithLsp } from "./lsp/index.js";
+export { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 export { loadLspConfig, parseLspConfig, resolveLspConfigPath, serverForLang } from "./lsp/config.js";
 export { openLspSession, LspTimeout } from "./lsp/client.js";
 export { spawnLspTransport } from "./lsp/spawn.js";
 export { createFramer, encodeMessage, fileUri, relFromUri, locationsToRefs, MAX_FRAME_BYTES } from "./lsp/protocol.js";
 export { agreementOf, columnOfSymbol, lspUnavailable } from "./lsp/refs.js";
 export type { LspConfig, LspServerConfig, LspConfigSource } from "./lsp/config.js";
-export type { LspStatus, LspServerStatus } from "./lsp/index.js";
+export type { LspStatus, LspServerStatus, LspCallers, LspCallersBlock, LspIncomingCall } from "./lsp/index.js";
 export type { LspTransport, LspSession, LspSessionOptions, LspCapabilities } from "./lsp/client.js";
 export type { LspReferences, LspBlock, LspAgreement } from "./lsp/refs.js";
 export type { LspRef, LspMessage } from "./lsp/protocol.js";

@@ -7,9 +7,9 @@
 // labelled block; it can never subtract an answer.
 
 import type { RepoScan } from "../scan.js";
-import type { SymbolReferences } from "../query.js";
+import { findSymbol, type SymbolReferences } from "../query.js";
 import { have } from "../util.js";
-import { openLspSession, type LspSession } from "./client.js";
+import { openLspSession, type LspCapabilities, type LspSession } from "./client.js";
 import {
   loadLspConfig,
   resolveLspConfigPath,
@@ -20,12 +20,16 @@ import {
   type LspConfigSource,
   type LspServerConfig,
 } from "./config.js";
-import { annotateWithLsp, lspUnavailable, type LspReferences } from "./refs.js";
+import { agreementOf, annotateWithLsp, lspUnavailable, type LspReferences } from "./refs.js";
 import { spawnLspTransport } from "./spawn.js";
+import { callersAgreement, callersUnavailable, collectIncomingCalls, type LspCallers } from "./callers.js";
+import { uniqueIncomingCalls, type LspIncomingCall, type LspRef } from "./protocol.js";
+import type { CodeSymbol } from "../types.js";
 
 export type { LspConfig, LspServerConfig } from "./config.js";
 export type { LspReferences, LspBlock, LspAgreement } from "./refs.js";
-export type { LspRef } from "./protocol.js";
+export type { LspRef, LspIncomingCall } from "./protocol.js";
+export type { LspCallers, LspCallersBlock } from "./callers.js";
 
 export interface LspServerStatus {
   id: string;
@@ -37,7 +41,7 @@ export interface LspServerStatus {
   filesInRepo: number;
   /** --probe only: did `initialize` succeed, and what did it advertise. */
   reachable?: boolean;
-  capabilities?: { references: boolean; definition: boolean; implementation: boolean; typeHierarchy: boolean };
+  capabilities?: LspCapabilities;
   error?: string;
 }
 
@@ -141,18 +145,110 @@ export async function referencesWithLsp(
   }
   if (!config) return statik; // tier not asked for — no block at all, byte-compat
 
-  const lang = statik.defs[0]?.lang;
-  if (!lang) return { ...statik, lsp: lspUnavailable("(none)", `no declaration of ${name} to anchor a request on`) };
-
-  const server = serverForLang(config, lang);
-  if (!server) return { ...statik, lsp: lspUnavailable("(none)", `no server configured for ${lang}`) };
-
-  const opened = await tryOpen(server, scan.root);
-  if (!opened.ok) return { ...statik, lsp: lspUnavailable(server.id, opened.reason) };
-
-  try {
-    return await annotateWithLsp(scan, name, statik, opened.session, server.id, server.languageId ?? server.languages[0]!);
-  } finally {
-    await opened.session.shutdown();
+  if (!statik.defs.length) return { ...statik, lsp: lspUnavailable("(none)", `no declaration of ${name} to anchor a request on`) };
+  const { groups, reasons } = declarationServers(config, statik.defs);
+  const refs: LspRef[] = [];
+  for (const [server, defs] of groups) {
+    const opened = await tryOpen(server, scan.root);
+    if (!opened.ok) {
+      reasons.push(`${server.id}: ${opened.reason}`);
+      continue;
+    }
+    try {
+      const answer = await annotateWithLsp(scan, name, { ...statik, defs }, opened.session, server.id, server.languageId);
+      if (answer.lsp) {
+        refs.push(...answer.lsp.refs);
+        if (!answer.lsp.ok) reasons.push(`${server.id}: ${answer.lsp.reason ?? "request failed"}`);
+      }
+    } finally {
+      await opened.session.shutdown();
+    }
   }
+  const seen = new Set<string>();
+  const normalized = refs.filter((ref) => {
+    const key = JSON.stringify([ref.file, ref.line, ref.character]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line || (a.character ?? 0) - (b.character ?? 0));
+  return {
+    ...statik,
+    lsp: {
+      server: [...groups.keys()].map((server) => server.id).sort().join(", ") || "(none)",
+      ok: reasons.length === 0,
+      ...(reasons.length ? { reason: [...new Set(reasons)].sort().join("; ") } : {}),
+      refs: normalized,
+      agreement: agreementOf(normalized, statik),
+    },
+  };
+}
+
+/** Incoming calls may exist even when the static caller index has no entry. */
+export async function callersWithLsp<T extends object>(
+  scan: RepoScan,
+  repo: string,
+  name: string,
+  statik: T,
+): Promise<LspCallers<T>> {
+  let config: LspConfig | undefined;
+  try {
+    config = loadLspConfig(repo);
+  } catch (error) {
+    return { ...statik, lsp: callersUnavailable("(config)", error instanceof Error ? error.message : String(error)) };
+  }
+  if (!config) return { ...statik, lsp: callersUnavailable("(none)", "no LSP server configured") };
+
+  const separator = name.indexOf("@");
+  const target = separator < 0 ? name : name.slice(0, separator);
+  const file = separator < 0 ? undefined : name.slice(separator + 1);
+  const defs = findSymbol(scan, target, { maxResults: Infinity }).filter((def) => file === undefined || def.file === file);
+  if (!defs.length) return { ...statik, lsp: callersUnavailable("(none)", `no declaration of ${name} to anchor a request on`) };
+
+  const { groups, reasons } = declarationServers(config, defs);
+  const calls: LspIncomingCall[] = [];
+  for (const [server, declarations] of groups) {
+    const opened = await tryOpen(server, scan.root);
+    if (!opened.ok) {
+      reasons.push(`${server.id}: ${opened.reason}`);
+      continue;
+    }
+    try {
+      const result = await collectIncomingCalls(scan, declarations, opened.session, server.languageId);
+      calls.push(...result.calls);
+      if (result.reason) reasons.push(`${server.id}: ${result.reason}`);
+    } finally {
+      await opened.session.shutdown();
+    }
+  }
+  const normalized = uniqueIncomingCalls(calls);
+  return {
+    ...statik,
+    lsp: {
+      server: [...groups.keys()].map((server) => server.id).sort().join(", ") || "(none)",
+      ok: reasons.length === 0,
+      ...(reasons.length ? { reason: [...new Set(reasons)].sort().join("; ") } : {}),
+      calls: normalized,
+      agreement: callersAgreement(normalized, statik),
+    },
+  };
+}
+
+/** Group before opening a server: a homonym may belong to several languages. */
+function declarationServers(config: LspConfig, defs: CodeSymbol[]): {
+  groups: Map<LspServerConfig, CodeSymbol[]>;
+  reasons: string[];
+} {
+  const groups = new Map<LspServerConfig, CodeSymbol[]>();
+  const reasons: string[] = [];
+  for (const def of defs) {
+    const server = serverForLang(config, def.lang);
+    if (!server) {
+      reasons.push(`no server configured for ${def.lang}`);
+      continue;
+    }
+    const group = groups.get(server) ?? [];
+    group.push(def);
+    groups.set(server, group);
+  }
+  return { groups, reasons };
 }

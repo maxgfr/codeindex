@@ -439,6 +439,7 @@ describe("lsp status", () => {
       definition: true,
       implementation: true,
       typeHierarchy: false,
+      callHierarchy: false,
     });
   }, 30_000);
 });

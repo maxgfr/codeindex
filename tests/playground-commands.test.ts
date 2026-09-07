@@ -195,6 +195,17 @@ describe("playground command palette", () => {
     expect(() => runCommand(commands, null, "search", "x")).toThrow(/Load a repository/);
   });
 
+  it("lists Node-only search and LSP variants and explains typed attempts", () => {
+    const list = describeCommands(commands);
+    for (const name of ["search --semantic", "callers --lsp", "lsp"]) {
+      expect(list.find((c: Any) => c.name === name)?.unavailable).toBeTruthy();
+      expect(() => runCommand(commands, session, name, "client")).toThrow(/not available in the browser/);
+    }
+    expect(() => runCommand(commands, session, "search", "client --semantic")).toThrow(/embedding model or endpoint/);
+    expect(() => runCommand(commands, session, "callers", "client --lsp")).toThrow(/configured language server/);
+    expect(runCommand(commands, session, "search", "client").data.length).toBeGreaterThan(0);
+  });
+
   it("reports a summary with every number the page displays defined", () => {
     // A wrong field name here does not throw — it renders "undefined" in a stat
     // tile. `graph.edges` (the field is `fileEdges`) got through review exactly

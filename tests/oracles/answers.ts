@@ -16,6 +16,7 @@ import { basename } from "node:path";
 /** One question with the answer a compiler already knows. */
 export interface AnswerCase {
   repo: string;
+  kind?: "location";
   /** "where is X declared" — the symbol asked about. */
   symbol: string;
   /** The repo-relative file the compiler says declares it. Exactly one. */
@@ -27,7 +28,10 @@ export interface AnswerCase {
 export interface AnswerCorpus {
   generatedAt: string;
   tool: string;
-  cases: AnswerCase[];
+  cases: (AnswerCase | ReferenceCase)[];
+  unavailable?: { repo: string; reason: string }[];
+  revisions?: Record<string, string>;
+  provenance?: Record<string, { generatedAt: string; tool: string; revision?: string; refreshed: boolean }>;
 }
 
 /**
@@ -45,21 +49,21 @@ export interface AnswerCorpus {
  * what makes the resulting table say nothing.
  */
 export function casesFromPairs(repo: string, declarations: { file: string; name: string }[], limit = 25): AnswerCase[] {
-  const byName = new Map<string, string[]>();
+  const byName = new Map<string, Set<string>>();
   for (const { file, name } of declarations) {
     if (name.length < 4 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
     // A namespace descriptor whose name IS the filename is scip-typescript
     // describing the module, not a declaration anyone would search for.
     if (name === basename(file).replace(/\.[^.]+$/, "")) continue;
-    const arr = byName.get(name) ?? [];
-    arr.push(file);
+    const arr = byName.get(name) ?? new Set<string>();
+    arr.add(file);
     byName.set(name, arr);
   }
 
   const unique: AnswerCase[] = [];
   for (const [symbol, files] of byName) {
-    if (files.length !== 1) continue; // ambiguous — no single right answer
-    unique.push({ repo, symbol, declaredIn: files[0]!, distractors: [] });
+    if (files.size !== 1) continue; // ambiguous — no single right answer
+    unique.push({ repo, symbol, declaredIn: [...files][0]!, distractors: [] });
   }
 
   // Deterministic selection: sort by name and take a prefix, rather than
@@ -69,38 +73,58 @@ export function casesFromPairs(repo: string, declarations: { file: string; name:
   return unique.slice(0, limit);
 }
 
-export type Grade = "correct" | "incomplete" | "wrong" | "empty";
+export { gradeAnswer, gradeFiles, pathsIn, type Grade } from "../../scripts/bench/answer-grading.mjs";
 
-/**
- * Grade one answer against the compiler's.
- *
- * Three outcomes rather than a boolean, because "named the right file among
- * five" and "named the right file" are different qualities and collapsing them
- * hides the thing an agent actually pays for: reading four files it did not
- * need. `empty` is kept separate from `wrong` for the same reason — a tool that
- * says nothing is less harmful than one that says something false.
- */
-export function gradeAnswer(expected: string, filesInAnswer: string[]): Grade {
-  if (!filesInAnswer.length) return "empty";
-  const hit = filesInAnswer.some((f) => f === expected || f.endsWith(`/${expected}`) || expected.endsWith(`/${f}`));
-  if (!hit) return "wrong";
-  return filesInAnswer.length === 1 ? "correct" : "incomplete";
+/** Compiler symbol identity is retained so homonyms cannot blend references. */
+export interface ScipOccurrence {
+  file: string;
+  symbol: string;
+  name: string;
+  definition: boolean;
 }
 
-/**
- * Every repo-relative-looking path in a tool's response text.
- *
- * Deliberately shape-based rather than schema-based: the three servers return
- * three different JSON shapes, and grading them through a per-server extractor
- * would make the grader part of what is being compared. Extracting paths from
- * the raw text treats all three identically — which is the only way the
- * comparison is fair.
- */
-export function pathsIn(text: string, knownFiles: Set<string>): string[] {
-  const out = new Set<string>();
-  for (const match of text.matchAll(/[\w./-]+\.[A-Za-z]{1,5}\b/g)) {
-    const candidate = match[0].replace(/^\.\//, "");
-    if (knownFiles.has(candidate)) out.add(candidate);
+export interface ReferenceCase extends Omit<AnswerCase, "kind"> {
+  kind: "references";
+  /** General references, not necessarily calls; declaration file excluded. */
+  referencedIn: string[];
+}
+
+export function referenceCasesFromOccurrences(repo: string, occurrences: ScipOccurrence[], limit = 25): ReferenceCase[] {
+  const definitions = new Map<string, ScipOccurrence[]>();
+  for (const occ of occurrences) {
+    if (!occ.definition) continue;
+    const list = definitions.get(occ.name) ?? [];
+    if (!list.some((d) => d.file === occ.file && d.symbol === occ.symbol)) list.push(occ);
+    definitions.set(occ.name, list);
   }
-  return [...out].sort();
+  const out: ReferenceCase[] = [];
+  for (const c of casesFromPairs(repo, occurrences.filter((o) => o.definition), Infinity)) {
+    const defs = definitions.get(c.symbol)!;
+    if (defs.length !== 1) continue;
+    const identity = defs[0]!.symbol;
+    const referencedIn = [...new Set(occurrences.filter((o) => !o.definition && o.symbol === identity && o.file !== c.declaredIn).map((o) => o.file))].sort();
+    if (referencedIn.length) out.push({ ...c, kind: "references", referencedIn });
+  }
+  return out.slice(0, limit);
+}
+
+
+/** A bounded refresh retains other repositories' cases with their own dates. */
+export function mergeAnswerCorpora(previous: AnswerCorpus | undefined, generated: AnswerCorpus, selected?: string[]): AnswerCorpus {
+  const provenance: NonNullable<AnswerCorpus["provenance"]> = {};
+  for (const repo of new Set(generated.cases.map((c) => c.repo))) {
+    provenance[repo] = { generatedAt: generated.generatedAt, tool: generated.tool, revision: generated.revisions?.[repo], refreshed: true };
+  }
+  const retained = selected && previous ? previous.cases.filter((c) => !selected.includes(c.repo)) : [];
+  const retainedRepos = new Set(retained.map((c) => c.repo));
+  for (const repo of retainedRepos) {
+    provenance[repo] = { ...(previous!.provenance?.[repo] ?? { generatedAt: previous!.generatedAt, tool: previous!.tool, revision: previous!.revisions?.[repo] }), refreshed: false };
+  }
+  return {
+    ...generated,
+    cases: [...retained, ...generated.cases],
+    provenance,
+    unavailable: generated.unavailable?.map((entry) => retainedRepos.has(entry.repo)
+      ? { repo: entry.repo, reason: "not refreshed in bounded generation; prior compiler cases retained with original provenance" } : entry),
+  };
 }

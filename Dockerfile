@@ -4,18 +4,20 @@
 # zero-runtime-dependency bundle. `pnpm build` produces scripts/engine.mjs +
 # scripts/engine.d.mts (tsup + postbuild) and both are committed to the repo,
 # so there is nothing to `npm install` or compile here: the image is just
-# `node` plus that bundle, its thin CLI entry, and the optional tree-sitter
+# `node`, Git, that bundle, its thin CLI entry, and the optional tree-sitter
 # grammars that turn on the AST extraction tier. No src/, no node_modules, no
 # embedding model (those are opt-in and stay outside the image — see the
 # semantic tier in README.md / `codeindex embed pull`).
 #
-# Base: node:22-slim (Debian bookworm). A distroless nodejs22 base is ~27 MiB
-# smaller, but node:22-slim already lands the full image comfortably under
-# the 200 MiB target once the ~22 MiB of grammars are added, and it keeps a
-# shell + coreutils in the image for support/debugging (`docker run --rm -it
-# --entrypoint sh ghcr.io/maxgfr/codeindex`) at negligible cost — worth more
-# here than the extra size shaved off an already-small image.
+# Node plus Git: repository metadata and the churn/coupling/delta commands use
+# the Git executable even though the JavaScript bundle has no npm dependencies.
+# Trust only the documented bind mount: its host UID may differ from node.
+# Keep recommended packages out and remove apt metadata after installation.
 FROM node:22-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+RUN git config --system --add safe.directory /work
 
 ARG VERSION=dev
 

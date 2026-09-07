@@ -260,6 +260,9 @@ export function buildCommandTable(engine, mount) {
     hotspots: { hint: "", describe: "Churn × size ranking", unavailable: "needs git history" },
     risk: { hint: "", describe: "Complexity × churn ranking", unavailable: "needs git history" },
     delta: { hint: "", describe: "Review panel for a git diff", unavailable: "needs git history" },
+    "search --semantic": { hint: "<query>", describe: "Search by meaning with embeddings", unavailable: "use the Node CLI with an embedding model or endpoint" },
+    "callers --lsp": { hint: "<symbol>", describe: "Find callers using a language server", unavailable: "use the Node CLI with a configured language server" },
+    lsp: { hint: "status", describe: "Inspect configured language servers", unavailable: "language servers run in Node, outside the browser" },
     embed: { hint: "", describe: "Embedding tier for semantic search", unavailable: "needs a model download" },
     mcp: { hint: "", describe: "Run as an MCP server", unavailable: "needs a stdio transport" },
   };
@@ -267,9 +270,13 @@ export function buildCommandTable(engine, mount) {
 
 /** Run one command, with the same error vocabulary the UI shows. */
 export function runCommand(commands, session, name, args = "") {
-  const command = commands[name];
+  // Disabled variants remain discoverable in the palette and give the same
+  // explanation when typed, instead of treating their flags as search text.
+  const flag = name === "search" ? "--semantic" : name === "callers" ? "--lsp" : undefined;
+  const variant = flag && args.trim().split(/\s+/).includes(flag) ? `${name} ${flag}` : name;
+  const command = commands[variant];
   if (!command) throw new Error(`Unknown command "${name}". Press ⌘K for the list.`);
-  if (command.unavailable) throw new Error(`"${name}" ${command.unavailable} — not available in the browser.`);
+  if (command.unavailable) throw new Error(`"${variant}" is not available in the browser: ${command.unavailable}.`);
   if (!session) throw new Error("Load a repository first.");
   return command.run(session, args);
 }

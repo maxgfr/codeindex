@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { REPO_ROOT, CLI_PATH, ENGINE_URL, reposFor, clonePinned, pickSymbol } from "./repos.mjs";
 import { detectCompetitors, noCompetitors, runCmd } from "./competitors.mjs";
 import { adapterFor } from "./mcp-adapters.mjs";
-import { askAll, loadCorpus } from "./answers.mjs";
+import { askAll, loadCorpus, repositoryFiles } from "./answers.mjs";
 import { measuredTokens, byteLen } from "./tokens.mjs";
 import { renderMarkdown, renderJson, na } from "./render.mjs";
 
@@ -642,55 +642,60 @@ function scenarioInstall(_ctxs, comp, _cfg) {
 async function scenarioAnswers(ctxs, comp, _cfg) {
   const corpus = loadCorpus();
   const rows = [];
-  if (!corpus?.cases?.length) {
-    rows.push([na("no answer corpus — run CODEINDEX_ANSWERS=1 pnpm vitest run tests/answers-oracle.test.ts")]);
-    return {
-      id: "answers",
-      title: "Answer quality (find-symbol, graded against the TypeScript compiler)",
-      note: "Corpus absent on this machine.",
-      headers: ["Status"],
-      rows,
-    };
-  }
-
+  const evidence = [];
+  const headers = ["Repo", "Server", "Asked", "Correct", "Incomplete", "Missed", "Tokens/answer", "Question", "Precision", "Recall", "Empty", "Not measured", "Median ms"];
+  const missing = (head, kind, reason) => [...head, ...Array.from({ length: 5 }, () => na(reason)), { v: kind, k: "text" }, ...Array.from({ length: 5 }, () => na(reason))];
   for (const ctx of ctxs) {
-    const dir = ctx.dir();
-    // Matched on SLUG, not on this machine's clone path — the corpus is
-    // committed and has to mean the same thing on every checkout.
-    const cases = corpus.cases.filter((c) => c.repo === ctx.repo.slug);
-    if (!cases.length) continue; // no compiler-derived questions for this repo
-    const knownFiles = new Set(ctx.arts().graph.files.map((f) => f.rel));
-    for (const server of MCP_SERVERS) {
-      const gate = mcpGate(server, comp, ctx);
-      const head = [{ v: ctx.repo.slug, k: "text" }, { v: server, k: "text" }];
-      if (gate) {
-        rows.push([...head, na(gate), na(gate), na(gate), na(gate), na(gate)]);
-        continue;
+    for (const kind of ["location", "references"]) {
+      const cases = (corpus?.cases ?? []).filter((c) => c.repo === ctx.repo.slug && (c.kind ?? "location") === kind);
+      let knownFiles;
+      const variants = kind === "references" ? ["codeindex", "codeindex lsp", "serena"] : MCP_SERVERS;
+      for (const variant of variants) {
+        const server = variant === "codeindex lsp" ? "codeindex" : variant;
+        const head = [{ v: ctx.repo.slug, k: "text" }, { v: variant, k: "text" }];
+        if (!cases.length) {
+          const reason = corpus?.unavailable?.find((r) => r.repo === ctx.repo.slug)?.reason
+            ?? `no answer corpus for ${ctx.repo.slug} ${kind} — run CODEINDEX_ANSWERS=1 pnpm vitest run tests/answers-oracle.test.ts`;
+          rows.push(missing(head, kind, reason));
+          continue;
+        }
+        const gate = mcpGate(server, comp, ctx);
+        if (gate) {
+          rows.push(missing(head, kind, gate));
+          continue;
+        }
+        log(`answers: ${ctx.repo.slug} × ${variant} (${cases.length} ${kind} questions)`);
+        knownFiles ??= repositoryFiles(ctx.dir());
+        const opts = server === "codeindex" ? { engine: CLI_PATH, lsp: variant === "codeindex lsp" } : { bin: comp[server].path };
+        if (server === "graphify" && comp.graphify.extra?.mcpPath) opts.mcpBin = comp.graphify.extra.mcpPath;
+        const r = await askAll(server, probeWorkDir(ctx, server), cases, knownFiles, opts);
+        evidence.push({ repo: ctx.repo.slug, revision: corpus.revisions?.[ctx.repo.slug] ?? ctx.repo.sha, server: variant, kind, provenance: corpus.provenance?.[ctx.repo.slug], ...r });
+        if (!r.ok) {
+          rows.push(missing(head, kind, r.reason));
+          continue;
+        }
+        rows.push([
+          ...head,
+          { v: r.asked, k: "int" },
+          { v: r.grades.correct, k: "int" },
+          { v: r.grades.incomplete, k: "int" },
+          { v: r.grades.wrong + r.grades.empty, k: "int" },
+          { v: r.tokens, k: "int" },
+          { v: kind, k: "text" },
+          { v: `${(100 * r.precision).toFixed(1)}%`, k: "text" },
+          { v: `${(100 * r.recall).toFixed(1)}%`, k: "text" },
+          { v: r.grades.empty, k: "int" },
+          { v: r.unavailable, k: "int" },
+          { v: r.ms, k: "ms" },
+        ]);
       }
-      log(`answers: ${ctx.repo.slug} × ${server} (${cases.length} questions)`);
-      const opts = server === "codeindex" ? { engine: CLI_PATH } : { bin: comp[server].path };
-      if (server === "graphify" && comp.graphify.extra?.mcpPath) opts.mcpBin = comp.graphify.extra.mcpPath;
-      const r = await askAll(server, probeWorkDir(ctx, server), cases, knownFiles, opts);
-      if (!r.ok) {
-        rows.push([...head, na(r.reason), na(r.reason), na(r.reason), na(r.reason), na(r.reason)]);
-        continue;
-      }
-      rows.push([
-        ...head,
-        { v: r.asked, k: "int" },
-        { v: r.grades.correct, k: "int" },
-        { v: r.grades.incomplete, k: "int" },
-        { v: r.grades.wrong + r.grades.empty, k: "int" },
-        { v: r.tokens, k: "int" },
-      ]);
     }
   }
   return {
     id: "answers",
-    title: "Answer quality (find-symbol, graded against the TypeScript compiler)",
-    note: `Questions derived from scip-typescript's index — the REAL TypeScript compiler, the same authority the extraction oracles use — so the answer key is not authored by any tool in this table. Only names the compiler declares in exactly ONE file are asked (${corpus.cases.length} across the corpus, generated ${corpus.generatedAt}); a name declared twice would grade luck. The grader is shape-based and identical for all three servers: it pulls repo-relative paths out of the raw response text and checks the expected file is among them — a per-server parser would make the grader a variable in the experiment. "correct" = the right file and only it; "incomplete" = the right file among others, which costs the reader the others; "missed" = a wrong file or nothing. Tokens are the mean per answer (bytes/4), because being correct at ten times the context is a different result from being correct.`,
-    headers: ["Repo", "Server", "Asked", "Correct", "Incomplete", "Missed", "Tokens/answer"],
-    rows,
+    title: "Answer quality (declarations and general references, graded against the TypeScript compiler)",
+    note: `Questions come from ${corpus?.tool ?? "scip-typescript"} (${corpus?.cases?.length ?? 0} cases; assembled ${corpus?.generatedAt ?? "not measured"}). Per-repo compiler dates and retained-case provenance are in JSON evidence. Location questions retain the existing grade. References ask for distinct files with non-definition occurrences of the same compiler symbol, excluding its declaration file for every server; these are general references, not proof of calls. Precision and recall are macro means over measured questions. Unsupported tools and unavailable LSP tiers are explicitly not measured; failed supported calls count as empty. LSP rows grade only the LSP references, preserve the server's agreement matrix in JSON evidence, and never grade static fallback as an LSP success. Path normalization and grading are shared with oracle tests; ambiguous suffixes are rejected. Tokens are mean full-response bytes/4 (default payload); latency is median tool-call time including any per-query language-server work. Configure CODEINDEX_LSP_CONFIG to opt into the LSP benchmark. Controlled callers/impact/search fixtures are tested separately and are not compiler-derived competitor claims.`,
+    headers, rows, evidence,
   };
 }
 

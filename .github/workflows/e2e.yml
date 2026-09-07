@@ -35,6 +35,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:e2e
 
+      - name: Install pinned TypeScript language server
+        run: npm install -g typescript-language-server@5.1.3 typescript@5.9.3
+      - name: Real LSP callers and references through the shipped CLI and MCP
+        run: CODEINDEX_TYPESCRIPT_LSP="$(command -v typescript-language-server)" pnpm exec vitest run tests/lsp-real.test.ts
+
       # The oracles that need a cloned corpus and an external binary — too slow
       # and too environment-dependent for `pnpm test`, which is why they live here
       # rather than gating every push. The tags.scm audit and the oracle roll-up

@@ -15,7 +15,9 @@ function validate(schema: Record<string, unknown>, value: unknown, path = "$"): 
   if (Array.isArray(schema.oneOf)) {
     const branches = schema.oneOf as Record<string, unknown>[];
     const failures = branches.map((b) => validate(b, value, path));
-    if (failures.some((f) => f === undefined)) return undefined;
+    const matches = failures.filter((f) => f === undefined).length;
+    if (matches === 1) return undefined;
+    if (matches > 1) return `${path}: matched ${matches} oneOf branches`;
     return `${path}: matched none of ${branches.length} oneOf branches (${failures.join(" | ")})`;
   }
   const types = schema.type === undefined ? undefined : Array.isArray(schema.type) ? schema.type : [schema.type];
@@ -166,6 +168,18 @@ describe("outputSchema / structuredContent", () => {
       expect(err, `${name}: ${err}`).toBeUndefined();
     }
   }, 120_000);
+
+  it("validates targeted callers, including concise and an LSP degradation", async () => {
+    for (const args of [{ name: "backoff" }, { name: "backoff", concise: true }, { name: "backoff", lsp: true, concise: true }]) {
+      const { results } = await session([{ name: "callers", arguments: args }], "2025-11-25");
+      const result = results.callers!;
+      expect(result.isError).not.toBe(true);
+      const answer = result.structuredContent as { def: unknown; callers: unknown[] };
+      expect(answer.def).toBeDefined();
+      expect(answer.callers.length).toBeGreaterThan(0);
+      expect(validate(OUTPUT_SCHEMAS.callers!, answer)).toBeUndefined();
+    }
+  });
 
   it("sends neither schema nor structuredContent to a 2024-11-05 client", async () => {
     const { tools, results } = await session([{ name: "scan_summary", arguments: {} }], "2024-11-05");

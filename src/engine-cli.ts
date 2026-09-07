@@ -24,7 +24,7 @@ import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
 import { computeImportPairs } from "./callers.js";
 import { buildSymbolGraph, neighborhood } from "./symbolgraph.js";
-import { buildCallerIndex } from "./callers.js";
+import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
@@ -48,12 +48,12 @@ import {
   probeEndpoint,
 } from "./embed/endpoint.js";
 import { have, sh } from "./util.js";
-import { lspStatus } from "./lsp/index.js";
+import { lspStatus, callersWithLsp } from "./lsp/index.js";
 import { profileNames, toolsInProfiles } from "./mcp/tools.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
 
-Usage: engine.mjs <command> [flags]
+Usage: codeindex <command> [flags]
 
 Commands:
   index       Build graph.json + symbols.json (+ incremental cache.json) into
@@ -63,7 +63,8 @@ Commands:
   symbols     Symbol index (symbols.json bytes) to stdout or --out
   scip        SCIP code-intelligence index (protobuf bytes) into --out
               (default index.scip; --out - writes to stdout)
-  callers     Per-symbol caller index (JSON)
+  callers     Per-symbol caller index (JSON); optional <name> or <name@file>
+              selects one symbol; --lsp appends language-server incoming calls
   hierarchy   Type hierarchy: extends/implements, and what extends/implements it
   implementations  Everything implementing/extending a type (transitively)
   callgraph   Bounded symbol-to-symbol neighborhood (--depth, --direction)
@@ -200,6 +201,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --run               \`embed serve\`: run the docker command instead of printing it
   --probe             \`lsp status\`: start each server and read the capabilities
                       it really advertises (default: no spawn)
+  --lsp               \`callers <name>\`: append incoming calls from a configured
+                      language server; requires a symbol target
   --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
@@ -239,6 +242,7 @@ interface CliFlags {
   exact?: boolean; // search: drop results carrying no verbatim term match
   explain?: boolean; // search: emit { results, explain } instead of a bare array
   semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
+  lsp?: boolean; // callers: append language-server incoming calls
   recall?: boolean; // callers: recall-oriented binding
   run?: boolean; // `embed serve`: actually run the docker command (default: print)
   probe?: boolean; // `lsp status`: start each server to read its real capabilities
@@ -304,6 +308,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--exact") flags.exact = true;
     else if (a === "--explain") flags.explain = true;
     else if (a === "--semantic") flags.semantic = true;
+    else if (a === "--lsp") flags.lsp = true;
     else if (a === "--recall") flags.recall = true;
     else if (a === "--run") flags.run = true;
     else if (a === "--probe") flags.probe = true;
@@ -768,11 +773,18 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       process.stderr.write(`codeindex: SCIP index → ${out} (${bytes.length} bytes)\n`);
     }
   } else if (cmd === "callers") {
+    if (flags.lsp && !flags.positional) throw new Error("callers --lsp requires a symbol: callers <name> --lsp");
     const scan = await readScan();
     const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
-    const obj: Record<string, unknown> = {};
-    for (const [name, entry] of index) obj[name] = entry;
-    emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
+    if (flags.positional) {
+      const entry = lookupCallerEntry(index, flags.positional) ?? { error: `no tracked callers for "${flags.positional}"` };
+      const result = flags.lsp ? await callersWithLsp(scan, flags.repo, flags.positional, entry) : entry;
+      emit(JSON.stringify(result, null, 2) + "\n", flags.out);
+    } else {
+      const obj: Record<string, unknown> = {};
+      for (const [name, entry] of index) obj[name] = entry;
+      emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
+    }
   } else if (cmd === "hierarchy") {
     const scan = await readScan();
     const hierarchy = buildTypeHierarchy(scan, computeImportPairs(scan));

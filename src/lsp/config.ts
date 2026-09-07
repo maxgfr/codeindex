@@ -23,7 +23,7 @@ export interface LspServerConfig {
   id: string;
   /** Engine `lang` strings (see src/lang/registry.ts), not LSP language ids. */
   languages: string[];
-  /** What `didOpen` announces. Defaults to the first entry of `languages`. */
+  /** What `didOpen` announces. Defaults to each declaration's language. */
   languageId?: string;
   command: string;
   args?: string[];

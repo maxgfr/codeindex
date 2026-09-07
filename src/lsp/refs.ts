@@ -105,7 +105,7 @@ export async function annotateWithLsp(
   statik: SymbolReferences,
   session: LspSession,
   serverId: string,
-  languageId: string,
+  languageId?: string,
 ): Promise<LspReferences> {
   if (!session.capabilities.references) {
     return { ...statik, lsp: lspUnavailable(serverId, "server does not provide textDocument/references") };
@@ -120,7 +120,7 @@ export async function annotateWithLsp(
     for (const def of statik.defs) {
       const text = readTextOrEmpty(scan.root, def.file);
       if (!text) continue;
-      session.didOpen(def.file, text, languageId);
+      session.didOpen(def.file, text, languageId ?? def.lang);
       const character = columnOfSymbol(scan.root, def.file, def.line, name);
       for (const ref of await session.references(def.file, def.line, character)) {
         const key = `${ref.file}:${ref.line}:${ref.character ?? ""}`;

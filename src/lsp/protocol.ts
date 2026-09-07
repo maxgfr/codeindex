@@ -32,6 +32,43 @@ export interface LspRef {
   character?: number;
 }
 
+/** A call site, distinct from the declaration of the function making it. */
+export interface LspIncomingCall extends LspRef {
+  caller: LspRef & { name: string; kind: number };
+}
+
+/** Incoming call ranges belong to `from.uri`, not to the queried symbol. */
+export function incomingCallsToSites(root: string, raw: unknown): LspIncomingCall[] {
+  if (!Array.isArray(raw)) return [];
+  const calls: LspIncomingCall[] = [];
+  for (const entry of raw) {
+    const from = entry?.from;
+    if (!from || typeof from.uri !== "string" || typeof from.name !== "string" || typeof from.kind !== "number") continue;
+    const caller = locationsToRefs(root, { uri: from.uri, range: from.selectionRange })[0];
+    if (!caller || !Array.isArray(entry.fromRanges)) continue;
+    for (const range of entry.fromRanges) {
+      const start = range?.start;
+      if (!Number.isInteger(start?.line) || start.line < 0 || !Number.isInteger(start?.character) || start.character < 0) continue;
+      for (const site of locationsToRefs(root, { uri: from.uri, range })) {
+        calls.push({ ...site, caller: { ...caller, name: from.name, kind: from.kind } });
+      }
+    }
+  }
+  return uniqueIncomingCalls(calls);
+}
+
+/** Stable ordering across overloads, prepared items and multiple servers. */
+export function uniqueIncomingCalls(calls: LspIncomingCall[]): LspIncomingCall[] {
+  const seen = new Set<string>();
+  return calls.filter((call) => {
+    const key = JSON.stringify([call.file, call.line, call.character, call.caller]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => byStr(a.file, b.file) || a.line - b.line || (a.character ?? 0) - (b.character ?? 0)
+    || byStr(a.caller.name, b.caller.name) || a.caller.line - b.caller.line);
+}
+
 /**
  * The largest frame this client will assemble, in bytes.
  *

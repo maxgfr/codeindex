@@ -42,6 +42,7 @@
 // `undefined` with a recorded `lastFailure()` — it never throws, so the suite
 // skips instead of going red.
 
+import type { ScipOccurrence } from "./answers.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -678,7 +679,7 @@ function hasWorkspacesField(repoDir: string): boolean {
   }
 }
 
-function runScipTs(repoDir: string, bin: string): { side: Side; unparsed: number } | undefined {
+function runScipTs(repoDir: string, bin: string): { side: Side; unparsed: number; unparsedReferences: number; occurrences: ScipOccurrence[] } | undefined {
   if (!ensureDeps(repoDir)) return undefined;
   const out = join(mkdtempSync(join(tmpdir(), "codeindex-oracle-scip-")), "index.scip");
   const r = runCmd(bin, ["index", "--cwd", repoDir, "--no-progress-bar", "--output", out, ...workspaceFlags(repoDir)], {
@@ -702,7 +703,9 @@ function runScipTs(repoDir: string, bin: string): { side: Side; unparsed: number
   }
 
   const side: Side = { pairs: new Set(), files: new Set() };
+  const occurrences: ScipOccurrence[] = [];
   let unparsed = 0;
+  let unparsedReferences = 0;
   for (const docField of documents) {
     let doc: Field[];
     try {
@@ -723,18 +726,21 @@ function runScipTs(repoDir: string, bin: string): { side: Side; unparsed: number
         unparsed++;
         continue;
       }
-      if (((firstOf(occ, F_OCC_ROLES)?.varint ?? 0) & ROLE_DEFINITION) === 0) continue;
-      const parsed = parseScipSymbol(strOf(firstOf(occ, F_OCC_SYMBOL)));
+      const definition = ((firstOf(occ, F_OCC_ROLES)?.varint ?? 0) & ROLE_DEFINITION) !== 0;
+      const symbol = strOf(firstOf(occ, F_OCC_SYMBOL));
+      const parsed = parseScipSymbol(symbol);
       if (parsed.kind === "unparsed") {
-        unparsed++;
+        if (definition) unparsed++;
+        else unparsedReferences++;
         continue;
       }
       if (parsed.kind !== "declaration") continue;
       if (isFileNamespace(parsed, rel)) continue;
-      side.pairs.add(pairKey(rel, parsed.name));
+      occurrences.push({ file: rel, symbol, name: parsed.name, definition });
+      if (definition) side.pairs.add(pairKey(rel, parsed.name));
     }
   }
-  return { side, unparsed };
+  return { side, unparsed, unparsedReferences, occurrences };
 }
 
 // ---------------------------------------------------------------------------
@@ -867,6 +873,23 @@ export function scipDeclarations(repoDir: string): { file: string; name: string 
   const sc = runScipTs(repoDir, scipTs.path!);
   if (!sc) return undefined;
   return [...sc.side.pairs].map((key) => ({ file: pairFile(key), name: key.slice(key.indexOf(SEP) + 1) }));
+}
+
+/** One compiler run supplies declarations and non-definition references. */
+export function scipAnswerIndex(repoDir: string): { declarations: { file: string; name: string }[]; occurrences: ScipOccurrence[]; version: string } | undefined {
+  failure = undefined;
+  const { scipTs } = detectTools();
+  if (!scipTs.available) return fail(`scip-typescript unavailable: ${scipTs.reason}`);
+  const sc = runScipTs(repoDir, scipTs.path!);
+  if (!sc) return undefined;
+  // Incomplete decoding is usable for extraction diagnostics, but cannot be
+  // an authoritative reference answer key: missing occurrences skew recall.
+  if (sc.unparsed + sc.unparsedReferences) return fail(`SCIP answer index has ${sc.unparsed + sc.unparsedReferences} unparsed occurrences`);
+  return {
+    declarations: [...sc.side.pairs].map((key) => ({ file: pairFile(key), name: key.slice(key.indexOf(SEP) + 1) })),
+    occurrences: sc.occurrences,
+    version: scipTs.version!,
+  };
 }
 
 /**

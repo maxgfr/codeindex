@@ -41,6 +41,11 @@ export function spawnLspTransport(server: LspServerConfig, cwd: string): LspTran
   // try/catch and has to travel through onExit like any other death.
   child.on("error", () => fireExit(null));
   child.on("close", (code: number | null) => fireExit(code));
+  // Pipe failures are emitted asynchronously on the stream, not thrown by
+  // write(). A server can close stdin before the child itself emits close.
+  child.stdin?.on("error", () => fireExit(null));
+  child.stdout?.on("error", () => fireExit(null));
+  child.stderr?.on("error", () => fireExit(null));
 
   child.stdout?.on("data", (chunk: unknown) => {
     for (const listener of dataListeners) listener(chunk as Uint8Array);
