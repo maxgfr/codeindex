@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.28.6](https://github.com/maxgfr/codeindex/compare/v2.28.5...v2.28.6) (2026-09-07)
+
+
+### Bug Fixes
+
+* **cache:** validate persisted records and speed up reference queries ([2724908](https://github.com/maxgfr/codeindex/commit/272490846c871e8705b5074b024027aa7917a068))
+
 ## [2.28.5](https://github.com/maxgfr/codeindex/compare/v2.28.4...v2.28.5) (2026-09-07)
 
 
