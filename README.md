@@ -185,6 +185,25 @@ The AST tier is optional: without a `grammars/` directory next to the bundle
 the engine silently uses its regex tier. Only tools that want AST precision
 also vendor `scripts/grammars/` (~17 MiB of wasm).
 
+### Inventory consumers
+
+`walk(root, options)` also serves exhaustive inventories. The default source-indexing
+policy is unchanged. Opt into `includeBinary`, `includeLockfiles`, `includeOversize`
+and `includeMinified`, or replace `binaryExtensions` to keep textual SVG. These
+controls are independent: a `.lock` extension still follows the binary policy.
+
+`filter({ rel, abs, directory })` prunes consumer output and out-of-scope trees
+before descending. `onSkip({ rel, reason, directory, size? })` records observed
+exclusions, including nested repositories and broken links, without allocating a
+second inventory for ordinary indexing. It does not enumerate pruned descendants;
+`capped` still means that an explicitly requested file budget cut the walk short.
+
+`readTextEx(path)` distinguishes empty, binary and unreadable files, reports the
+encoding and original bytes, and marks whether decoded offsets address those bytes.
+`OffsetMap` converts JavaScript string positions to UTF-8 byte positions. Consumers
+keep their own classification and editing policy; `readText` remains the compatible
+string-only reader.
+
 ### Two grammar tiers
 
 | tier | languages | how you get it |

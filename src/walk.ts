@@ -1,6 +1,8 @@
 import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, existsSync, type Dirent } from "node:fs";
 import { join, resolve, sep, extname } from "node:path";
 import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
+import { readTextEx } from "./text.js";
+export { readTextEx } from "./text.js";
 
 // Directories that never carry signal for a documentation/code question and
 // would bloat the index (dependencies, build output, VCS internals, caches).
@@ -122,6 +124,20 @@ export const BINARY_EXT = new Set([
   ".mp4", ".mov", ".avi", ".webm", ".wav", ".flac", ".ogg", ".lock", ".min.js", ".map",
 ]);
 
+/** An observed exclusion. Directory contents are not enumerated. */
+export interface WalkSkip {
+  rel: string;
+  reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
+  directory: boolean;
+  size?: number;
+}
+
+export interface WalkEntry {
+  rel: string;
+  abs: string;
+  directory: boolean;
+}
+
 export interface WalkOptions {
   maxFileBytes?: number; // skip files larger than this (default 1 MiB)
   maxFiles?: number; // hard cap on indexed files (default: none — see DEFAULT_MAX_FILES)
@@ -137,6 +153,17 @@ export interface WalkOptions {
   // universe) and the MCP server keep the DEFAULT set — recall consumers
   // (e.g. ultrasec) consume scan/extract, not grep.
   ignoreDirs?: string[];
+  /** Inventory modes opt in; source indexing retains its existing defaults. */
+  includeLockfiles?: boolean;
+  includeBinary?: boolean;
+  includeOversize?: boolean;
+  includeMinified?: boolean;
+  /** Replace the binary extension policy, e.g. to retain textual SVG. */
+  binaryExtensions?: ReadonlySet<string>;
+  /** Called before entering a directory or accepting a file. False prunes it. */
+  filter?: (entry: WalkEntry) => boolean;
+  /** Observe exclusions without retaining a second inventory in memory. */
+  onSkip?: (entry: WalkSkip) => void;
 }
 
 export interface WalkedFile {
@@ -181,6 +208,9 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const out: WalkedFile[] = [];
   let capped = false;
   let excluded = 0;
+  const skip = (rel: string, reason: WalkSkip["reason"], directory = false, size?: number): void => {
+    opts.onSkip?.({ rel, reason, directory, ...(size === undefined ? {} : { size }) });
+  };
 
   // Containment root for the symlink-escape guard: a symlinked file or
   // directory whose real path leaves the repo must not be indexed (it would
@@ -236,6 +266,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     // Structural: independent of the gitignore layer.
     if (frame.rel && gitDir) {
       excluded++;
+      skip(frame.rel, "nested-repo", true);
       continue;
     }
     let rules = frame.rules;
@@ -265,7 +296,10 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       // false on its dirent and falls through to the stat-based
       // classification below, so a link named node_modules still classifies
       // by its target exactly as before.
-      if (entry.isDirectory() && isIgnoredDirectory(name, ignoreDirs)) continue;
+      if (entry.isDirectory() && isIgnoredDirectory(name, ignoreDirs)) {
+        skip(rel, "ignore-dir", true);
+        continue;
+      }
       let st;
       try {
         // Non-links: a single lstatSync supplies isDirectory/isFile/size/
@@ -275,49 +309,44 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         // a broken link throws here and is skipped, same as before.
         st = isLink ? statSync(abs) : lstatSync(abs);
       } catch {
+        skip(rel, isLink ? "broken-symlink" : "unreadable");
         continue;
       }
       if (st.isDirectory()) {
-        if (isIgnoredDirectory(name, ignoreDirs)) continue;
+        if (isIgnoredDirectory(name, ignoreDirs)) { skip(rel, "ignore-dir", true); continue; }
         // An in-repo DIRECTORY symlink is skipped entirely: its target is (or
         // will be) walked under its canonical name, and letting both paths race
         // through the cycle guard would keep whichever readdir served first —
         // aliased, filesystem-order-dependent indexes. Out-of-repo links are
         // covered by the containment guard above.
-        if (isLink) continue;
-        if (useGitignore && rules.length && isIgnored(rules, rel, true)) continue;
+        if (isLink) { skip(rel, "directory-symlink", true); continue; }
+        if (useGitignore && rules.length && isIgnored(rules, rel, true)) { skip(rel, "gitignored", true); continue; }
+        if (opts.filter && !opts.filter({ rel, abs, directory: true })) { skip(rel, "filter", true); continue; }
         stack.push({ dir: abs, rel, rules });
         continue;
       }
       if (!st.isFile()) continue;
-      // Each rejection below is a file the walk SAW and dropped — counted in
-      // `excluded` so consumers can report how much was filtered, not capped.
-      if (st.size > maxFileBytes) {
-        excluded++;
-        continue;
-      }
-      if (LOCKFILES.has(name.toLowerCase())) {
-        excluded++;
-        continue;
-      }
       const ext = extname(name).toLowerCase();
-      if (BINARY_EXT.has(ext)) {
+      // Ignore first so inventory clients report the user's reason, even for
+      // a file that would also fail the source-indexing size/extension policy.
+      let reason: WalkSkip["reason"] | undefined;
+      if (useGitignore && rules.length && isIgnored(rules, rel, false)) reason = "gitignored";
+      else if (opts.filter && !opts.filter({ rel, abs, directory: false })) reason = "filter";
+      else if (st.size > maxFileBytes && !opts.includeOversize) reason = "over-max-bytes";
+      else if (LOCKFILES.has(name.toLowerCase()) && !opts.includeLockfiles) reason = "lockfile";
+      else if ((opts.binaryExtensions ?? BINARY_EXT).has(ext) && !opts.includeBinary) reason = "binary-ext";
+      else if ((name.endsWith(".min.js") || name.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
+      if (reason) {
         excluded++;
-        continue;
-      }
-      if (name.endsWith(".min.js") || name.endsWith(".min.css")) {
-        excluded++;
-        continue;
-      }
-      if (useGitignore && rules.length && isIgnored(rules, rel, false)) {
-        excluded++;
+        skip(rel, reason, false, st.size);
         continue;
       }
       // Symlink-escape guard for files (statSync above follows links).
       if (isLink) {
         try {
-          if (!contained(realpathSync(abs))) continue;
+          if (!contained(realpathSync(abs))) { skip(rel, "symlink-outside-root"); continue; }
         } catch {
+          skip(rel, "broken-symlink");
           continue;
         }
       }
@@ -334,36 +363,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   return { files: out, capped, excluded };
 }
 
-// Read a file as text, returning "" on any error (unreadable, vanished). Honours
-// a Unicode BOM before the binary sniff — a UTF-16 source file is full of NUL
-// bytes and would otherwise be misread as binary and dropped, and a UTF-8 BOM
-// would otherwise glue "﻿" onto the first token (breaking line-1 extraction
-// and a `[file:1]` citation). Otherwise UTF-8, with a Latin-1 fallback and a
-// whole-buffer NUL sniff for genuinely-binary content.
+/** Compatibility reader; use readTextEx when empty, binary and unreadable differ. */
 export function readText(abs: string): string {
-  try {
-    const buf = readFileSync(abs);
-    // UTF-16LE/BE BOM. Truncate to an even byte length first so an odd trailing
-    // byte can't make swap16() throw (toString already tolerates it; mirror that).
-    if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
-      return buf.subarray(2, 2 + ((buf.length - 2) & ~1)).toString("utf16le");
-    }
-    if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
-      const swapped = Buffer.from(buf.subarray(2, 2 + ((buf.length - 2) & ~1)));
-      swapped.swap16(); // UTF-16BE → LE so Node can decode it
-      return swapped.toString("utf16le");
-    }
-    if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.subarray(3).toString("utf8");
-    // Binary sniff over the WHOLE buffer, not just the first 4 KiB — a NUL after
-    // 4 KiB still means binary (else the symbol right after it is dropped and the
-    // content hash is poisoned).
-    if (buf.includes(0)) return "";
-    const text = buf.toString("utf8");
-    // Invalid UTF-8 surfaces as U+FFFD; a Latin-1/Windows-1252 source decodes
-    // cleanly there (every byte maps to a code point), so prefer that over baking
-    // mojibake into symbols, signatures, and the content hash.
-    return text.includes("�") ? buf.toString("latin1") : text;
-  } catch {
-    return "";
-  }
+  return readTextEx(abs).text;
 }

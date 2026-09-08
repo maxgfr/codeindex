@@ -352,8 +352,135 @@ var init_ignore = __esm({
   }
 });
 
+// src/text.ts
+import { readFileSync } from "fs";
+function readTextEx(abs) {
+  let buf;
+  try {
+    buf = readFileSync(abs);
+  } catch {
+    return EMPTY;
+  }
+  const bytes = buf.length;
+  const base = { buf, bytes, ok: true, binary: false };
+  if (bytes >= 2 && buf[0] === 255 && buf[1] === 254) {
+    const text2 = buf.subarray(2, 2 + (bytes - 2 & ~1)).toString("utf16le");
+    return { ...base, text: text2, encoding: "utf16le", byteAddressable: false, bodyStart: 2 };
+  }
+  if (bytes >= 2 && buf[0] === 254 && buf[1] === 255) {
+    const swapped = Buffer.from(buf.subarray(2, 2 + (bytes - 2 & ~1)));
+    swapped.swap16();
+    return {
+      ...base,
+      text: swapped.toString("utf16le"),
+      encoding: "utf16be",
+      byteAddressable: false,
+      bodyStart: 2
+    };
+  }
+  if (bytes >= 3 && buf[0] === 239 && buf[1] === 187 && buf[2] === 191) {
+    return {
+      ...base,
+      text: buf.subarray(3).toString("utf8"),
+      encoding: "utf8-bom",
+      byteAddressable: true,
+      bodyStart: 3
+    };
+  }
+  if (buf.includes(0)) {
+    return { ...base, text: "", encoding: null, binary: true, byteAddressable: false, bodyStart: 0 };
+  }
+  const text = buf.toString("utf8");
+  if (text.includes("\uFFFD")) {
+    return {
+      ...base,
+      text: buf.toString("latin1"),
+      encoding: "latin1",
+      byteAddressable: false,
+      bodyStart: 0
+    };
+  }
+  return { ...base, text, encoding: "utf8", byteAddressable: true, bodyStart: 0 };
+}
+function buildCharToByte(text) {
+  const table = new Int32Array(text.length + 1);
+  let byte = 0;
+  for (let i2 = 0; i2 < text.length; i2++) {
+    table[i2] = byte;
+    const code = text.charCodeAt(i2);
+    if (code < 128) byte += 1;
+    else if (code < 2048) byte += 2;
+    else if (code >= 55296 && code <= 56319 && i2 + 1 < text.length) {
+      table[i2 + 1] = byte;
+      byte += 4;
+      i2++;
+    } else byte += 3;
+  }
+  table[text.length] = byte;
+  return table;
+}
+function buildLineStarts(text) {
+  const starts = [0];
+  for (let i2 = 0; i2 < text.length; i2++) {
+    if (text.charCodeAt(i2) === 10) starts.push(i2 + 1);
+  }
+  return Int32Array.from(starts);
+}
+var EMPTY, OffsetMap;
+var init_text = __esm({
+  "src/text.ts"() {
+    "use strict";
+    EMPTY = {
+      text: "",
+      buf: Buffer.alloc(0),
+      encoding: null,
+      binary: false,
+      bytes: 0,
+      ok: false,
+      byteAddressable: false,
+      bodyStart: 0
+    };
+    OffsetMap = class {
+      constructor(text) {
+        this.text = text;
+        this.ascii = !/[^\x00-\x7F]/.test(text);
+        this.table = this.ascii ? null : buildCharToByte(text);
+        this.lineStarts = buildLineStarts(text);
+      }
+      text;
+      ascii;
+      /** charToByteTable[i] = byte offset of char index i. Length = text.length + 1. */
+      table;
+      lineStarts;
+      /** UTF-8 byte offset of a JS string index. */
+      byteOf(charIndex) {
+        if (this.ascii) return charIndex;
+        const t = this.table;
+        if (charIndex <= 0) return 0;
+        if (charIndex >= t.length) return t[t.length - 1];
+        return t[charIndex];
+      }
+      /** 1-based line and 1-based column (in UTF-16 code units, matching editors). */
+      lineColOf(charIndex) {
+        const ls = this.lineStarts;
+        let lo = 0;
+        let hi = ls.length - 1;
+        while (lo < hi) {
+          const mid = lo + hi + 1 >> 1;
+          if (ls[mid] <= charIndex) lo = mid;
+          else hi = mid - 1;
+        }
+        return { line: lo + 1, col: charIndex - ls[lo] + 1 };
+      }
+      get lineCount() {
+        return this.lineStarts.length;
+      }
+    };
+  }
+});
+
 // src/walk.ts
-import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, existsSync } from "fs";
+import { readdirSync, statSync, lstatSync, readFileSync as readFileSync2, realpathSync, existsSync } from "fs";
 import { join, resolve, sep, extname } from "path";
 function isIgnoredDirectory(name2, ignoreDirs) {
   return name2 === GIT_ENTRY || ignoreDirs.has(name2) || name2.startsWith(".codeindex-edit-");
@@ -367,13 +494,13 @@ function gitDirOf(dir, entries) {
     const st = statSync(path);
     if (st.isDirectory()) return path;
     if (!st.isFile() || st.size > MAX_GITFILE_BYTES) return void 0;
-    const content = readFileSync(path, "utf8");
+    const content = readFileSync2(path, "utf8");
     if (!content.startsWith(GITFILE_PREFIX)) return void 0;
     const target = content.slice(GITFILE_PREFIX.length).replace(/[\r\n]+$/, "");
     if (!target) return void 0;
     const gitDir = resolve(dir, target);
     const common = join(gitDir, "commondir");
-    return existsSync(common) ? resolve(gitDir, readFileSync(common, "utf8").trim()) : gitDir;
+    return existsSync(common) ? resolve(gitDir, readFileSync2(common, "utf8").trim()) : gitDir;
   } catch {
     return void 0;
   }
@@ -395,6 +522,9 @@ function walk(root, opts = {}) {
   const out2 = [];
   let capped = false;
   let excluded = 0;
+  const skip = (rel2, reason, directory = false, size) => {
+    opts.onSkip?.({ rel: rel2, reason, directory, ...size === void 0 ? {} : { size } });
+  };
   let rootReal;
   try {
     rootReal = realpathSync(root);
@@ -428,6 +558,7 @@ function walk(root, opts = {}) {
     const gitDir = entries.some((e) => e.name === GIT_ENTRY) ? gitDirOf(frame.dir, entries) : void 0;
     if (frame.rel && gitDir) {
       excluded++;
+      skip(frame.rel, "nested-repo", true);
       continue;
     }
     let rules = frame.rules;
@@ -445,46 +576,59 @@ function walk(root, opts = {}) {
       const rel2 = frame.rel ? `${frame.rel}/${name2}` : name2;
       const isLink = entry2.isSymbolicLink();
       if (name2 === GIT_ENTRY) continue;
-      if (entry2.isDirectory() && isIgnoredDirectory(name2, ignoreDirs)) continue;
+      if (entry2.isDirectory() && isIgnoredDirectory(name2, ignoreDirs)) {
+        skip(rel2, "ignore-dir", true);
+        continue;
+      }
       let st;
       try {
         st = isLink ? statSync(abs) : lstatSync(abs);
       } catch {
+        skip(rel2, isLink ? "broken-symlink" : "unreadable");
         continue;
       }
       if (st.isDirectory()) {
-        if (isIgnoredDirectory(name2, ignoreDirs)) continue;
-        if (isLink) continue;
-        if (useGitignore && rules.length && isIgnored(rules, rel2, true)) continue;
+        if (isIgnoredDirectory(name2, ignoreDirs)) {
+          skip(rel2, "ignore-dir", true);
+          continue;
+        }
+        if (isLink) {
+          skip(rel2, "directory-symlink", true);
+          continue;
+        }
+        if (useGitignore && rules.length && isIgnored(rules, rel2, true)) {
+          skip(rel2, "gitignored", true);
+          continue;
+        }
+        if (opts.filter && !opts.filter({ rel: rel2, abs, directory: true })) {
+          skip(rel2, "filter", true);
+          continue;
+        }
         stack.push({ dir: abs, rel: rel2, rules });
         continue;
       }
       if (!st.isFile()) continue;
-      if (st.size > maxFileBytes) {
-        excluded++;
-        continue;
-      }
-      if (LOCKFILES.has(name2.toLowerCase())) {
-        excluded++;
-        continue;
-      }
       const ext = extname(name2).toLowerCase();
-      if (BINARY_EXT.has(ext)) {
+      let reason;
+      if (useGitignore && rules.length && isIgnored(rules, rel2, false)) reason = "gitignored";
+      else if (opts.filter && !opts.filter({ rel: rel2, abs, directory: false })) reason = "filter";
+      else if (st.size > maxFileBytes && !opts.includeOversize) reason = "over-max-bytes";
+      else if (LOCKFILES.has(name2.toLowerCase()) && !opts.includeLockfiles) reason = "lockfile";
+      else if ((opts.binaryExtensions ?? BINARY_EXT).has(ext) && !opts.includeBinary) reason = "binary-ext";
+      else if ((name2.endsWith(".min.js") || name2.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
+      if (reason) {
         excluded++;
-        continue;
-      }
-      if (name2.endsWith(".min.js") || name2.endsWith(".min.css")) {
-        excluded++;
-        continue;
-      }
-      if (useGitignore && rules.length && isIgnored(rules, rel2, false)) {
-        excluded++;
+        skip(rel2, reason, false, st.size);
         continue;
       }
       if (isLink) {
         try {
-          if (!contained(realpathSync(abs))) continue;
+          if (!contained(realpathSync(abs))) {
+            skip(rel2, "symlink-outside-root");
+            continue;
+          }
         } catch {
+          skip(rel2, "broken-symlink");
           continue;
         }
       }
@@ -498,29 +642,15 @@ function walk(root, opts = {}) {
   return { files: out2, capped, excluded };
 }
 function readText(abs) {
-  try {
-    const buf = readFileSync(abs);
-    if (buf.length >= 2 && buf[0] === 255 && buf[1] === 254) {
-      return buf.subarray(2, 2 + (buf.length - 2 & ~1)).toString("utf16le");
-    }
-    if (buf.length >= 2 && buf[0] === 254 && buf[1] === 255) {
-      const swapped = Buffer.from(buf.subarray(2, 2 + (buf.length - 2 & ~1)));
-      swapped.swap16();
-      return swapped.toString("utf16le");
-    }
-    if (buf.length >= 3 && buf[0] === 239 && buf[1] === 187 && buf[2] === 191) return buf.subarray(3).toString("utf8");
-    if (buf.includes(0)) return "";
-    const text = buf.toString("utf8");
-    return text.includes("\uFFFD") ? buf.toString("latin1") : text;
-  } catch {
-    return "";
-  }
+  return readTextEx(abs).text;
 }
 var IGNORE_DIRS, GIT_ENTRY, GITFILE_PREFIX, MAX_GITFILE_BYTES, LOCKFILES, BINARY_EXT, DEFAULT_MAX_FILES;
 var init_walk = __esm({
   "src/walk.ts"() {
     "use strict";
     init_ignore();
+    init_text();
+    init_text();
     IGNORE_DIRS = /* @__PURE__ */ new Set([
       ".git",
       "node_modules",
@@ -5896,7 +6026,7 @@ ${JSON.stringify(symbolNames, null, 2)}`);
 });
 
 // src/ast/loader.ts
-import { readFileSync as readFileSync2, existsSync as existsSync2, statSync as statSync2 } from "fs";
+import { readFileSync as readFileSync3, existsSync as existsSync2, statSync as statSync2 } from "fs";
 import { homedir } from "os";
 import { dirname, join as join2 } from "path";
 import { fileURLToPath } from "url";
@@ -5948,7 +6078,7 @@ async function ensureGrammars(keys) {
   if (!runtimeReady) {
     const runtime = firstIn("web-tree-sitter.wasm");
     if (!runtime) return;
-    await Parser.init({ wasmBinary: readFileSync2(runtime) });
+    await Parser.init({ wasmBinary: readFileSync3(runtime) });
     runtimeReady = true;
     parser = new Parser();
   }
@@ -5969,7 +6099,7 @@ async function ensureGrammars(keys) {
       continue;
     }
     try {
-      loaded.set(key, await Language.load(new Uint8Array(readFileSync2(wasm))));
+      loaded.set(key, await Language.load(new Uint8Array(readFileSync3(wasm))));
       failed.delete(key);
     } catch {
       failed.set(key, fingerprint);
@@ -8684,7 +8814,7 @@ var init_pool = __esm({
 });
 
 // src/preload.ts
-import { readFileSync as readFileSync3 } from "fs";
+import { readFileSync as readFileSync4 } from "fs";
 import { join as join4 } from "path";
 function toCacheMap(scan2) {
   const m = /* @__PURE__ */ new Map();
@@ -8701,7 +8831,7 @@ function needsGrammarWarm(walked, cache, fullHash = false) {
 function readPersistedIndex(repo, indexDir = INDEX_DIR) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync3(join4(repo, indexDir, "cache.json"), "utf8"));
+    parsed = JSON.parse(readFileSync4(join4(repo, indexDir, "cache.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -8725,8 +8855,8 @@ function preloadArtifacts(repo, scan2, meta, indexDir = INDEX_DIR) {
   let graphBytes;
   let symbolsBytes;
   try {
-    graphBytes = readFileSync3(join4(dir, "graph.json"));
-    symbolsBytes = readFileSync3(join4(dir, "symbols.json"));
+    graphBytes = readFileSync4(join4(dir, "graph.json"));
+    symbolsBytes = readFileSync4(join4(dir, "symbols.json"));
   } catch {
     return void 0;
   }
@@ -11188,7 +11318,7 @@ var init_query = __esm({
 });
 
 // src/edit.ts
-import { chmodSync, mkdtempSync as mkdtempSync2, readFileSync as readFileSync6, realpathSync as realpathSync2, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync4, writeFileSync as writeFileSync2 } from "fs";
+import { chmodSync, mkdtempSync as mkdtempSync2, readFileSync as readFileSync7, realpathSync as realpathSync2, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync4, writeFileSync as writeFileSync2 } from "fs";
 import { basename as basename3, dirname as dirname4, join as join11 } from "path";
 function resolveUniqueSymbol(scan2, namePath, file) {
   let matches = findSymbol(scan2, namePath);
@@ -11202,7 +11332,7 @@ function resolveUniqueSymbol(scan2, namePath, file) {
   throw new Error(`"${namePath}" is ambiguous (${matches.length} matches: ${list}) \u2014 qualify with \`file\` or a Parent/name path`);
 }
 function readDocument(abs) {
-  const bytes = readFileSync6(abs);
+  const bytes = readFileSync7(abs);
   let encoding = "utf8";
   let bom = Buffer.alloc(0);
   let payload = bytes;
@@ -11308,7 +11438,7 @@ var init_edit = __esm({
 });
 
 // src/memory.ts
-import { lstatSync as lstatSync2, realpathSync as realpathSync3, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync7, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync3 } from "fs";
+import { lstatSync as lstatSync2, realpathSync as realpathSync3, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync8, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync3 } from "fs";
 import { dirname as dirname5, join as join12 } from "path";
 function sanitize(name2) {
   const clean = name2.replace(/^mem:/, "").replace(/\.md$/, "");
@@ -11348,7 +11478,7 @@ function writeMemory(repo, name2, content) {
 }
 function readMemory(repo, name2) {
   try {
-    return readFileSync7(memoryPath(repo, name2), "utf8");
+    return readFileSync8(memoryPath(repo, name2), "utf8");
   } catch {
     return void 0;
   }
@@ -12533,7 +12663,7 @@ var init_grep = __esm({
 
 // src/embed/model.ts
 import { createHash as createHash3 } from "crypto";
-import { existsSync as existsSync7, readFileSync as readFileSync8 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync9 } from "fs";
 import { join as join15 } from "path";
 function resolveEmbedModelDir(repo) {
   const env = process.env.CODEINDEX_EMBED_DIR;
@@ -12577,7 +12707,7 @@ function loadEmbedModel(dir) {
   if (!dir) return void 0;
   const path = join15(dir, "model.json");
   if (!existsSync7(path)) return void 0;
-  const raw = JSON.parse(readFileSync8(path, "utf8"));
+  const raw = JSON.parse(readFileSync9(path, "utf8"));
   return parseEmbedModel(raw, path);
 }
 function resolveEmbedPullUrl() {
@@ -13011,7 +13141,7 @@ var init_coupling = __esm({
 });
 
 // src/onboard.ts
-import { existsSync as existsSync8, readFileSync as readFileSync9 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync10 } from "fs";
 import { join as join16, resolve as resolve3 } from "path";
 function tagline(root) {
   for (const name2 of README_NAMES) {
@@ -13019,7 +13149,7 @@ function tagline(root) {
     if (!existsSync8(path)) continue;
     let text;
     try {
-      text = readFileSync9(path, "utf8");
+      text = readFileSync10(path, "utf8");
     } catch {
       continue;
     }
@@ -13385,7 +13515,7 @@ var init_client = __esm({
 });
 
 // src/lsp/config.ts
-import { existsSync as existsSync9, readFileSync as readFileSync10 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync11 } from "fs";
 import { join as join17, resolve as resolve4 } from "path";
 function resolveLspConfigPath(repo) {
   const env = process.env.CODEINDEX_LSP_CONFIG;
@@ -13439,7 +13569,7 @@ function loadLspConfig(repo) {
   if (!path || !existsSync9(path)) return void 0;
   let payload;
   try {
-    payload = JSON.parse(readFileSync10(path, "utf8"));
+    payload = JSON.parse(readFileSync11(path, "utf8"));
   } catch (e) {
     throw new Error(`${path}: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -13472,14 +13602,14 @@ var init_config2 = __esm({
 });
 
 // src/lsp/refs.ts
-import { readFileSync as readFileSync11 } from "fs";
+import { readFileSync as readFileSync12 } from "fs";
 import { join as join18 } from "path";
 function lspUnavailable(server, reason) {
   return { server, ok: false, reason, refs: [], agreement: { both: [], lspOnly: [], staticOnly: [] } };
 }
 function columnOfSymbol(root, rel2, line2, name2) {
   try {
-    const lines = readFileSync11(join18(root, rel2), "utf8").split(/\r?\n/);
+    const lines = readFileSync12(join18(root, rel2), "utf8").split(/\r?\n/);
     const index = lines[line2 - 1]?.indexOf(name2) ?? -1;
     return index < 0 ? 0 : index;
   } catch {
@@ -13544,7 +13674,7 @@ function refOrder(a, b) {
 }
 function readTextOrEmpty(root, rel2) {
   try {
-    return readFileSync11(join18(root, rel2), "utf8");
+    return readFileSync12(join18(root, rel2), "utf8");
   } catch {
     return "";
   }
@@ -13626,7 +13756,7 @@ var init_spawn = __esm({
 });
 
 // src/lsp/callers.ts
-import { readFileSync as readFileSync12 } from "fs";
+import { readFileSync as readFileSync13 } from "fs";
 import { join as join19 } from "path";
 function callersAgreement(calls, statik) {
   const sites = "callers" in statik ? statik.callers : void 0;
@@ -13649,7 +13779,7 @@ async function collectIncomingCalls(scan2, defs, session, languageId) {
   if (!session.capabilities.callHierarchy) return { calls, reason: "server does not provide textDocument/prepareCallHierarchy" };
   try {
     for (const def of defs) {
-      const text = readFileSync12(join19(scan2.root, def.file), "utf8");
+      const text = readFileSync13(join19(scan2.root, def.file), "utf8");
       session.didOpen(def.file, text, languageId ?? def.lang);
       calls.push(...await session.incomingCalls(def.file, def.line, columnOfSymbol(scan2.root, def.file, def.line, def.name)));
     }
@@ -15160,7 +15290,7 @@ __export(mcp_exports, {
   warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
-import { readFileSync as readFileSync13, statSync as statSync8, watch as watchFs } from "fs";
+import { readFileSync as readFileSync14, statSync as statSync8, watch as watchFs } from "fs";
 import { isAbsolute, join as join22 } from "path";
 import { createInterface } from "readline";
 function isRpcRequest(value) {
@@ -15506,7 +15636,7 @@ async function callTool(name2, args2, defaultRepo) {
     if (payload === void 0 && configPath) {
       const abs = isAbsolute(configPath) ? configPath : join22(repo, configPath);
       try {
-        payload = JSON.parse(readFileSync13(abs, "utf8"));
+        payload = JSON.parse(readFileSync14(abs, "utf8"));
       } catch (e) {
         throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
       }
@@ -15969,7 +16099,7 @@ init_extract();
 init_web_tree_sitter();
 init_loader();
 init_sort();
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync5 } from "fs";
 import { join as join5 } from "path";
 var queries = /* @__PURE__ */ new Map();
 function queryFor(key, language) {
@@ -15980,7 +16110,7 @@ function queryFor(key, language) {
     const path = join5(dir, `${key}.tags.scm`);
     if (!existsSync4(path)) continue;
     try {
-      compiled = new Query(language, readFileSync4(path, "utf8"));
+      compiled = new Query(language, readFileSync5(path, "utf8"));
     } catch {
       compiled = null;
     }
@@ -16043,7 +16173,7 @@ init_loader();
 // src/ast/grammars-pull.ts
 init_types();
 import { createHash as createHash2 } from "crypto";
-import { existsSync as existsSync5, mkdirSync, mkdtempSync, readFileSync as readFileSync5, renameSync, rmSync, writeFileSync } from "fs";
+import { existsSync as existsSync5, mkdirSync, mkdtempSync, readFileSync as readFileSync6, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname as dirname3, join as join6, resolve as resolve2, sep as sep2 } from "path";
 import { gunzipSync } from "zlib";
 var DEFAULT_GRAMMARS_URL = `https://github.com/maxgfr/codeindex/releases/download/v${ENGINE_VERSION}/grammars-${ENGINE_VERSION}.tar.gz`;
@@ -16212,7 +16342,7 @@ async function pullGrammars(cacheDir, opts = {}) {
   if (existsSync5(runtime) && expected && existsSync5(markerPath)) {
     let marker = "";
     try {
-      marker = readFileSync5(markerPath, "utf8").trim();
+      marker = readFileSync6(markerPath, "utf8").trim();
     } catch {
     }
     if (marker === expected) {
@@ -17060,7 +17190,7 @@ init_util();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync11, mkdirSync as mkdirSync3, readFileSync as readFileSync14, statSync as statSync9, writeFileSync as writeFileSync4 } from "fs";
+import { existsSync as existsSync11, mkdirSync as mkdirSync3, readFileSync as readFileSync15, statSync as statSync9, writeFileSync as writeFileSync4 } from "fs";
 import { join as join23, resolve as resolve5 } from "path";
 init_pipeline();
 init_hash();
@@ -17519,7 +17649,7 @@ async function runCli(rawArgv) {
     let cache;
     let meta = {};
     try {
-      const parsed = JSON.parse(readFileSync14(cachePath, "utf8"));
+      const parsed = JSON.parse(readFileSync15(cachePath, "utf8"));
       cache = parseCacheEntries(parsed);
       if (cache) {
         meta = {
@@ -17546,7 +17676,7 @@ async function runCli(rawArgv) {
     const embedPath = join23(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
-        return sha1(readFileSync14(path));
+        return sha1(readFileSync15(path));
       } catch {
         return void 0;
       }
@@ -17854,7 +17984,7 @@ async function runCli(rawArgv) {
     }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRules(JSON.parse(readFileSync14(flags2.config, "utf8")));
+    const rules = parseRules(JSON.parse(readFileSync15(flags2.config, "utf8")));
     const { graph } = await readArtifacts();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
@@ -17943,7 +18073,11 @@ ${HELP}`);
     process.exitCode = 2;
   }
 }
+
+// src/engine.ts
+init_text();
 export {
+  BINARY_EXT,
   CORE_GRAMMARS,
   DEFAULT_DELTA_DEPTH,
   DEFAULT_GRAMMARS_URL,
@@ -17953,10 +18087,13 @@ export {
   EXTENDED_GRAMMARS,
   EXTRACTOR_VERSION,
   EXT_GRAMMAR,
+  IGNORE_DIRS,
   INDEX_DIR,
+  LOCKFILES,
   LspTimeout,
   MARKDOWN_EXT,
   MAX_FRAME_BYTES,
+  OffsetMap,
   RISK_WEIGHTS,
   SCHEMA_VERSION,
   agreementOf,
@@ -18081,6 +18218,7 @@ export {
   readMemory,
   readPersistedIndex,
   readText,
+  readTextEx,
   referencesWithLsp,
   relFromUri,
   renderGraphJson,

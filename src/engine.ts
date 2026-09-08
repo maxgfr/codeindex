@@ -28,8 +28,8 @@ export type {
 } from "./types.js";
 
 // Files tier: walk, read, filter, classify.
-export { walk, readText, DEFAULT_MAX_FILES } from "./walk.js";
-export type { WalkOptions, WalkedFile, WalkResult } from "./walk.js";
+export { walk, readText, DEFAULT_MAX_FILES, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
+export type { WalkOptions, WalkedFile, WalkResult, WalkSkip, WalkEntry } from "./walk.js";
 export { scanRepo, scanSummary } from "./scan.js";
 export type { RepoScan, ScanOptions, ScanSummary, ExtractedRecord } from "./scan.js";
 export { keptCodeFiles, buildCodeRecord } from "./scan.js";
@@ -290,3 +290,6 @@ export type { ShResult } from "./util.js";
 // (import.meta.url inside their bundle IS their bundle) and hijack their argv.
 // The standalone CLI/MCP entry is the static wrapper scripts/cli.mjs.
 export { runCli } from "./engine-cli.js";
+
+export { readTextEx, OffsetMap } from "./text.js";
+export type { TextRead, Encoding } from "./text.js";
