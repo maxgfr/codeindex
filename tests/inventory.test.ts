@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { walk, BINARY_EXT, type WalkSkip } from "../src/walk.js";
 import { readTextEx, OffsetMap } from "../src/text.js";
 
@@ -52,3 +52,35 @@ it("distinguishes empty, binary and unreadable and preserves byte coordinates", 
   writeFileSync(join(root, "utf16"), Buffer.concat([Buffer.from([255, 254]), Buffer.from("é", "utf16le")]));
   expect(readTextEx(join(root, "utf16"))).toMatchObject({ text: "é", encoding: "utf16le", byteAddressable: false });
 });
+
+describe('OffsetMap', () => {
+  it('takes the identity path on ASCII', () => {
+    const m = new OffsetMap('const a = 1')
+    expect(m.byteOf(6)).toBe(6)
+  })
+
+  it('maps char indices to UTF-8 byte offsets on accented text', () => {
+    // "Données effacées." — the exact shape of string this tool exists to move.
+    const text = 'Données effacées.'
+    const m = new OffsetMap(text)
+    expect(m.byteOf(0)).toBe(0)
+    // "Donn" = 4 bytes, then "é" is 2 bytes, so char 5 starts at byte 6.
+    expect(m.byteOf(5)).toBe(6)
+    expect(m.byteOf(text.length)).toBe(Buffer.byteLength(text, 'utf8'))
+  })
+
+  it('handles astral characters without shifting', () => {
+    const text = 'a😀b'
+    const m = new OffsetMap(text)
+    expect(m.byteOf(1)).toBe(1)
+    expect(m.byteOf(3)).toBe(5) // 1 + 4
+    expect(m.byteOf(text.length)).toBe(Buffer.byteLength(text, 'utf8'))
+  })
+
+  it('reports 1-based line and column', () => {
+    const m = new OffsetMap('a\nbb\nccc')
+    expect(m.lineColOf(0)).toEqual({ line: 1, col: 1 })
+    expect(m.lineColOf(2)).toEqual({ line: 2, col: 1 })
+    expect(m.lineColOf(6)).toEqual({ line: 3, col: 2 })
+  })
+})
