@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [2.30.0](https://github.com/maxgfr/codeindex/compare/v2.29.1...v2.30.0) (2026-09-08)
+
+
+### Features
+
+* **inventory:** share configurable walks and byte-aware text reads ([bc63c5c](https://github.com/maxgfr/codeindex/commit/bc63c5c47497b6070b584fdaa3a51f1fad08cc58))
+
 ## [2.29.1](https://github.com/maxgfr/codeindex/compare/v2.29.0...v2.29.1) (2026-09-07)
 
 
