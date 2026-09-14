@@ -20,7 +20,14 @@ name: Release
 # right after `semantic-release` runs, gated on the `.release-version`
 # sentinel file that `.releaserc.json`'s `@semantic-release/exec` publishCmd
 # writes only when a release actually happened.
+#
+# Dispatch note: a merge performed by a workflow with GITHUB_TOKEN (grammars-repin
+# self-merging its repin pull request) does not start `on: push` here, by the same
+# anti-recursion rule described above. `workflow_dispatch` is what lets that job
+# release the commit it just merged; semantic-release is a no-op when the commits
+# since the last release warrant none, so dispatching is always safe.
 on:
+  workflow_dispatch:
   push:
     branches: [main]
 

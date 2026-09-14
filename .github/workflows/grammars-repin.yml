@@ -10,11 +10,19 @@ name: Grammars repin
 # releases, re-vendors the wasm (`pnpm grammars`), rebuilds the reproducible
 # bundle (`pnpm build` — web-tree-sitter's JS is inlined into engine.mjs by
 # tsup, so its wasm and its bundled runtime move together), then runs the full
-# gate (typecheck / test / reproducible-bundle). Only if every gate is green AND
-# something actually changed does it update a dedicated pull request. Grammar
-# bytes are part of the engine's versioned output: merging the `fix(grammars)`
-# commit therefore cuts a patch release and publishes a matching grammar asset,
-# instead of silently changing wasm under an existing ENGINE_VERSION.
+# gate (typecheck / test / reproducible-bundle / Node 18 smoke — every check
+# ci.yml would run on a pull request). Only if every gate is green AND
+# something actually changed does it open a pull request, squash-merge it and
+# delete the branch, so the repin lands unattended instead of parking a PR
+# nobody reviews. Grammar bytes are part of the engine's versioned output:
+# merging the `fix(grammars)` commit therefore cuts a patch release and
+# publishes a matching grammar asset, instead of silently changing wasm under
+# an existing ENGINE_VERSION.
+#
+# The pull request is a record, not a review gate: every gate below runs on the
+# exact tree being merged, in this job, before the merge. That is what makes
+# self-merging safe here — waiting for ci.yml on the branch would only re-run
+# the same checks, and a GITHUB_TOKEN-created PR does not start them by itself.
 
 on:
   workflow_dispatch:
@@ -84,7 +92,28 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         run: pnpm run check:build
 
-      - name: Push automation branch and open or refresh the pull request
+      # Last gate, mirroring ci.yml's `smoke-node18` job: the published
+      # artifacts are dependency-free and must stay loadable on Node 18. A
+      # grammar bump moves web-tree-sitter's inlined runtime too, so this is
+      # exactly the regression that could otherwise auto-merge unnoticed.
+      # Node is switched in place (no pnpm here — plain `node` only).
+      - name: Use Node 18 for the smoke gate
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Gate — Node 18 smoke
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          node -e 'import("./scripts/engine.mjs").then(m => { if (typeof m.scanRepo !== "function") process.exit(1) })'
+          node scripts/cli.mjs scan --repo tests/fixtures/mini-repo --out /tmp/codeindex-node18-scan.json
+          node scripts/cli.mjs search client --repo tests/fixtures/mini-repo --out /tmp/codeindex-node18-search.json
+          test -s /tmp/codeindex-node18-scan.json
+          test -s /tmp/codeindex-node18-search.json
+
+      - name: Push automation branch, open the pull request and merge it
+        id: merge
         if: steps.diff.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -95,19 +124,42 @@ jobs:
           else
             git push origin HEAD:refs/heads/automation/grammars-repin
           fi
+          TITLE="fix(grammars): bump tree-sitter grammars and re-vendor wasm"
+          BODY="Automated grammar repin. The full test, reproducible-build and Node 18 smoke gates passed in the repin job, on these exact bytes, before this pull request was merged. Merging creates a patch release so ENGINE_VERSION and the downloadable grammar asset remain aligned."
           PR=$(gh pr list --head automation/grammars-repin --state open --json number --jq '.[0].number // empty')
           if [ -n "$PR" ]; then
-            gh pr edit "$PR" \
-              --title "fix(grammars): bump tree-sitter grammars and re-vendor wasm" \
-              --body "Automated grammar repin. The full test and reproducible-build gates passed; merging creates a patch release so ENGINE_VERSION and the downloadable grammar asset remain aligned."
+            gh pr edit "$PR" --title "$TITLE" --body "$BODY"
           else
-            gh pr create \
-              --base main \
-              --head automation/grammars-repin \
-              --title "fix(grammars): bump tree-sitter grammars and re-vendor wasm" \
-              --body "Automated grammar repin. The full test and reproducible-build gates passed; merging creates a patch release so ENGINE_VERSION and the downloadable grammar asset remain aligned."
+            gh pr create --base main --head automation/grammars-repin --title "$TITLE" --body "$BODY"
+            PR=$(gh pr list --head automation/grammars-repin --state open --json number --jq '.[0].number // empty')
           fi
-          # GITHUB_TOKEN-created PR events do not recursively start CI. An
-          # explicit workflow_dispatch is allowed and attaches the normal CI
-          # checks (including Node 18 smoke) to this branch's HEAD.
-          gh workflow run ci.yml --ref automation/grammars-repin
+          if [ -z "$PR" ]; then
+            echo "No open pull request for automation/grammars-repin — refusing to merge blind." >&2
+            exit 1
+          fi
+          # Squash so main gets exactly one conventional `fix(grammars): ...`
+          # commit — that subject is what semantic-release turns into the patch
+          # release. Fall back to a merge commit if squashing is disabled on the
+          # repository (the branch commit carries the same subject either way).
+          if ! gh pr merge "$PR" --squash --subject "$TITLE" --body ""; then
+            echo "Squash merge refused — falling back to a merge commit."
+            gh pr merge "$PR" --merge
+          fi
+          # Deleted here rather than via `gh pr merge --delete-branch`: that flag
+          # also prunes the local branch, which is the one checked out in this
+          # job. A failed cleanup must not fail a merge that already landed.
+          git push origin --delete automation/grammars-repin || true
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      # GitHub's anti-recursion rule: the merge above is performed with
+      # GITHUB_TOKEN, so the resulting push to main does NOT start release.yml's
+      # `on: push`. Without this explicit dispatch the re-pinned grammars would
+      # sit on main unreleased — the exact misalignment between ENGINE_VERSION
+      # and the published grammar asset this workflow exists to avoid.
+      # semantic-release is a no-op when nothing releasable landed, so an extra
+      # dispatch is harmless.
+      - name: Trigger the release run for the merged commit
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release.yml --ref main
