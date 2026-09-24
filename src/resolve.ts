@@ -67,6 +67,18 @@ interface RustCrate {
   rootFile?: string; // src/lib.rs or src/main.rs, whichever exists
 }
 
+// The index a JVM import resolves against: every lookup is one Map read, where
+// probing each source root per import cost a Maven repo with hundreds of roots
+// ~0.5ms a spec (and `java.util.List` probes them all before going external).
+interface JvmIndex {
+  // Fully-qualified name -> the file declaring it: a .java file by its path
+  // under a source root (the shortest root wins, as the root order always did).
+  types: Map<string, string>;
+  // Package -> its representative file, for wildcard imports: the first .java
+  // file of the package dir under the shortest root holding one.
+  packages: Map<string, string>;
+}
+
 export interface ResolveContext {
   fileSet: Set<string>;
   dirSet: Set<string>; // every directory that has any file beneath it
@@ -82,6 +94,12 @@ export interface ResolveContext {
   rubyLibRoots: string[]; // dirs a Ruby bare `require` resolves against
   phpPsr4: { prefix: string; dir: string }[]; // composer PSR-4 namespace prefix -> dir, longest first
   csharpNamespaces: Map<string, string[]>; // C# namespace -> files declaring it (sorted)
+  // Both indexes below are derived from the fields above, and built on first
+  // use when absent, so a hand-built context still resolves.
+  jvm?: JvmIndex;
+  // Every dotted prefix of a C# namespace -> the byStr-first file of any
+  // namespace at or under it: `using System;` is one lookup, not a scan.
+  csharpPrefix?: Map<string, string>;
   warnings: string[]; // build-time config issues (e.g. an unparseable tsconfig)
   // Memo of JS/TS resolutions keyed by "<importing dir>\0<spec>" — resolveJs is
   // a pure function of those two (its tsconfig scope, workspace and probe
@@ -93,7 +111,7 @@ export interface ResolveContext {
   // importer's directory (relative base, enclosing roots).
   pyMemo?: Map<string, Resolution>;
   // Per-directory sorted file lists by extension ("<ext>\0<dir>"), for the
-  // Go-package / Java-wildcard "first file in the directory" rule.
+  // Go-package "first file in the directory" rule.
   dirFilesMemo?: Map<string, string[]>;
 }
 
@@ -1041,33 +1059,67 @@ function resolveRust(fromRel: string, spec: string, ctx: ResolveContext): Resolu
   return { kind: "external" };
 }
 
+// The packages a directory answers to: one per Java source root at or above
+// it, with that root's rank (index in the shortest-first root list) and the
+// dir below it, dotted. A segment holding a dot answers to no import (`a.b.C`
+// only ever probed `a/b/C.java`), so it yields nothing.
+function* javaPackagesOf(dir: string, rootRank: Map<string, number>): Generator<{ rank: number; pkg: string }> {
+  for (let d = dir; ; d = d.includes("/") ? posix.dirname(d) : "") {
+    const rank = rootRank.get(d);
+    if (rank !== undefined) {
+      const below = d ? dir.slice(d.length + 1) : dir;
+      if (!below.includes(".")) yield { rank, pkg: below.replace(/\//g, ".") };
+    }
+    if (!d) return;
+  }
+}
+
+// The JVM index for .java files, from the file set and the source roots.
+// Where several roots hold the same name, the shortest root wins: the order
+// the per-root probe it replaces tried them in.
+function buildJvmIndex(ctx: Pick<ResolveContext, "filesByDir" | "javaRoots">): JvmIndex {
+  const rootRank = new Map(ctx.javaRoots.map((r, i) => [r, i]));
+  const types = new Map<string, string>();
+  const packages = new Map<string, string>();
+  if (!rootRank.size) return { types, packages };
+  const typeRank = new Map<string, number>(); // the rank of the root each kept entry came from
+  const pkgRank = new Map<string, number>();
+  const keep = (map: Map<string, string>, ranks: Map<string, number>, key: string, rank: number, file: string) => {
+    if (rank >= (ranks.get(key) ?? Infinity)) return;
+    ranks.set(key, rank);
+    map.set(key, file);
+  };
+  for (const [dir, list] of ctx.filesByDir) {
+    const java = list.filter((f) => f.endsWith(".java"));
+    if (!java.length) continue;
+    // A package is a directory: its representative is the dir's first .java
+    // file (the Go-package pattern), whatever that file's own name.
+    const first = java.reduce((a, b) => (b < a ? b : a));
+    for (const { rank, pkg } of javaPackagesOf(dir, rootRank)) {
+      keep(packages, pkgRank, pkg, rank, first);
+      for (const f of java) {
+        const stem = f.slice(f.lastIndexOf("/") + 1, -".java".length);
+        if (!stem.includes(".")) keep(types, typeRank, pkg ? pkg + "." + stem : stem, rank, f);
+      }
+    }
+  }
+  return { types, packages };
+}
+
 function resolveJava(spec: string, ctx: ResolveContext): Resolution {
   if (!ctx.javaRoots.length) return { kind: "external" };
-  const probe = (pkgPath: string): string | undefined => {
-    for (const root of ctx.javaRoots) {
-      const p = norm(posix.join(root, pkgPath));
-      // Wildcard import: the package directory — resolve to its
-      // lexicographically-first .java file (the Go-package pattern).
-      if (p.endsWith("/*") || p === "*") {
-        const dir = p === "*" ? "" : p.slice(0, -2);
-        const inDir = filesInDir(ctx, dir, ".java");
-        if (inDir.length) return inDir[0];
-        continue;
-      }
-      if (ctx.fileSet.has(p + ".java")) return p + ".java";
-    }
-    return undefined;
-  };
-
-  const path = spec.replace(/\./g, "/");
-  let hit = probe(path);
-  if (!hit && !spec.endsWith(".*")) {
+  const jvm = (ctx.jvm ??= buildJvmIndex(ctx));
+  const segs = spec.split(".");
+  let hit: string | undefined;
+  if (segs[segs.length - 1] === "*") {
+    // Wildcard import: the package directory — resolve to its
+    // lexicographically-first .java file (the Go-package pattern).
+    hit = jvm.packages.get(segs.slice(0, -1).join("."));
+  } else {
+    hit = jvm.types.get(segs.join("."));
     // `import com.a.Outer.Inner` (nested class) or `import static com.a.C.m` —
     // peel trailing segments until a type file matches.
-    const segs = path.split("/");
-    for (let n = segs.length - 1; n >= 2 && !hit; n--) {
-      hit = probe(segs.slice(0, n).join("/"));
-    }
+    for (let n = segs.length - 1; n >= 2 && !hit; n--) hit = jvm.types.get(segs.slice(0, n).join("."));
   }
   // stdlib/third-party (java.util.*, com.google.*) simply never match a root.
   return hit ? { kind: "resolved", target: hit } : { kind: "external" };
@@ -1121,14 +1173,27 @@ function resolvePhp(fromRel: string, spec: string, ctx: ResolveContext): Resolut
 function resolveCsharp(spec: string, ctx: ResolveContext): Resolution {
   const exact = ctx.csharpNamespaces.get(spec);
   if (exact?.length) return { kind: "resolved", target: exact[0]! };
-  let best: string | undefined;
-  for (const [ns, files] of ctx.csharpNamespaces) {
-    if (ns === spec || ns.startsWith(spec + ".")) {
-      const f = files[0]!;
-      if (best === undefined || byStr(f, best) < 0) best = f;
+  const best = (ctx.csharpPrefix ??= buildCsharpPrefix(ctx.csharpNamespaces)).get(spec);
+  return best ? { kind: "resolved", target: best } : { kind: "external" };
+}
+
+// Each namespace's dotted prefixes (`A`, `A.B` for `A.B.C`, and `A.B.C`
+// itself) -> the byStr-first file of any namespace at or under it, so a
+// `using` that names a parent namespace is one lookup instead of a scan of
+// every namespace — which `using System;` in every file used to be.
+function buildCsharpPrefix(namespaces: Map<string, string[]>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [ns, files] of namespaces) {
+    const f = files[0];
+    if (f === undefined) continue;
+    for (let i = ns.indexOf("."); ; i = ns.indexOf(".", i + 1)) {
+      const prefix = i === -1 ? ns : ns.slice(0, i);
+      const cur = out.get(prefix);
+      if (cur === undefined || byStr(f, cur) < 0) out.set(prefix, f);
+      if (i === -1) break;
     }
   }
-  return best ? { kind: "resolved", target: best } : { kind: "external" };
+  return out;
 }
 
 // Resolve an import specifier for a file of the given extension.

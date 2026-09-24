@@ -136,3 +136,85 @@ describe("resolveImport — Java", () => {
     expect(graph.fileEdges.some((e) => e.from === from && e.to.endsWith("User.java"))).toBe(true);
   });
 });
+
+// Java and C# resolution run on per-context indexes (one Map read per lookup)
+// instead of probing every source root / scanning every namespace per import.
+// A RepoScan built in memory: buildResolveContext only reads manifests (none
+// here) from disk, so the layout needs no files.
+function memScan(files: { rel: string; pkg?: string }[]) {
+  return {
+    root: "/nonexistent",
+    files: files.map((f) => ({ ...f, ext: f.rel.slice(f.rel.lastIndexOf(".")), symbols: [], refs: [] })),
+    languages: {},
+    docText: new Map(),
+  } as unknown as Parameters<typeof buildResolveContext>[0];
+}
+
+describe("resolveImport — Java/C# indexes", () => {
+  it("keeps the shortest source root's file when two roots hold the same name", () => {
+    const ctx = buildResolveContext(
+      memScan([
+        { rel: "a/src/com/x/Util.java", pkg: "com.x" },
+        { rel: "src/com/x/Util.java", pkg: "com.x" },
+        { rel: "src/com/y/Only.java", pkg: "com.y" },
+        { rel: "a/src/com/z/B.java", pkg: "com.z" },
+        { rel: "a/src/com/z/A.java", pkg: "com.z" },
+      ]),
+    );
+    expect(ctx.javaRoots).toEqual(["src", "a/src"]);
+    const from = "a/src/com/z/B.java";
+    expect(resolveImport(from, ".java", "com.x.Util", ctx)).toEqual({ kind: "resolved", target: "src/com/x/Util.java" });
+    // The shorter root has no com/z: the wildcard falls to the next root's dir,
+    // and names its first file whatever order the files came in.
+    expect(resolveImport(from, ".java", "com.z.*", ctx)).toEqual({ kind: "resolved", target: "a/src/com/z/A.java" });
+    expect(resolveImport(from, ".java", "com.y.Only.Inner.m", ctx)).toEqual({
+      kind: "resolved",
+      target: "src/com/y/Only.java",
+    });
+    // A package dir is not a type, and a peel stops at two segments.
+    expect(resolveImport(from, ".java", "com.y", ctx).kind).toBe("external");
+    expect(resolveImport(from, ".java", "com.q.R", ctx).kind).toBe("external");
+  });
+
+  it("resolves a Maven repo with hundreds of source roots without a per-root probe", () => {
+    const files: { rel: string; pkg: string }[] = [];
+    for (let m = 0; m < 100; m++) {
+      for (const kind of ["main", "test"]) {
+        for (let i = 0; i < 10; i++) {
+          files.push({ rel: `m${m}/src/${kind}/java/com/acme/m${m}/${kind}/C${i}.java`, pkg: `com.acme.m${m}.${kind}` });
+        }
+      }
+    }
+    const ctx = buildResolveContext(memScan(files));
+    expect(ctx.javaRoots.length).toBe(200);
+    const specs = ["java.util.List", "org.slf4j.Logger", "java.util.concurrent.*", "com.google.common.base.Strings"];
+    specs.push("javax.inject.Inject", "org.junit.jupiter.api.Test", "java.io.File", "reactor.core.publisher.Mono");
+    const t0 = performance.now();
+    for (const f of files) for (const s of specs) expect(resolveImport(f.rel, ".java", s, ctx).kind).toBe("external");
+    // 16,000 external specs: ~8s with a probe of all 200 roots per segment
+    // peeled, a few ms with the index. The bound only catches a regression.
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(resolveImport(files[0]!.rel, ".java", "com.acme.m42.test.C7", ctx)).toEqual({
+      kind: "resolved",
+      target: "m42/src/test/java/com/acme/m42/test/C7.java",
+    });
+  });
+
+  it("resolves a C# parent namespace to the byStr-first file under it, exact namespace first", () => {
+    const ctx = buildResolveContext(
+      memScan([
+        { rel: "z/Acme.Core.cs", pkg: "Acme.Core" },
+        { rel: "b/Acme.Core.Io.cs", pkg: "Acme.Core.Io" },
+        { rel: "a/Acme.Web.cs", pkg: "Acme.Web" },
+        { rel: "c/AcmeTools.cs", pkg: "AcmeTools" },
+      ]),
+    );
+    const from = "c/AcmeTools.cs";
+    expect(resolveImport(from, ".cs", "Acme", ctx)).toEqual({ kind: "resolved", target: "a/Acme.Web.cs" });
+    expect(resolveImport(from, ".cs", "Acme.Core", ctx)).toEqual({ kind: "resolved", target: "z/Acme.Core.cs" });
+    expect(resolveImport(from, ".cs", "Acme.Core.Io", ctx)).toEqual({ kind: "resolved", target: "b/Acme.Core.Io.cs" });
+    // A dotted prefix, not a string prefix: `Acm` names no namespace.
+    expect(resolveImport(from, ".cs", "Acm", ctx).kind).toBe("external");
+    expect(resolveImport(from, ".cs", "System.Linq", ctx).kind).toBe("external");
+  });
+});
