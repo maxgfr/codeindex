@@ -30,7 +30,8 @@ function symbol(v: unknown, rel: string): boolean {
 }
 
 function ref(v: unknown): boolean {
-  return object(v) && (v.kind === "import" || v.kind === "doc-link") && string(v.spec);
+  return object(v) && (v.kind === "import" || v.kind === "doc-link") && string(v.spec) &&
+    (v.soft === undefined || v.soft === true);
 }
 
 function call(v: unknown): boolean {
