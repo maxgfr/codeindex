@@ -37,7 +37,10 @@ compares](#how-it-compares).
   `from pkg import name` also links `pkg/name.py` when `name` is a submodule
   (and nothing when it is a function or class); PHP group (`use A\{B, C}`) and
   comma `use` lists and `__DIR__`-anchored includes are followed, and a trait
-  `use` inside a class is not an import.
+  `use` inside a class is not an import. Minified JavaScript is recognised by
+  its content, not only by a `.min.js` name: it stays in the index with its
+  summary and imports, flagged `minified` on its `FileRecord` and graph node,
+  but its one-letter symbols and call sites are not extracted.
 - **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
   `grammars pull`) or per-language regex rules (16 languages, always available).
   Each symbol carries its **complete signature** (parameters and return type,

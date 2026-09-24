@@ -59,7 +59,7 @@ describe("persisted cache validation", () => {
     ["refs", [{ kind: "import", spec: ".util", soft: "yes" }]],
     ["calls", [{ name: "run", line: 0 }]], ["idents", [1]], ["terms", {}],
     ["importedNames", [null]], ["truncated", "yes"], ["relations", [{ kind: "extends", from: "A", to: null, line: 1 }]],
-    ["literals", [{ kind: "string", value: 10, line: 1 }]],
+    ["literals", [{ kind: "string", value: 10, line: 1 }]], ["minified", false],
   ])("rejects a malformed record field %s", (field, value) => {
     const current = cache();
     Object.assign(current.files[REL]!.record, { [field]: value });

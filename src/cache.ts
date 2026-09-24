@@ -59,7 +59,7 @@ function record(v: unknown, rel: string): v is FileRecord {
     strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel)) &&
     Array.isArray(v.refs) && v.refs.every(ref) &&
     optionalArray(v.calls, call) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) &&
-    (v.truncated === undefined || v.truncated === true);
+    (v.truncated === undefined || v.truncated === true) && (v.minified === undefined || v.minified === true);
 }
 
 function entry(v: unknown, rel: string): v is PersistedCacheEntry {

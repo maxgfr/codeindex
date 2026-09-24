@@ -5,6 +5,7 @@ import { extractAst } from "../ast/extract.js";
 import { extractReexports, extToLang, MAX_REEXPORTS } from "../lang/common.js";
 import { extractImports, extractPackage } from "./imports.js";
 import { sfcParts } from "./sfc.js";
+import { isMinified } from "./minified.js";
 import { isBanner, isDirective, stripCommentMarkers } from "./doc-text.js";
 import { subtokens } from "../util.js";
 
@@ -19,6 +20,9 @@ export interface CodeInfo {
   summary?: string;
   // A cap truncated `symbols` — propagated onto the FileRecord.
   truncated?: true;
+  // Minified JS: only the summary and imports were extracted (see
+  // extract/minified.ts) — propagated onto the FileRecord.
+  minified?: true;
   refs: RawRef[]; // import refs (raw specifiers, unresolved)
   pkg?: string; // Java: the file's own `package x.y.z;` — used to derive source roots
   idents?: string[]; // distinctive identifiers referenced (AST path) — feeds `use` edges
@@ -308,6 +312,12 @@ function mergeCalls(
 // BOTH extraction tiers — AST and regex — so recall-oriented consumers can raise
 // it. Dedup/sort semantics are unchanged; absent, output is byte-identical.
 export function extractCode(rel: string, ext: string, content: string, opts: { maxCallsPerFile?: number } = {}): CodeInfo {
+  // A minified bundle keeps its place in the index, its summary and its imports
+  // (real edges, whoever wrote them) — and nothing else: its symbols and call
+  // sites are one-letter noise (see extract/minified.ts). The flag says so.
+  if (isMinified(ext, content)) {
+    return { symbols: [], minified: true, summary: topDocComment(content), refs: extractImports(ext, content) };
+  }
   // A single-file component (.vue/.svelte/.astro) is extracted as its script:
   // the JS/TS tier runs over a copy with the markup blanked, lines unchanged
   // (see extract/sfc.ts). Its symbols keep the component's own language, which
