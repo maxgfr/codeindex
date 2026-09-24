@@ -68,6 +68,14 @@ describe("grep universe: walk flags, scope and globs", () => {
     ]);
   });
 
+  it("honours .git/info/exclude on both backends, as the walker does", () => {
+    const root = repo({ "kept.txt": "NEEDLE\n", "local.txt": "NEEDLE\n" });
+    execFileSync("git", ["init", "-q", "."], { cwd: root });
+    writeFileSync(join(root, ".git", "info", "exclude"), "local.txt\n");
+    expect(files(both(root, "NEEDLE"))).toEqual(["kept.txt"]);
+    expect(files(both(root, "NEEDLE", { gitignore: false }))).toEqual(["kept.txt", "local.txt"]);
+  });
+
   it("never lets a positive glob resurrect ignored files (an rg whitelist glob overrides ignores)", () => {
     const root = repo({
       ".gitignore": "gen.ts\n",

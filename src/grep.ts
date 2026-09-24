@@ -585,7 +585,15 @@ function runScan(job: ScanJob, onEvent: (ev: ScanEvent) => void): { stoppedAt?: 
         continue;
       }
       const left = job.deadline - Date.now();
-      if (left <= 0) return { stoppedAt: Atomics.load(sig, 1) };
+      if (left <= 0) {
+        // The file in progress bounds the answer; results the worker posted
+        // for earlier files since the last receive still belong to it.
+        const stoppedAt = Atomics.load(sig, 1);
+        for (let m; (m = receiveMessageOnPort(port) as { message: ScanEvent } | undefined); ) {
+          if ("i" in m.message && m.message.i < stoppedAt) onEvent(m.message);
+        }
+        return { stoppedAt };
+      }
       // Short slices: a message posted between the load and the receive is
       // caught by the counter, and one still in flight by the next slice.
       Atomics.wait(sig, 0, seen, Math.min(left, 50));

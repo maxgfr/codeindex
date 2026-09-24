@@ -148,8 +148,10 @@ export {
 export type { DiffFile, DiffSpec, Hunk } from "./git.js";
 
 // Repo text search (ripgrep when available, pure-JS fallback otherwise).
-export { grepRepo } from "./grep.js";
-export type { SearchHit, GrepOptions } from "./grep.js";
+// grepRepoEx adds what the bare hit list cannot say: truncated, the matching
+// file count, a time-budget stop, and the notes a caller should surface.
+export { grepRepo, grepRepoEx } from "./grep.js";
+export type { SearchHit, GrepOptions, GrepResult } from "./grep.js";
 
 // Keyless BM25 lexical search over symbols/paths/headings/summaries (issue #4).
 export { searchIndex, explainQuery, subtokens } from "./bm25.js";
