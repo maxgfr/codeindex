@@ -416,7 +416,17 @@ export function extractAst(
     // `export default Foo;` / `export { Foo }` re-export a declaration made
     // earlier in the file; record those names and mark the matching symbols
     // exported after the walk (the declaration node itself is not wrapped).
-    const exportedNames = new Set<string>();
+    // Keyed by the SCOPE the list was written in: it names that scope's own
+    // bindings, never a class member or a function's local that happens to
+    // share the name — `export { save }` used to publish `private save()` too.
+    const exportedNames = new Map<string, Set<string>>();
+    const scopeKey = (at: { parent?: string; parentPath?: string }): string => at.parentPath ?? at.parent ?? "";
+    const exportName = (name: string, ctx: WalkCtx): void => {
+      const key = scopeKey(ctx);
+      let names = exportedNames.get(key);
+      if (!names) exportedNames.set(key, (names = new Set()));
+      names.add(name);
+    };
 
     const emit = (s: CodeSymbol): void => {
       if (symbols.length < maxSymbols) symbols.push(s);
@@ -566,16 +576,20 @@ export function extractAst(
       // `export …` / `declare …` marks everything it wraps as public.
       const isExportMarker = spec.exportMarkers?.has(type) === true;
       const nowExported = ctx.exported || isExportMarker;
-      if (type === "export_statement") {
+      // `export { a } from "./x"` re-exports ANOTHER module's binding and
+      // names nothing declared here.
+      if (type === "export_statement" && !node.childForFieldName("source")) {
         for (const c of node.namedChildren) {
-          if (c.type === "identifier") exportedNames.add(c.text);
+          if (c.type === "identifier") exportName(c.text, ctx);
           else if (c.type === "export_clause") {
             for (const clause of c.namedChildren) {
               const nm = clause.childForFieldName("name") ?? clause.namedChildren[0];
-              if (nm?.text) exportedNames.add(nm.text);
+              if (nm?.text) exportName(nm.text, ctx);
             }
           }
         }
+      }
+      if (type === "export_statement") {
         // An anonymous `export default function/class/arrow` has no name node the
         // declaration walk could pick up — name it after the file stem (ultradoc
         // parity), so the module's default export is a real, referencable symbol.
@@ -626,19 +640,19 @@ export function extractAst(
             // exported surface, identifier value = the local declaration).
             if (right.type === "object") {
               for (const p of right.namedChildren) {
-                if (p.type === "shorthand_property_identifier") exportedNames.add(p.text);
+                if (p.type === "shorthand_property_identifier") exportName(p.text, ctx);
                 else if (p.type === "pair") {
                   const k = p.childForFieldName("key");
                   const v = p.childForFieldName("value");
-                  if (k?.type === "property_identifier") exportedNames.add(k.text);
-                  if (v?.type === "identifier") exportedNames.add(v.text);
+                  if (k?.type === "property_identifier") exportName(k.text, ctx);
+                  if (v?.type === "identifier") exportName(v.text, ctx);
                 }
               }
               return;
             }
             // `module.exports = Foo;` — the CJS default export of a local decl.
             if (right.type === "identifier") {
-              exportedNames.add(right.text);
+              exportName(right.text, ctx);
               return;
             }
           }
@@ -687,7 +701,7 @@ export function extractAst(
             if (prop?.type === "property_identifier") {
               const obj = left.text.slice(0, left.text.length - prop.text.length - 1);
               if (obj === "exports" || obj === "module.exports") {
-                if (right.type === "identifier") exportedNames.add(right.text);
+                if (right.type === "identifier") exportName(right.text, ctx);
                 if (right.type !== "identifier" || right.text !== prop.text) {
                   emit({
                     name: prop.text,
@@ -853,7 +867,7 @@ export function extractAst(
       sectionPublic: true,
     });
     if (exportedNames.size) {
-      for (const s of symbols) if (!s.exported && exportedNames.has(s.name)) s.exported = true;
+      for (const s of symbols) if (!s.exported && exportedNames.get(scopeKey(s))?.has(s.name)) s.exported = true;
     }
 
     const wantImports = opts.imports !== false;

@@ -459,3 +459,36 @@ describe("a Lua function stored in a table", () => {
     }
   });
 });
+
+describe("an export list", () => {
+  const exported = (all: CodeSymbol[]) => all.map((s) => `${ids([s])[0]}=${s.exported ? 1 : 0}`);
+
+  // `export { save, helper }` names MODULE bindings. Marking every same-named
+  // symbol published a `private` method and a function's local, which then
+  // became call-resolution candidates and dropped out of deadcode.
+  it("marks only the bindings of the scope it is written in", () => {
+    const src = [
+      "class Store {",
+      "  private save(): void {}",
+      "}",
+      "function save(): void {}",
+      "function outer() {",
+      "  function helper() {}",
+      "}",
+      "function helper() {}",
+      "export { save, helper };",
+    ].join("\n");
+    expect(exported(syms("a.ts", src))).toEqual(["Store=0", "Store.save=0", "save=1", "outer=0", "outer.helper=0", "helper=1"]);
+    const ambient = 'module "m" {\n  function g(): void;\n  function h(): void;\n  export { g };\n}\nfunction g() {}';
+    expect(exported(syms("m.ts", ambient))).toEqual(['"m"=0', '"m".g=1', '"m".h=0', "g=0"]);
+  });
+
+  it("re-exporting another module's binding marks nothing declared here", () => {
+    expect(exported(syms("r.ts", 'const a = 1;\nexport { a } from "./other";'))).toEqual(["a=0"]);
+    expect(exported(syms("c.js", "function foo() {}\nclass K { foo() {} }\nmodule.exports = { foo };"))).toEqual([
+      "foo=1",
+      "K=0",
+      "K.foo=0",
+    ]);
+  });
+});
