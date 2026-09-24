@@ -132,8 +132,9 @@ Commands:
               positional for one file; omit for the repo-wide top
   risk        Complexity × git-churn ranking (JSON; --since to bound, --limit)
   delta       Review panel for the git diff: changed files -> enclosing symbols ->
-              blast radius -> risk score with explained reasons
-              (--base <ref> | --staged, --depth <n>, --json)
+              blast radius -> risk score with explained reasons; a deleted or
+              renamed file that is still imported is listed under \`broken\`
+              with its importers (--base <ref> | --staged, --depth <n>, --json)
   impact      Reverse dependency closure of a file or module: everything that
               transitively imports/uses/calls it (--depth <n>; JSON)
   neighbors   Graph neighbours of a file or module, both directions
@@ -1126,11 +1127,12 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const risks = riskHotspots(scan, res.churn, flags.limit);
     emit(JSON.stringify({ churnOk: res.ok, ...historyStatus(res), risks }, null, 2) + "\n", flags.out);
   } else if (cmd === "delta") {
-    const { graph, symbols } = await readArtifacts();
+    const { scan, graph, symbols } = await readArtifacts();
     const res = deltaFor(flags.repo, graph, symbols, {
       base: flags.base,
       staged: flags.staged,
       depth: flags.depth,
+      scan,
     });
     if ("error" in res) throw new Error(res.error);
     emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);

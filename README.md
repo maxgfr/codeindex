@@ -472,6 +472,25 @@ codeindex churn    --repo packages/api      # one package of a monorepo
   all four commands and reused while HEAD stays the same, so an MCP session
   asking for `onboard`, `hotspots` and `risk` reads the history once.
 
+## Reviewing a diff
+
+`codeindex delta` maps the git diff onto the graph: changed files, the symbols
+enclosing each hunk, the blast radius, and a risk score per module in which
+every point comes with the reason that fired it.
+
+```sh
+codeindex delta --repo .                  # the branch vs its merge-base with the default branch
+codeindex delta --repo . --staged --json  # the staged changeset, as JSON
+```
+
+- **A removed file that is still imported is the highest-weighted signal**
+  (`brokenImport`, 40). The worktree's graph no longer holds a deleted or
+  renamed file, so delta puts the removed paths back and re-resolves the
+  graph's dangling imports: the ones that land on a removed path are listed
+  under `broken` with their importer (and `renamedTo` for a move), the module
+  the file was removed from is scored even when nothing else in it changed,
+  and the importers count as its direct dependents.
+
 ## Docker
 
 `ghcr.io/maxgfr/codeindex` ships the same zero-dependency bundle (`engine.mjs`
