@@ -18,6 +18,8 @@ compares](#how-it-compares).
 
 - **Walk** a repo deterministically: ignore lists, `.gitignore` and
   `.git/info/exclude`, binary/lockfile skips, a size cap, symlink-cycle guard.
+  A symlink that stays inside the repo, file or directory, is an alias: its
+  target is indexed once, under its own path.
   Nested repositories (a subdirectory with its own `.git` — linked worktrees,
   vendored clones, submodules) are skipped like git does, and `.git` itself —
   like the engine's own `.codeindex` — is never walked even when
@@ -189,8 +191,9 @@ also vendor `scripts/grammars/` (~17 MiB of wasm).
 ### Inventory consumers
 
 `walk(root, options)` also serves exhaustive inventories. The default source-indexing
-policy is unchanged. Opt into `includeBinary`, `includeLockfiles`, `includeOversize`
-and `includeMinified`, or replace `binaryExtensions` to keep textual SVG. These
+policy is unchanged. Opt into `includeBinary`, `includeLockfiles`, `includeOversize`,
+`includeMinified` and `includeFileSymlinks` (in-repo file links, skipped by default
+as aliases), or replace `binaryExtensions` to keep textual SVG. These
 controls are independent: a `.lock` extension still follows the binary policy.
 
 `filter({ rel, abs, directory })` prunes consumer output and out-of-scope trees

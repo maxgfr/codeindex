@@ -134,7 +134,7 @@ export const BINARY_EXT = new Set([
 /** An observed exclusion. Directory contents are not enumerated. */
 export interface WalkSkip {
   rel: string;
-  reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
+  reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "file-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
   directory: boolean;
   size?: number;
 }
@@ -166,6 +166,8 @@ export interface WalkOptions {
   includeBinary?: boolean;
   includeOversize?: boolean;
   includeMinified?: boolean;
+  /** Keep in-repo FILE symlinks as files of their own (skipped by default — see walk). */
+  includeFileSymlinks?: boolean;
   /** Replace the binary extension policy, e.g. to retain textual SVG. */
   binaryExtensions?: ReadonlySet<string>;
   /** Called before entering a directory or accepting a file. False prunes it. */
@@ -349,7 +351,14 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         skip(rel, reason, false, st.size);
         continue;
       }
-      // Symlink-escape guard for files (statSync above follows links).
+      // Symlink-escape guard for files (statSync above follows links). A link
+      // that stays inside the repo is an ALIAS, skipped like a directory link:
+      // git stores it as a one-line blob naming its target, and indexing the
+      // target's content a second time under the link's path made every
+      // symbol in it ambiguous (`alias.py -> main.py` gave `main` two defs, so
+      // call resolution had no unique target) and doubled doc and search hits
+      // (`CLAUDE.md -> AGENTS.md`). The target is indexed under its own path
+      // whenever the walk keeps it. Inventories opt back in.
       if (isLink) {
         try {
           if (!contained(realpathSync(abs))) { skip(rel, "symlink-outside-root"); continue; }
@@ -357,6 +366,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
           skip(rel, "broken-symlink");
           continue;
         }
+        if (!opts.includeFileSymlinks) { skip(rel, "file-symlink"); continue; }
       }
       // The cap is enforced HERE, on kept files, so a flat directory cannot
       // silently overshoot it and `capped` is set exactly when a file was

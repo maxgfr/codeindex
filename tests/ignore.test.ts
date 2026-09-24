@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseGitignore, isIgnored } from "../src/ignore.js";
-import { walk } from "../src/walk.js";
+import { walk, type WalkSkip } from "../src/walk.js";
 import { scanRepo } from "../src/scan.js";
 
 const test = (rules: ReturnType<typeof parseGitignore>, rel: string, isDir = false) =>
@@ -205,18 +205,28 @@ describe("symlink-escape guard", () => {
     expect(rels).toEqual(["inside.ts"]);
   });
 
-  it("keeps symlinks that stay inside the repo", () => {
+  // An in-repo file link is an alias of a file indexed under its own path.
+  // Kept, it duplicated the target: `main` defined in alias.py AND main.py,
+  // so no call to it resolved to a unique definition.
+  it("skips file symlinks that stay inside the repo, unless an inventory opts in", () => {
     const root = mkdtempSync(join(tmpdir(), "ci-symlink-in-"));
-    writeFileSync(join(root, "real.ts"), "export const a = 1;\n");
-    symlinkSync(join(root, "real.ts"), join(root, "alias.ts"));
-    const rels = walk(root)
-      .files.map((f) => f.rel)
-      .sort();
-    expect(rels).toEqual(["alias.ts", "real.ts"]);
+    writeFileSync(join(root, "real.py"), "def main():\n    return 1\n");
+    symlinkSync(join(root, "real.py"), join(root, "alias.py"));
+    symlinkSync("real.py", join(root, "relative-alias.py"));
+    const skips: WalkSkip[] = [];
+    expect(walk(root, { onSkip: (s) => skips.push(s) }).files.map((f) => f.rel)).toEqual(["real.py"]);
+    expect(skips.map((s) => [s.rel, s.reason])).toEqual([
+      ["alias.py", "file-symlink"],
+      ["relative-alias.py", "file-symlink"],
+    ]);
+    expect(scanRepo(root).files.flatMap((f) => f.symbols.map((s) => `${s.name}@${f.rel}`))).toEqual(["main@real.py"]);
+    const inventory = walk(root, { includeFileSymlinks: true }).files.map((f) => f.rel);
+    expect(inventory).toEqual(["alias.py", "real.py", "relative-alias.py"]);
   });
 
-  // Dirent-based walk regression: one walk containing a symlinked FILE (kept,
-  // classified/sized by its TARGET), a symlinked DIR (skipped — canonical path
+  // Dirent-based walk regression: one walk containing a symlinked FILE (an
+  // alias, skipped by default; kept by an inventory, it is classified and
+  // sized by its TARGET), a symlinked DIR (skipped — canonical path
   // only), a symlink NAMED like an ignored dir (still skipped via its target's
   // type, since the dirent itself is a link, not a directory), and a broken
   // symlink (skipped without aborting the walk).
@@ -231,7 +241,8 @@ describe("symlink-escape guard", () => {
     symlinkSync(join(root, "lib"), join(root, "node_modules")); // link named like an ignored dir
     symlinkSync(join(root, "gone.ts"), join(root, "dangling.ts")); // broken link
 
-    const { files } = walk(root);
+    expect(walk(root).files.map((f) => f.rel).sort()).toEqual(["lib/mod.ts", "real.ts"]); // file-link.ts: an alias
+    const { files } = walk(root, { includeFileSymlinks: true });
     const rels = files.map((f) => f.rel).sort();
     expect(rels).toEqual(["file-link.ts", "lib/mod.ts", "real.ts"]);
     // The kept file link carries its TARGET's size (stat follows), not the
