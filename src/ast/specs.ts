@@ -37,13 +37,18 @@ const rel = (kind: RawRelation["kind"], from: string, to: string, node: TSNode):
   line: node.startPosition.row + 1,
 });
 
-// JS/TS state both relations inside one `class_heritage` node.
+// JS/TS state both relations inside one `class_heritage` node. TypeScript
+// splits it into clauses; JavaScript's grammar has no clause nodes and holds the
+// extended expression directly, so reading only `extends_clause` gave no .js
+// class a superclass at all.
 function tsHeritage(node: TSNode, ctx: { self?: string }): RawRelation[] {
   if (!ctx.self) return [];
   const heritage = childOfType(node, "class_heritage");
   if (!heritage) return [];
+  const clauses = heritage.namedChildren.some((c) => c.type.endsWith("_clause"));
   const out: RawRelation[] = [];
-  for (const to of heritageTargets(childOfType(heritage, "extends_clause"))) out.push(rel("extends", ctx.self, to, node));
+  for (const to of heritageTargets(clauses ? childOfType(heritage, "extends_clause") : heritage))
+    out.push(rel("extends", ctx.self, to, node));
   for (const to of heritageTargets(childOfType(heritage, "implements_clause"))) out.push(rel("implements", ctx.self, to, node));
   return out;
 }

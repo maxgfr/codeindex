@@ -426,8 +426,12 @@ export function extractAst(
     const relSeen = new Set<string>();
     // `self` is what the relation is ABOUT: a class's own name, Rust's impl
     // target, or the enclosing class for a Ruby `include`.
-    const collectRelations = (node: TSNode, self: string | undefined): void => {
-      const reader = spec.relationsFrom?.[node.type];
+    // `as` reads the node as another type: a class EXPRESSION states its
+    // heritage exactly like the declaration form, but only where the walk knows
+    // what it is bound to (see declareValue) — keyed on its own type, every
+    // `return class extends Base {}` would make the enclosing function extend Base.
+    const collectRelations = (node: TSNode, self: string | undefined, as = node.type): void => {
+      const reader = spec.relationsFrom?.[as];
       if (!reader) return;
       for (const r of reader(node, { self })) {
         if (r.from === r.to) continue; // a type does not inherit from itself
@@ -509,6 +513,22 @@ export function extractAst(
       }
     };
 
+    // The context a declaration's body is walked in: its members hang off it,
+    // and a function's body is executable code, one level deeper.
+    const bodyCtx = (name: string, kind: string, parentPath: string | undefined, ctx: WalkCtx, exported: boolean): WalkCtx => {
+      const entersFunction = FUNCTION_KINDS.has(kind);
+      return {
+        parent: name,
+        parentPath: parentPath ? `${parentPath}/${name}` : name,
+        ownerKind: kind,
+        exported,
+        forcePublic: PUBLIC_MEMBER_KINDS.has(kind),
+        inFunctionBody: ctx.inFunctionBody || entersFunction,
+        funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
+        sectionPublic: true,
+      };
+    };
+
     // Descend into a declaration's body. Normally the body is a container CHILD
     // (a class_body, a declaration_list). Some grammars give a declaration no
     // body node at all and hang its members directly off it — Solidity's
@@ -527,6 +547,16 @@ export function extractAst(
         walkChildren(c, ctx);
       }
       if (!descended && spec.containers.has(node.type)) walkChildren(node, ctx);
+    };
+
+    // Walk a function or class VALUE as the declaration of a name the walk
+    // assigned it: an anonymous `export default`, a `module.exports =` or an
+    // `exports.x =`. A class expression is neither a def nor a container, so
+    // without this every member of `export default class extends
+    // React.Component { … }` or `module.exports = class { … }` was lost.
+    const declareValue = (value: TSNode, name: string, kind: string, ctx: WalkCtx, exported: boolean): void => {
+      collectRelations(value, name, value.type === "class" ? "class_declaration" : value.type);
+      walkBody(value, bodyCtx(name, kind, ctx.parentPath, ctx, exported));
     };
 
     const walk = (node: TSNode, ctx: WalkCtx): void => {
@@ -549,15 +579,18 @@ export function extractAst(
         // An anonymous `export default function/class/arrow` has no name node the
         // declaration walk could pick up — name it after the file stem (ultradoc
         // parity), so the module's default export is a real, referencable symbol.
+        // Its body is then walked as that symbol's, so members and nested
+        // declarations hang off the stem rather than off nothing.
         if (stem && node.children.some((c) => c.type === "default")) {
           for (const c of node.namedChildren) {
             const fnLike = ANON_DEFAULT_FN.has(c.type);
             const classLike = ANON_DEFAULT_CLASS.has(c.type);
             if ((fnLike || classLike) && !c.childForFieldName("name")) {
               const doc = docCommentFor(node);
+              const kind = classLike ? "class" : "function";
               emit({
                 name: stem,
-                kind: classLike ? "class" : "function",
+                kind,
                 file: rel,
                 line: node.startPosition.row + 1,
                 endLine: endLineOf(node),
@@ -566,7 +599,8 @@ export function extractAst(
                 exported: true,
                 lang,
               });
-              break;
+              declareValue(c, stem, kind, ctx, true);
+              return;
             }
           }
         }
@@ -576,6 +610,11 @@ export function extractAst(
       // expression. Named after the assigned property (or identifier); only
       // `exports.*` / `module.exports.*` targets count as exported — augmenting
       // a local object (res.*, Foo.prototype.*) is not a module export.
+      // `module.exports = <function|class>` itself is the module's DEFAULT
+      // export, named like an anonymous ESM one: the value's own name, else the
+      // file stem. Reading it as an assignment to a property named `exports` on
+      // an object named `module` made every Express middleware and webpack
+      // loader a private function called "exports".
       if (spec.assignments && type === "expression_statement") {
         const expr = node.namedChildren[0];
         if (expr?.type === "assignment_expression") {
@@ -607,7 +646,10 @@ export function extractAst(
           if (left && right && funcy) {
             let name: string | undefined;
             let exportedAssign = false;
-            if (left.type === "member_expression") {
+            if (left.type === "member_expression" && left.text === "module.exports") {
+              name = right.childForFieldName("name")?.text ?? (stem || undefined);
+              exportedAssign = true;
+            } else if (left.type === "member_expression") {
               const prop = left.childForFieldName("property");
               if (prop?.type === "property_identifier") {
                 name = prop.text;
@@ -619,18 +661,21 @@ export function extractAst(
             }
             if (name) {
               const doc = docCommentFor(node);
+              const kind = right.type === "class" ? "class" : "function";
+              const exported = !ctx.inFunctionBody && (nowExported || exportedAssign);
               emit({
                 name,
-                kind: right.type === "class" ? "class" : "function",
+                kind,
                 file: rel,
                 line: expr.startPosition.row + 1,
                 endLine: endLineOf(expr),
                 ...(ctx.parent ? { parent: ctx.parent } : {}),
                 signature: declHeader(expr, content),
                 ...(doc ? { doc } : {}),
-                exported: !ctx.inFunctionBody && (nowExported || exportedAssign),
+                exported,
                 lang,
               });
+              declareValue(right, name, kind, ctx, exported);
               return;
             }
           } else if (left?.type === "member_expression" && right) {
@@ -773,17 +818,7 @@ export function extractAst(
             lang,
           });
           collectRelations(node, name);
-          const entersFunction = FUNCTION_KINDS.has(kind);
-          walkBody(node, {
-            parent: name,
-            parentPath: parentPath ? `${parentPath}/${name}` : name,
-            ownerKind: kind,
-            exported: nowExported,
-            forcePublic: PUBLIC_MEMBER_KINDS.has(kind),
-            inFunctionBody: ctx.inFunctionBody || entersFunction,
-            funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
-            sectionPublic: true,
-          });
+          walkBody(node, bodyCtx(name, kind, parentPath, ctx, nowExported));
           return;
         }
       }

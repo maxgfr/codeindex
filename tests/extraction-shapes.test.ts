@@ -341,3 +341,46 @@ describe("a C++ header named .h", () => {
     expect(grammarKeysForExts([".h"])).toEqual(["c", "cpp"]);
   });
 });
+
+describe("a module's default export bound to a function or class value", () => {
+  const rels = (rel: string, src: string) =>
+    (extractAst(rel, rel.slice(rel.lastIndexOf(".")), src)?.relations ?? []).map((r) => `${r.kind} ${r.from} ${r.to}`);
+
+  // The dominant export style of Express middleware, webpack loaders and ESLint
+  // rules read as a private function named "exports", its class body unwalked.
+  it("names `module.exports = …` after the value, else the file stem, and exports it", () => {
+    const named = syms("mw.js", "module.exports = function middleware(req, res) {};");
+    expect(named.map((s) => [s.name, s.kind, s.exported])).toEqual([["middleware", "function", true]]);
+    const anon = syms("mw.js", "module.exports = async (req, res) => { function inner() {} };");
+    expect(anon.map((s) => [ids([s])[0], s.kind, s.exported])).toEqual([
+      ["mw", "function", true],
+      ["mw.inner", "function", false],
+    ]);
+    const cls = syms("cls.js", "module.exports = class Foo extends Base { bar() {} };");
+    expect(ids(cls)).toEqual(["Foo", "Foo.bar"]);
+    expect(cls.every((s) => s.exported)).toBe(true);
+    expect(rels("cls.js", "module.exports = class Foo extends Base { bar() {} };")).toEqual(["extends Foo Base"]);
+  });
+
+  it("walks the class an `exports.x =` assignment binds", () => {
+    const all = syms("ex.js", "exports.Store = class { save() {} };\nexports.helper = function () { function nested() {} };");
+    expect(ids(all)).toEqual(["Store", "Store.save", "helper", "helper.nested"]);
+    expect(find(all, "nested")?.exported).toBe(false);
+  });
+
+  it("walks an anonymous `export default class` and hangs its members off the stem", () => {
+    const all = syms("Card.tsx", "export default class extends React.Component {\n  render() { return null; }\n  private tick() {}\n}");
+    expect(ids(all)).toEqual(["Card", "Card.render", "Card.tick"]);
+    expect(find(all, "render")?.exported).toBe(true);
+    expect(find(all, "tick")?.exported).toBe(false);
+    expect(rels("Card.tsx", "export default class extends React.Component {}")).toEqual(["extends Card Component"]);
+    expect(ids(syms("widget.ts", "export default function () { function inner() {} }"))).toEqual(["widget", "widget.inner"]);
+  });
+
+  it("reads a JavaScript superclass, which its grammar writes without a clause node", () => {
+    expect(rels("a.js", "class A extends B {}\nclass C extends mixin(D) {}")).toEqual(["extends A B", "extends C mixin"]);
+    // A class expression inside a function is bound to nothing the walk knows,
+    // so it must not state a relation about the function.
+    expect(rels("f.js", "function make() { return class extends Base {}; }")).toEqual([]);
+  });
+});

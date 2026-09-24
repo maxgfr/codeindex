@@ -107,18 +107,19 @@ function spanText(lines: readonly string[], line: number, endLine: number): stri
  * cannot appear in the span.
  *
  * WHY: src/ast/extract.ts names an anonymous `export default function/class/
- * arrow` after the file stem (`Button.tsx` → `Button`), so a module's default
- * export is a referencable symbol instead of nothing. The name is provably
- * absent from the file — it was taken from the path.
+ * arrow` — and its CommonJS twin, `module.exports = function () {…}` — after
+ * the file stem (`Button.tsx` → `Button`), so a module's default export is a
+ * referencable symbol instead of nothing. The name is provably absent from the
+ * file — it was taken from the path.
  *
  * Detected structurally, not by extension: the name must equal the file stem AND
- * the claimed span must actually contain `export default`. A `Button.tsx` that
- * really does declare `class Button` never reaches here (its name is in the span),
- * and a wrong span over unrelated code is still reported.
+ * the claimed span must actually contain `export default` or `module.exports =`.
+ * A `Button.tsx` that really does declare `class Button` never reaches here (its
+ * name is in the span), and a wrong span over unrelated code is still reported.
  */
 function isFileStemDefaultExport(rel: string, name: string, span: string): boolean {
   const stem = (rel.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
-  return name === stem && /\bexport\s+default\b/.test(span);
+  return name === stem && /\bexport\s+default\b|\bmodule\.exports\s*=/.test(span);
 }
 
 /**

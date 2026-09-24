@@ -62,6 +62,23 @@
       ],
       "calls": [],
       "relations": []
+    },
+    "logger.js": {
+      "symbols": [
+        { "name": "RequestLogger", "kind": "class", "doc": true },
+        { "name": "handle", "parent": "RequestLogger", "kind": "method" }
+      ],
+      "calls": ["next"],
+      "relations": [{ "kind": "extends", "from": "RequestLogger", "to": "Middleware" }]
+    },
+    "Card.tsx": {
+      "symbols": [
+        { "name": "Card", "kind": "class", "doc": true },
+        { "name": "render", "parent": "Card", "kind": "method" },
+        { "name": "measure", "parent": "Card", "kind": "method", "exported": false }
+      ],
+      "calls": [],
+      "relations": [{ "kind": "extends", "from": "Card", "to": "Component" }]
     }
   }
 }

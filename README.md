@@ -36,13 +36,15 @@ compares](#how-it-compares).
   interface members, class fields, enum members, every `declare`/`.d.ts`
   declaration, Rust trait method signatures, Go interface method sets and type
   aliases, record components and constructor `val` parameters, C `#define`
-  macros and the members of a `typedef struct`, and Python declarations under
-  `if TYPE_CHECKING:` / `try:` / `with` blocks. A doc comment is found across
-  Rust attributes and TypeScript decorators; visibility is read from a
-  declaration's modifiers, never from its parameter names or default values;
-  an out-of-line C++ definition (`void Widget::draw()`) belongs to its class;
-  and a `.h` header is parsed as C++ when its content is (a namespace, class
-  or template), as C otherwise.
+  macros and the members of a `typedef struct`, Python declarations under
+  `if TYPE_CHECKING:` / `try:` / `with` blocks, and the members of a class
+  bound by `module.exports =` or an anonymous `export default class` (a
+  default export with no name of its own is named after the file stem). A doc
+  comment is found across Rust attributes and TypeScript decorators;
+  visibility is read from a declaration's modifiers, never from its parameter
+  names or default values; an out-of-line C++ definition (`void
+  Widget::draw()`) belongs to its class; and a `.h` header is parsed as C++
+  when its content is (a namespace, class or template), as C otherwise.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
@@ -158,12 +160,12 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 307 labelled declarations in 20 files |
-| kind accuracy | **100%** | the same 307 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 307 declarations |
-| doc comment attached | **100%** | the 174 declarations labelled with a doc |
+| symbol precision / recall | **100% / 100%** | 312 labelled declarations in 22 files |
+| kind accuracy | **100%** | the same 312 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 312 declarations |
+| doc comment attached | **100%** | the 176 declarations labelled with a doc |
 | complete signature | **100%** | the 32 declarations labelled with a signature |
-| call edges / inheritance (F1) | **100% / 100%** | 48 labelled call sites, 22 relations |
+| call edges / inheritance (F1) | **100% / 100%** | 49 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
 
 `pnpm quality:report` reproduces every number; `tests/quality.test.ts` enforces
