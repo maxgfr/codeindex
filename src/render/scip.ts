@@ -10,7 +10,8 @@
 // scip-typescript emits and that `scip stats`/`scip lint` read; the typed
 // single/multi-line ranges (fields 8-11) are deliberately out of scope. The
 // symbol grammar (scheme/package/descriptors and the suffixes `/` namespace,
-// `#` type, `.` term, `().` method) is taken from the `Symbol` message comment.
+// `#` type, `.` term, `().` method, `!` macro) is taken from the `Symbol`
+// message comment.
 
 import { join } from "node:path";
 import { ENGINE_VERSION } from "../types.js";
@@ -18,6 +19,9 @@ import type { CodeSymbol, FileRecord } from "../types.js";
 import type { RepoScan } from "../scan.js";
 import { readText } from "../walk.js";
 import { byStr } from "../sort.js";
+import { importPairsFor } from "../derived.js";
+import { resolveRelations } from "../relations.js";
+import { manifestCoordinates } from "../workspaces.js";
 
 export interface RenderScipOptions {
   // URI-encoded absolute path to the index root (SCIP `Metadata.project_root`).
@@ -153,12 +157,16 @@ const F_OCC_RANGE = 1;
 const F_OCC_SYMBOL = 2;
 const F_OCC_ROLES = 3;
 const F_SI_SYMBOL = 1;
+const F_SI_RELATIONSHIPS = 4;
 const F_SI_KIND = 5;
 const F_SI_DISPLAY_NAME = 6;
 // SymbolInformation.enclosing_symbol = 8 is deliberately never written: the
 // proto reserves it for LOCAL symbols ("for non-local symbols, the enclosing
 // symbol should be parsed from the `symbol` field"), and every symbol here is
 // global — the parent is already the descriptor chain.
+const F_REL_SYMBOL = 1;
+const F_REL_IS_REFERENCE = 2;
+const F_REL_IS_IMPLEMENTATION = 3;
 
 const TEXT_ENCODING_UTF8 = 1; // TextEncoding.UTF8
 const ROLE_DEFINITION = 0x1; // SymbolRole.Definition (a reference omits the field → 0)
@@ -171,13 +179,34 @@ const ROLE_DEFINITION = 0x1; // SymbolRole.Definition (a reference omits the fie
 const POSITION_ENCODING_UTF16 = 2; // PositionEncoding.UTF16CodeUnitOffsetFromLineStart
 
 // ---------------------------------------------------------------------------
-// SCIP symbol strings (the `Symbol` grammar). Local, minimal scheme:
-//   <scheme:codeindex> ' ' <manager:.> ' ' <package-name:.> ' ' <version:.> ' ' <descriptors>
-// Descriptors: the file path as a backtick-escaped namespace, then the chain of
-// enclosing declarations, then the symbol itself — each with the suffix its
-// kind calls for.
+// SCIP symbol strings (the `Symbol` grammar):
+//   <scheme:codeindex> ' ' <manager> ' ' <package-name> ' ' <version> ' ' <descriptors>
+// The package is the one the file's nearest manifest names (`.` placeholders
+// when there is none). Descriptors: the file path as a backtick-escaped
+// namespace, then the chain of enclosing declarations, then the symbol itself —
+// each with the suffix its kind calls for.
 // ---------------------------------------------------------------------------
-const SYMBOL_PREFIX = "codeindex . . . ";
+const SCHEME = "codeindex";
+const NO_PACKAGE = ". . .";
+
+// The manifest naming the package a source file of each language ships in.
+const PACKAGE_MANIFEST = new Map<string, string>([
+  ["typescript", "package.json"],
+  ["javascript", "package.json"],
+  ["go", "go.mod"],
+  ["rust", "Cargo.toml"],
+  ["python", "pyproject.toml"],
+  ["java", "pom.xml"],
+  ["kotlin", "pom.xml"],
+  ["scala", "pom.xml"],
+  ["php", "composer.json"],
+]);
+
+// <manager>/<package-name>/<version>: any UTF-8 with spaces doubled, `.` when empty.
+function packageField(value: string | undefined): string {
+  return value ? value.replace(/ /g, "  ") : ".";
+}
+
 const SIMPLE_ID = /^[A-Za-z0-9_+\-$]+$/; // <identifier-character> = _ + - $ letters digits
 
 function escapeId(name: string): string {
@@ -362,12 +391,13 @@ interface DocDefs {
 
 const endOf = (d: Def): number => d.sym.endLine ?? d.sym.line;
 
+const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+
 // The directory a Go file's package lives in, plus the package clause: files of
 // one directory normally share a package, but `foo_test` is a distinct one.
 function goPackageKey(f: FileRecord): string {
-  const dir = f.rel.includes("/") ? f.rel.slice(0, f.rel.lastIndexOf("/")) : "";
   const pkg = f.symbols.find((s) => s.kind === "package")?.name ?? "";
-  return `${dir}\u0000${pkg}`;
+  return `${dirOf(f.rel)}\u0000${pkg}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +407,29 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
   const projectRoot = opts.projectRoot ?? "file://" + scan.root.replace(/\\/g, "/");
   const toolVersion = opts.toolVersion ?? ENGINE_VERSION;
 
+  // `<manager> <name> <version>` of the nearest manifest (of the file's
+  // language) at or above `dir`, memoized per directory: a manifest that names
+  // nothing is skipped on the way up, the repo root ends the walk.
+  const packageAt = new Map<string, string>();
+  const packageOf = (dir: string, manifest: string): string => {
+    const key = `${dir}\u0000${manifest}`;
+    let hit = packageAt.get(key);
+    if (hit === undefined) {
+      const c = manifestCoordinates(scan.root, dir, manifest);
+      hit = c
+        ? `${packageField(c.manager)} ${packageField(c.name)} ${packageField(c.version)}`
+        : dir
+          ? packageOf(dirOf(dir), manifest)
+          : NO_PACKAGE;
+      packageAt.set(key, hit);
+    }
+    return hit;
+  };
+  const prefixOf = (f: FileRecord): string => {
+    const manifest = PACKAGE_MANIFEST.get(f.lang);
+    return `${SCHEME} ${manifest ? packageOf(dirOf(f.rel), manifest) : NO_PACKAGE} ${fileNamespace(f.rel)}`;
+  };
+
   // One Document per `code` file that declares ≥1 symbol, in scan order (already
   // sorted by rel).
   const docs = scan.files.filter((f) => f.kind === "code" && f.symbols.length > 0);
@@ -385,6 +438,7 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
   // (tree-sitter error recovery on `var { 1: } = …`) has no spelling in the
   // grammar, so it is left out rather than written as a non-canonical `` `` ``.
   const docDefs = new Map<string, DocDefs>();
+  const prefixes = new Map<string, string>();
   // Go methods may sit in any file of their package: package key → type name →
   // its first top-level declaration, in scan order.
   const goTypes = new Map<string, Map<string, Def>>();
@@ -406,6 +460,7 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
       }
     }
     docDefs.set(f.rel, { defs, byName });
+    prefixes.set(f.rel, prefixOf(f));
   }
 
   // The definition a member belongs to. `parent` is only a NAME, and a name is
@@ -449,7 +504,7 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
     const owner =
       parent && !inProgress.has(parent)
         ? symbolOf(parent)
-        : SYMBOL_PREFIX + fileNamespace(d.file.rel) + (d.sym.parent ? escapeId(d.sym.parent) + "#" : "");
+        : prefixes.get(d.file.rel)! + (d.sym.parent ? escapeId(d.sym.parent) + "#" : "");
     inProgress.delete(d);
     d.symbol = makeUnique(owner, d.sym.name, d.suffix, d.sym.line, used);
     if (parent && owner === parent.symbol) (parent.children ??= []).push(d);
@@ -466,6 +521,43 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
       let arr = defByName.get(d.sym.name);
       if (!arr) defByName.set(d.sym.name, (arr = []));
       arr.push({ symbolString, family: familyOf(d.sym.lang) });
+    }
+  }
+
+  // Implementation relationships, from the inheritance relations.ts already
+  // resolves (same binding rules as the call graph). A subtype points at every
+  // supertype it extends or implements — `is_implementation` for both, as
+  // scip-typescript and scip-java emit for a base class too, so "Find
+  // implementations" on a base lists its subclasses. A method overriding a
+  // same-named method of that supertype also gets `is_reference`, so "Find
+  // references" on the contract's method includes the implementations' call
+  // sites. Keyed by target symbol: `scip lint` flags a pair stated twice.
+  const relationships = new Map<Def, Map<string, boolean>>(); // def → target → is_reference
+  const relate = (from: Def, to: Def, isReference: boolean): void => {
+    if (from === to) return;
+    let targets = relationships.get(from);
+    if (!targets) relationships.set(from, (targets = new Map()));
+    targets.set(to.symbol!, isReference || targets.get(to.symbol!) === true);
+  };
+  for (const r of resolveRelations(scan, importPairsFor(scan))) {
+    // The subtype is the declaration the relation was stated on, or the one
+    // enclosing it (a Ruby `include`); a Rust `impl Trait for T` sits outside
+    // T, so any non-callable declaration of that name in the file will do.
+    const subs = (docDefs.get(r.fromFile)?.byName.get(r.from) ?? []).filter((d) => d.suffix !== "()." && d.suffix !== "!");
+    const sub =
+      subs.find((d) => d.sym.line === r.fromLine) ??
+      subs.filter((d) => d.sym.line <= r.fromLine && endOf(d) >= r.fromLine).pop() ??
+      subs[0];
+    // relations.ts binds the target to the FIRST type-kinded declaration of
+    // that name in the file; the same pick here.
+    const sup = docDefs.get(r.toFile)?.byName.get(r.to)?.find((d) => d.sym.kind === r.toKind);
+    if (!sub || !sup) continue;
+    relate(sub, sup, false);
+    const inherited = new Map<string, Def>();
+    for (const m of sup.children ?? []) if (m.suffix === "()." && !inherited.has(m.sym.name)) inherited.set(m.sym.name, m);
+    for (const m of sub.children ?? []) {
+      const overridden = m.suffix === "()." ? inherited.get(m.sym.name) : undefined;
+      if (overridden) relate(m, overridden, true);
     }
   }
 
@@ -529,7 +621,12 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
 
     // One SymbolInformation per definition, sorted by symbol string.
     const infos = defs
-      .map((d) => ({ symbol: d.symbol!, displayName: d.sym.name, kind: kindOf(d.sym.kind) }))
+      .map((d) => ({
+        symbol: d.symbol!,
+        displayName: d.sym.name,
+        kind: kindOf(d.sym.kind),
+        relationships: [...(relationships.get(d) ?? [])].sort((a, b) => byStr(a[0], b[0])),
+      }))
       .sort((a, b) => byStr(a.symbol, b.symbol));
 
     const doc = new Bytes(1024);
@@ -546,9 +643,17 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
       pushMessage(doc, F_DOC_OCCURRENCES, ob);
     }
     const sb = new Bytes(64);
+    const rb = new Bytes(64);
     for (const si of infos) {
       sb.reset();
       pushString(sb, F_SI_SYMBOL, si.symbol);
+      for (const [target, isReference] of si.relationships) {
+        rb.reset();
+        pushString(rb, F_REL_SYMBOL, target);
+        if (isReference) pushVarintField(rb, F_REL_IS_REFERENCE, 1);
+        pushVarintField(rb, F_REL_IS_IMPLEMENTATION, 1);
+        pushMessage(sb, F_SI_RELATIONSHIPS, rb);
+      }
       if (si.kind !== undefined) pushVarintField(sb, F_SI_KIND, si.kind);
       pushString(sb, F_SI_DISPLAY_NAME, si.displayName);
       pushMessage(doc, F_DOC_SYMBOLS, sb);

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "../src/workspaces.js";
+import { checkWorkspaceDeps, detectWorkspaces, manifestCoordinates, workspaceReport } from "../src/workspaces.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import type { Edge } from "../src/types.js";
 
@@ -206,5 +206,35 @@ describe("checkWorkspaceDeps", () => {
     const plain = spawnSync(process.execPath, [CLI, "workspaces", "--repo", join(FIXTURES, "mini-monorepo")], { encoding: "utf8" });
     expect(plain.status).toBe(0);
     expect(JSON.parse(plain.stdout).check).toBeUndefined();
+  });
+});
+
+describe("manifestCoordinates", () => {
+  it("reads a package's own name and version, never an inherited or plugin one", () => {
+    const root = scratchRepo({
+      "app/pom.xml": [
+        "<project>",
+        "  <parent><groupId>g</groupId><artifactId>parent-pom</artifactId><version>9.9</version></parent>",
+        "  <artifactId>app</artifactId>",
+        "  <dependencies><dependency><artifactId>dep</artifactId><version>1.0</version></dependency></dependencies>",
+        "  <build><plugins><plugin><artifactId>p</artifactId><version>3.1</version></plugin></plugins></build>",
+        "</project>",
+      ].join("\n"),
+      "lib/pom.xml": "<project><artifactId>lib</artifactId><version>2.5.0</version></project>\n",
+      "php/composer.json": '{ "name": "acme/php", "version": "0.3.0" }\n',
+      "Cargo.toml": '[workspace]\nmembers = ["crates/*"]\n',
+      "go.mod": 'module "example.com/quoted"\n',
+      // JSONC, like every other manifest read here.
+      "web/package.json": '{\n  // the app\n  "name": "web",\n}\n',
+    });
+    // The module inherits its version from <parent>: none, not the plugin's 3.1.
+    expect(manifestCoordinates(root, "app", "pom.xml")).toEqual({ manager: "maven", name: "app" });
+    expect(manifestCoordinates(root, "lib", "pom.xml")).toEqual({ manager: "maven", name: "lib", version: "2.5.0" });
+    expect(manifestCoordinates(root, "php", "composer.json")).toEqual({ manager: "composer", name: "acme/php", version: "0.3.0" });
+    // A virtual workspace root names no package, so a walk up the tree continues.
+    expect(manifestCoordinates(root, "", "Cargo.toml")).toBeUndefined();
+    expect(manifestCoordinates(root, "", "go.mod")).toEqual({ manager: "gomod", name: "example.com/quoted" });
+    expect(manifestCoordinates(root, "web", "package.json")).toEqual({ manager: "npm", name: "web" });
+    expect(manifestCoordinates(root, "missing", "package.json")).toBeUndefined();
   });
 });

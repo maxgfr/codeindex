@@ -884,6 +884,69 @@ export function detectWorkspaces(root: string): WorkspaceInfo {
   };
 }
 
+// --- package coordinates ------------------------------------------------------
+// What a manifest says a package IS — its registry name and version — rather
+// than where a workspace member lives. The SCIP export stamps them on every
+// symbol so two repositories' indexes never share one global namespace.
+
+export interface PackageCoordinates {
+  manager: string; // npm | gomod | cargo | python | maven | composer
+  name: string;
+  version?: string;
+}
+
+// A pom's own <version>: the same blocks as ownArtifactId are stripped, plus
+// the ones whose plugins carry versions of their own, so a module that inherits
+// its version from <parent> reports none instead of a plugin's.
+function ownPomVersion(pom: string): string | undefined {
+  const stripped = pom.replace(
+    /<(parent|dependencies|dependencyManagement|build|profiles|reporting)>[\s\S]*?<\/\1>/g,
+    "",
+  );
+  return stripped.match(/<version>\s*([^<]+?)\s*<\/version>/)?.[1];
+}
+
+/**
+ * The coordinates `dir/<manifest>` declares, or undefined when the file is
+ * absent or names no package — a nested `{"type": "module"}` package.json, a
+ * Cargo virtual-workspace root — so a caller walking up the tree keeps going.
+ */
+export function manifestCoordinates(root: string, dir: string, manifest: string): PackageCoordinates | undefined {
+  const path = join(root, dir, manifest);
+  const text = readText(path);
+  if (!text) return undefined;
+  const nonEmpty = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const coords = (manager: string, name: string | undefined, version: string | undefined) =>
+    name ? { manager, name, ...(version ? { version } : {}) } : undefined;
+  switch (manifest) {
+    case "package.json":
+    case "composer.json": {
+      const pkg = readJson(path);
+      return coords(manifest === "package.json" ? "npm" : "composer", nonEmpty(pkg?.name), nonEmpty(pkg?.version));
+    }
+    case "go.mod":
+      // Go versions live in VCS tags, never in go.mod.
+      return coords("gomod", text.match(/^module\s+"?([^\s"]+)/m)?.[1], undefined);
+    case "Cargo.toml": {
+      const body = tomlSectionBody(text, "package");
+      return coords("cargo", tomlString(body, "name"), tomlString(body, "version"));
+    }
+    case "pyproject.toml": {
+      const project = tomlSectionBody(text, "project");
+      const poetry = tomlSectionBody(text, "tool.poetry");
+      return coords(
+        "python",
+        tomlString(project, "name") ?? tomlString(poetry, "name"),
+        tomlString(project, "version") ?? tomlString(poetry, "version"),
+      );
+    }
+    case "pom.xml":
+      return coords("maven", ownArtifactId(text), ownPomVersion(text));
+    default:
+      return undefined;
+  }
+}
+
 // --- declared vs actual dependencies ----------------------------------------
 
 export interface UndeclaredDependency {

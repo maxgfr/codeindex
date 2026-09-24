@@ -46,7 +46,8 @@ compares](#how-it-compares).
   **symbol-level graph** for bounded "what does this reach" neighborhoods.
 - **Render** byte-stable `graph.json` / `symbols.json` (two builds of an
   unchanged repo are byte-identical), plus a **SCIP** code-intelligence index
-  (`index.scip`) via a hand-rolled zero-dependency protobuf encoder — validated
+  (`index.scip`: nested symbols, package identity, implementation
+  relationships) via a hand-rolled zero-dependency protobuf encoder — validated
   by the official `scip` CLI (`stats`/`lint`).
 
 ## Measured against other indexers
@@ -470,17 +471,18 @@ printing an empty diagram.
 
 ## SCIP export
 
-`codeindex scip` writes a [SCIP](https://github.com/sourcegraph/scip) index
-that `scip lint` accepts without a finding. Symbols are global, one namespace
-per file, and follow the declaration chain with the suffix each kind calls
-for:
+`codeindex scip` writes a [SCIP](https://github.com/sourcegraph/scip) index.
+Symbols are global: the package the file's nearest manifest names (npm
+`package.json`, `go.mod`, Cargo, `pyproject.toml`, Maven, Composer; `. . .`
+when there is none), one namespace per file, then the declaration chain with
+the suffix each kind calls for:
 
 ```text
-codeindex . . . `src/app.py`/create_app().index().     a function nested in a function
-codeindex . . . `src/app.py`/create_app().Task#run().  a method of a class nested in one
-codeindex . . . `context.go`/Context#BindWith().       a Go method declared in deprecated.go
-codeindex . . . `shapes.ts`/Geo/area().                a function in a namespace
-codeindex . . . `shapes.ts`/over(16).                  a repeated overload, told apart by its line
+codeindex python flask 3.1.0 `src/app.py`/create_app().index().     a function nested in a function
+codeindex python flask 3.1.0 `src/app.py`/create_app().Task#run().  a method of a class nested in one
+codeindex gomod example.com/svc . `context.go`/Context#BindWith().  a Go method declared in deprecated.go
+codeindex npm @acme/web 1.2.3 `shapes.ts`/Geo/area().               a function in a namespace
+codeindex npm @acme/web 1.2.3 `shapes.ts`/over(16).                 a repeated overload, told apart by its line
 ```
 
 Every symbol kind maps to its SCIP `Kind` (property, field, enum member,
@@ -490,6 +492,18 @@ in another file of its package hangs off the type it belongs to. A re-export
 declaration it forwards, not a second definition; `export * from` names nothing
 and emits nothing. A member whose owner is not in the index (a type from
 another crate) keeps a `Owner#` descriptor under its own file.
+
+The inheritance `hierarchy` resolves becomes `relationships`: a subtype is an
+implementation of each type it extends or implements, so "Find
+implementations" on a base lists its subclasses, and a method overriding a
+same-named supertype method is an implementation and a reference of it, so
+"Find references" on the contract's method reaches the overrides.
+
+Every occurrence and relationship names a symbol the index defines, and
+`scip lint` finds nothing else to report, with one caveat that is upstream's:
+its relationship pass only knows the documents it has already visited, in Go
+map order, so a relationship to a symbol of another document is reported as
+missing at random.
 
 ## Docker
 

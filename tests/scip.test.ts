@@ -176,7 +176,10 @@ describe("renderScip", () => {
 
     let totalDefs = 0;
     let totalRefs = 0;
-    const symbolPattern = /^codeindex \. \. \. `[^`]+`\/.+$/;
+    // <scheme> <manager> <name> <version> (spaces doubled inside a field), then
+    // the file namespace and its descriptors.
+    const field = "(?:[^ ]|  )+";
+    const symbolPattern = new RegExp(`^codeindex ${field} ${field} ${field} \`[^\`]+\`\\/.+$`);
 
     for (const docField of documents) {
       const doc = decode(docField.bytes!);
@@ -306,8 +309,17 @@ describe("renderScip", () => {
     const stats = execFileSync(scipBin, ["stats", "--from", out], { encoding: "utf8" });
     const parsed = JSON.parse(stats) as { occurrences?: number; documents?: number };
     expect(parsed.occurrences ?? 0).toBeGreaterThan(0);
-    // lint must not fail fatally (non-zero exit throws).
+    // lint must not fail fatally (non-zero exit throws). The polyglot repos
+    // exercise every suffix, the method disambiguator and escaped package
+    // fields: lint re-formats each symbol and rejects any non-canonical one.
+    // (Neither holds a relationship across documents: lint checks those only
+    // against the documents it has already visited, in Go map order, so they
+    // fail it at random although the target is defined.)
     execFileSync(scipBin, ["lint", out], { encoding: "utf8", stdio: "pipe" });
+    for (const files of [SHAPES_REPO, PACKAGES_REPO]) {
+      writeFileSync(out, renderScip(scanRepo(repoWith(files)), { projectRoot: PROJECT_ROOT }));
+      execFileSync(scipBin, ["lint", out], { encoding: "utf8", stdio: "pipe" });
+    }
   });
 });
 
@@ -366,6 +378,21 @@ const SHAPES_REPO: Record<string, string> = {
     "",
   ].join("\n"),
   "index.ts": 'export { Box } from "./shapes";\nexport * from "./shapes";\n',
+};
+
+// One manifest per ecosystem, nested where the walk up the tree matters.
+const PACKAGES_REPO: Record<string, string> = {
+  "package.json": '{ "name": "@acme/web", "version": "1.2.3" }\n',
+  "src/a.ts": "export function a(): void {}\n",
+  "src/esm/package.json": '{ "type": "module" }\n',
+  "src/esm/b.ts": "export function b(): void {}\n",
+  "svc/go.mod": "module example.com/svc\n\ngo 1.21\n",
+  "svc/main.go": "package main\n\nfunc Main() {}\n",
+  "crates/core/Cargo.toml": '[package]\nname = "core-lib"\nversion = "0.4.0"\n',
+  "crates/core/src/lib.rs": "pub fn core() {}\n",
+  "py/pyproject.toml": '[project]\nname = "odd name"\nversion = "2.0"\n',
+  "py/m.py": "def hello():\n    pass\n",
+  "native/n.c": "int native_fn(void) { return 1; }\n",
 };
 
 const P = "codeindex . . . ";
@@ -454,5 +481,71 @@ describe("renderScip symbol structure", () => {
       ["`py/app.py`/Flask#", [0, 17, 22]],
       ["`py/app.py`/create_app().", [1, 17, 27]],
     ]);
+  });
+});
+
+describe("renderScip relationships and package identity", () => {
+  it("points a subtype and its overriding methods at what they implement", () => {
+    const root = repoWith({
+      "src/contract.ts": "export interface Runnable {\n  start(): void;\n}\n",
+      "src/base.ts": "export abstract class Base {\n  abstract start(): void;\n  stop(): void {}\n}\n",
+      "src/worker.ts": [
+        'import { Runnable } from "./contract";',
+        'import { Base } from "./base";',
+        "export class Worker extends Base implements Runnable {",
+        "  start(): void {}",
+        "  stop(): void {}",
+        "  other(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+      // A trait implemented outside the type's own declaration.
+      "shape.rs": "pub trait Shape { fn area(&self) -> f64; }\npub struct Sq;\nimpl Shape for Sq { fn area(&self) -> f64 { 1.0 } }\n",
+    });
+    const { infos } = decodeIndex(renderScip(scanRepo(root), { projectRoot: PROJECT_ROOT }));
+    const relsOf = (s: string) =>
+      infos
+        .find((i) => i.symbol === P + s)
+        ?.relationships.map((r) => [r.symbol.slice(P.length), r.isImplementation, r.isReference]);
+
+    // The type itself: an implementation of each supertype, never a reference
+    // (Find references on Base must not list Worker).
+    expect(relsOf("`src/worker.ts`/Worker#")).toEqual([
+      ["`src/base.ts`/Base#", true, false],
+      ["`src/contract.ts`/Runnable#", true, false],
+    ]);
+    // An overriding method: implementation AND reference of every same-named
+    // method up the hierarchy.
+    expect(relsOf("`src/worker.ts`/Worker#start().")).toEqual([
+      ["`src/base.ts`/Base#start().", true, true],
+      ["`src/contract.ts`/Runnable#start().", true, true],
+    ]);
+    expect(relsOf("`src/worker.ts`/Worker#stop().")).toEqual([["`src/base.ts`/Base#stop().", true, true]]);
+    expect(relsOf("`src/worker.ts`/Worker#other().")).toEqual([]);
+    expect(relsOf("`shape.rs`/Sq#")).toEqual([["`shape.rs`/Shape#", true, false]]);
+    expect(relsOf("`shape.rs`/Sq#area().")).toEqual([["`shape.rs`/Shape#area().", true, true]]);
+
+    // Every relationship names a symbol the index defines.
+    const defined = new Set(infos.map((i) => i.symbol));
+    for (const i of infos) for (const r of i.relationships) expect(defined).toContain(r.symbol);
+  });
+
+  it("names each symbol's package after the nearest manifest of its language", () => {
+    const root = repoWith(PACKAGES_REPO);
+    const { infos } = decodeIndex(renderScip(scanRepo(root), { projectRoot: PROJECT_ROOT }));
+    const packageOf = (doc: string) => {
+      const symbols = [...new Set(infos.filter((i) => i.doc === doc).map((i) => i.symbol.slice(0, i.symbol.indexOf(" `"))))];
+      expect(symbols).toHaveLength(1);
+      return symbols[0];
+    };
+    expect(packageOf("src/a.ts")).toBe("codeindex npm @acme/web 1.2.3");
+    // A nested package.json that names nothing does not start a new package.
+    expect(packageOf("src/esm/b.ts")).toBe("codeindex npm @acme/web 1.2.3");
+    expect(packageOf("svc/main.go")).toBe("codeindex gomod example.com/svc .");
+    expect(packageOf("crates/core/src/lib.rs")).toBe("codeindex cargo core-lib 0.4.0");
+    // Spaces inside a package field are doubled, as the grammar requires.
+    expect(packageOf("py/m.py")).toBe("codeindex python odd  name 2.0");
+    // No manifest for the language (go.mod does not name a C file's package).
+    expect(packageOf("native/n.c")).toBe("codeindex . . .");
   });
 });

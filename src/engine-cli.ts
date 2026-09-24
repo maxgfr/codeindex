@@ -64,7 +64,9 @@ Commands:
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
   scip        SCIP code-intelligence index (protobuf bytes) into --out
-              (default index.scip; --out - writes to stdout)
+              (default index.scip; --out - writes to stdout). Symbols carry
+              the nearest manifest's package and their declaration chain;
+              subtypes and overrides carry implementation relationships
   callers     Per-symbol caller index (JSON); optional <name> or <name@file>
               selects one symbol; --lsp appends language-server incoming calls
   hierarchy   Type hierarchy: extends/implements, and what extends/implements it
