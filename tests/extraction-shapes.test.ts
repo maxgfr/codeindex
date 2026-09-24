@@ -536,3 +536,51 @@ describe("a constructor parameter that declares a property", () => {
     expect(props(syms("Svc.php", src))).toEqual(["Svc.repo:4=0 private readonly Repo $repo", "Svc.name:5=1 public string $name = ''"]);
   });
 });
+
+describe("a Python module that declares `__all__`", () => {
+  const vis = (all: CodeSymbol[]) => all.map((s) => `${s.kind} ${ids([s])[0]}=${s.exported ? 1 : 0}`);
+
+  // `__all__` is the surface `from m import *` exports and API docs publish;
+  // the underscore rule only guesses at it.
+  it("decides its top-level names' visibility; members keep the convention", () => {
+    const src = [
+      "from .decoder import JSONDecoder, Other",
+      "from .app import Flask as Flask",
+      "__all__ = ['Service', 'CONST', '_listed', 'JSONDecoder']",
+      "if sys.platform == 'win32':",
+      "    __all__.append('win_only')",
+      "__all__.extend(('ext',))",
+      "CONST = 5",
+      "OTHER = 1",
+      "_listed = 2",
+      "def helper(): ...",
+      "def win_only(): ...",
+      "def ext(): ...",
+      "class Service:",
+      "    def run(self): ...",
+      "    def _hidden(self): ...",
+    ].join("\n");
+    expect(vis(syms("mod.py", src))).toEqual([
+      "reexport JSONDecoder=1",
+      "reexport Flask=0",
+      "const __all__=0",
+      "const CONST=1",
+      "const OTHER=0",
+      "const _listed=1",
+      "function helper=0",
+      "function win_only=1",
+      "function ext=1",
+      "class Service=1",
+      "function Service.run=1",
+      "function Service._hidden=0",
+    ]);
+  });
+
+  it("is ignored when computed at runtime, and absent", () => {
+    for (const all of ["[n for n in globals() if n[:1] != '_']", "base.__all__ + ['x']"]) {
+      expect(vis(syms("m.py", `__all__ = ${all}\nOTHER = 1\n_p = 2`))).toEqual(["const __all__=1", "const OTHER=1", "const _p=0"]);
+    }
+    expect(vis(syms("m.py", "__all__ = ['a']\n__all__.extend(names())\nOTHER = 1"))).toEqual(["const __all__=1", "const OTHER=1"]);
+    expect(vis(syms("m.py", "from .x import Y\nOTHER = 1"))).toEqual(["const OTHER=1"]);
+  });
+});

@@ -199,8 +199,15 @@ export interface LangSpec {
    */
   extraMembers?: (
     node: TSNode,
-    ctx: { ownerKind?: string; inFunctionBody: boolean },
+    ctx: { ownerKind?: string; inFunctionBody: boolean; publicNames?: Set<string> },
   ) => { name: string; kind: string; node?: TSNode }[];
+
+  /**
+   * The public surface a module DECLARES, overriding the naming convention for
+   * its top-level names: Python's `__all__`. Undefined when the module states
+   * none (or computes it at runtime).
+   */
+  publicNames?: (root: TSNode) => Set<string> | undefined;
 
   /**
    * Inheritance the declaration states: `extends` / `implements` targets, keyed
@@ -269,6 +276,70 @@ function underMainGuard(node: TSNode): boolean {
     if (p.type === "if_statement" && MAIN_GUARD.test(p.childForFieldName("condition")?.text ?? "")) return true;
   }
   return false;
+}
+
+// `__all__` is the list `from m import *` exports and API docs publish — the
+// module saying which of its names are public, where the underscore rule only
+// guesses. Read statically, in every form the standard library writes it:
+// `__all__ = […]`/`(…)` (typed or not), `+= […]`, `.extend([…])`,
+// `.append("x")`, at module scope or under a module-level `if`/`try`. Any
+// other write — a comprehension, `other.__all__ + […]`, `.extend(names())` —
+// is computed at runtime; no static reading of it is honest, so the module
+// keeps the convention (undefined), as it does when it declares no `__all__`.
+const MODULE_BLOCKS = new Set(["block", "if_statement", "elif_clause", "else_clause", "try_statement", "except_clause", "finally_clause", "with_statement"]);
+function pythonAll(root: TSNode): Set<string> | undefined {
+  const names = new Set<string>();
+  let declared = false;
+  // A plain string literal's value; undefined for an f-string with a hole or
+  // an implicit concatenation.
+  const literal = (n: TSNode | undefined): string | undefined => {
+    if (n?.type !== "string" || n.namedChildren.some((c) => c.type === "interpolation")) return undefined;
+    const parts = n.namedChildren.filter((c) => c.type === "string_content");
+    return parts.length <= 1 ? (parts[0]?.text ?? "") : undefined;
+  };
+  const literals = (n: TSNode | null | undefined): string[] | undefined => {
+    if (n?.type !== "list" && n?.type !== "tuple") return undefined;
+    const out: string[] = [];
+    for (const c of n.namedChildren) {
+      const v = literal(c);
+      if (v === undefined) return undefined;
+      out.push(v);
+    }
+    return out;
+  };
+  const isAll = (n: TSNode | null | undefined): boolean => n?.type === "identifier" && n.text === "__all__";
+  // The values one statement adds, [] when it does not touch `__all__`, and
+  // undefined when it writes it dynamically.
+  const added = (stmt: TSNode): string[] | undefined => {
+    const e = stmt.namedChildren[0];
+    if (!e) return [];
+    if ((e.type === "assignment" || e.type === "augmented_assignment") && isAll(e.childForFieldName("left"))) {
+      if (e.type === "assignment") declared = true;
+      else if (e.childForFieldName("operator")?.text !== "+=") return undefined;
+      return literals(e.childForFieldName("right"));
+    }
+    const fn = e.type === "call" ? e.childForFieldName("function") : null;
+    if (fn?.type !== "attribute" || !isAll(fn.childForFieldName("object"))) return [];
+    const arg = e.childForFieldName("arguments")?.namedChildren;
+    const method = fn.childForFieldName("attribute")?.text;
+    if (method === "extend" && arg?.length === 1) return literals(arg[0]);
+    const one = method === "append" && arg?.length === 1 ? literal(arg[0]) : undefined;
+    return one === undefined ? undefined : [one];
+  };
+  const visit = (container: TSNode): boolean => {
+    for (const stmt of container.namedChildren) {
+      if (MODULE_BLOCKS.has(stmt.type)) {
+        if (!visit(stmt)) return false;
+        continue;
+      }
+      if (stmt.type !== "expression_statement") continue;
+      const values = added(stmt);
+      if (values === undefined) return false;
+      for (const v of values) names.add(v);
+    }
+    return true;
+  };
+  return visit(root) && declared ? names : undefined;
 }
 
 // A conversion operator (`operator bool() const`) is an `operator_cast` holding
@@ -619,6 +690,7 @@ export const SPECS: Record<string, LangSpec> = {
       "case_clause",
     ]),
     exported: byPyConvention,
+    publicNames: pythonAll,
     imports: { import_statement: "path", import_from_statement: "path" },
     calls: { call: "function" },
     docstring: true,
@@ -642,13 +714,23 @@ export const SPECS: Record<string, LangSpec> = {
       // `__init__.py` is made of: flask re-exports 39 names this way and the
       // index reported none of them. Only the same-name form counts, so an
       // ordinary `import x as y` rename is still just an import.
+      // A name the module imports and lists in `__all__` is re-exported the
+      // same way — `from .decoder import JSONDecoder` under
+      // `__all__ = ["JSONDecoder", …]` is how json/__init__.py, and most
+      // package `__init__.py` files, publish what their submodules define.
       if (node.type === "import_from_statement") {
         const out: { name: string; kind: string }[] = [];
+        const from = node.childForFieldName("module_name");
         for (const child of node.namedChildren) {
-          if (child.type !== "aliased_import") continue;
-          const original = child.namedChildren[0]?.text;
-          const alias = child.childForFieldName("alias")?.text;
-          if (original && alias && original === alias) out.push({ name: alias, kind: "reexport" });
+          if (from && child.startIndex === from.startIndex) continue;
+          if (child.type === "aliased_import") {
+            const original = child.namedChildren[0]?.text;
+            const alias = child.childForFieldName("alias")?.text;
+            if (alias && (original === alias || (ctx.ownerKind === undefined && ctx.publicNames?.has(alias))))
+              out.push({ name: alias, kind: "reexport" });
+          } else if (child.type === "dotted_name" && ctx.ownerKind === undefined && ctx.publicNames?.has(child.text)) {
+            out.push({ name: child.text, kind: "reexport" });
+          }
         }
         return out;
       }

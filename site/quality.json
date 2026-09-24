@@ -3,11 +3,11 @@
   "engineVersion": "2.30.1",
   "base": {
     "languages": 17,
-    "files": 22,
-    "symbols": 322,
+    "files": 23,
+    "symbols": 332,
     "calls": 51,
     "relations": 24,
-    "docLabels": 179,
+    "docLabels": 181,
     "sigLabels": 32
   },
   "extraction": [

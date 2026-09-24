@@ -32,6 +32,22 @@
         { "kind": "extends", "from": "Scheduler", "to": "Runnable" },
         { "kind": "extends", "from": "SchedulerLike", "to": "Runnable" }
       ]
+    },
+    "__init__.py": {
+      "symbols": [
+        { "name": "service", "kind": "reexport" },
+        { "name": "JobSpec", "kind": "reexport" },
+        { "name": "Scheduler", "kind": "reexport" },
+        { "name": "run_all", "kind": "reexport" },
+        { "name": "MAX_ATTEMPTS", "kind": "reexport", "exported": false },
+        { "name": "__all__", "kind": "const", "exported": false },
+        { "name": "VERSION", "kind": "const" },
+        { "name": "DEBUG", "kind": "const", "exported": false },
+        { "name": "describe", "kind": "function", "doc": true },
+        { "name": "helper", "kind": "function", "exported": false, "doc": true }
+      ],
+      "calls": [],
+      "relations": []
     }
   }
 }

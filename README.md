@@ -44,7 +44,9 @@ compares](#how-it-compares).
   default export with no name of its own is named after the file stem). A doc
   comment is found across Rust attributes and TypeScript decorators;
   visibility is read from a declaration's modifiers, never from its parameter
-  names or default values; an out-of-line C++ definition (`void
+  names or default values, and a Python module's `__all__` (when written as a
+  literal) decides which of its top-level names are public — the names it
+  imports and lists become `reexport` symbols; an out-of-line C++ definition (`void
   Widget::draw()`) belongs to its class, and a Lua `function M.go()` to its
   table; and a `.h` header is parsed as C++ when its content is (a namespace,
   class or template), as C otherwise.
@@ -163,10 +165,10 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 322 labelled declarations in 22 files |
-| kind accuracy | **100%** | the same 322 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 322 declarations |
-| doc comment attached | **100%** | the 179 declarations labelled with a doc |
+| symbol precision / recall | **100% / 100%** | 332 labelled declarations in 23 files |
+| kind accuracy | **100%** | the same 332 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 332 declarations |
+| doc comment attached | **100%** | the 181 declarations labelled with a doc |
 | complete signature | **100%** | the 32 declarations labelled with a signature |
 | call edges / inheritance (F1) | **100% / 100%** | 51 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |

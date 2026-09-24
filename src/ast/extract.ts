@@ -431,6 +431,10 @@ export function extractAst(
     const emit = (s: CodeSymbol): void => {
       if (symbols.length < maxSymbols) symbols.push(s);
     };
+    // The public surface the module declares (Python's `__all__`), read before
+    // the walk: it decides visibility after it, and which imports are
+    // re-exports during it.
+    const publicNames = spec.publicNames?.(root);
 
     const relations: RawRelation[] = [];
     const relSeen = new Set<string>();
@@ -501,7 +505,8 @@ export function extractAst(
           continue;
         }
 
-        for (const extra of spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody }) ?? []) {
+        const extras = spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody, publicNames });
+        for (const extra of extras ?? []) {
           const at = extra.node ?? c;
           const header = declHeader(at, content);
           const doc = docCommentFor(at);
@@ -869,6 +874,18 @@ export function extractAst(
     });
     if (exportedNames.size) {
       for (const s of symbols) if (!s.exported && exportedNames.get(scopeKey(s))?.has(s.name)) s.exported = true;
+    }
+    // A module that STATES its public surface overrides the naming convention
+    // for its own top-level names; members keep theirs.
+    if (publicNames) {
+      for (const s of symbols) if (s.parent === undefined) s.exported = publicNames.has(s.name);
+      // A listed name the module both defines and imports — asyncio's
+      // pure-Python functions, replaced by `_asyncio`'s when that import
+      // succeeds — is declared once, by its definition.
+      const defined = new Set(symbols.filter((s) => s.parent === undefined && s.kind !== "reexport").map((s) => s.name));
+      let kept = 0;
+      for (const s of symbols) if (s.parent !== undefined || s.kind !== "reexport" || !defined.has(s.name)) symbols[kept++] = s;
+      symbols.length = kept;
     }
 
     const wantImports = opts.imports !== false;
