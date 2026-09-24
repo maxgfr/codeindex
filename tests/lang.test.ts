@@ -90,13 +90,19 @@ trait HasHeaders {}`;
   end
   defmacro where(q) do
   end
+  defmacrop hidden(q), do: q
+  defguard is_query(q) when is_map(q)
+  defguardp is_empty(q) when q == %{}
 end`;
     const s = extractSymbols("a.ex", ".ex", src);
     const by = Object.fromEntries(s.map((x) => [x.name, x]));
     expect(by["Ecto.Query"]).toMatchObject({ kind: "module" });
     expect(by.from).toMatchObject({ kind: "function", exported: true });
     expect(by.build).toMatchObject({ kind: "function", exported: false });
-    expect(by.where).toMatchObject({ kind: "macro" });
+    expect(by.where).toMatchObject({ kind: "macro", exported: true });
+    expect(by.hidden).toMatchObject({ kind: "macro", exported: false });
+    expect(by.is_query).toMatchObject({ kind: "guard", exported: true });
+    expect(by.is_empty).toMatchObject({ kind: "guard", exported: false });
   });
 
   it("extracts shell functions (both syntaxes, incl. .zsh)", () => {

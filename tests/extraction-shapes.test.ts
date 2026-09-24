@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractAst } from "../src/ast/extract.js";
-import { grammarKeyFor, grammarKeysForExts } from "../src/ast/loader.js";
+import { grammarKeyFor, grammarKeysForExts, grammarReady } from "../src/ast/loader.js";
 import type { CodeSymbol } from "../src/types.js";
 
 // Declaration SHAPES the AST walk mishandled, one describe per shape. Each was
@@ -382,5 +382,36 @@ describe("a module's default export bound to a function or class value", () => {
     // A class expression inside a function is bound to nothing the walk knows,
     // so it must not state a relation about the function.
     expect(rels("f.js", "function make() { return class extends Base {}; }")).toEqual([]);
+  });
+});
+
+describe("an Elixir definition with a guard", () => {
+  // `def f(x) when …` wraps the head in a `when` operator, so the name reader
+  // found no call there and every guarded clause — and every `defguard`, which
+  // always has one — was dropped, while its head registered as a call site.
+  it.skipIf(!grammarReady("elixir"))("is indexed under its own name, and its head is not a call", () => {
+    const src = [
+      "defmodule M do",
+      "  defguard is_pos(x) when is_integer(x) and x > 0",
+      "  defguardp is_small(x) when x < 10",
+      "  def pub(x) when is_pos(x) do",
+      "    x",
+      "  end",
+      "  defp hidden(x) when is_integer(x), do: x",
+      "  defmacro m(x) when is_atom(x), do: x",
+      "  def a <~> b, do: a",
+      "end",
+    ].join("\n");
+    const r = extractAst("m.ex", ".ex", src)!;
+    expect(r.symbols.map((s) => [ids([s])[0], s.kind, s.exported])).toEqual([
+      ["M", "module", true],
+      ["M.is_pos", "guard", true],
+      ["M.is_small", "guard", false],
+      ["M.pub", "function", true],
+      ["M.hidden", "function", false],
+      ["M.m", "macro", true],
+      ["M.<~>", "function", true],
+    ]);
+    expect(r.calls.map((c) => `${c.name}:${c.line}`)).toEqual(["is_atom:8", "is_integer:2", "is_integer:7", "is_pos:4"]);
   });
 });

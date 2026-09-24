@@ -356,6 +356,14 @@ const ELIXIR_DEFS: Record<string, string> = {
   defdelegate: "function",
 };
 
+// A guarded head — `def fetch(id) when is_integer(id)`, and every `defguard` —
+// wraps the declared head in a `when` operator, so the macro's first argument
+// is that operator rather than the `fetch(id)` call. Reading through it is the
+// difference between indexing a pattern-matched function and dropping it.
+const isElixirGuard = (n: TSNode): boolean =>
+  n.type === "binary_operator" && n.childForFieldName("operator")?.text === "when";
+const elixirHead = (arg: TSNode): TSNode => (isElixirGuard(arg) ? (arg.childForFieldName("left") ?? arg) : arg);
+
 // HCL/Terraform declares everything as a labelled block. Only these top-level
 // block types name something a reader looks up; `lifecycle`, `ingress` and the
 // rest are nested configuration, and treating them as symbols would bury the
@@ -1257,8 +1265,9 @@ export const SPECS: Record<string, LangSpec> = {
     // same `call` node and only its callee name says what it declares.
     defs: {},
     containers: new Set(["source", "do_block", "call", "stab_clause"]),
-    // `defp`/`defmacrop` are the private forms; everything else is public.
-    exported: (header) => !/^\s*defp?macrop\b|^\s*defp\b/.test(header),
+    // `defp`/`defmacrop`/`defguardp` are the private forms; everything else is
+    // public.
+    exported: (header) => !/^\s*def(p|macrop|guardp)\b/.test(header),
     calls: { call: "function" },
     kindFrom: {
       call: (node) => ELIXIR_DEFS[node.childForFieldName("target")?.text ?? node.namedChildren[0]?.text ?? ""],
@@ -1267,9 +1276,13 @@ export const SPECS: Record<string, LangSpec> = {
       // A module attribute: `@max_attempts 5` parses as unary_operator > call.
       if (node.parent?.type === "unary_operator") return true;
       // The declaration's own signature: `def start(queue)` nests the name in a
-      // `call` under the declaring macro's `arguments`.
-      if (node.parent?.type !== "arguments") return false;
-      const decl = node.parent.parent;
+      // `call` under the declaring macro's `arguments` — one `when` operator
+      // further down when the head is guarded.
+      // (The guard's left operand is the one that starts where it does.)
+      const guard = node.parent;
+      const head = guard && isElixirGuard(guard) && guard.startIndex === node.startIndex ? guard : node;
+      if (head.parent?.type !== "arguments") return false;
+      const decl = head.parent.parent;
       const target = decl?.childForFieldName("target") ?? decl?.namedChildren[0];
       return target !== undefined && ELIXIR_DEFS[target.text] !== undefined;
     },
@@ -1292,12 +1305,16 @@ export const SPECS: Record<string, LangSpec> = {
     nameFrom: {
       call: (node) => {
         const args = node.childForFieldName("arguments") ?? node.namedChildren.find((c) => c.type === "arguments");
-        const first = args?.namedChildren[0];
-        if (!first) return undefined;
+        const arg = args?.namedChildren[0];
+        if (!arg) return undefined;
+        const first = elixirHead(arg);
         // `defmodule Worker.Scheduler` names an alias; `def start(queue)` wraps
         // the name in an inner call; `defstruct` has no name of its own.
         if (first.type === "alias") return first.text;
         if (first.type === "identifier") return first.text;
+        // `def a <~> b` defines the OPERATOR; its left operand is a parameter,
+        // which the generic read below would have returned as the name.
+        if (first.type === "binary_operator") return first.childForFieldName("operator")?.text;
         const inner = first.childForFieldName("target") ?? first.namedChildren[0];
         return inner && /identifier|alias/.test(inner.type) ? inner.text : undefined;
       },

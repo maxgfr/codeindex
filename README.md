@@ -37,7 +37,8 @@ compares](#how-it-compares).
   declaration, Rust trait method signatures, Go interface method sets and type
   aliases, record components and constructor `val` parameters, C `#define`
   macros and the members of a `typedef struct`, Python declarations under
-  `if TYPE_CHECKING:` / `try:` / `with` blocks, and the members of a class
+  `if TYPE_CHECKING:` / `try:` / `with` blocks, Elixir clauses with a `when`
+  guard and `defguard`, and the members of a class
   bound by `module.exports =` or an anonymous `export default class` (a
   default export with no name of its own is named after the file stem). A doc
   comment is found across Rust attributes and TypeScript decorators;
@@ -160,12 +161,12 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 312 labelled declarations in 22 files |
-| kind accuracy | **100%** | the same 312 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 312 declarations |
+| symbol precision / recall | **100% / 100%** | 315 labelled declarations in 22 files |
+| kind accuracy | **100%** | the same 315 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 315 declarations |
 | doc comment attached | **100%** | the 176 declarations labelled with a doc |
 | complete signature | **100%** | the 32 declarations labelled with a signature |
-| call edges / inheritance (F1) | **100% / 100%** | 49 labelled call sites, 24 relations |
+| call edges / inheritance (F1) | **100% / 100%** | 51 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
 
 `pnpm quality:report` reproduces every number; `tests/quality.test.ts` enforces
