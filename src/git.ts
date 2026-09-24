@@ -3,9 +3,18 @@ import { sh } from "./util.js";
 // The short HEAD commit of a working tree, when it is a git repo. Recorded in
 // the manifest so an index is pinned to an exact revision. Returns undefined
 // when `git` is absent or the directory isn't a repo — the index still works.
+//
+// A FIXED-length prefix of the full id, never `rev-parse --short`: git sizes
+// that abbreviation from the object count, so the same commit and tree printed
+// "3b08cd7" in one clone and "3b08cd72" in another with more objects — a
+// shallow CI clone and a full one, or the same clone after a fetch or gc —
+// and graph.json's bytes changed with it (forcing a full rebuild). Seven is
+// git's default minimum, so small repos keep exactly the bytes they had.
+const COMMIT_CHARS = 7;
+
 export function headCommit(dir: string): string | undefined {
-  const res = sh("git", ["-C", dir, "rev-parse", "--short", "HEAD"]);
-  return res.ok ? res.stdout.trim() : undefined;
+  const res = sh("git", ["-C", dir, "rev-parse", "HEAD"]);
+  return res.ok ? res.stdout.trim().slice(0, COMMIT_CHARS) : undefined;
 }
 
 // ---------------------------------------------------------------------------

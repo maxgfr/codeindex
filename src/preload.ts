@@ -20,11 +20,19 @@
 // `codeindex search` cost a full tree-sitter pass over the repo every time it
 // ran — 6.3s on a 7k-file repo with a fresh index sitting right next to it.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ENGINE_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { Graph, SymbolIndex } from "./types.js";
-import { parseCacheEntries, type PersistedCacheEntry, type PersistedCacheMap } from "./cache.js";
-export type { PersistedCacheEntry, PersistedCacheMap } from "./cache.js";
+import {
+  compatibleEntries,
+  parseCacheEntries,
+  parseExtractionProfile,
+  type ExtractionProfile,
+  type PersistedCacheEntry,
+  type PersistedCacheMap,
+} from "./cache.js";
+export type { ExtractionProfile, PersistedCacheEntry, PersistedCacheMap } from "./cache.js";
+import { grammarReady, resolvableGrammarKeys } from "./ast/loader.js";
 import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
 import type { IndexArtifacts } from "./pipeline.js";
@@ -45,6 +53,18 @@ export interface PersistedMeta {
   commit?: string;
   graphSha1?: string;
   symbolsSha1?: string;
+  embed?: { embedVersion?: number; modelId?: string; sha1?: string };
+  // How the code records were extracted (see compatibleEntries). Absent in
+  // caches written before it was recorded, and then no code record is reused.
+  extraction?: ExtractionProfile;
+}
+
+// Where an index dir lives. RELATIVE to the repo by contract, but an absolute
+// --index must be honoured as given: path.join does not reset on an absolute
+// segment, so `join(repo, "/abs/idx")` probed <repo>/abs/idx, found nothing,
+// and every read command silently paid a full cold build next to a fresh index.
+export function indexDirPath(repo: string, indexDir: string = INDEX_DIR): string {
+  return resolve(repo, indexDir);
 }
 
 export interface PreloadedSession {
@@ -85,6 +105,9 @@ export function needsGrammarWarm(
 // match this engine — the exact gate the CLI applies before trusting a cache —
 // otherwise the whole cache is discarded (cold scan). Any read/parse failure (no
 // index yet, unreadable, malformed) returns undefined: the cold path.
+// `indexDir` is repo-relative, or absolute. The map is returned UNFILTERED:
+// before seeding a scan with it, narrow it with compatibleEntries against
+// meta.extraction, as preloadSession does.
 export function readPersistedIndex(
   repo: string,
   indexDir: string = INDEX_DIR,
@@ -93,7 +116,7 @@ export function readPersistedIndex(
     | ({ schemaVersion?: number; extractorVersion?: number; files?: Record<string, PersistedCacheEntry> } & PersistedMeta)
     | undefined;
   try {
-    parsed = JSON.parse(readFileSync(join(repo, indexDir, "cache.json"), "utf8")) as typeof parsed;
+    parsed = JSON.parse(readFileSync(join(indexDirPath(repo, indexDir), "cache.json"), "utf8")) as typeof parsed;
   } catch {
     return undefined;
   }
@@ -106,6 +129,8 @@ export function readPersistedIndex(
       commit: parsed.commit,
       graphSha1: parsed.graphSha1,
       symbolsSha1: parsed.symbolsSha1,
+      embed: parsed.embed,
+      extraction: parseExtractionProfile(parsed.extraction),
     },
   };
 }
@@ -137,7 +162,7 @@ export function preloadArtifacts(
   ) {
     return undefined;
   }
-  const dir = join(repo, indexDir);
+  const dir = indexDirPath(repo, indexDir);
   let graphBytes: Buffer;
   let symbolsBytes: Buffer;
   try {
@@ -178,8 +203,14 @@ export function preloadSession(
   // and it computes the contentUnchanged the artifact guard reads. When the
   // on-disk content drifted from cache.json, changed files are re-read/extracted
   // here exactly as a cold scan would, so the scan stays correct and the guard
-  // simply fails (arts undefined → rebuild on demand).
-  const scan = scanRepo(repo, { ...opts, cache: persisted.cacheMap });
+  // simply fails (arts undefined → rebuild on demand). A synchronous scan
+  // extracts at whatever tier is loaded right now, so that is the tier a
+  // reused record must have been extracted at.
+  const cache = compatibleEntries(persisted.cacheMap, persisted.meta.extraction, {
+    maxCallsPerFile: opts.maxCallsPerFile,
+    ast: grammarReady,
+  });
+  const scan = scanRepo(repo, { ...opts, cache });
   return { scan, cacheMap: toCacheMap(scan), arts: preloadArtifacts(repo, scan, persisted.meta, indexDir) };
 }
 
@@ -197,31 +228,49 @@ export function preloadSession(
 // scanRepo consumes the records exactly as the sequential loop would have
 // built them (pool.ts) — an unchanged index still loads no wasm and spawns
 // nothing.
+//
+// `opts.ast: false` declares a caller that extracts at the regex tier (its warm
+// loads nothing, e.g. the CLI's --no-ast); by default the warm is expected to
+// load every grammar resolvable on disk.
 export async function preloadSessionLazy(
   repo: string,
-  opts: Omit<ScanOptions, "cache"> & { workers?: number },
+  opts: Omit<ScanOptions, "cache"> & { workers?: number; ast?: boolean },
   warm: () => Promise<void>,
   indexDir: string = INDEX_DIR,
 ): Promise<PreloadedSession | undefined> {
   const persisted = readPersistedIndex(repo, indexDir);
   if (!persisted) return undefined;
-  const walked = opts.precomputedWalk ?? walk(repo, {
-    maxFileBytes: opts.maxBytes,
-    maxFiles: opts.maxFiles,
-    gitignore: opts.gitignore,
-    ignoreDirs: opts.ignoreDirs,
+  const { ast, workers, ...scanOpts } = opts;
+  const walked = scanOpts.precomputedWalk ?? walk(repo, {
+    maxFileBytes: scanOpts.maxBytes,
+    maxFiles: scanOpts.maxFiles,
+    gitignore: scanOpts.gitignore,
+    ignoreDirs: scanOpts.ignoreDirs,
   });
+  // Records extracted at another tier (or call cap) than this run would use
+  // are dropped before anything else looks at the cache. Nothing is loaded yet,
+  // so the tier is PREDICTED from what the warm would load; a dropped entry
+  // then reads as a new code file below, which is exactly what makes the warm
+  // happen for it.
+  const resolvable = ast === false ? new Set<string>() : resolvableGrammarKeys();
+  const compatible = (tier: (key: string) => boolean): PersistedCacheMap =>
+    compatibleEntries(persisted.cacheMap, persisted.meta.extraction, { maxCallsPerFile: scanOpts.maxCallsPerFile, ast: tier });
+  let cache = compatible((key) => grammarReady(key) || resolvable.has(key));
   // Decide whether grammars are needed from metadata BEFORE extraction. The old
   // flow first extracted every changed code file without grammars, discovered
   // the scan was stale, then warmed and extracted those files again. A new or
   // stat-changed path may need AST work; deletions, scope-only differences and
   // an unchanged index do not. fullHash deliberately warms because equal stats
   // are no longer a freshness proof in that mode.
-  const needsWarm = needsGrammarWarm(walked, persisted.cacheMap, opts.fullHash);
+  const needsWarm = needsGrammarWarm(walked, cache, scanOpts.fullHash);
   if (needsWarm) {
     await warm();
+    // Loaded now: filter again against the tier extraction will really use. It
+    // differs from the prediction only for a wasm that is present but fails to
+    // load, whose records the index built at the regex tier.
+    cache = compatible(grammarReady);
   }
-  const scan = await scanRepoParallel(repo, { ...opts, cache: persisted.cacheMap, precomputedWalk: walked });
+  const scan = await scanRepoParallel(repo, { ...scanOpts, workers, cache, precomputedWalk: walked });
   let artifactsTried = false;
   let artifacts: IndexArtifacts | undefined;
   return {

@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cpSync, mkdtempSync, rmSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { preloadSessionLazy } from "../src/preload.js";
+import { dirname, join } from "node:path";
+import { preloadSessionLazy, readPersistedIndex } from "../src/preload.js";
 import { ensureGrammars, grammarKeysForExts } from "../src/ast/loader.js";
+import { scanRepo } from "../src/scan.js";
 import { walk } from "../src/walk.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
@@ -110,6 +111,59 @@ describe("persisted-index reuse — output-identical", { timeout: 60_000 }, () =
     });
   });
 
+  // path.join does not reset on an absolute segment: `--index /abs/idx` probed
+  // <repo>/abs/idx, found nothing, and every read paid a full cold build. The
+  // output was right either way, so only REUSE proves the fix.
+  it("reuses an ABSOLUTE --index instead of silently rebuilding", async () => {
+    await withRepoAsync(async (repo) => {
+      const abs = join(dirname(repo), "elsewhere", "idx");
+      run(repo, ["index", "--out", abs]);
+      expect(readPersistedIndex(repo, abs)?.cacheMap.size).toBeGreaterThan(0);
+      let warms = 0;
+      const session = await preloadSessionLazy(repo, {}, async () => {
+        warms++;
+      }, abs);
+      expect(warms).toBe(0);
+      expect(session?.scan.contentUnchanged).toBe(true);
+      expect(session?.loadArtifacts?.()?.graph.fileCount).toBe(session?.scan.files.length);
+      expect(run(repo, ["symbols", "--index", abs])).toBe(run(repo, ["symbols", "--no-index-cache"]));
+    });
+  });
+
+  // `index` excludes its own --out; the read commands scanned it. An in-repo
+  // custom index then showed up as three config files (search answered "graph"
+  // with idx/graph.json) and the read scan never matched the index, so its
+  // artifacts were never reused.
+  it("neither scans nor ignores an in-repo custom --index", async () => {
+    await withRepoAsync(async (repo) => {
+      run(repo, ["index", "--out", join(repo, "idx")]);
+      const hits = JSON.parse(run(repo, ["search", "graph symbols cache", "--index", "idx"])) as { file: string }[];
+      expect(hits.some((h) => h.file.startsWith("idx/"))).toBe(false);
+      const count = (args: string[]): number => (JSON.parse(run(repo, ["scan", ...args])) as { fileCount: number }).fileCount;
+      expect(count(["--index", "idx"])).toBe(scanRepo(repo, { exclude: ["idx/**"] }).files.length);
+      let warms = 0;
+      // The options the CLI passes for `--index idx`.
+      const session = await preloadSessionLazy(repo, { out: join(repo, "idx") }, async () => {
+        warms++;
+      }, "idx");
+      expect(warms).toBe(0);
+      expect(session?.scan.contentUnchanged).toBe(true);
+      expect(session?.loadArtifacts?.()).toBeDefined();
+      expect(run(repo, ["graph", "--index", "idx"])).toBe(readFileSync(join(repo, "idx", "graph.json"), "utf8"));
+    });
+  });
+
+  it("says so on stderr when a NAMED --index is unusable, and still answers", () => {
+    withRepo((repo) => {
+      const res = spawnSync(process.execPath, [CLI, "symbols", "--repo", repo, "--index", "no-such-idx"], { encoding: "utf8" });
+      expect(res.status).toBe(0);
+      expect(res.stderr).toContain(`no usable index at ${join(repo, "no-such-idx")}`);
+      expect(res.stdout).toBe(run(repo, ["symbols", "--no-index-cache"]));
+      // The default location being empty is the normal first run: no note.
+      expect(spawnSync(process.execPath, [CLI, "symbols", "--repo", repo], { encoding: "utf8" }).stderr).not.toContain("no usable index");
+    });
+  });
+
   it("does not let a scoped read reuse a whole-repo index", () => {
     withRepo((repo) => {
       prime(repo);
@@ -158,6 +212,25 @@ describe("lazy grammar warm on persisted indexes", { timeout: 30_000 }, () => {
       });
       expect(warms).toBe(1);
       expect(result?.scan.files.flatMap((file) => file.symbols).some((symbol) => symbol.name === "lazyAdded")).toBe(true);
+    });
+  });
+
+  // An index built at the regex tier (--no-ast, or before a grammar was
+  // available) passed every freshness key, so its records were served forever
+  // to a process that extracts at the AST tier. The profile in cache.json makes
+  // those records misses: warmed, re-extracted, and the stale artifacts refused.
+  it("re-extracts records an index built at another tier", async () => {
+    await withRepoAsync(async (repo) => {
+      run(repo, ["index", "--out", join(repo, ".codeindex"), "--no-ast"]);
+      expect(readPersistedIndex(repo)?.meta.extraction).toEqual({ grammars: [] });
+      let warms = 0;
+      const session = await preloadSessionLazy(repo, {}, async () => {
+        warms++;
+      });
+      expect(warms).toBe(1);
+      expect(session?.scan.contentUnchanged).toBe(false);
+      expect(session?.loadArtifacts?.()).toBeUndefined();
+      expect(session?.scan.files).toEqual(scanRepo(repo).files);
     });
   });
 

@@ -20,17 +20,24 @@ export const IGNORE_DIRS = new Set([
 // The VCS entry that marks a repository root: a directory for a normal clone,
 // a "gitdir: <path>" FILE for a linked worktree or a submodule.
 const GIT_ENTRY = ".git";
+// The engine's own index dir (preload.ts's INDEX_DIR, repeated here because
+// preload.ts imports this module).
+const INDEX_ENTRY = ".codeindex";
 
 function isIgnoredDirectory(name: string, ignoreDirs: Set<string>): boolean {
   // `.git` is structural, not a preference: VCS internals (objects, packs,
   // hooks) never carry signal, so it stays ignored even when a caller-supplied
   // `ignoreDirs` replaces the default set without listing it — `--ignore-dir
   // foo` used to pull thousands of loose objects into the index.
+  // `.codeindex` is structural for the same reason: it is this engine's own
+  // output (artifacts, pulled models, MCP memories). `--ignore-dir
+  // node_modules` put it back in the scan, so search answered with
+  // `.codeindex/symbols.json` and the index described itself.
   // A process killed during an atomic symbolic edit can leave the
   // `.codeindex-edit-*` directory beside the source. It contains a copy of that
   // source and must never become a duplicate phantom file in the next index,
   // even when the consumer repo has no matching .gitignore rule.
-  return name === GIT_ENTRY || ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
+  return name === GIT_ENTRY || name === INDEX_ENTRY || ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
 }
 
 // A gitfile's mandatory opening bytes. Git's parser (read_gitfile_gently)
@@ -146,7 +153,8 @@ export interface WalkOptions {
   // every consumer; pass false to index generated/ignored trees deliberately.
   gitignore?: boolean;
   // Directory names to skip, REPLACING the default set entirely (not merging
-  // with it) — except `.git`, which is skipped whatever the list says.
+  // with it) — except `.git` and `.codeindex`, which are skipped whatever the
+  // list says.
   // IGNORE_DIRS is a public export, so consumers compose
   // `[...IGNORE_DIRS, "extra"]` — or filter it — themselves; replace is the
   // simplest contract. Deliberate scope boundary: grep.ts (the ripgrep

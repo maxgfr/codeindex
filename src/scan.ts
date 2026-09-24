@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type { FileRecord, FileKind } from "./types.js";
 import { walk, readText, type WalkResult, type WalkedFile } from "./walk.js";
 import { headCommit } from "./git.js";
@@ -51,9 +51,9 @@ export interface ScanOptions {
   scope?: string;
   // Honor .gitignore files (default true — see WalkOptions.gitignore).
   gitignore?: boolean;
-  // Directory names to skip — REPLACES the default set, except `.git` which is
-  // always skipped (see WalkOptions.ignoreDirs; compose with the IGNORE_DIRS
-  // export to extend it).
+  // Directory names to skip — REPLACES the default set, except `.git` and
+  // `.codeindex` which are always skipped (see WalkOptions.ignoreDirs; compose
+  // with the IGNORE_DIRS export to extend it).
   ignoreDirs?: string[];
   maxBytes?: number;
   maxFiles?: number;
@@ -61,7 +61,10 @@ export interface ScanOptions {
   // tiers). Raising it trades index size for call-graph recall; dedup/sort
   // semantics are unchanged. Absent, output is byte-identical to before.
   maxCallsPerFile?: number;
-  out?: string; // absolute output dir to exclude from the scan (self-index guard)
+  // Absolute output dir to exclude from the scan (self-index guard). Inside the
+  // repo, the whole dir is skipped; at the repo root, only the index artifacts
+  // written there (INDEX_ARTIFACTS); above the root, nothing.
+  out?: string;
   // Previous build's extraction cache (rel → {hash, record, size?, mtimeMs?}). A
   // file whose (size,mtime) key matches skips read+hash entirely (the stat
   // fastpath); one whose content hash is unchanged reuses its record and skips
@@ -161,10 +164,10 @@ function* keptFiles(
     });
   // Never index our own output (e.g. a committed `docs/ultraindex/`), or builds
   // would describe the encyclopedia instead of the code.
-  const outPrefix = opts.out ? opts.out.replace(/\/+$/, "") + "/" : null;
+  const guard = selfIndexGuard(root, opts.out);
 
   for (const f of walked) {
-    if (outPrefix && (f.abs === opts.out || f.abs.startsWith(outPrefix))) continue;
+    if (guard && guard(f)) continue;
     if (include && !include(f.rel)) continue;
     if (exclude && exclude(f.rel)) continue;
     yield { f, kind: classify(f.rel, f.ext), lang: extToLang(f.ext) };
@@ -175,6 +178,28 @@ function* keptFiles(
 interface WalkTotals {
   capped: boolean;
   excluded: number;
+}
+
+// The files `codeindex index` writes into its --out dir, plus the
+// `<name>.tmp-<pid>` sibling each is staged under before its atomic rename.
+const INDEX_ARTIFACTS = ["graph.json", "symbols.json", "cache.json", "embeddings.bin"];
+const isIndexArtifact = (name: string): boolean =>
+  INDEX_ARTIFACTS.some((a) => name === a || name.startsWith(`${a}.tmp-`));
+
+// Which walked files an --out dir takes out of the scan. Excluding everything
+// under --out is right while --out sits INSIDE the repo, but `index --out .`
+// (or --out at any ancestor of --repo) put every file under it: the scan came
+// back empty, and the run still exited 0 with a 0-file graph. There the only
+// files the index itself contributes are its artifacts — directly in --out,
+// which for an ancestor is outside the repo, so nothing is excluded at all.
+function selfIndexGuard(root: string, out: string | undefined): ((f: WalkedFile) => boolean) | undefined {
+  if (!out) return undefined;
+  const up = relative(resolve(out), resolve(root));
+  if (up === "") return (f) => !f.rel.includes("/") && isIndexArtifact(f.rel);
+  if (up !== ".." && !up.startsWith(`..${sep}`) && !isAbsolute(up)) return undefined;
+  const dir = out.replace(/\/+$/, "");
+  const prefix = dir + "/";
+  return (f) => f.abs === dir || f.abs.startsWith(prefix);
 }
 
 // The code files this scan would extract, in the same order scanRepo sees them.
@@ -247,8 +272,8 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     // every build, so a doc is always read regardless. --full-hash disables the
     // fastpath. The (size,mtime) pair is the heuristic here (not the exact content
     // hash below): a real editor bumps mtime on every save, and --full-hash /
-    // --no-cache are the escape hatches for the astronomically-unlikely edit that
-    // preserves both.
+    // --no-index-cache are the escape hatches for the astronomically-unlikely
+    // edit that preserves both.
     if (
       kind !== "doc" &&
       !opts.fullHash &&
@@ -280,7 +305,14 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     const content = preUsable ? undefined : readText(f.abs);
     const hash = preUsable ? preUsable.record.hash : sha1(content!);
     if (cached && cached.hash === hash) {
-      files.push(cached.record);
+      // The hash is over the DECODED text, so it is blind to bytes the decoder
+      // drops: every binary hashes as sha1(""), a BOM or a UTF-16 odd trailing
+      // byte vanishes. Such a file can change size under an equal hash, and
+      // the record kept its stale size for good — the cache entry then missed
+      // the stat fastpath on every later run and cache.json was rewritten each
+      // time. Every other field derives from the decoded text, so only the
+      // size is refreshed.
+      files.push(cached.record.size === f.size ? cached.record : { ...cached.record, size: f.size });
       if (kind === "doc" && content) docText.set(f.rel, content);
       // Content proven identical, but a (size, mtimeMs) drift — e.g. a bare
       // touch, or an old cache without stat keys — still rewrites cache bytes.

@@ -141,6 +141,69 @@ describe("scanRepo — change-tracking flags", () => {
     expect(precomputed.capped).toBe(direct.capped);
     expect(precomputed.excluded).toBe(direct.excluded);
   });
+
+  // The content hash is over DECODED text, and every binary decodes to "", so a
+  // binary that grows keeps an equal hash. Its record kept the stale size: the
+  // cache entry then missed the stat fastpath on every later run and cache.json
+  // was rewritten each time (and RepoScan.files[].size was simply wrong).
+  it("a binary that changes size under an equal hash takes the new size, then settles", () => {
+    const { root } = setup();
+    writeFileSync(join(root, "data.dat"), Buffer.from("a\0bcdef"));
+    const first = scanRepo(root);
+    writeFileSync(join(root, "data.dat"), Buffer.from("a\0bcdefghijk"));
+    const second = scanRepo(root, { cache: cacheOf(first) });
+    const before = first.files.find((f) => f.rel === "data.dat")!;
+    const after = second.files.find((f) => f.rel === "data.dat")!;
+    expect(after.hash).toBe(before.hash);
+    expect(after.size).toBe(12);
+    expect(second.contentUnchanged).toBe(true);
+    const third = scanRepo(root, { cache: cacheOf(second) });
+    expect(third.cacheDirty).toBe(false);
+    expect(third.contentUnchanged).toBe(true);
+  });
+});
+
+describe("scanRepo — the --out self-index guard", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+  function copy(): string {
+    const dir = mkdtempSync(join(tmpdir(), "ci-scan-out-"));
+    dirs.push(dir);
+    const root = join(dir, "mini-repo");
+    cpSync(REPO, root, { recursive: true });
+    return root;
+  }
+  const rels = (root: string, opts?: Parameters<typeof scanRepo>[1]): string[] => scanRepo(root, opts).files.map((f) => f.rel);
+
+  it("an --out inside the repo is excluded whole", () => {
+    const root = copy();
+    writeFileSync(join(root, "src", "graph.json"), "{}\n");
+    expect(rels(root, { out: join(root, "src") }).some((r) => r.startsWith("src/"))).toBe(false);
+  });
+
+  // `index --out .` used to exclude every file (all of them live under --out),
+  // so the run wrote a 0-file graph and still exited 0.
+  it("an --out at the repo root excludes only the index artifacts written there", () => {
+    const root = copy();
+    const artifacts = ["graph.json", "symbols.json", "cache.json", "graph.json.tmp-4242"];
+    for (const name of artifacts) writeFileSync(join(root, name), "{}\n");
+    writeFileSync(join(root, "src", "graph.json"), "{}\n"); // same name, not at --out: a repo file
+    const all = rels(root);
+    const guarded = rels(root, { out: root });
+    expect(all).toEqual(expect.arrayContaining(artifacts));
+    expect(guarded).toEqual(all.filter((r) => !artifacts.includes(r)));
+    expect(guarded).toContain("src/graph.json");
+    expect(rels(root, { out: `${root}/` })).toEqual(guarded);
+  });
+
+  it("an --out above the repo root excludes nothing", () => {
+    const root = copy();
+    const sub = join(root, "src");
+    expect(rels(sub, { out: root })).toEqual(rels(sub));
+    expect(rels(sub).length).toBeGreaterThan(0);
+  });
 });
 
 describe("extractMarkdown", () => {

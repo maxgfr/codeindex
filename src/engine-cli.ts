@@ -7,6 +7,7 @@ import {
   EXTENDED_GRAMMARS,
   ensureGrammars,
   grammarKeysForExts,
+  grammarReady,
   resolveGrammarsTier,
   sharedGrammarsCacheDir,
 } from "./ast/loader.js";
@@ -18,8 +19,8 @@ import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
 import { scanSummary, type RepoScan } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
-import { preloadSessionLazy, INDEX_DIR } from "./preload.js";
-import { parseCacheEntries } from "./cache.js";
+import { indexDirPath, preloadSessionLazy, readPersistedIndex, INDEX_DIR, type PersistedMeta } from "./preload.js";
+import { compatibleEntries, extractionProfile, sameExtractionProfile } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
 import { computeImportPairs } from "./callers.js";
@@ -57,7 +58,10 @@ Usage: codeindex <command> [flags]
 
 Commands:
   index       Build graph.json + symbols.json (+ incremental cache.json) into
-              --out <dir> in ONE pass — the fast path for repeated runs
+              --out <dir> in ONE pass — the fast path for repeated runs. Each
+              artifact is replaced atomically (temp file + rename). An --out
+              inside the repo is excluded from the scan; at the repo root only
+              the artifacts are
   scan        Scan summary: file count, language histogram, capped flag
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
@@ -97,9 +101,13 @@ Commands:
   grammars    Tree-sitter wasm grammars (optional AST tier; regex without them).
               Two tiers: CORE ships with the bundle; EXTENDED (kotlin, elixir,
               zig, solidity, hcl/terraform) arrives only via \`grammars pull\`.
-              Precedence: bundle-adjacent > CODEINDEX_GRAMMARS_DIR > shared cache:
+              Precedence: bundle-adjacent > CODEINDEX_GRAMMARS_DIR > shared cache,
+              per grammar — a pulled EXTENDED wasm is found even when the
+              core ones ship next to the bundle:
                 grammars status  Active tier (adjacent/env/cache/none), resolved
-                                 dir, pinned ENGINE_VERSION, pull-needed (JSON)
+                                 dir, pinned ENGINE_VERSION, pull-needed, and
+                                 extendedPullNeeded when an EXTENDED grammar is
+                                 still missing (JSON)
                 grammars pull    Fetch the per-release grammars-<version>.tar.gz
                                  asset into the shared cache (sha256-verified,
                                  atomic). Override the source with
@@ -171,7 +179,7 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --no-gitignore      Do not honor .gitignore files (default: honored)
   --ignore-dir <name> Directory names to skip (repeatable) — REPLACES the
                       default ignored-directory set, never merges with it
-                      (\`.git\` stays skipped regardless)
+                      (\`.git\` and \`.codeindex\` stay skipped regardless)
   --max-files <n>     Cap walked files (default: none — the whole tree is
                       indexed; a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
@@ -182,11 +190,19 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       Also settable with CODEINDEX_WORKERS. Artifacts are
                       byte-identical either way
   --index <dir>       Persisted index the READ commands reuse, relative to the
-                      repo (default .codeindex — i.e. what \`index --out\` wrote
-                      there). A fresh index turns the scan into a stat pass and,
-                      when it still matches the worktree, skips the pipeline
-                      entirely. Stale/absent/corrupt → a normal cold build
+                      repo or absolute (default .codeindex — i.e. what
+                      \`index --out\` wrote there). A fresh index turns the scan
+                      into a stat pass and, when it still matches the worktree,
+                      skips the pipeline entirely. Stale/absent/corrupt → a
+                      normal cold build (with a note on stderr when --index was
+                      given). The dir itself is never scanned. Records built
+                      with another --no-ast/--max-calls setting or grammar set
+                      are re-extracted, never reused
   --no-index-cache    Never reuse a persisted index; always build from scratch
+                      (\`index\` too: its cache.json is ignored, then rewritten)
+  --full-hash         Re-read and re-hash every file instead of trusting an
+                      unchanged (size, mtime) — for an edit that kept both.
+                      Unchanged content still reuses its extraction
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
@@ -229,6 +245,7 @@ interface CliFlags {
   workers?: number; // extraction worker threads (0/1 = sequential)
   indexDir?: string; // persisted index to read (default .codeindex)
   noIndexCache?: boolean; // never reuse a persisted index
+  fullHash?: boolean; // re-read and re-hash every file (no (size, mtime) fastpath)
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
@@ -294,6 +311,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--index") flags.indexDir = next();
     else if (a === "--no-index-cache") flags.noIndexCache = true;
+    else if (a === "--full-hash") flags.fullHash = true;
     else if (a === "--workers") {
       // 0 is meaningful here (force sequential), so this cannot use num().
       const raw = next();
@@ -338,6 +356,27 @@ function emit(content: string, out?: string): void {
   else process.stdout.write(content);
 }
 
+// Replace an index artifact in one step: write a sibling temp file, then
+// rename it over the target (atomic on POSIX). graph.json, symbols.json and
+// cache.json used to be truncated and rewritten in place, so a reader polling
+// them mid-index — CI, an editor plugin, the MCP server's artifact preload —
+// saw an empty or half-written file, and a crash mid-write left torn JSON until
+// the next index. The temp name is one the self-index guard skips (scan.ts), so
+// even an --out at the repo root never indexes a leftover. Where the temp file
+// or the rename is refused (a Windows reader holding the target open), fall
+// back to the historical in-place write rather than failing the index.
+function writeArtifact(path: string, data: string | Uint8Array): void {
+  const temp = `${path}.tmp-${process.pid}`;
+  try {
+    writeFileSync(temp, data);
+    renameSync(temp, path);
+    return;
+  } catch {
+    rmSync(temp, { force: true });
+  }
+  writeFileSync(path, data);
+}
+
 function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexOptions {
   return {
     include: flags.include.length ? flags.include : undefined,
@@ -348,6 +387,15 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
     maxFiles: flags.maxFiles,
     maxBytes: flags.maxBytes,
     maxCallsPerFile: flags.maxCalls,
+    fullHash: flags.fullHash,
+    // The index the read commands consult is excluded from what they scan,
+    // exactly as `index` excludes its --out (which overrides this there). An
+    // in-repo custom dir (`index --out idx` + `--index idx`) was otherwise
+    // scanned as three config files: search answered "graph" with
+    // idx/graph.json, and the scan never matched the index that `index` built
+    // without them, so its artifacts were never reused. The default
+    // .codeindex is pruned by the walk already; this is a no-op there.
+    out: indexDirPath(flags.repo, flags.indexDir),
     // The walk performed once in runCli to warm the present-language grammars,
     // reused here so scanRepo does not traverse the tree a second time. Absent
     // for --no-ast / scan-less commands: scanRepo walks itself, unchanged.
@@ -568,11 +616,19 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (flags.noIndexCache) return undefined;
     preloadPromise = preloadSessionLazy(
       flags.repo,
-      { ...scanOptions(flags, precomputedWalk), workers: flags.workers },
+      { ...scanOptions(flags, precomputedWalk), workers: flags.workers, ast: !flags.noAst },
       warmPresentGrammars,
       indexDir,
     ).then((p) => {
       if (p) preloaded = { scan: p.scan, arts: p.arts, loadArtifacts: p.loadArtifacts };
+      // The default location being empty is the normal first run; an index the
+      // user NAMED being unusable is a mistake worth one line (a typo'd path
+      // otherwise just looks like a slow command).
+      else if (flags.indexDir !== undefined) {
+        process.stderr.write(
+          `codeindex: no usable index at ${indexDirPath(flags.repo, indexDir)} (missing, unreadable, or written by an incompatible engine) — building from scratch\n`,
+        );
+      }
       return preloaded;
     });
     return preloadPromise;
@@ -609,41 +665,33 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // old caches lacking them simply never take the fastpath below (their
     // per-file records are still reused). cache.json embeds mtimes, so it was
     // never cross-machine byte-reproducible — no determinism surface changes.
-    type CacheMeta = {
-      engineVersion?: string;
-      commit?: string;
-      graphSha1?: string;
-      symbolsSha1?: string;
-      embed?: { embedVersion?: number; modelId?: string; sha1?: string };
-    };
-    let cache: Map<string, CacheEntry> | undefined;
-    let meta: CacheMeta = {};
-    try {
-      const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as {
-        schemaVersion: number;
-        extractorVersion: number;
-        files: Record<string, CacheEntry>;
-      } & CacheMeta;
-      cache = parseCacheEntries(parsed);
-      if (cache) {
-        meta = {
-          engineVersion: parsed.engineVersion,
-          commit: parsed.commit,
-          graphSha1: parsed.graphSha1,
-          symbolsSha1: parsed.symbolsSha1,
-          embed: parsed.embed,
-        };
-      }
-    } catch {
-      // no cache yet (or unreadable) — cold build
-    }
+    type CacheMeta = Pick<PersistedMeta, "engineVersion" | "commit" | "graphSha1" | "symbolsSha1" | "embed">;
+    // --no-index-cache is the documented "always build from scratch": it used
+    // to be read only by the query commands, so `index` kept trusting a
+    // cache.json whose (size, mtime) keys hid a same-size edit made under a
+    // restored mtime, with no escape hatch short of deleting the file by hand.
+    const persisted = flags.noIndexCache ? undefined : readPersistedIndex(flags.repo, outDir);
+    const meta: CacheMeta = persisted?.meta ?? {};
     await warmPresentGrammars();
+    // Grammars are loaded (or deliberately not, under --no-ast), so the tier
+    // this run extracts each language at is known exactly: keep only records
+    // extracted the same way — see compatibleEntries.
+    const cache = persisted && compatibleEntries(persisted.cacheMap, persisted.meta.extraction, {
+      maxCallsPerFile: flags.maxCalls,
+      ast: grammarReady,
+    });
     const scan = await scanRepoParallel(flags.repo, {
       ...scanOptions(flags, precomputedWalk),
       cache,
       out: outDir,
       workers: flags.workers,
     });
+    const extraction = extractionProfile(scan.files, flags.maxCalls, grammarReady);
+    if (scan.files.length === 0) {
+      process.stderr.write(
+        `codeindex: warning: no file of ${flags.repo} was indexed — check --scope/--include/--exclude and the ignore rules\n`,
+      );
+    }
     const modelDir = resolveEmbedModelDir(flags.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : undefined;
 
@@ -669,7 +717,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       }
       // Fixed key order; JSON.stringify drops the undefined-valued keys
       // (commit outside a git worktree, embed without a model) cleanly.
-      writeFileSync(
+      writeArtifact(
         cachePath,
         JSON.stringify({
           schemaVersion: SCHEMA_VERSION,
@@ -679,6 +727,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           graphSha1: out.graphSha1,
           symbolsSha1: out.symbolsSha1,
           embed: out.embed,
+          extraction,
           files,
         }) + "\n",
       );
@@ -714,9 +763,11 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (fastpath) {
       // Artifacts verified byte-identical to what this build would produce —
       // leave them untouched. Rewrite cache.json only when the scan says its
-      // bytes would change (e.g. an mtime drifted); the meta is carried
-      // forward verbatim since the guard just proved it describes the disk.
-      if (scan.cacheDirty) writeCache(meta);
+      // bytes would change (e.g. an mtime drifted) or its extraction profile
+      // would (a cache written before profiles existed, or a --max-calls switch
+      // on a tree with no code to re-extract); the meta is carried forward
+      // verbatim since the guard just proved it describes the disk.
+      if (scan.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction)) writeCache(meta);
       process.stderr.write(
         `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
       );
@@ -724,8 +775,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       const { graph, symbols } = buildArtifactsFromScan(scan);
       const graphJson = renderGraphJson(graph);
       const symbolsJson = renderSymbolsJson(symbols);
-      writeFileSync(graphPath, graphJson);
-      writeFileSync(symbolsPath, symbolsJson);
+      writeArtifact(graphPath, graphJson);
+      writeArtifact(symbolsPath, symbolsJson);
       // Deterministic embeddings sidecar: written next to graph.json ONLY when a
       // model asset is present (opt-in). Silently skipped otherwise — no model, no
       // embeddings.bin, no impact on the graph/symbols consumers.
@@ -734,7 +785,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       if (model) {
         const index = buildEmbeddingIndex(scan, model);
         const bytes = serializeEmbeddings(index);
-        writeFileSync(embedPath, bytes);
+        writeArtifact(embedPath, bytes);
         embedMeta = { embedVersion: EMBED_VERSION, modelId: model.modelId, sha1: sha1(bytes) };
         embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
       }
@@ -945,7 +996,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       mkdirSync(flags.out, { recursive: true });
       const scan = await readScan();
       const index = buildEmbeddingIndex(scan, model);
-      writeFileSync(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
+      writeArtifact(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
     } else if (sub === "pull") {
       // Default: the official published asset + its pinned sha256. A user-set
@@ -1012,6 +1063,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         cacheDir,
         runtimePresent,
         pullNeeded: !runtimePresent,
+        // The AST tier can be live (pullNeeded false) while the EXTENDED
+        // grammars are missing — the npm layout ships only the core ones — and
+        // those languages then run on the regex tier until a pull.
+        extendedPullNeeded: extended.length < EXTENDED_GRAMMARS.size,
         core: { resolved: core.length, of: CORE_GRAMMARS.size, missing: [...CORE_GRAMMARS].filter((k) => !core.includes(k)).sort() },
         extended: {
           resolved: extended.length,

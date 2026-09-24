@@ -19,8 +19,9 @@ compares](#how-it-compares).
 - **Walk** a repo deterministically: ignore lists, `.gitignore` and
   `.git/info/exclude`, binary/lockfile skips, a size cap, symlink-cycle guard.
   Nested repositories (a subdirectory with its own `.git` — linked worktrees,
-  vendored clones, submodules) are skipped like git does, and `.git` itself is
-  never walked even when `--ignore-dir` replaces the default ignore list. No
+  vendored clones, submodules) are skipped like git does, and `.git` itself —
+  like the engine's own `.codeindex` — is never walked even when
+  `--ignore-dir` replaces the default ignore list. No
   file-count cap unless you ask for one (`--max-files`), and asking sets the
   `capped` flag — never a silent truncation.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
@@ -217,8 +218,9 @@ checkout for a benefit only some can use. It ships inside the per-release
 `grammars-<version>.tar.gz` asset instead. Without a pull those grammars are
 simply absent and the engine falls back to the regex tier, exactly as it does for
 a language it has no grammar for at all — `codeindex grammars status` reports
-resolved-vs-missing per tier so a Kotlin repo quietly indexed by regex is visible
-rather than guesswork.
+resolved-vs-missing per tier (and `extendedPullNeeded` while any extended
+grammar is missing) so a Kotlin repo quietly indexed by regex is visible rather
+than guesswork.
 
 *Not included, and why:* **Swift** publishes no prebuilt wasm at all, and
 **Dart**'s does not load under web-tree-sitter 0.26 — shipping it would be dead
@@ -235,9 +237,13 @@ codeindex grammars status   # active tier (adjacent/env/cache/none) + whether a 
 codeindex grammars pull     # fetch the per-release grammars asset, sha256-verified, into the cache
 ```
 
-Resolution is **adjacent > env > cache > regex**: a bundle-adjacent `grammars/`
-still wins if present (offline setups are untouched), then
-`CODEINDEX_GRAMMARS_DIR`, then the pulled cache. `pull` fetches the official
+Resolution is **adjacent > env > cache > regex**, per grammar: a
+bundle-adjacent `grammars/` still wins if present (offline setups are
+untouched), then `CODEINDEX_GRAMMARS_DIR`, then the pulled cache — and a
+grammar the winner lacks is looked up in the tiers below it. That is what lets
+the npm package (which ships only the core wasms) pick up the extended ones a
+pull put in the cache. The legacy `CODEINDEX_GRAMMAR_DIR` still pins one dir
+with nothing behind it. `pull` fetches the official
 `grammars-<version>.tar.gz` release asset (its `.sha256` sidecar is verified
 before anything is written) and extracts it atomically; the same wasm bytes
 produce **byte-identical** AST extraction from the cache as from a vendored dir.
@@ -377,6 +383,19 @@ codeindex callgraph buildGraph --repo . --depth 2
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
 ```
+
+`index` keeps a `cache.json` next to the artifacts, and every read command
+reuses whatever sits in `--index` (default `.codeindex`; relative to the repo,
+or absolute): unchanged files skip extraction, and when nothing changed the
+artifacts load instead of being rebuilt. The index dir itself is never scanned,
+and `--out .` at the repo root skips only the artifacts it writes. A record is
+reused only if it was extracted the way this run would extract it — the same
+`--no-ast`/`--max-calls` setting and the same grammar per language — so
+switching either, or pulling a grammar, re-extracts exactly the files it
+affects. Freshness is keyed on `(size, mtime)`; for an edit that preserves
+both, `--full-hash` re-hashes every file and `--no-index-cache` ignores the
+cache altogether (for `index` too). Artifacts are replaced atomically (a temp
+file renamed over the old one), so a concurrent reader never sees a torn file.
 
 ## Values with no single source of truth
 
