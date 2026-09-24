@@ -19,7 +19,9 @@ compares](#how-it-compares).
 - **Walk** a repo deterministically: ignore lists, `.gitignore` and
   `.git/info/exclude`, binary/lockfile skips, a size cap, symlink-cycle guard.
   A symlink that stays inside the repo, file or directory, is an alias: its
-  target is indexed once, under its own path.
+  target is indexed once, under its own path. `build`, `out`, `target` and
+  `tmp` are skipped as build output unless git tracks files in them — they
+  are ordinary package names too (a Go `build` package, `com.acme.build`).
   Nested repositories (a subdirectory with its own `.git` — linked worktrees,
   vendored clones, submodules) are skipped like git does, and `.git` itself —
   like the engine's own `.codeindex` — is never walked even when

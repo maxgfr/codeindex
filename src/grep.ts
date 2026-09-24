@@ -90,7 +90,9 @@ function jsBackend(root: string, re: RegExp, opts: GrepOptions): SearchHit[] {
   // anchor may follow the `!` of a negated glob: `!/sub/**` ≡ `!sub/**`).
   const filter = compileGlobFilter(opts.globs?.map((g) => g.replace(/^(!?)\//, "$1")));
   const hits: SearchHit[] = [];
-  for (const f of walk(root).files) {
+  // Build-output-named dirs by name alone, like rg's `!**/<dir>/**` globs
+  // above: the walk's exemption for git-tracked ones is not expressible there.
+  for (const f of walk(root, { trackedBuildDirs: false }).files) {
     if (filter && !filter(f.rel)) continue;
     const content = readText(f.abs);
     if (!content) continue;

@@ -185,7 +185,10 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --ignore-dir <name> Directory names to skip (repeatable) — REPLACES the
                       default ignored-directory set, never merges with it
                       (\`.git\` and \`.codeindex\` stay skipped regardless).
-                      A name, not a path: use --exclude '<dir>/**' for a path
+                      A name, not a path: use --exclude '<dir>/**' for a path.
+                      The default set skips build/out/target/tmp only where
+                      git tracks nothing in them; a listed name is skipped
+                      everywhere
   --max-files <n>     Cap indexed files, counted after --scope/--include/
                       --exclude (default: none — the whole tree is indexed;
                       a cap sets the \`capped\` flag)
