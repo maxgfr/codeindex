@@ -6,7 +6,7 @@
 // Both share one hub gate. A hyper-connected node (a barrel, a types module)
 // otherwise drags the entire graph into any depth-≥2 neighbourhood, which is
 // the difference between an answer and a dump.
-import type { Edge, Graph } from "./types.js";
+import type { Edge, EdgeKind, Graph } from "./types.js";
 import { byStr } from "./sort.js";
 
 // Only these edge kinds carry a real "depends on" relation. A doc-link or a
@@ -201,10 +201,33 @@ export interface NeighborResult {
   members?: string[]; // for a module target
 }
 
+// Every edge kind a link-graph can carry: what `neighbors --kind` accepts. A
+// misspelt kind used to filter the walk down to nothing and answer an empty
+// list with exit 0, indistinguishable from "no neighbours".
+export const EDGE_KINDS: readonly EdgeKind[] = ["import", "call", "use", "extends", "implements", "doc-link", "mention", "contains"];
+
+// How much a link says about the dependency, strongest first: what a file
+// states (import, inheritance, an import-corroborated call), then name-based
+// evidence, then a call inferred from a unique name alone.
+function linkRank(l: NeighborLink): number {
+  if (l.kind === "call") return l.confidence === "inferred" ? 4 : 1;
+  if (l.kind === "import" || l.kind === "extends" || l.kind === "implements") return 0;
+  if (l.kind === "use") return 2;
+  return 3;
+}
+
 // Breadth-first walk from `start`, out to `depth` hops, in BOTH directions.
 // With `kinds` set, only those edge kinds are traversed — and the degree
 // distribution feeding the hub gate is measured over that same filtered
 // subgraph, so the gate reflects the view the caller asked for.
+//
+// EVERY edge between the frontier and a node first reached at this depth is a
+// link, one per (node, direction, kind), not just the first edge found. The
+// walk used to keep only that first one, and out-edges come first, so gin's
+// `render` showed `root` as an (inferred, and wrong) outgoing call and hid the
+// real incoming import behind it. A node's links are listed together, in the
+// order its node was reached, strongest evidence first — a consumer reading
+// only a node's first link gets the relation that matters.
 function bfs(edges: Edge[], start: string, depth: number, kinds?: Set<string>): NeighborLink[] {
   // A non-start node at or above the threshold is EMITTED as a link but never
   // expanded THROUGH. Only bites at depth ≥ 2 — depth-1 links all come from
@@ -214,23 +237,32 @@ function bfs(edges: Edge[], start: string, depth: number, kinds?: Set<string>): 
   const links: NeighborLink[] = [];
   let frontier = [start];
   for (let d = 1; d <= depth; d++) {
-    const next: string[] = [];
+    // node → its links at this depth. Map order is the order nodes were first
+    // reached: deterministic, since the adjacency lists are pre-sorted.
+    const reached = new Map<string, NeighborLink[]>();
+    const link = (node: string, direction: "out" | "in", e: Edge): void => {
+      let own = reached.get(node);
+      if (!own) {
+        if (seen.has(node)) return; // reached at an earlier depth (or the start)
+        seen.add(node);
+        reached.set(node, (own = []));
+      }
+      // Several frontier nodes may reach one node the same way: the first wins.
+      if (own.some((l) => l.direction === direction && l.kind === e.kind)) return;
+      own.push({ node, direction, kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
+    };
     for (const node of frontier) {
       if (node !== start && (degree.get(node) ?? 0) >= threshold) continue;
-      for (const e of out.get(node) ?? []) {
-        if (seen.has(e.to)) continue;
-        links.push({ node: e.to, direction: "out", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
-        seen.add(e.to);
-        next.push(e.to);
-      }
-      for (const e of inn.get(node) ?? []) {
-        if (seen.has(e.from)) continue;
-        links.push({ node: e.from, direction: "in", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
-        seen.add(e.from);
-        next.push(e.from);
-      }
+      for (const e of out.get(node) ?? []) link(e.to, "out", e);
+      for (const e of inn.get(node) ?? []) link(e.from, "in", e);
     }
-    frontier = next;
+    for (const own of reached.values()) {
+      own.sort(
+        (a, b) => linkRank(a) - linkRank(b) || Number(a.direction === "in") - Number(b.direction === "in") || byStr(a.kind, b.kind),
+      );
+      links.push(...own);
+    }
+    frontier = [...reached.keys()];
   }
   return links;
 }

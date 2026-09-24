@@ -108,6 +108,71 @@ describe("neighborsOf", () => {
   });
 });
 
+// gin's `neighbors render` listed `root` only as an (inferred) outgoing call:
+// the walk kept the FIRST edge to each node, out-edges first, and hid the real
+// incoming import behind it.
+describe("neighborsOf reports every relation to a neighbour", () => {
+  const graphOf = (edges: Edge[]): Graph =>
+    ({
+      schemaVersion: 5,
+      version: "test",
+      fileCount: 5,
+      languages: {},
+      files: ["render.go", "root.go", "binding.go", "x.go", "y.go"].map((rel) => ({
+        id: rel, kind: "file" as const, rel, fileKind: "code", lang: "go",
+        module: "root", title: rel, symbols: [], lines: 1, degIn: 0, degOut: 0, pagerank: 0,
+      })),
+      modules: [],
+      fileEdges: edges,
+      moduleEdges: [],
+    }) as unknown as Graph;
+  const e = (from: string, to: string, kind: Edge["kind"], weight = 1, confidence?: "extracted" | "inferred"): Edge =>
+    ({ from, to, kind, weight, ...(confidence ? { confidence } : {}) }) as Edge;
+
+  it("keeps each (direction, kind) and lists the strongest evidence first", () => {
+    const graph = graphOf([
+      e("render.go", "root.go", "call", 30, "inferred"),
+      e("root.go", "render.go", "import", 12),
+      e("root.go", "render.go", "call", 2, "extracted"),
+      e("render.go", "binding.go", "call", 1, "inferred"),
+      e("binding.go", "render.go", "import", 6),
+    ]);
+    const links = neighborsOf(graph, "render.go", 1)!.links.map((l) => [l.node, l.direction, l.kind, l.weight]);
+    // Nodes in the order they were reached; each node's links strongest first.
+    expect(links).toEqual([
+      ["binding.go", "in", "import", 6],
+      ["binding.go", "out", "call", 1],
+      ["root.go", "in", "import", 12],
+      ["root.go", "in", "call", 2],
+      ["root.go", "out", "call", 30],
+    ]);
+  });
+
+  it("links a deeper node from every frontier node that reaches it, once per (direction, kind)", () => {
+    const graph = graphOf([
+      e("render.go", "root.go", "import"),
+      e("render.go", "binding.go", "import"),
+      e("binding.go", "x.go", "import", 5), // binding.go is reached first, so it wins…
+      e("root.go", "x.go", "import", 3), // …over the same relation from root.go
+      e("x.go", "binding.go", "use", 1), // a different relation: kept
+      e("x.go", "root.go", "call", 1), // and another, from the second frontier node
+      e("y.go", "binding.go", "import", 1),
+    ]);
+    const res = neighborsOf(graph, "render.go", 2)!;
+    expect(res.links.filter((l) => l.depth === 1).map((l) => l.node)).toEqual(["binding.go", "root.go"]);
+    const deep = res.links.filter((l) => l.depth === 2).map((l) => [l.node, l.direction, l.kind, l.weight]);
+    expect(deep).toEqual([
+      ["x.go", "out", "import", 5],
+      ["x.go", "in", "call", 1],
+      ["x.go", "in", "use", 1],
+      ["y.go", "in", "import", 1],
+    ]);
+    // Edges back to the start (render.go → root.go, seen from root.go) and
+    // between two depth-1 nodes are not new neighbours.
+    expect(res.links.some((l) => l.node === "render.go")).toBe(false);
+  });
+});
+
 describe("symbolsInHunks", () => {
   const defs = [
     { name: "outer", file: "a.ts", line: 1, endLine: 20, kind: "function", exported: true },
