@@ -18,7 +18,9 @@ export interface RepoScan {
   languages: Record<string, number>;
   // Raw content of doc files, kept so the graph's mention pass does not re-read
   // them from disk (they were already read here). Docs only — bounding memory to
-  // prose, never the whole source tree.
+  // prose, never the whole source tree. A doc served by the stat fastpath is
+  // not read during the scan: its text loads on the first lookup (see
+  // LazyDocText), so a run that reuses the artifacts never reads it at all.
   docText: Map<string, string>;
   // rel → last-modified ms for every kept file, so build.ts can persist the
   // (size,mtime) fastpath key into cache.json for the next build.
@@ -34,8 +36,7 @@ export interface RepoScan {
   // True iff a cache was supplied AND every kept file reused its cached record
   // (via the stat fastpath or an exact content-hash match) AND the kept file
   // set equals the cache's key set — i.e. this scan proved the indexed content
-  // identical to the previous build's. Docs never take the fastpath (see the
-  // docs exemption below), so their contribution is always an exact hash check.
+  // identical to the previous build's.
   contentUnchanged: boolean;
   // True iff persisting this scan's cache would change at least one byte of the
   // previous cache: some kept file's (hash, size, mtimeMs) differs from its
@@ -147,6 +148,82 @@ export function buildCodeRecord(
   return record;
 }
 
+// RepoScan.docText with the reads deferred. The mention pass needs every doc's
+// text, but only when the pipeline actually runs; a warm `index` or a read
+// command against a fresh index reuses the artifacts and never asks. Docs used
+// to be exempt from the stat fastpath for this reason alone, so every such run
+// read and hashed all of them: 7.5k docs, 21.7MB kept in memory, ~250ms on
+// typescript-go. A doc the fastpath serves is registered here unread and
+// loaded on its first lookup.
+//
+// A Map subclass so RepoScan.docText keeps its public type. Lookups load one
+// doc; anything that enumerates (size, iteration) loads every pending doc
+// first, so no consumer can tell a deferred entry from an eager one. Empty
+// text is not stored, exactly as the eager path skips it.
+class LazyDocText extends Map<string, string> {
+  private readonly pending = new Map<string, string>(); // rel → abs, not read yet
+
+  defer(rel: string, abs: string): void {
+    this.pending.set(rel, abs);
+  }
+
+  private load(rel: string): void {
+    const abs = this.pending.get(rel);
+    if (abs === undefined) return;
+    this.pending.delete(rel);
+    const text = readText(abs);
+    if (text) super.set(rel, text);
+  }
+
+  private loadAll(): void {
+    for (const rel of [...this.pending.keys()]) this.load(rel);
+  }
+
+  override get(rel: string): string | undefined {
+    this.load(rel);
+    return super.get(rel);
+  }
+  override has(rel: string): boolean {
+    this.load(rel);
+    return super.has(rel);
+  }
+  override set(rel: string, text: string): this {
+    this.pending?.delete(rel); // `?.`: Map's constructor may call set before fields exist
+    return super.set(rel, text);
+  }
+  override delete(rel: string): boolean {
+    const deferred = this.pending.delete(rel);
+    return super.delete(rel) || deferred;
+  }
+  override clear(): void {
+    this.pending.clear();
+    super.clear();
+  }
+  override get size(): number {
+    this.loadAll();
+    return super.size;
+  }
+  override forEach(fn: (text: string, rel: string, map: Map<string, string>) => void, thisArg?: unknown): void {
+    this.loadAll();
+    super.forEach(fn, thisArg);
+  }
+  override entries(): MapIterator<[string, string]> {
+    this.loadAll();
+    return super.entries();
+  }
+  override keys(): MapIterator<string> {
+    this.loadAll();
+    return super.keys();
+  }
+  override values(): MapIterator<string> {
+    this.loadAll();
+    return super.values();
+  }
+  override [Symbol.iterator](): MapIterator<[string, string]> {
+    return this.entries();
+  }
+}
+
 // Which walked files this scan keeps, and how each is labelled. Shared by
 // scanRepo and scanSummary so the two can never disagree on a file count or a
 // language histogram — the summary path is exactly this loop, stopped early.
@@ -248,7 +325,7 @@ export function scanSummary(root: string, opts: ScanOptions = {}): ScanSummary {
 export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
   const files: FileRecord[] = [];
   const languages: Record<string, number> = {};
-  const docText = new Map<string, string>();
+  const docText = new LazyDocText();
   const mtimes = new Map<string, number>();
 
   // Change-tracking accumulators (see RepoScan.contentUnchanged / cacheDirty).
@@ -269,16 +346,15 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
 
     const cached = opts.cache?.get(f.rel);
 
-    // Stat fastpath: a NON-DOC file whose size AND mtime both match its cache
-    // entry is treated as unchanged and reuses its record WITHOUT a read or hash.
-    // Docs are EXEMPT — the graph's mention pass needs their raw content (docText)
-    // every build, so a doc is always read regardless. --full-hash disables the
+    // Stat fastpath: a file whose size AND mtime both match its cache entry is
+    // treated as unchanged and reuses its record WITHOUT a read or hash. A doc
+    // is registered for a deferred read instead (see LazyDocText): the mention
+    // pass reads it only if the pipeline runs. --full-hash disables the
     // fastpath. The (size,mtime) pair is the heuristic here (not the exact content
     // hash below): a real editor bumps mtime on every save, and --full-hash /
     // --no-index-cache are the escape hatches for the astronomically-unlikely
     // edit that preserves both.
     if (
-      kind !== "doc" &&
       !opts.fullHash &&
       cached &&
       cached.size !== undefined &&
@@ -287,6 +363,7 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
       cached.mtimeMs === f.mtimeMs
     ) {
       files.push(cached.record);
+      if (kind === "doc") docText.defer(f.rel, f.abs);
       continue;
     }
 

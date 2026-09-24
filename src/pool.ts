@@ -336,8 +336,8 @@ export async function scanRepoParallel(
     });
   const scanOpts: ScanOptions = { ...opts, precomputedWalk: walked };
 
-  // Only code files are worth shipping out: docs must be read on the main
-  // thread anyway (the graph's mention pass needs their text), and everything
+  // Only code files are worth shipping out: a changed doc is read on the main
+  // thread anyway (the graph's mention pass needs its text), and everything
   // else is a read plus a hash with no extraction behind it.
   //
   // Files the cache will serve by its stat fastpath are skipped — extracting

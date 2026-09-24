@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { fileURLToPath } from "node:url";
-import { cpSync, mkdtempSync, rmSync, utimesSync, writeFileSync, appendFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanRepo, scanSummary, type RepoScan } from "../src/scan.js";
@@ -8,6 +8,9 @@ import { walk } from "../src/walk.js";
 import type { FileRecord } from "../src/types.js";
 import { extractMarkdown } from "../src/extract/markdown.js";
 import { extractCode } from "../src/extract/code.js";
+import { buildArtifactsFromScan } from "../src/pipeline.js";
+import { renderGraphJson } from "../src/render/graph-json.js";
+import { renderSymbolsJson } from "../src/render/symbols-json.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 
@@ -116,12 +119,45 @@ describe("scanRepo — change-tracking flags", () => {
     expect(rescan.cacheDirty).toBe(true);
   });
 
-  it("a doc edit clears contentUnchanged (docs stay on the exact hash path)", () => {
+  it("a doc edit clears contentUnchanged", () => {
     const { root, cache } = setup();
     appendFileSync(join(root, "README.md"), "\nEdited prose.\n");
     const rescan = scanRepo(root, { cache });
     expect(rescan.contentUnchanged).toBe(false);
     expect(rescan.cacheDirty).toBe(true);
+  });
+
+  // Docs were exempt from the stat fastpath only because the mention pass
+  // needs their text, so every warm run read and hashed all of them even when
+  // the artifacts were then reused. A stat-matched doc now reuses its record
+  // unread, and its text loads when (if) something asks for it.
+  it("a stat-matched doc reuses its record without a read, and loads its text on demand", () => {
+    const { root, cache } = setup();
+    const readme = cache.get("README.md")!;
+    // A record the file could never produce: only a scan that skipped the
+    // read (and so the hash check) can hand it back.
+    const marker = { ...readme.record, summary: "FROM-CACHE", hash: "not-the-content" };
+    cache.set("README.md", { ...readme, hash: marker.hash, record: marker });
+    const rescan = scanRepo(root, { cache });
+    expect(rescan.files.find((f) => f.rel === "README.md")).toBe(marker);
+    expect(rescan.contentUnchanged).toBe(true);
+    const text = readFileSync(join(root, "README.md"), "utf8");
+    expect(rescan.docText.get("README.md")).toBe(text);
+    expect(rescan.docText.has("docs/guide.md")).toBe(true);
+    // Enumeration sees the deferred docs too, like the eager Map it replaces.
+    const cold = scanRepo(root);
+    expect(rescan.docText.size).toBe(cold.docText.size);
+    expect(new Map(rescan.docText)).toEqual(new Map(cold.docText));
+  });
+
+  it("artifacts from a warm scan with deferred docs are byte-identical to a cold scan's", () => {
+    const { root, cache } = setup();
+    const cold = buildArtifactsFromScan(scanRepo(root), {});
+    const warm = buildArtifactsFromScan(scanRepo(root, { cache }), {});
+    expect(renderGraphJson(warm.graph)).toBe(renderGraphJson(cold.graph));
+    expect(renderSymbolsJson(warm.symbols)).toBe(renderSymbolsJson(cold.symbols));
+    // The fixture's docs do mention symbols, so the comparison is not vacuous.
+    expect(cold.graph.fileEdges.some((e) => e.kind === "mention")).toBe(true);
   });
 
   it("no cache supplied → contentUnchanged=false, cacheDirty=true", () => {
