@@ -9,9 +9,9 @@ import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protoc
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
 const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
-  scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
-  include: { type: "array", items: { type: "string" }, description: "Include globs" },
-  exclude: { type: "array", items: { type: "string" }, description: "Exclude globs" },
+  scope: { type: "string", description: "Restrict to one directory or file (repo-relative); ANDed with include/exclude" },
+  include: { type: "array", items: { type: "string" }, description: "Include globs, rooted at the repo: '*.ts' is top-level only, '**/*.ts' any depth" },
+  exclude: { type: "array", items: { type: "string" }, description: "Exclude globs (rooted, like include)" },
 };
 
 export const TOOLS = [

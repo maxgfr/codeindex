@@ -397,6 +397,17 @@ both, `--full-hash` re-hashes every file and `--no-index-cache` ignores the
 cache altogether (for `index` too). Artifacts are replaced atomically (a temp
 file renamed over the old one), so a concurrent reader never sees a torn file.
 
+`--scope <dir|file>` restricts a command to one part of the repo (`./src`,
+`src/` and an absolute path inside the repo all name `src`), and combines with
+`--include`/`--exclude` as an intersection: `--scope src --include '**/*.md'`
+is the markdown under `src/`. Globs are rooted at the repo, so `*.md` is the
+top-level files only and `**/*.md` any depth. The filter runs inside the walk:
+`--max-files` counts only files it keeps, and a directory that cannot hold one
+is never listed (a `--scope` over 186 files of a 66k-file repo walks those
+186). `grep` is the exception: it adds the scope to its globs. A `--scope`
+that does not exist, an `--ignore-dir` given a path rather than a directory
+name, and a filter that keeps no file at all each print a warning on stderr.
+
 ## Values with no single source of truth
 
 `codeindex literals` reports the defect a compiler cannot: **one value written

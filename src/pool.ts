@@ -26,7 +26,15 @@ import { sha1 } from "./hash.js";
 import { readText, walk } from "./walk.js";
 import { extToLang } from "./lang/registry.js";
 import { ensureGrammars, grammarKeysForExts, grammarReady } from "./ast/loader.js";
-import { buildCodeRecord, keptCodeFiles, scanRepo, type ExtractedRecord, type RepoScan, type ScanOptions } from "./scan.js";
+import {
+  buildCodeRecord,
+  keptCodeFiles,
+  scanRepo,
+  scanWalkOptions,
+  type ExtractedRecord,
+  type RepoScan,
+  type ScanOptions,
+} from "./scan.js";
 
 // One unit of work: a code file to read, hash and extract.
 interface Job {
@@ -326,14 +334,7 @@ export async function scanRepoParallel(
   if (count < 2) return scanRepo(root, opts);
 
   // Walk ONCE and reuse it for both the job list and the scan itself.
-  const walked =
-    opts.precomputedWalk ??
-    walk(root, {
-      maxFileBytes: opts.maxBytes,
-      maxFiles: opts.maxFiles,
-      gitignore: opts.gitignore,
-      ignoreDirs: opts.ignoreDirs,
-    });
+  const walked = opts.precomputedWalk ?? walk(root, scanWalkOptions(root, opts));
   const scanOpts: ScanOptions = { ...opts, precomputedWalk: walked };
 
   // Only code files are worth shipping out: a changed doc is read on the main

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import {
@@ -17,7 +17,7 @@ import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
-import { scanSummary, type RepoScan } from "./scan.js";
+import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
 import { indexDirPath, preloadSessionLazy, readPersistedIndex, INDEX_DIR, type PersistedMeta } from "./preload.js";
 import { compatibleEntries, extractionProfile, sameExtractionProfile } from "./cache.js";
@@ -173,15 +173,22 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       writes the binary index to stdout)
   --project-root <uri> \`scip\`: override Metadata.project_root (default
                       file://<repo>); pin it for a byte-reproducible index
-  --include <glob>    Only include matching paths (repeatable)
+  --include <glob>    Only include matching paths (repeatable). Globs are rooted
+                      at the repo: '*.ts' is top-level files only, '**/*.ts'
+                      any depth
   --exclude <glob>    Exclude matching paths (repeatable)
-  --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
+  --scope <path>      Restrict to one directory or file of the repo ('./src',
+                      'src/' and an absolute path inside the repo work too).
+                      Combined with --include/--exclude as an intersection
+                      (\`grep\`: added to its globs instead)
   --no-gitignore      Do not honor .gitignore files (default: honored)
   --ignore-dir <name> Directory names to skip (repeatable) — REPLACES the
                       default ignored-directory set, never merges with it
-                      (\`.git\` and \`.codeindex\` stay skipped regardless)
-  --max-files <n>     Cap walked files (default: none — the whole tree is
-                      indexed; a cap sets the \`capped\` flag)
+                      (\`.git\` and \`.codeindex\` stay skipped regardless).
+                      A name, not a path: use --exclude '<dir>/**' for a path
+  --max-files <n>     Cap indexed files, counted after --scope/--include/
+                      --exclude (default: none — the whole tree is indexed;
+                      a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --max-calls <n>     Per-file call-site cap for extraction (default 512)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
@@ -298,7 +305,9 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--exclude") flags.exclude.push(next());
     else if (a === "--scope") flags.scope = next();
     else if (a === "--no-gitignore") flags.gitignore = false;
-    else if (a === "--ignore-dir") flags.ignoreDirs.push(next());
+    // A trailing separator (`build/`, shell completion's spelling) still names
+    // the directory `build`; the walk compares bare names.
+    else if (a === "--ignore-dir") flags.ignoreDirs.push(next().replace(/(.)[\\/]+$/, "$1"));
     else if (a === "--max-files") flags.maxFiles = num();
     else if (a === "--max-bytes") flags.maxBytes = num();
     else if (a === "--max-calls") flags.maxCalls = num();
@@ -375,6 +384,38 @@ function writeArtifact(path: string, data: string | Uint8Array): void {
     rmSync(temp, { force: true });
   }
   writeFileSync(path, data);
+}
+
+// Path flags that cannot mean what was typed, reported once on stderr (stdout
+// carries the command's output). Each used to be a silent empty or unfiltered
+// result: `--ignore-dir src/gen` compares directory NAMES and so skipped
+// nothing, while still replacing the default set; a mistyped --scope
+// answered for zero files with exit 0.
+function warnPathFlags(flags: CliFlags): void {
+  for (const name of flags.ignoreDirs) {
+    if (!/[\\/]/.test(name)) continue;
+    process.stderr.write(
+      `codeindex: warning: --ignore-dir takes a directory name, and "${name}" is a path that matches nothing — use --exclude '${name}/**' to leave that directory out\n`,
+    );
+  }
+  if (flags.scope === undefined) return;
+  const scope = normalizeScope(flags.repo, flags.scope);
+  if (scope === ".." || scope.startsWith("../") || isAbsolute(scope)) {
+    process.stderr.write(`codeindex: warning: --scope ${flags.scope} is outside --repo ${flags.repo} — nothing matches\n`);
+  } else if (scope && !/[*?[]/.test(scope) && !existsSync(join(flags.repo, scope))) {
+    process.stderr.write(`codeindex: warning: --scope ${flags.scope} does not exist under ${flags.repo} — nothing matches\n`);
+  }
+}
+
+// The warning for a scan that kept no file at all. Include globs are rooted at
+// the repo, which is the usual surprise: `*.py` is the top-level files only.
+function warnEmptyScan(flags: CliFlags): void {
+  const rooted = flags.include.find((g) => !g.includes("/"));
+  process.stderr.write(
+    `codeindex: warning: no file of ${flags.repo} was indexed — check --scope/--include/--exclude and the ignore rules` +
+      (rooted ? ` (globs are rooted at the repo: '${rooted}' matches top-level paths only, '**/${rooted}' any depth)` : "") +
+      "\n",
+  );
 }
 
 function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexOptions {
@@ -563,6 +604,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   const flags = parseFlags(rest);
   if (!existsSync(flags.repo)) throw new Error(`--repo path does not exist: ${flags.repo}`);
   if (!statSync(flags.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags.repo}`);
+  warnPathFlags(flags);
 
   // Warm ONLY the grammars for languages actually present, and only for commands
   // that scan the file tree. Scan-less commands (grep, churn, coupling,
@@ -574,12 +616,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags.positional !== "build");
   let precomputedWalk: WalkResult | undefined;
   if (scans && !flags.noAst) {
-    precomputedWalk = walk(flags.repo, {
-      maxFileBytes: flags.maxBytes,
-      maxFiles: flags.maxFiles,
-      gitignore: flags.gitignore,
-      ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
-    });
+    // The scan's own walk options, path filter included, so the grammars
+    // warmed are those of the files in scope and the scan can reuse this walk.
+    precomputedWalk = walk(flags.repo, scanWalkOptions(flags.repo, scanOptions(flags)));
   }
   let grammarsWarmed = false;
   const warmPresentGrammars = async (): Promise<void> => {
@@ -687,11 +726,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       workers: flags.workers,
     });
     const extraction = extractionProfile(scan.files, flags.maxCalls, grammarReady);
-    if (scan.files.length === 0) {
-      process.stderr.write(
-        `codeindex: warning: no file of ${flags.repo} was indexed — check --scope/--include/--exclude and the ignore rules\n`,
-      );
-    }
+    if (scan.files.length === 0) warnEmptyScan(flags);
     const modelDir = resolveEmbedModelDir(flags.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : undefined;
 
@@ -800,6 +835,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // path-based classifiers, never a read or a parse. Same numbers as before by
     // construction — scanSummary and scanRepo share the keptFiles loop.
     const s = scanSummary(flags.repo, scanOptions(flags, precomputedWalk));
+    if (s.fileCount === 0) warnEmptyScan(flags);
     const summary = {
       engineVersion: ENGINE_VERSION,
       commit: s.commit,

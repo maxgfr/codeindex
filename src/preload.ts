@@ -33,7 +33,7 @@ import {
 } from "./cache.js";
 export type { ExtractionProfile, PersistedCacheEntry, PersistedCacheMap } from "./cache.js";
 import { grammarReady, resolvableGrammarKeys } from "./ast/loader.js";
-import { scanRepo, type RepoScan, type ScanOptions } from "./scan.js";
+import { scanRepo, scanWalkOptions, type RepoScan, type ScanOptions } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
 import type { IndexArtifacts } from "./pipeline.js";
 import { sha1 } from "./hash.js";
@@ -241,12 +241,7 @@ export async function preloadSessionLazy(
   const persisted = readPersistedIndex(repo, indexDir);
   if (!persisted) return undefined;
   const { ast, workers, ...scanOpts } = opts;
-  const walked = scanOpts.precomputedWalk ?? walk(repo, {
-    maxFileBytes: scanOpts.maxBytes,
-    maxFiles: scanOpts.maxFiles,
-    gitignore: scanOpts.gitignore,
-    ignoreDirs: scanOpts.ignoreDirs,
-  });
+  const walked = scanOpts.precomputedWalk ?? walk(repo, scanWalkOptions(repo, scanOpts));
   // Records extracted at another tier (or call cap) than this run would use
   // are dropped before anything else looks at the cache. Nothing is loaded yet,
   // so the tier is PREDICTED from what the warm would load; a dropped entry
