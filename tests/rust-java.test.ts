@@ -33,6 +33,18 @@ describe("extractCode: Rust mod/use specs", () => {
     expect(specs).toContain("mod util");
     expect(specs).not.toContain("mod inline");
   });
+  it("emits a #[path] module as its file, not as the plain mod name", () => {
+    const src = [
+      '#[path = "weird_name.rs"]',
+      "/// doc",
+      '#[cfg(unix)]',
+      "pub(crate) mod odd;",
+      '#[path = "sys/unix.rs"] mod sys;',
+      "mod plain;",
+    ].join("\n");
+    const specs = extractCode("src/lib.rs", ".rs", src).refs.map((r) => r.spec);
+    expect(specs).toEqual(["mod-path weird_name.rs", "mod-path sys/unix.rs", "mod plain"]);
+  });
   it("expands brace groups, strips aliases and globs", () => {
     const info = extractCode("src/a.rs", ".rs", "use crate::x::{y, z::w as W};\nuse crate::deep::*;\n");
     const specs = info.refs.map((r) => r.spec);
@@ -216,5 +228,86 @@ describe("resolveImport — Java/C# indexes", () => {
     // A dotted prefix, not a string prefix: `Acm` names no namespace.
     expect(resolveImport(from, ".cs", "Acm", ctx).kind).toBe("external");
     expect(resolveImport(from, ".cs", "System.Linq", ctx).kind).toBe("external");
+  });
+});
+
+describe("resolveImport — Rust crate names, renames, uniform paths and #[path]", () => {
+  const root = scratchRepo({
+    "Cargo.toml": [
+      "[workspace]",
+      'members = ["crates/*"]',
+      "",
+      "[workspace.dependencies]",
+      'ws-alias = { package = "core-lib", path = "crates/core" } # inherited rename',
+    ].join("\n"),
+    "crates/core/Cargo.toml": [
+      "[package]",
+      'authors = ["a"]',
+      'name = "core-lib"',
+      'edition = "2021"',
+      "",
+      "[lib]",
+      'name = "corelib"',
+    ].join("\n"),
+    "crates/core/src/lib.rs": 'pub mod util;\npub mod net;\n#[path = "weird_name.rs"]\npub mod odd;\n#[path = "gone.rs"]\nmod gone;\nuse net::http::Client;\nuse serde::Serialize;\n',
+    "crates/core/src/util.rs": "pub fn u() {}\n",
+    "crates/core/src/weird_name.rs": "pub fn w() {}\n",
+    "crates/core/src/net/mod.rs": "pub mod http;\n",
+    "crates/core/src/net/http/mod.rs": "mod client;\nuse client::Client;\n",
+    "crates/core/src/net/http/client.rs": "pub struct Client;\n",
+    "crates/app/Cargo.toml": [
+      "[package]",
+      'name = "app"',
+      "edition.workspace = true",
+      "",
+      "[dependencies]",
+      'renamed = { package = "core-lib", path = "../core" }',
+      "ws-alias.workspace = true",
+      'serde = "1"',
+      "",
+      "[dev-dependencies.by-table]",
+      'package = "core-lib"',
+      'path = "../core"',
+    ].join("\n"),
+    "crates/app/src/main.rs": "use corelib::util::u;\nuse renamed::util;\nuse ws_alias::net;\nuse by_table::util::u as v;\nfn main() {}\n",
+    // No `edition`: cargo's default, 2015, where `use` paths are crate-relative.
+    "crates/old/Cargo.toml": '[package]\nname = "old"\n',
+    "crates/old/src/lib.rs": "mod a;\nmod b;\n",
+    "crates/old/src/a.rs": "use b::B;\n",
+    "crates/old/src/b.rs": "pub struct B;\n",
+  });
+  const ctx = buildResolveContext(scanRepo(root));
+  const lib = "crates/core/src/lib.rs";
+  const main = "crates/app/src/main.rs";
+  const res = (from: string, spec: string) => resolveImport(from, ".rs", spec, ctx);
+
+  it("names a crate by its [lib] name", () => {
+    expect(res(main, "corelib::util::u")).toEqual({ kind: "resolved", target: "crates/core/src/util.rs" });
+    expect(res(main, "core_lib::util::u").kind).toBe("external");
+  });
+  it("follows a dependency renamed inline, as a table, and through [workspace.dependencies]", () => {
+    expect(res(main, "renamed::util")).toEqual({ kind: "resolved", target: "crates/core/src/util.rs" });
+    expect(res(main, "by_table::util::u")).toEqual({ kind: "resolved", target: "crates/core/src/util.rs" });
+    expect(res(main, "ws_alias::net")).toEqual({ kind: "resolved", target: "crates/core/src/net/mod.rs" });
+    // A rename belongs to the crate that declares it.
+    expect(res(lib, "renamed::util").kind).toBe("external");
+  });
+  it("reads a bare path as a child module first (2018+ uniform paths)", () => {
+    expect(res(lib, "net::http::Client")).toEqual({ kind: "resolved", target: "crates/core/src/net/http/mod.rs" });
+    expect(res("crates/core/src/net/http/mod.rs", "client::Client")).toEqual({
+      kind: "resolved",
+      target: "crates/core/src/net/http/client.rs",
+    });
+    expect(res(lib, "serde::Serialize").kind).toBe("external");
+  });
+  it("reads a bare path from the crate root in a 2015 crate", () => {
+    expect(res("crates/old/src/a.rs", "b::B")).toEqual({ kind: "resolved", target: "crates/old/src/b.rs" });
+  });
+  it("resolves a #[path] module to its file, and dangles a missing one", () => {
+    expect(res(lib, "mod-path weird_name.rs")).toEqual({ kind: "resolved", target: "crates/core/src/weird_name.rs" });
+    expect(res(lib, "mod-path gone.rs")).toEqual({ kind: "dangling", reason: "missing-module" });
+    const { graph } = buildIndexArtifacts(root);
+    const dangling = graph.fileEdges.filter((e) => e.dangling).map((e) => `${e.from} ${e.to}`);
+    expect(dangling).toEqual([`${lib} mod-path gone.rs`]);
   });
 });

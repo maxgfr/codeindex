@@ -62,10 +62,17 @@ interface GoModule {
 }
 
 interface RustCrate {
-  name: string; // [package].name with "-" mapped to "_" (the in-code identifier)
+  name: string; // [lib].name, else [package].name, "-" mapped to "_" (the in-code identifier)
   dir: string; // posix dir of Cargo.toml, "" for root
-  srcDir: string; // dir/src
-  rootFile?: string; // src/lib.rs or src/main.rs, whichever exists
+  srcDir: string; // the dir of the [lib] path when one is set, else dir/src
+  rootFile?: string; // the [lib] path, else src/lib.rs or src/main.rs, whichever exists
+  // Renamed dependencies (`alias = { package = "x", … }`, directly or through
+  // `[workspace.dependencies]`) onto an in-repo crate: in-code alias -> that
+  // crate's dir. Code names a renamed crate by the alias, never by its own name.
+  renames?: Map<string, string>;
+  // Edition 2015 (cargo's default when `edition` is absent): a `use` path is
+  // crate-relative there, where 2018+ reads it from the current module.
+  edition2015?: boolean;
 }
 
 // The index a JVM import resolves against, one for .java, .kt and .scala
@@ -490,6 +497,138 @@ function parseGoReplaces(text: string, modDir: string): { from: string; toDir: s
   return out;
 }
 
+interface CargoDep {
+  package?: string; // the real package name when the key is a rename
+  path?: string;
+  workspace?: boolean; // `x.workspace = true`: the entry lives in [workspace.dependencies]
+}
+
+interface CargoManifest {
+  dir: string;
+  packageName?: string;
+  libName?: string;
+  libPath?: string;
+  edition?: string; // as written; "workspace" when inherited, undefined when absent
+  deps: Map<string, CargoDep>; // every [*dependencies] table, keyed by the name as written
+  workspaceDeps?: Map<string, CargoDep>; // set when the manifest has a [workspace]
+}
+
+// The few Cargo.toml facts resolution needs, read line by line: `[section]`
+// headers and their `key = value` lines, values read as a quoted string,
+// `true`, or a one-line inline table. Not a TOML parser — a multi-line value
+// is skipped, and nothing here needs one.
+function parseCargoManifest(text: string, dir: string): CargoManifest {
+  const out: CargoManifest = { dir, deps: new Map() };
+  const str = (v: string): string | undefined => {
+    const m = /^(?:"([^"]*)"|'([^']*)')$/.exec(v);
+    return m ? (m[1] ?? m[2]) : undefined;
+  };
+  const entry = (table: Map<string, CargoDep>, name: string): CargoDep => {
+    let d = table.get(name);
+    if (!d) table.set(name, (d = {}));
+    return d;
+  };
+  // One `key = value` of a dependency, whichever TOML shape carried it.
+  const setDep = (dep: CargoDep, key: string, value: string): void => {
+    if (key === "package" || key === "path") dep[key] = str(value) ?? dep[key];
+    else if (key === "workspace") dep.workspace = value === "true";
+  };
+  let section = "";
+  for (const raw of text.split(/\r?\n/)) {
+    // Drop a trailing comment, keeping a `#` inside a quoted string.
+    const line = raw.replace(/^((?:[^"'#]|"[^"]*"|'[^']*')*)#.*$/, "$1").trim();
+    const header = /^\[\[?([^\]]+)\]\]?$/.exec(line);
+    if (header) {
+      section = header[1]!.replace(/["'\s]/g, "");
+      if (section === "workspace" || section.startsWith("workspace.")) out.workspaceDeps ??= new Map();
+      continue;
+    }
+    const kv = /^([\w.-]+)\s*=\s*(.+)$/.exec(line);
+    if (!kv) continue;
+    const key = kv[1]!;
+    const value = kv[2]!;
+    if (section === "package") {
+      if (key === "name") out.packageName = str(value) ?? out.packageName;
+      else if (key === "edition") out.edition = str(value) ?? (/workspace\s*=\s*true/.test(value) ? "workspace" : undefined);
+      else if (key === "edition.workspace") out.edition = "workspace";
+      continue;
+    }
+    if (section === "lib") {
+      if (key === "name") out.libName = str(value) ?? out.libName;
+      else if (key === "path") out.libPath = str(value) ?? out.libPath;
+      continue;
+    }
+    // [dependencies], [dev-dependencies], [build-dependencies], their
+    // [target.'cfg(…)'.*] forms and [workspace.dependencies]; a `.x` suffix
+    // is the `[dependencies.x]` table form of one entry.
+    const deps = /^(?:(workspace)\.|target\..+\.)?(?:dev-|build-)?dependencies(?:\.(.+))?$/.exec(section);
+    if (!deps) continue;
+    const table = deps[1] ? out.workspaceDeps! : out.deps;
+    if (deps[2]) {
+      setDep(entry(table, deps[2]), key, value);
+      continue;
+    }
+    const dot = /^([\w-]+)\.(package|path|workspace)$/.exec(key);
+    if (dot) setDep(entry(table, dot[1]!), dot[2]!, value);
+    else if (value.startsWith("{")) {
+      const dep = entry(table, key);
+      for (const m of value.matchAll(/\b(package|path|workspace)\s*=\s*("[^"]*"|'[^']*'|true|false)/g)) {
+        setDep(dep, m[1]!, m[2]!);
+      }
+    }
+  }
+  return out;
+}
+
+// Every Cargo.toml with a [package] as a crate, each with the renamed
+// dependencies it can name. Deepest dir first so the crate enclosing an
+// importing file is found by a simple scan.
+function buildRustCrates(root: string, fileSet: Set<string>): RustCrate[] {
+  const manifests: CargoManifest[] = [];
+  for (const rel of [...fileSet].sort(byStr)) {
+    if (rel !== "Cargo.toml" && !rel.endsWith("/Cargo.toml")) continue;
+    manifests.push(parseCargoManifest(readText(join(root, rel)), rel.includes("/") ? posix.dirname(rel) : ""));
+  }
+  // A virtual workspace manifest has no crate of its own.
+  const packages = manifests.filter((m) => m.packageName !== undefined);
+  const byDir = new Map(packages.map((m) => [m.dir, m]));
+  const within = (dir: string, anc: string): boolean => !anc || dir === anc || dir.startsWith(anc + "/");
+  const crates: RustCrate[] = [];
+  for (const m of packages) {
+    const defaultSrc = norm(posix.join(m.dir, "src")).replace(/^\.$/, "");
+    const libPath = m.libPath ? norm(posix.join(m.dir, m.libPath)) : undefined;
+    const lib = libPath && !libPath.startsWith("..") && fileSet.has(libPath) ? libPath : undefined;
+    const srcDir = lib ? (lib.includes("/") ? posix.dirname(lib) : "") : defaultSrc;
+    const rootFile = lib ?? firstThat(fileSet, [posix.join(defaultSrc, "lib.rs"), posix.join(defaultSrc, "main.rs")]);
+    // The workspace this crate inherits `{ workspace = true }` entries from:
+    // the nearest manifest at or above it declaring [workspace].
+    const ws = manifests
+      .filter((w) => w.workspaceDeps && within(m.dir, w.dir))
+      .sort((a, b) => b.dir.length - a.dir.length)[0];
+    const renames = new Map<string, string>();
+    for (const [alias, dep] of [...m.deps].sort((a, b) => byStr(a[0], b[0]))) {
+      const src = dep.workspace ? ws?.workspaceDeps?.get(alias) : dep;
+      if (!src?.package) continue; // not a rename: code uses the crate's own name
+      const base = dep.workspace ? ws!.dir : m.dir;
+      const target = src.path
+        ? byDir.get(norm(posix.join(base, src.path)).replace(/^\.$/, ""))
+        : packages.find((p) => p.packageName === src.package);
+      if (target) renames.set(alias.replace(/-/g, "_"), target.dir);
+    }
+    crates.push({
+      name: (m.libName ?? m.packageName!).replace(/-/g, "_"),
+      dir: m.dir,
+      srcDir,
+      rootFile,
+      ...(renames.size ? { renames } : {}),
+      // An inherited edition (`edition.workspace = true`) is 2021+: workspace
+      // inheritance itself only arrived with Rust 1.64.
+      ...(m.edition === undefined || m.edition === "2015" ? { edition2015: true } : {}),
+    });
+  }
+  return crates.sort((a, b) => b.dir.length - a.dir.length || (a.dir < b.dir ? -1 : 1));
+}
+
 // Build the repo-wide context resolution needs: the file set, a dir→files index,
 // tsconfig path aliases, the go module paths, and python roots. Read once.
 export function buildResolveContext(scan: RepoScan): ResolveContext {
@@ -632,23 +771,9 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
   }
   goModules.sort((a, b) => b.dir.length - a.dir.length || (a.dir < b.dir ? -1 : 1));
 
-  // Rust crates: every Cargo.toml with a [package] section. The crate's in-code
-  // name maps "-" to "_" (cargo's identifier rule); deepest dir first so the
-  // crate enclosing an importing file is found by a simple scan.
-  const rustCrates: RustCrate[] = [];
-  for (const rel of fileSet) {
-    if (rel !== "Cargo.toml" && !rel.endsWith("/Cargo.toml")) continue;
-    const text = readText(join(scan.root, rel));
-    // [package] name = "x" — section-scoped so a [dependencies] entry named
-    // `name` can't masquerade as the crate name.
-    const m = /\[package\][^[]*?^\s*name\s*=\s*"([^"]+)"/ms.exec(text);
-    if (!m) continue; // a virtual workspace manifest — no crate of its own
-    const dir = rel.includes("/") ? posix.dirname(rel) : "";
-    const srcDir = norm(posix.join(dir, "src")).replace(/^\.$/, "");
-    const rootFile = firstThat(fileSet, [posix.join(srcDir, "lib.rs"), posix.join(srcDir, "main.rs")]);
-    rustCrates.push({ name: m[1]!.replace(/-/g, "_"), dir, srcDir, rootFile });
-  }
-  rustCrates.sort((a, b) => b.dir.length - a.dir.length || (a.dir < b.dir ? -1 : 1));
+  // Rust crates. The crate's in-code name is its [lib] name, else its package
+  // name, "-" mapped to "_" (cargo's identifier rule).
+  const rustCrates = buildRustCrates(scan.root, fileSet);
 
   // Java source roots: a file at X/com/a/b/C.java declaring `package com.a.b`
   // anchors X as a root — covers src/main/java, Maven/Gradle multi-module, any
@@ -1063,6 +1188,13 @@ function resolveRust(fromRel: string, spec: string, ctx: ResolveContext): Resolu
     const hit = probeMod(childDir, name) ?? (isRootish ? undefined : probeMod(fromDir, name));
     return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
   }
+  if (spec.startsWith("mod-path ")) {
+    // `#[path = "x.rs"] mod m;` names its file outright, relative to the
+    // declaring file's own dir. It must exist, like any declared `mod`.
+    const p = norm(posix.join(fromDir, spec.slice("mod-path ".length)));
+    if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
+    return ctx.fileSet.has(p) ? { kind: "resolved", target: p } : { kind: "dangling", reason: "missing-module" };
+  }
 
   const segs = spec.split("::").map((s) => s.trim()).filter(Boolean);
   if (!segs.length) return { kind: "external" };
@@ -1091,8 +1223,18 @@ function resolveRust(fromRel: string, spec: string, ctx: ResolveContext): Resolu
     baseDir = dir;
     rest = segs.slice(i);
   } else {
-    // A bare first segment may be a sibling in-repo crate (`other_crate::…`).
-    const target = ctx.rustCrates.find((c) => c.name === head);
+    // A bare first segment is a module in scope or a crate. In scope: a child
+    // module of this file (2018+ uniform paths: `use net::http::Client;` in
+    // lib.rs), or a crate-root module (2015, where `use` paths are
+    // crate-relative). Local first — rustc rejects a name that is both.
+    const local = walkPath(home?.edition2015 ? home.srcDir : childDir, segs);
+    if (local) return { kind: "resolved", target: local };
+    // Else a crate: a dependency renamed in this crate's Cargo.toml (code
+    // names it only by the alias), then an in-repo crate by its own name.
+    const renamed = home?.renames?.get(head);
+    const target = renamed !== undefined
+      ? ctx.rustCrates.find((c) => c.dir === renamed)
+      : ctx.rustCrates.find((c) => c.name === head);
     if (target) {
       const walked = walkPath(target.srcDir, segs.slice(1));
       if (walked) return { kind: "resolved", target: walked };

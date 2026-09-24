@@ -292,10 +292,21 @@ function extractImports(ext: string, content: string): RawRef[] {
     }
   } else if (ext === ".rs") {
     let m: RegExpExecArray | null;
+    // `#[path = "x.rs"] mod foo;` loads x.rs (relative to this file's dir)
+    // instead of foo.rs, so it is emitted as `mod-path x.rs`; the plain
+    // `mod foo` it would otherwise also yield names a file that is not there.
+    // Other attributes and doc comments may sit between the two.
+    const pathed = new Set<number>(); // end offsets of the `mod …;` statements taken here
+    const pathRe =
+      /#\[\s*path\s*=\s*"([^"]+)"\s*\]\s*(?:(?:#\[[^\]]*\]|\/\/[^\n]*)\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_]\w*\s*;/g;
+    while ((m = pathRe.exec(content))) {
+      specs.add(`mod-path ${m[1]}`);
+      pathed.add(m.index + m[0].length);
+    }
     // `mod foo;` declares a child module that MUST exist as a file (an inline
     // `mod foo { … }` body has no `;` and is skipped).
     const modRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm;
-    while ((m = modRe.exec(content))) specs.add(`mod ${m[1]}`);
+    while ((m = modRe.exec(content))) if (!pathed.has(m.index + m[0].length)) specs.add(`mod ${m[1]}`);
     // `use` paths, brace groups expanded. External crates (std, serde, …) are
     // filtered at resolve time, where the in-repo crate list lives.
     const useRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);/gm;
