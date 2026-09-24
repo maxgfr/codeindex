@@ -111,6 +111,7 @@ describe("rewriteCommand — rewrites it understands", () => {
     expect(rewriteCommand("rg -tpy 'def main'")).toBe("codeindex grep 'def main' --include '**/*.py' --include '**/*.pyi' --ignore-dir .codeindex");
     expect(rewriteCommand("rg -S foo")).toBe("codeindex grep foo --ignore-case --ignore-dir .codeindex");
     expect(rewriteCommand("rg -S Foo")).toBe("codeindex grep Foo --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -S -F '\\Q'")).toBe("codeindex grep '\\\\Q' --ignore-dir .codeindex"); // a literal Q is uppercase
     expect(rewriteCommand("rg -l foo")).toBe("codeindex grep foo --files-with-matches --ignore-dir .codeindex");
     expect(rewriteCommand("git grep -n foo -- '*.ts'")).toBe("codeindex grep foo --include '**/*.ts' --ignore-dir .codeindex");
   });
@@ -165,6 +166,7 @@ describe("rewriteCommand — refusals (a bad rewrite is worse than none)", () =>
     expect(rewriteCommand("grep -r foo /etc")).toBeUndefined();
     expect(rewriteCommand("grep -r foo ../other")).toBeUndefined();
     expect(rewriteCommand("grep -r foo 'src/*.ts'")).toBeUndefined();
+    expect(rewriteCommand("grep -r foo ''")).toBeUndefined();
   });
 
   it("refuses rule orders where the later rule wins in grep/rg but exclusion wins here", () => {

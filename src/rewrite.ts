@@ -729,7 +729,7 @@ function toPattern(p: Parsed): string | undefined {
 // Normalise a search path to the engine's repo-relative scope, or undefined
 // when it points outside the tree the rewrite searches (`..`, absolute, `~`).
 function toScope(path: string): string | undefined {
-  if (path.startsWith("/") || path.startsWith("~") || /[*?[\]{}\\]/.test(path)) return undefined;
+  if (path === "" || path.startsWith("/") || path.startsWith("~") || /[*?[\]{}\\]/.test(path)) return undefined;
   const s = path.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
   if (s.split("/").some((seg) => seg === "..")) return undefined;
   return s === "" || s === "." ? "" : s;
@@ -766,7 +766,8 @@ export function rewriteCommand(cmd: string, bin = "codeindex"): string | undefin
   // tell the two apart.
   if (p.orderSensitive) return undefined;
 
-  const ignoreCase = p.smartCase ? !p.patterns.some(hasUpperLiteral) : p.ignoreCase;
+  const upper = (s: string): boolean => (p.fixed ? s !== s.toLowerCase() : hasUpperLiteral(s));
+  const ignoreCase = p.smartCase ? !p.patterns.some(upper) : p.ignoreCase;
   const pattern = toPattern(p);
   if (pattern === undefined) return undefined;
   try {
