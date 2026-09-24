@@ -155,7 +155,7 @@ function byLen(a: string, b: string): number {
   return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
 }
 
-function tolerantJsonParse(text: string): unknown {
+export function tolerantJsonParse(text: string): unknown {
   // tsconfig.json is JSONC: strip // and /* */ comments and trailing commas. This
   // MUST be string-aware — tsconfig glob values like "**/*.ts" or
   // "./src/styled-system/*" contain `/*`, `*/` and `//` that a naive regex
@@ -940,6 +940,15 @@ function resolveCsharp(spec: string, ctx: ResolveContext): Resolution {
     }
   }
   return best ? { kind: "resolved", target: best } : { kind: "external" };
+}
+
+// Extensions resolveImport dispatches on. Any other importer falls through to
+// `external`, so its imports can never become edges — the resolution report
+// calls those `unsupported` rather than letting them pass as third-party.
+// Keep in step with the dispatch below.
+const RESOLVER_EXTS = new Set([".go", ".rs", ".java", ".rb", ".rake", ".php", ".cs"]);
+export function hasImportResolver(ext: string): boolean {
+  return JS_TS.has(ext) || SFC_HTML.has(ext) || PY.has(ext) || C_CPP.has(ext) || RESOLVER_EXTS.has(ext);
 }
 
 // Resolve an import specifier for a file of the given extension.

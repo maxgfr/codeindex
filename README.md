@@ -376,6 +376,9 @@ codeindex implementations Runnable --repo .   # who implements it, transitively
 codeindex callgraph buildGraph --repo . --depth 2
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
+codeindex workspaces --repo . --check         # monorepo packages; undeclared sibling imports exit 1
+codeindex resolution --repo .                 # per-language import resolution health
+codeindex mermaid src/app --repo .            # module diagram around a module, dir or file
 ```
 
 ## Values with no single source of truth
@@ -425,6 +428,45 @@ An arrow function returning a value (`export const getPath = () => "/a/b"`) is
 a *consumer*, not a source of truth, and is reported as a call site. A lookup
 table (`export const ROUTES = { … }`) genuinely is one, and is reported as a
 holder.
+
+## Monorepos and import resolution
+
+`codeindex workspaces` lists the packages of a monorepo with their declared
+dependency graph, one cycle if there is one, and a topological build order. It
+reads npm/yarn `workspaces`, `pnpm-workspace.yaml` (block or flow list), lerna,
+nx, Cargo `[workspace]`, `go.work` (without one, every nested `go.mod` outside
+`vendor`, `testdata` and `fixtures` dirs), Maven `<modules>` (recursing into
+nested aggregators), uv workspaces, Composer path repositories and Gradle
+`include` (multi-line forms too; `project(':x')` and `projects.x` type-safe
+accessors become edges). Manifests are read as JSONC, like the resolver reads
+them; one that still does not parse is named in `warnings` instead of being
+dropped silently.
+
+`--check` compares what each package declares with what its code imports,
+using the link-graph's resolved import edges:
+
+- `undeclared` — a package imports a sibling its manifest does not list. It
+  works in a hoisted checkout and breaks the isolated install, the publish or
+  `go mod tidy`. Any entry makes the command exit 1, a CI gate like `rules`.
+  Nx members are skipped: Nx infers project dependencies from imports.
+- `unusedDeclared` — a declared sibling no import uses (npm, pnpm, lerna,
+  Cargo and Go only; informational, never fails the check).
+
+`codeindex resolution` says whether the graph can be trusted for a language
+before you rely on `impact`, `callers` or `deadcode` there. Per importer
+language it counts imports that `resolved` to an in-repo file, went `external`
+(third-party or stdlib, by design no edge), `dangling` (a local target that
+does not exist, by reason) and `unsupported` (no resolver for that language),
+lists the top dangling specifiers with an example importer and the top
+external packages (`--limit`, default 10; `--lang` for one language), notes a
+language that yields no import edges at all, and repeats the config `warnings`
+(an unparseable `tsconfig.json` or `package.json`, a missing `extends` base)
+that silently turn resolvable imports external. `index` prints those warnings
+to stderr too. Nothing here changes an artifact.
+
+`codeindex mermaid [target]` focuses the diagram on a module slug, a module
+directory or a file (its module), and fails on anything else rather than
+printing an empty diagram.
 
 ## Docker
 
@@ -740,13 +782,13 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**33 tools**, grouped by what they answer:
+**34 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
-| impact | `find_references`, `callers`, `call_graph`, `dead_code` |
+| impact | `find_references`, `callers`, `call_graph`, `dead_code`, `resolution_report` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
@@ -828,9 +870,9 @@ introduced are only sent to clients that asked for it, so an older client sees
 exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
-the 27 read tools, `destructiveHint`/`idempotentHint` on the six that write —
+the 28 read tools, `destructiveHint`/`idempotentHint` on the six that write —
 which is what lets a host auto-approve reads and confirm only writes. From
-`2025-06-18`, the 20 tools whose result is always a JSON object also declare an
+`2025-06-18`, the 21 tools whose result is always a JSON object also declare an
 `outputSchema` and return `structuredContent`, so a client can validate and type
 the result instead of re-parsing a string. The remaining tools return arrays,
 argument-dependent shapes or plain text, which cannot yield a conforming
@@ -906,7 +948,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **33 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **34 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

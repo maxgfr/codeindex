@@ -362,7 +362,7 @@ describe("MCP server", () => {
 
     expect(res.get(1)!.result!.serverInfo!.name).toBe("codeindex");
     const toolNames = res.get(2)!.result!.tools!.map((t) => t.name);
-    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "lsp_status", "onboard", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules"]);
+    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "lsp_status", "onboard", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules", "resolution_report"]);
 
     const summary = JSON.parse(res.get(3)!.result!.content![0]!.text) as { fileCount: number };
     expect(summary.fileCount).toBeGreaterThan(0);
@@ -1600,5 +1600,28 @@ describe("tool profiles and onboarding", () => {
     expect(brief.brief).toContain("indexed files");
     expect(brief.brief).toContain("## Key files");
     expect(res.get(3)!.result!.content![0]!.text).toBe(brief.brief);
+  }, 30_000);
+});
+
+describe("workspaces check and resolution_report over MCP", () => {
+  it("workspaces `check: true` reports an undeclared sibling import; resolution_report answers per language", async () => {
+    const monorepo = fileURLToPath(new URL("./fixtures/mini-monorepo", import.meta.url));
+    const res = await mcpSession([
+      { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+      { method: "notifications/initialized" },
+      { id: 2, method: "tools/call", params: { name: "workspaces", arguments: { repo: monorepo, check: true } } },
+      { id: 3, method: "tools/call", params: { name: "workspaces", arguments: { repo: monorepo } } },
+      { id: 4, method: "tools/call", params: { name: "resolution_report", arguments: { repo: monorepo, lang: "typescript" } } },
+    ]);
+    const checked = JSON.parse(res.get(2)!.result!.content![0]!.text) as {
+      check: { ok: boolean; undeclared: { from: string; to: string; example: string }[] };
+    };
+    expect(checked.check.ok).toBe(false);
+    expect(checked.check.undeclared).toEqual([{ from: "@scope/b", to: "@scope/a", files: 1, example: "packages/b/src/consumer.ts" }]);
+    // Unchecked: the historical shape, byte for byte (no `check`, no empty `warnings`).
+    expect(Object.keys(JSON.parse(res.get(3)!.result!.content![0]!.text) as object)).toEqual(["packages", "cycle", "topoOrder"]);
+    const report = JSON.parse(res.get(4)!.result!.content![0]!.text) as { languages: { lang: string; resolved: number }[] };
+    expect(report.languages.map((l) => l.lang)).toEqual(["typescript"]);
+    expect(report.languages[0]!.resolved).toBe(1);
   }, 30_000);
 });

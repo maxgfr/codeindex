@@ -17,7 +17,7 @@ import { writeMemory, readMemory, deleteMemory, listMemories } from "../src/memo
 import { readText as engineRead } from "../src/walk.js";
 import { findDeadCode } from "../src/deadcode.js";
 import { symbolComplexity, riskHotspots } from "../src/complexity.js";
-import { renderMermaid } from "../src/viz.js";
+import { renderMermaid, renderMermaidClustered } from "../src/viz.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { grepRepo } from "../src/grep.js";
 import { extractCode } from "../src/extract/code.js";
@@ -536,5 +536,47 @@ describe("dead code, complexity, mermaid", () => {
     expect(mmd).toContain("graph LR");
     expect(mmd).toContain("-->");
     expect(renderMermaid(graph)).toBe(mmd);
+  });
+
+  // `src/a-b` and `src/a_b` (slugs src-a-b, src-a_b) used to share the node id
+  // src_a_b, so the diagram drew one module with a doubled edge.
+  function collidingRepo(): string {
+    const root = mkdtempSync(join(tmpdir(), "ci-mmd-ids-"));
+    for (const dir of ["a-b", "a_b", "c"]) mkdirSync(join(root, "src", dir), { recursive: true });
+    writeFileSync(join(root, "src", "a-b", "x.ts"), "export const x = 1;\n");
+    writeFileSync(join(root, "src", "a_b", "y.ts"), "export const y = 2;\n");
+    writeFileSync(join(root, "src", "c", "z.ts"), 'import { x } from "../a-b/x";\nimport { y } from "../a_b/y";\nexport const z = x + y;\n');
+    return root;
+  }
+
+  it("renderMermaid gives every module its own node id, keeping readable ids where they are unique", () => {
+    const { graph } = buildIndexArtifacts(collidingRepo());
+    expect(renderMermaid(graph)).toBe(
+      [
+        "graph LR",
+        '  src_a_b["src-a-b"]',
+        '  src_a_b_2["src-a_b"]',
+        '  src_c["src-c"]',
+        "  src_c --> src_a_b",
+        "  src_c --> src_a_b_2",
+        "",
+      ].join("\n"),
+    );
+    const clustered = renderMermaidClustered(graph).content;
+    expect(clustered).toContain("m_src_a_b[");
+    expect(clustered).toContain("m_src_a_b_2[");
+    expect(clustered).toContain("m_src_c --> m_src_a_b\n");
+    expect(clustered).toContain("m_src_c --> m_src_a_b_2\n");
+  });
+
+  it("renderMermaid focuses on a slug, a module directory or a file, and throws on anything else", () => {
+    const { graph } = buildIndexArtifacts(collidingRepo());
+    const bySlug = renderMermaid(graph, { module: "src-a_b" });
+    expect(bySlug).toBe(['graph LR', '  src_a_b_2["src-a_b"]', '  src_c["src-c"]', "  src_c --> src_a_b_2", ""].join("\n"));
+    expect(renderMermaid(graph, { module: "src/a_b" })).toBe(bySlug);
+    expect(renderMermaid(graph, { module: "src/a_b/" })).toBe(bySlug);
+    expect(renderMermaid(graph, { module: "src/a_b/y.ts" })).toBe(bySlug);
+    // It used to print a bare "graph LR" — indistinguishable from "no dependencies".
+    expect(() => renderMermaid(graph, { module: "nonexistent" })).toThrow(/no such file or module in the index: nonexistent/);
   });
 });
