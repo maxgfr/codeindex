@@ -76,6 +76,21 @@
           "kind": "field"
         },
         {
+          "name": "QueueName",
+          "kind": "type",
+          "doc": true
+        },
+        {
+          "name": "Delay",
+          "kind": "type",
+          "doc": true
+        },
+        {
+          "name": "budget",
+          "kind": "type",
+          "exported": false
+        },
+        {
           "name": "Start",
           "parent": "Scheduler",
           "kind": "method",

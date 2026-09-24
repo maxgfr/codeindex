@@ -164,6 +164,23 @@ function isAnonymousMemberPlaceholder(name: string, span: string): boolean {
 }
 
 /**
+ * The name is an operator or an indexer whose spelling the extractor
+ * NORMALIZED, so the source may space it differently.
+ *
+ * WHY: `operator ==` and `operator==` are one C++/C# name, and an in-class
+ * declaration and its out-of-line definition must not split on formatting — so
+ * src/ast/node.ts drops the whitespace. A C# indexer has no name at all and is
+ * named `this[]` whatever its parameters. The same presence check still
+ * applies, only whitespace-insensitively, and an indexer's span must really
+ * open `this[`.
+ */
+function isNormalizedOperator(name: string, span: string): boolean {
+  if (name === "this[]") return /\bthis\s*\[/.test(span);
+  if (!name.startsWith("operator")) return false;
+  return span.replace(/\s+/g, "").includes(name.replace(/\s+/g, ""));
+}
+
+/**
  * Every structural invariant, over symbols supplied by the CALLER.
  *
  * Split out from `checkFile` so the invariants can be tested against
@@ -209,7 +226,8 @@ export function checkSymbols(rel: string, content: string, symbols: readonly Cod
       !span.includes(s.name) &&
       !isFileStemDefaultExport(rel, s.name, span) &&
       !isComposedName(s.name, span) &&
-      !isAnonymousMemberPlaceholder(s.name, span)
+      !isAnonymousMemberPlaceholder(s.name, span) &&
+      !isNormalizedOperator(s.name, span)
     ) {
       out.push({
         kind: "span-missing-name",

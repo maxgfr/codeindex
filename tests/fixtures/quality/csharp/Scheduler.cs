@@ -66,6 +66,16 @@ public class Scheduler : BaseWorker, IRunnable
         pending.Clear();
     }
 
+    /// <summary>The job queued at <paramref name="index"/>.</summary>
+    public JobSpec this[int index] => pending[index];
+
+    /// <summary>Both queues, drained as one.</summary>
+    public static Scheduler operator +(Scheduler a, Scheduler b) => a;
+
+    private void Trace(string note = "public api")
+    {
+    }
+
     /// <summary>The job at the head of the queue.</summary>
     public static explicit operator JobSpec(Scheduler scheduler) => scheduler.pending[0];
 

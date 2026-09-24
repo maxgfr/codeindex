@@ -34,6 +34,15 @@ type Audited struct {
 	Log []string
 }
 
+// QueueName is the name a scheduler drains — an alias, not a new type.
+type QueueName = string
+
+type (
+	// Delay is how long to wait before a retry, in milliseconds.
+	Delay = int
+	budget = int
+)
+
 // Start drains the pending queue.
 func (s *Scheduler) Start() error {
 	for _, spec := range s.pending {

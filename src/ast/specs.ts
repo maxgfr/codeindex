@@ -5,14 +5,15 @@
 // `defs` maps a node type to a symbol kind; `containers` are nodes whose
 // children we keep walking (bodies, declaration groups, `export …` wrappers);
 // `exported` decides visibility from the declaration's HEADER (its full
-// signature — see ast/signature.ts) and its name.
+// signature — see ast/signature.ts), its name, and the header's MODIFIER PREFIX
+// (the text before the name, where visibility keywords live).
 //
 // Everything after `assignments` is an escape hatch for a grammar shape the two
 // tables cannot express. Each one exists because a real language needs it, and
 // each is documented with which.
 import type { RawRelation } from "../types.js";
 import type { TSNode } from "./node.js";
-import { findFirst, nameOf, readTypeName } from "./node.js";
+import { findFirst, nameOf, nextDeclarator, readTypeName } from "./node.js";
 
 /** Type names an inheritance clause lists, skipping type-argument noise. */
 function heritageTargets(clause: TSNode | null | undefined): string[] {
@@ -60,7 +61,15 @@ export interface LangSpec {
   lang: string;
   defs: Record<string, string>;
   containers: Set<string>;
-  exported: (header: string, name: string) => boolean;
+  /**
+   * `prefix` is the header up to the declared name — where every language here
+   * but Solidity writes its visibility keyword. Rules that look for a keyword
+   * read it rather than the whole header, whose parameters and default values
+   * are free text: `setPrivate(bool $private)` is not private, and
+   * `register(Object internal)` is not `internal`. When the name cannot be
+   * located in the tree, `prefix` is the whole header.
+   */
+  exported: (header: string, name: string, prefix: string) => boolean;
   imports?: Record<string, "string" | "path">; // node type → how to read the specifier
   // Call-expression node type → how to read the callee name. "function": read the
   // callee/function field, descending to the rightmost segment of a member/
@@ -106,6 +115,15 @@ export interface LangSpec {
    * colliding with every same-named method in the repo.
    */
   parentFrom?: Record<string, (node: TSNode) => string | undefined>;
+
+  /**
+   * Where a declaration's members hang when that is not the declaration itself.
+   * The walk descends into a declaration's CONTAINER children; C's
+   * `typedef struct { … } T` keeps its field list one level further down, inside
+   * the struct_specifier under the typedef's `type` field. Returning undefined
+   * means "the declaration itself", the default.
+   */
+  bodyFrom?: Record<string, (node: TSNode) => TSNode | undefined>;
 
   /**
    * Container node types whose members are public regardless of the visibility
@@ -209,16 +227,20 @@ export const FUNCTION_VALUE_TYPES = new Set([
   "lambda",
 ]);
 
-const byPublicKeyword = (line: string): boolean => /\b(public|internal)\b/.test(line);
+// Keyword rules read the modifier PREFIX (see LangSpec.exported), never the
+// whole header: a keyword in a parameter list or a default string used to flip
+// the declaration, and Scala's `class Svc(val name: String, private val secret:
+// Int)` marked the whole CLASS private for one constructor parameter.
+const byPublicKeyword = (_h: string, _n: string, prefix: string): boolean => /\b(public|internal)\b/.test(prefix);
 // Scala is public by default; `private`/`protected` modifiers sit on the
 // declaration's header (same stance as the regex tier).
-const byNotPrivate = (line: string): boolean => !/\b(private|protected)\b/.test(line);
+const byNotPrivate = (_h: string, _n: string, prefix: string): boolean => !/\b(private|protected)\b/.test(prefix);
 // Lua: `local function f` is file-local by construction. Assignment-style
 // `local f = function()` stays exported — regex-tier parity (its rule marks
 // those exported), and the `local` keyword lives on the wrapping
 // variable_declaration, outside the assignment node this line is read from.
 const byNotLocal = (line: string): boolean => !/^local\b/.test(line);
-const byPub = (line: string): boolean => /\bpub\b/.test(line);
+const byPub = (_h: string, _n: string, prefix: string): boolean => /\bpub\b/.test(prefix);
 const byCapital = (_l: string, name: string): boolean => /^[A-Z]/.test(name);
 const byPyConvention = (_l: string, name: string): boolean => !name.startsWith("_") || /^__\w+__$/.test(name);
 const always = (): boolean => true;
@@ -226,8 +248,91 @@ const always = (): boolean => true;
 // bare declaration is module-private, so the name/header heuristic never marks it.
 const neverExport = (): boolean => false;
 
+// `if __name__ == "__main__":` is the SCRIPT half of a module. Now that the walk
+// descends into `if` blocks, what the guard assigns (`parser = ArgumentParser()`,
+// `args = parser.parse_args()`) would read as module constants, yet none of it
+// exists when the module is imported. Checked only on the assignment path, the
+// one place that noise could come from; ancestors are few at module scope.
+const MAIN_GUARD = /^(__name__\s*==\s*(["'])__main__\2|(["'])__main__\3\s*==\s*__name__)$/;
+function underMainGuard(node: TSNode): boolean {
+  for (let p = node.parent; p && p.type !== "module"; p = p.parent) {
+    if (p.type === "if_statement" && MAIN_GUARD.test(p.childForFieldName("condition")?.text ?? "")) return true;
+  }
+  return false;
+}
+
+// A conversion operator (`operator bool() const`) is an `operator_cast` holding
+// an abstract_function_declarator, so a test for function_declarator alone
+// filed it as a data member.
 const hasFunctionDeclarator = (node: TSNode): boolean =>
-  findFirst(node, (n) => n.type === "function_declarator") !== undefined;
+  findFirst(node, (n) => n.type === "function_declarator" || n.type === "operator_cast") !== undefined;
+
+// --- C and C++ share their preprocessor and their `typedef struct` idiom -----
+
+const TAGGED_SPECIFIER: Record<string, string> = {
+  struct_specifier: "struct",
+  union_specifier: "union",
+  enum_specifier: "enum",
+  class_specifier: "class",
+};
+
+// `typedef struct job { int id; } job_t;` keeps its members inside the
+// struct_specifier under the typedef's `type` field — a child no container list
+// names, so the walk emitted `job_t` and never looked inside. cJSON's `cJSON`,
+// the one struct its whole API is about, indexed with no fields at all.
+const typedefBody = (node: TSNode): TSNode | undefined => {
+  const t = node.childForFieldName("type");
+  return t && TAGGED_SPECIFIER[t.type] && t.childForFieldName("body") ? t : undefined;
+};
+
+// The TAG of that struct (`job`) is a name in its own right — code writes
+// `struct job *next` — so it is emitted beside the typedef, unless the two are
+// spelled the same (`typedef struct cJSON {…} cJSON`). A body-less typedef
+// (`typedef struct opaque opaque_t;`) defines no tag and emits none.
+function typedefTag(node: TSNode): { name: string; kind: string }[] {
+  if (node.type !== "type_definition") return [];
+  const t = typedefBody(node);
+  const tag = t?.childForFieldName("name")?.text;
+  return t && tag && tag !== nameOf(node) ? [{ name: tag, kind: TAGGED_SPECIFIER[t.type]! }] : [];
+}
+
+// A valueless `#define ACME_SCHEDULER_H` directly inside the `#ifndef` of the
+// same name is a header's include guard: every header has one and it names
+// nothing a reader looks up. A guard wraps the rest of the header; an `#ifndef`
+// holding nothing but its define (`#ifndef API\n#define API\n#endif`) is a
+// real default and stays.
+function isIncludeGuard(node: TSNode): boolean {
+  if (node.childForFieldName("value")) return false;
+  const guard = node.parent;
+  if (guard?.type !== "preproc_ifdef" || guard.namedChildCount <= 2) return false;
+  if (guard.childForFieldName("name")?.text !== node.childForFieldName("name")?.text) return false;
+  return guard.firstChild?.type === "#ifndef";
+}
+
+// `void Widget::draw() const {…}` defines a MEMBER out of line, and its class is
+// the scope nearest the name (`Outer::Inner::deep` → Inner). Without this the
+// definition hung off the enclosing namespace, so a .cc file's methods could
+// not be tied to the class they implement — 243 of leveldb's 993 functions.
+// Also covers a static data member defined out of line (`int Widget::count = 0;`).
+function cppMemberScope(node: TSNode): string | undefined {
+  let d = node.childForFieldName("declarator");
+  while (d && d.type !== "qualified_identifier") d = nextDeclarator(d);
+  let scope: TSNode | null = null;
+  while (d?.type === "qualified_identifier") {
+    scope = d.childForFieldName("scope");
+    d = d.childForFieldName("name");
+  }
+  return scope ? readTypeName(scope) : undefined;
+}
+
+// A Scala or Kotlin constructor parameter declares a MEMBER when `val`/`var` is
+// the last word before its name — after any modifier or annotation. A
+// start-of-text test dropped every modified one (`private val secret`,
+// `@Transient var z`), which the tags.scm oracle then listed as missing.
+function memberKeyword(node: TSNode, name: TSNode | undefined | null): string | undefined {
+  if (!name) return undefined;
+  return /\b(val|var)\s*$/.exec(node.text.slice(0, name.startIndex - node.startIndex))?.[1];
+}
 
 // Elixir's declaring macros, by callee name. Anything not here is an ordinary
 // call, not a declaration.
@@ -425,7 +530,28 @@ export const SPECS: Record<string, LangSpec> = {
   python: {
     lang: "python",
     defs: { function_definition: "function", class_definition: "class" },
-    containers: new Set(["block", "decorated_definition", "module"]),
+    containers: new Set([
+      "block",
+      "decorated_definition",
+      "module",
+      // Compound statements, for the same reason TypeScript lists its own: the
+      // walk only descends through a node whose type is a container, so `block`
+      // alone stopped one level short of every declaration under an `if`/`try`.
+      // Python declares conditionally all the time — `if TYPE_CHECKING:` (seven
+      // classes in flask/globals.py), `except ImportError:` fallbacks, version
+      // switches — and the regex tier found all of them while the AST tier did
+      // not. None of these enters a function, so a local stays a local and a
+      // module-level assignment inside one stays a module constant.
+      "if_statement",
+      "elif_clause",
+      "else_clause",
+      "try_statement",
+      "except_clause",
+      "finally_clause",
+      "with_statement",
+      "match_statement",
+      "case_clause",
+    ]),
     exported: byPyConvention,
     imports: { import_statement: "path", import_from_statement: "path" },
     calls: { call: "function" },
@@ -465,6 +591,7 @@ export const SPECS: Record<string, LangSpec> = {
       if (!assign || assign.type !== "assignment") return [];
       const left = assign.childForFieldName("left");
       if (!left || left.type !== "identifier") return [];
+      if (underMainGuard(node)) return [];
       return [{ name: left.text, kind: ctx.ownerKind === "class" ? "field" : "const" }];
     },
   },
@@ -474,6 +601,11 @@ export const SPECS: Record<string, LangSpec> = {
       function_declaration: "function",
       method_declaration: "method",
       type_spec: "type",
+      // `type B = int` is NOT a type_spec: tree-sitter-go gives an alias its own
+      // node, so every alias — top-level or grouped in `type ( … )` — was
+      // dropped. The grammar's own tags.scm misses it too, which is why no
+      // oracle comparing against it could notice.
+      type_alias: "type",
       const_spec: "const",
       var_spec: "var",
       field_declaration: "field",
@@ -773,6 +905,16 @@ export const SPECS: Record<string, LangSpec> = {
       // node the identifier-ish reader skips, so the declaration vanished. Only a
       // user-defined target happened to work.
       conversion_operator_declaration: (node) => node.childForFieldName("type")?.text,
+      // `public static Svc operator +(Svc a, Svc b)` has no name node, so the
+      // generic reader returned the RETURN type ("Svc"). The operator token is
+      // the identity, spelled like C++'s (`operator+`, `operator true`).
+      operator_declaration: (node) => {
+        const op = node.childForFieldName("operator")?.text;
+        return op ? `operator${/^\w/.test(op) ? " " : ""}${op}` : undefined;
+      },
+      // `public int this[int i]` is named by the keyword, which the generic
+      // reader cannot see, so every indexer was dropped.
+      indexer_declaration: () => "this[]",
     },
     relationsFrom: {
       class_declaration: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : []),
@@ -840,6 +982,11 @@ export const SPECS: Record<string, LangSpec> = {
       // file read as C++ indexed fully. A same-family asymmetry is a miss, not a
       // stance. Found by the grammar-vocabulary oracle.
       declaration: "const",
+      // `#define MAX_JOBS 64` / `#define SQUARE(x) …`. In a C API the macros ARE
+      // part of the public surface (cJSON's 32 — its version numbers, type tags
+      // and `cJSON_ArrayForEach` — were all absent), and ctags indexes both forms.
+      preproc_def: "macro",
+      preproc_function_def: "macro",
     },
     // C has no visibility keyword — headers are the interface, so everything
     // counts as exported (same stance as the regex extractor).
@@ -861,6 +1008,11 @@ export const SPECS: Record<string, LangSpec> = {
       // Same split as C++: a `declaration` is a prototype or a variable.
       declaration: (node) => (hasFunctionDeclarator(node) ? "function" : "const"),
     },
+    nameFrom: {
+      preproc_def: (node) => (isIncludeGuard(node) ? undefined : node.childForFieldName("name")?.text),
+    },
+    bodyFrom: { type_definition: typedefBody },
+    extraMembers: typedefTag,
   },
   cpp: {
     lang: "cpp",
@@ -883,6 +1035,9 @@ export const SPECS: Record<string, LangSpec> = {
       // form was not.
       using_declaration: "using",
       friend_declaration: "friend",
+      // Same preprocessor as C; see the C spec.
+      preproc_def: "macro",
+      preproc_function_def: "macro",
     },
     containers: new Set([
       "translation_unit",
@@ -911,7 +1066,14 @@ export const SPECS: Record<string, LangSpec> = {
       // `declaration` the reader will not cross — so the function form emitted
       // nothing. Descend one level when the direct read fails.
       friend_declaration: (node) => nameOf(node) ?? (node.namedChildren[0] ? nameOf(node.namedChildren[0]) : undefined),
+      preproc_def: (node) => (isIncludeGuard(node) ? undefined : node.childForFieldName("name")?.text),
     },
+    parentFrom: {
+      function_definition: cppMemberScope,
+      declaration: cppMemberScope,
+    },
+    bodyFrom: { type_definition: typedefBody },
+    extraMembers: typedefTag,
     relationsFrom: {
       // C++ has no interfaces — a pure-virtual base is still `extends`.
       class_specifier: (node, ctx) =>
@@ -973,7 +1135,8 @@ export const SPECS: Record<string, LangSpec> = {
       // parameter. Only the first is a member of the type — and a `case class`
       // makes every parameter one.
       class_parameter: (node) => {
-        if (/^\s*(?:val|var)\b/.test(node.text)) return /^\s*var\b/.test(node.text) ? "var" : "val";
+        const keyword = memberKeyword(node, node.childForFieldName("name"));
+        if (keyword) return keyword;
         return node.parent?.parent?.type === "class_definition" && /\bcase\s+class\b/.test(node.parent.parent.text.slice(0, 80))
           ? "val"
           : undefined;
@@ -1046,7 +1209,7 @@ export const SPECS: Record<string, LangSpec> = {
       // A bare `(queue: String)` parameter is an argument, not a property; only
       // `val`/`var` (or a `data class`, where every parameter is one) declares a member.
       class_parameter: (node) =>
-        /^\s*(?:val|var)\b/.test(node.text) ||
+        memberKeyword(node, node.namedChildren.find((c) => /identifier$/.test(c.type))) ||
         /\bdata\s+class\b/.test(node.parent?.parent?.parent?.text.slice(0, 80) ?? "")
           ? "property"
           : undefined,

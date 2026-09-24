@@ -1,10 +1,19 @@
 """Coordinates background jobs and their retry policy."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 MAX_ATTEMPTS = 5
 _DEFAULT_QUEUE = "jobs"
+
+try:
+    from ujson import loads as _fast_loads
+except ImportError:
+    _fast_loads = None
+
+    def parse_payload(raw: str) -> dict:
+        """Decode a job payload without the optional ujson speedup."""
+        return {}
 
 
 class Runnable:
@@ -57,3 +66,13 @@ class Scheduler(Runnable):
 async def drain(scheduler: Scheduler) -> None:
     """Await every in-flight job."""
     scheduler.start()
+
+
+if TYPE_CHECKING:
+
+    class SchedulerLike(Runnable):
+        """What a type checker accepts wherever a Scheduler is expected."""
+
+
+if __name__ == "__main__":
+    queue_name = _DEFAULT_QUEUE

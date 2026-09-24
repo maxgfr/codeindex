@@ -76,6 +76,12 @@
           "exported": false
         },
         {
+          "name": "pause",
+          "parent": "Scheduler",
+          "kind": "method",
+          "doc": true
+        },
+        {
           "name": "depth",
           "parent": "Scheduler",
           "kind": "method"

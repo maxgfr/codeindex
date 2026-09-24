@@ -119,6 +119,13 @@
           "exported": false
         },
         {
+          "name": "register",
+          "parent": "Scheduler",
+          "kind": "method",
+          "exported": false,
+          "doc": true
+        },
+        {
           "name": "depth",
           "parent": "Scheduler",
           "kind": "method"

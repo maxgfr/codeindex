@@ -37,6 +37,15 @@ pub enum Error {
     Rejected(String),
 }
 
+/// Tuning knobs read once at startup.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct Options {
+    /// Upper bound on queued jobs.
+    #[allow(dead_code)]
+    pub max_pending: usize,
+}
+
 /// Runs jobs with exponential backoff between retries.
 pub struct Scheduler {
     pub queue: String,
@@ -67,6 +76,13 @@ impl Scheduler {
 
     fn reset(&mut self) {
         self.pending.clear();
+    }
+
+    /// True when nothing is waiting.
+    #[inline]
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        self.pending.is_empty()
     }
 }
 

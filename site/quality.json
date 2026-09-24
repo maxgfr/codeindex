@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "engineVersion": "2.26.0",
+  "engineVersion": "2.30.1",
   "base": {
     "languages": 17,
-    "files": 18,
-    "symbols": 265,
-    "calls": 47,
-    "relations": 21,
-    "docLabels": 147,
-    "sigLabels": 29
+    "files": 20,
+    "symbols": 307,
+    "calls": 48,
+    "relations": 22,
+    "docLabels": 174,
+    "sigLabels": 32
   },
   "extraction": [
     {
@@ -88,7 +88,7 @@
         "symbolsRecall": 1,
         "symbolsF1": 1,
         "kindAccuracy": 1,
-        "exportedAccuracy": 0.9444,
+        "exportedAccuracy": 0.9524,
         "docCoverage": 1,
         "sigCoverage": 1,
         "callsF1": 1,
@@ -262,7 +262,7 @@
       "id": "grammar-vocabulary",
       "label": "Grammar vocabulary",
       "authority": "each tree-sitter grammar's own declared node types, read at runtime from the parser",
-      "value": "21 grammars, 208 declaration-ish types unhandled",
+      "value": "21 grammars, 211 declaration-ish types unhandled",
       "scope": "Names every construct a grammar declares that no extraction rule covers. The denominator is the grammar's, not ours — which is what makes it able to find what nobody thought to label."
     },
     {

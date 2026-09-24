@@ -29,6 +29,24 @@ union acme_result {
 /** Opaque scheduler handle. */
 typedef struct acme_scheduler acme_scheduler_t;
 
+/** Upper bound on queued jobs. */
+#define ACME_MAX_PENDING 64
+
+/** Milliseconds to wait before attempt `n`. */
+#define ACME_BACKOFF_MS(n) (1u << (n))
+
+/** Counters a scheduler keeps while it runs. */
+typedef struct acme_stats {
+  /** Jobs that ran to completion. */
+  unsigned done;
+  unsigned failed;
+  /** Called after every finished job. */
+  void (*on_done)(const struct acme_job *job);
+} acme_stats_t;
+
+/** How a dispatch ended. */
+typedef enum { ACME_OK, ACME_GAVE_UP } acme_status_t;
+
 /** Drain the pending queue. */
 int acme_start(acme_scheduler_t *sched);
 

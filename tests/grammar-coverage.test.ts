@@ -153,6 +153,22 @@ describe("grammar coverage", () => {
     expect(DECLARATIVE_TYPE.test("identifier")).toBe(false);
   });
 
+  it("sees the declarations whose node names fit no generic shape", () => {
+    // Each of these was missing from the index while this oracle could not name
+    // it: Go's `type B = int`, C's `#define`, Python 3.12's `type X = …`, Ruby's
+    // `class << self`.
+    for (const t of ["type_alias", "type_alias_statement", "preproc_def", "preproc_function_def", "singleton_class"]) {
+      expect(DECLARATIVE_TYPE.test(t), t).toBe(true);
+    }
+    // Elixir's `alias` is a module NAME, not a declaration; matching it would
+    // manufacture a gap in the one grammar with no declarative vocabulary.
+    expect(DECLARATIVE_TYPE.test("alias")).toBe(false);
+    // And the ones the specs now handle are no longer reported.
+    expect(grammarCoverage("go").uncoveredDeclarative).not.toContain("type_alias");
+    expect(grammarCoverage("c").uncoveredDeclarative).not.toContain("preproc_def");
+    expect(grammarCoverage("cpp").uncoveredDeclarative).not.toContain("preproc_function_def");
+  });
+
   // Elixir is the one grammar whose vocabulary contains nothing declaration-ish at
   // all: it declares through macro CALLS (`defmodule`, `def`, `defstruct`), so its
   // node types are `call`, `arguments`, `stab_clause`, `do_block` — no

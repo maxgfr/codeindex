@@ -52,6 +52,11 @@ class Scheduler extends BaseWorker implements Runnable
         $this->pending = [];
     }
 
+    /** Stop taking jobs; `$private` keeps the pause out of the audit log. */
+    public function pause(bool $private = false): void
+    {
+    }
+
     public function depth(): int
     {
         return count($this->pending);

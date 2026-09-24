@@ -66,6 +66,9 @@ public class Scheduler extends BaseWorker implements Runnable {
     pending.clear();
   }
 
+  /** Registers a hook; {@code internal} hides it from listings. */
+  void register(Runnable hook, boolean internal) {}
+
   @Override
   public int depth() {
     return pending.size();

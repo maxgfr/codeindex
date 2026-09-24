@@ -34,8 +34,15 @@ compares](#how-it-compares).
   not the first physical line), its own **doc comment**, its qualified `parent`,
   and its line span — including the members a declaration-only walk misses:
   interface members, class fields, enum members, every `declare`/`.d.ts`
-  declaration, Rust trait method signatures, Go interface method sets, record
-  components and constructor `val` parameters.
+  declaration, Rust trait method signatures, Go interface method sets and type
+  aliases, record components and constructor `val` parameters, C `#define`
+  macros and the members of a `typedef struct`, and Python declarations under
+  `if TYPE_CHECKING:` / `try:` / `with` blocks. A doc comment is found across
+  Rust attributes and TypeScript decorators; visibility is read from a
+  declaration's modifiers, never from its parameter names or default values;
+  an out-of-line C++ definition (`void Widget::draw()`) belongs to its class;
+  and a `.h` header is parsed as C++ when its content is (a namespace, class
+  or template), as C otherwise.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
@@ -61,7 +68,7 @@ vocabulary:
 | **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, against ctags' 94.6% on the same files |
 | **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | reports **2,014** declarations ctags does not over 6 real repositories, and reproduces **61.7%–98.8%** of ctags' names — what is left bucketed by kind, per repo below |
 | **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
-| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **208** declaration-ish node types still unhandled |
+| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **211** declaration-ish node types still unhandled |
 
 ### The one head-to-head
 
@@ -151,12 +158,12 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 265 labelled declarations in 18 files |
-| kind accuracy | **100%** | the same 265 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 94.4% on Go | the same 265 declarations |
-| doc comment attached | **100%** | the 147 declarations labelled with a doc |
-| complete signature | **100%** | the 29 declarations labelled with a signature |
-| call edges / inheritance (F1) | **100% / 100%** | 47 labelled call sites, 21 relations |
+| symbol precision / recall | **100% / 100%** | 307 labelled declarations in 20 files |
+| kind accuracy | **100%** | the same 307 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 307 declarations |
+| doc comment attached | **100%** | the 174 declarations labelled with a doc |
+| complete signature | **100%** | the 32 declarations labelled with a signature |
+| call edges / inheritance (F1) | **100% / 100%** | 48 labelled call sites, 22 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
 
 `pnpm quality:report` reproduces every number; `tests/quality.test.ts` enforces

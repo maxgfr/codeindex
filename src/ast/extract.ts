@@ -1,7 +1,7 @@
 import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector } from "../extract/literals.js";
 import { byStr } from "../sort.js";
-import { grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
+import { grammarKeyFor, grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
 import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
 import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, type LangSpec } from "./specs.js";
 import { declHeader } from "./signature.js";
@@ -304,6 +304,39 @@ function collectAll(
 }
 
 
+// Parts of a declaration that can spell its name BEFORE the name itself does,
+// or that hold free text — never searched for it: an annotation argument
+// (`@Column(name = "name") private String name` — the JPA idiom), a modifier
+// list, a parameter list, a body, a string.
+const NAME_SEARCH_SKIP = /annotation|attribute|decorator|modifier|parameter|argument|body|block|string|comment|_list$/;
+
+// Where a declaration's NAME starts: the first leaf, in source order, whose
+// text is the name. Bounded to three levels (C#'s field_declaration →
+// variable_declaration → variable_declarator is the deepest real shape), and
+// undefined when a spec synthesized the name (`this[]`, `aws_instance.web`).
+function nameStart(node: TSNode, name: string): number | undefined {
+  const visit = (n: TSNode, depth: number): number | undefined => {
+    for (const c of n.namedChildren) {
+      if (c.namedChildren.length === 0) {
+        if (c.text === name) return c.startIndex;
+      } else if (depth < 3 && !NAME_SEARCH_SKIP.test(c.type)) {
+        const hit = visit(c, depth + 1);
+        if (hit !== undefined) return hit;
+      }
+    }
+    return undefined;
+  };
+  return visit(node, 0);
+}
+
+// The last line a declaration occupies. A node whose final byte is a newline —
+// every C preprocessor directive, `#define` included — ends at column 0 of the
+// NEXT line, which is not part of it.
+function endLineOf(node: TSNode): number {
+  const end = node.endPosition;
+  return end.column === 0 && end.row > node.startPosition.row ? end.row : end.row + 1;
+}
+
 // Every identifier a destructuring pattern BINDS, in source order. Recurses so
 // nested and defaulted patterns (`const { a: { b }, c = 1 } = …`) yield `b` and
 // `c` rather than the pattern's text.
@@ -361,12 +394,15 @@ export function extractAst(
   content: string,
   opts: { maxCalls?: number; imports?: boolean; maxSymbols?: number } = {},
 ): AstResult | undefined {
-  const key = grammarKeyForExt(ext);
+  const key = grammarKeyFor(ext, content);
   if (!key || !grammarReady(key)) return undefined;
   const spec = SPECS[key];
   if (!spec) return undefined;
   const parser = parserFor(key);
   if (!parser) return undefined;
+  // A `.h` read as C++ is still a "c" file (see grammarKeyFor), and its symbols
+  // carry the language every other `.h` symbol carries.
+  const lang = SPECS[grammarKeyForExt(ext) ?? key]?.lang ?? spec.lang;
 
   let tree: { rootNode: TSNode; delete(): void } | null = null;
   try {
@@ -411,7 +447,9 @@ export function extractAst(
       if (spec.publicMember?.(node) === true) return true;
       if (!ctx.sectionPublic) return false;
       if (ctx.forcePublic) return true;
-      return ctx.exported || spec.exported(header, name);
+      if (ctx.exported) return true;
+      const at = nameStart(node, name);
+      return spec.exported(header, name, at === undefined ? header : content.slice(node.startIndex, at));
     };
 
     const docOf = (node: TSNode): string | undefined =>
@@ -441,10 +479,10 @@ export function extractAst(
             kind: bareKind,
             file: rel,
             line: c.startPosition.row + 1,
-            endLine: c.endPosition.row + 1,
+            endLine: endLineOf(c),
             ...(childCtx.parent ? { parent: childCtx.parent } : {}),
             exported: childCtx.forcePublic || childCtx.exported,
-            lang: spec.lang,
+            lang,
           });
           continue;
         }
@@ -457,13 +495,13 @@ export function extractAst(
             kind: extra.kind,
             file: rel,
             line: c.startPosition.row + 1,
-            endLine: c.endPosition.row + 1,
+            endLine: endLineOf(c),
             ...(childCtx.parent ? { parent: childCtx.parent } : {}),
             ...(childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {}),
             signature: header,
             ...(doc ? { doc } : {}),
             exported: visibilityOf(c, header, extra.name, childCtx),
-            lang: spec.lang,
+            lang,
           });
         }
 
@@ -480,6 +518,8 @@ export function extractAst(
     // container (Ruby's `class`, whose body_statement is the container) does not
     // get its body walked twice and emit every member twice.
     const walkBody = (node: TSNode, ctx: WalkCtx): void => {
+      const holder = spec.bodyFrom?.[node.type]?.(node);
+      if (holder) return walkBody(holder, ctx);
       let descended = false;
       for (const c of node.namedChildren) {
         if (!spec.containers.has(c.type)) continue;
@@ -520,11 +560,11 @@ export function extractAst(
                 kind: classLike ? "class" : "function",
                 file: rel,
                 line: node.startPosition.row + 1,
-                endLine: node.endPosition.row + 1,
+                endLine: endLineOf(node),
                 signature: declHeader(node, content),
                 ...(doc ? { doc } : {}),
                 exported: true,
-                lang: spec.lang,
+                lang,
               });
               break;
             }
@@ -584,12 +624,12 @@ export function extractAst(
                 kind: right.type === "class" ? "class" : "function",
                 file: rel,
                 line: expr.startPosition.row + 1,
-                endLine: expr.endPosition.row + 1,
+                endLine: endLineOf(expr),
                 ...(ctx.parent ? { parent: ctx.parent } : {}),
                 signature: declHeader(expr, content),
                 ...(doc ? { doc } : {}),
                 exported: !ctx.inFunctionBody && (nowExported || exportedAssign),
-                lang: spec.lang,
+                lang,
               });
               return;
             }
@@ -609,11 +649,11 @@ export function extractAst(
                     kind: "const",
                     file: rel,
                     line: expr.startPosition.row + 1,
-                    endLine: expr.endPosition.row + 1,
+                    endLine: endLineOf(expr),
                     ...(ctx.parent ? { parent: ctx.parent } : {}),
                     signature: declHeader(expr, content),
                     exported: true,
-                    lang: spec.lang,
+                    lang,
                   });
                 }
                 return;
@@ -646,12 +686,12 @@ export function extractAst(
             kind: "function",
             file: rel,
             line: node.startPosition.row + 1,
-            endLine: node.endPosition.row + 1,
+            endLine: endLineOf(node),
             ...(ctx.parent ? { parent: ctx.parent } : {}),
             signature: header,
             ...(doc ? { doc } : {}),
             exported: visibilityOf(node, header, target.text, { ...ctx, exported: nowExported }),
-            lang: spec.lang,
+            lang,
           });
         }
         return;
@@ -692,12 +732,12 @@ export function extractAst(
               kind,
               file: rel,
               line: node.startPosition.row + 1,
-              endLine: node.endPosition.row + 1,
+              endLine: endLineOf(node),
               ...(ctx.parent ? { parent: ctx.parent } : {}),
               signature: header,
               ...(doc ? { doc } : {}),
               exported: visibilityOf(node, header, bound, { ...ctx, exported: nowExported }),
-              lang: spec.lang,
+              lang,
             });
           }
           return;
@@ -724,13 +764,13 @@ export function extractAst(
             kind,
             file: rel,
             line: node.startPosition.row + 1,
-            endLine: node.endPosition.row + 1,
+            endLine: endLineOf(node),
             ...(parent ? { parent } : {}),
             ...(parentPath && parentPath !== parent ? { parentPath } : {}),
             signature: header,
             ...(doc ? { doc } : {}),
             exported: visibilityOf(node, header, name, { ...ctx, exported: nowExported }),
-            lang: spec.lang,
+            lang,
           });
           collectRelations(node, name);
           const entersFunction = FUNCTION_KINDS.has(kind);
