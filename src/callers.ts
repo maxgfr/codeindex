@@ -13,7 +13,7 @@
 // graph.json stays byte-compatible with ultraindex.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { familyOf, pickCandidate } from "./calls.js";
+import { addDef, defsOutside, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
 import { importPairsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 
@@ -73,34 +73,17 @@ export function buildCallerIndex(
   const pairs = importPairs ?? importPairsFor(scan);
   const recall = opts.recall === true;
 
-  // name → def sites (first symbol per (name, file) wins, like resolveCallEdges).
-  const defs = new Map<string, CodeSymbol[]>();
+  // name → family → def sites (first symbol per (name, file) wins, like
+  // resolveCallEdges). CodeSymbol structurally contains Cand's file/lang
+  // fields, and pickCandidate returns the selected object unchanged.
+  const defs: DefTable<CodeSymbol> = new Map();
   for (const f of scan.files) {
-    const seen = new Set<string>();
     for (const s of f.symbols) {
       if (!s.exported || REFERENCE_KINDS.has(s.kind)) continue;
-      if (seen.has(s.name)) continue;
-      seen.add(s.name);
-      let arr = defs.get(s.name);
-      if (!arr) defs.set(s.name, (arr = []));
-      arr.push(s);
+      addDef(defs, s.name, s);
     }
   }
-  // The hot loop below resolves every call. Group definitions by language
-  // family once so it does not allocate a filtered + mapped candidate list for
-  // each site. CodeSymbol structurally contains Cand's file/lang fields, and
-  // pickCandidate returns the selected object unchanged.
-  const defsByFamily = new Map<string, Map<string, CodeSymbol[]>>();
-  for (const [name, sites] of defs) {
-    const families = new Map<string, CodeSymbol[]>();
-    for (const site of sites) {
-      const family = familyOf(site.lang);
-      let grouped = families.get(family);
-      if (!grouped) families.set(family, (grouped = []));
-      grouped.push(site);
-    }
-    defsByFamily.set(name, families);
-  }
+  const targetsOf = importTargets(pairs);
   // Same-file binding also needs non-exported defs (a private helper shadows
   // an exported symbol of the same name elsewhere).
   const localDefs = new Map<string, Map<string, CodeSymbol>>();
@@ -123,6 +106,11 @@ export function buildCallerIndex(
     if (!f.calls?.length) continue;
     const family = familyOf(f.lang);
     const own = localDefs.get(f.rel)!;
+    const targets = targetsOf.get(f.rel);
+    // Every cross-file call of one name in one file binds the same way — the
+    // choice depends on (file, name) only — so resolve each name once per file.
+    // null = resolved to "no binding".
+    const bound = new Map<string, { def: CodeSymbol; corroborated: boolean } | null>();
     for (const c of f.calls) {
       const local = own.get(c.name);
       if (local) {
@@ -132,27 +120,34 @@ export function buildCallerIndex(
           record(local, recall ? { file: f.rel, line: c.line, confidence: "corroborated" } : { file: f.rel, line: c.line });
         continue;
       }
-      const cands = (defsByFamily.get(c.name)?.get(family) ?? []).filter((d) => d.file !== f.rel);
-      if (!cands.length) continue;
-      const imported = cands.filter((d) => pairs.has(`${f.rel}|${d.file}`));
-      const chosen =
-        family === "js"
-          ? imported.length
-            ? pickCandidate(f.rel, imported)
-            : // JS/TS gate: no corroborating import → no binding. Recall mode
-              // relaxes this to a unique-repo-wide name match (issue #7).
-              recall && cands.length === 1
-              ? cands[0]
-              : undefined
-          : imported.length
-            ? pickCandidate(f.rel, imported)
-            : pickCandidate(f.rel, cands);
-      if (!chosen) continue;
-      const def = chosen as CodeSymbol;
+      let hit = bound.get(c.name);
+      if (hit === undefined) {
+        hit = null;
+        const group = defs.get(c.name)?.get(family);
+        const cands = group ? defsOutside(group, f.rel) : [];
+        if (group && cands.length) {
+          const imported = importedDefs(group, targets);
+          const chosen =
+            family === "js"
+              ? imported.length
+                ? pickCandidate(f.rel, imported)
+                : // JS/TS gate: no corroborating import → no binding. Recall mode
+                  // relaxes this to a unique-repo-wide name match (issue #7).
+                  recall && cands.length === 1
+                  ? cands[0]
+                  : undefined
+              : imported.length
+                ? pickCandidate(f.rel, imported)
+                : pickCandidate(f.rel, cands);
+          if (chosen) hit = { def: chosen, corroborated: imported.length > 0 };
+        }
+        bound.set(c.name, hit);
+      }
+      if (!hit) continue;
       record(
-        def,
+        hit.def,
         recall
-          ? { file: f.rel, line: c.line, confidence: imported.length ? "corroborated" : "unique-name" }
+          ? { file: f.rel, line: c.line, confidence: hit.corroborated ? "corroborated" : "unique-name" }
           : { file: f.rel, line: c.line },
       );
     }

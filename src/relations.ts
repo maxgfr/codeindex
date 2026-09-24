@@ -17,7 +17,7 @@
 // looked like.
 import type { Edge, RawRelation } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { familyOf, pickCandidate, type Cand } from "./calls.js";
+import { addDef, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
 import { byStr } from "./sort.js";
 
 // Internal Map-key separator. Written as an ESCAPE, never as a literal NUL: a
@@ -68,19 +68,13 @@ interface TypeDef {
   line: number;
 }
 
-// name → every type-ish definition of it, deduped per file.
-function typeDefs(scan: RepoScan): Map<string, TypeDef[]> {
-  const defs = new Map<string, TypeDef[]>();
-  const seen = new Set<string>();
+// name → family → every type-ish definition of it, deduped per file.
+function typeDefs(scan: RepoScan): DefTable<TypeDef> {
+  const defs: DefTable<TypeDef> = new Map();
   for (const f of scan.files) {
     for (const s of f.symbols) {
       if (!TYPE_KINDS.has(s.kind)) continue;
-      const dedup = `${s.name} ${s.file}`;
-      if (seen.has(dedup)) continue;
-      seen.add(dedup);
-      let arr = defs.get(s.name);
-      if (!arr) defs.set(s.name, (arr = []));
-      arr.push({ name: s.name, file: s.file, kind: s.kind, lang: s.lang, line: s.line });
+      addDef(defs, s.name, { name: s.name, file: s.file, kind: s.kind, lang: s.lang, line: s.line });
     }
   }
   return defs;
@@ -96,19 +90,22 @@ function typeDefs(scan: RepoScan): Map<string, TypeDef[]> {
  */
 export function resolveRelations(scan: RepoScan, importPairs: Set<string>): ResolvedRelation[] {
   const defs = typeDefs(scan);
+  const targetsOf = importTargets(importPairs);
   const out: ResolvedRelation[] = [];
   for (const f of scan.files) {
     if (!f.relations?.length) continue;
     const family = familyOf(f.lang);
+    const targets = targetsOf.get(f.rel);
     for (const r of f.relations) {
-      const cands = (defs.get(r.to) ?? []).filter((d) => familyOf(d.lang) === family);
-      if (!cands.length) continue;
-      // Prefer a candidate the file actually imports; fall back to proximity.
-      const imported = cands.filter((d) => importPairs.has(`${f.rel}|${d.file}`) || d.file === f.rel);
-      const pool = imported.length ? imported : cands;
-      const chosen = pickCandidate(f.rel, pool.map((d): Cand => ({ file: d.file, lang: d.lang })));
-      if (!chosen) continue;
-      const target = pool.find((d) => d.file === chosen.file)!;
+      const group = defs.get(r.to)?.get(family);
+      if (!group) continue;
+      // Prefer a candidate the file actually imports (or declares itself);
+      // fall back to proximity.
+      const imported = importedDefs(group, targets);
+      const local = group.byFile.get(f.rel);
+      if (local) imported.push(local);
+      const target = pickCandidate(f.rel, imported.length ? imported : group.list);
+      if (!target) continue;
       out.push({
         kind: CONTRACT_KINDS.has(target.kind) ? "implements" : r.kind,
         from: r.from,
@@ -179,8 +176,8 @@ export function buildTypeHierarchy(scan: RepoScan, importPairs: Set<string>): Ma
   // Which declaration a (name, file) pair refers to.
   const entries = new Map<string, TypeHierarchyEntry>();
   const keyOf = (name: string, file: string): string => `${name}${SEP}${file}`;
-  for (const arr of defs.values()) {
-    for (const d of arr) {
+  for (const families of defs.values()) {
+    for (const d of [...families.values()].flatMap((g) => g.list)) {
       entries.set(keyOf(d.name, d.file), {
         name: d.name,
         file: d.file,

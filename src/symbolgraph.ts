@@ -13,7 +13,7 @@
 // the graph is built on demand from the scan, so no artifact or schema grows.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { familyOf, pickCandidate, type Cand } from "./calls.js";
+import { addDef, defsOutside, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
 import { enclosingAmong } from "./callers.js";
 import { resolveRelations } from "./relations.js";
 import { byStr } from "./sort.js";
@@ -94,9 +94,8 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   // Per-file symbol lists, filtered once and reused for every call site in that
   // file (the reason enclosingAmong is factored out of enclosingSymbol).
   const perFile = new Map<string, CodeSymbol[]>();
-  // Callable definitions by name, deduped per (name, file).
-  const defs = new Map<string, CodeSymbol[]>();
-  const defSeen = new Set<string>();
+  // Callable definitions by name and family, deduped per (name, file).
+  const defs: DefTable<CodeSymbol> = new Map();
 
   for (const f of scan.files) {
     const usable: CodeSymbol[] = [];
@@ -104,16 +103,11 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
       if (REFERENCE_KINDS.has(s.kind)) continue;
       usable.push(s);
       nodes.set(symbolId(s), toNode(s));
-      if (!s.exported) continue;
-      const key = `${s.name} ${s.file}`;
-      if (defSeen.has(key)) continue;
-      defSeen.add(key);
-      let arr = defs.get(s.name);
-      if (!arr) defs.set(s.name, (arr = []));
-      arr.push(s);
+      if (s.exported) addDef(defs, s.name, s);
     }
     perFile.set(f.rel, usable);
   }
+  const targetsOf = importTargets(importPairs);
 
   const agg = new Map<string, SymbolEdge>();
   const add = (from: string, to: string, kind: SymbolEdgeKind): void => {
@@ -131,6 +125,10 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
     const own = perFile.get(f.rel) ?? [];
     const localByName = new Map<string, CodeSymbol>();
     for (const s of own) if (!localByName.has(s.name)) localByName.set(s.name, s);
+    const targets = targetsOf.get(f.rel);
+    // The callee of a cross-file call depends on (file, name) only, so each
+    // name is bound once per file (null = no binding) — see buildCallerIndex.
+    const bound = new Map<string, string | null>();
 
     for (const c of f.calls) {
       const caller = enclosingAmong(own, c.line);
@@ -142,17 +140,21 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
         if (local.line !== c.line) add(symbolId(caller), symbolId(local), "calls");
         continue;
       }
-      const cands = (defs.get(c.name) ?? []).filter((d) => familyOf(d.lang) === family && d.file !== f.rel);
-      if (!cands.length) continue;
-      const imported = cands.filter((d) => importPairs.has(`${f.rel}|${d.file}`));
-      // JS/TS keeps its import gate: a bare identifier is too ambiguous to bind
-      // on name alone, and a wrong edge here misleads an impact analysis.
-      const pool = imported.length ? imported : family === "js" ? [] : cands;
-      if (!pool.length) continue;
-      const chosen = pickCandidate(f.rel, pool.map((d): Cand => ({ file: d.file, lang: d.lang })));
-      if (!chosen) continue;
-      const target = pool.find((d) => d.file === chosen.file)!;
-      add(symbolId(caller), symbolId(target), "calls");
+      let callee = bound.get(c.name);
+      if (callee === undefined) {
+        callee = null;
+        const group = defs.get(c.name)?.get(family);
+        if (group) {
+          const imported = importedDefs(group, targets);
+          // JS/TS keeps its import gate: a bare identifier is too ambiguous to
+          // bind on name alone, and a wrong edge here misleads an impact analysis.
+          const pool = imported.length ? imported : family === "js" ? [] : defsOutside(group, f.rel);
+          const target = pickCandidate(f.rel, pool);
+          if (target) callee = symbolId(target);
+        }
+        bound.set(c.name, callee);
+      }
+      if (callee) add(symbolId(caller), callee, "calls");
     }
   }
 
