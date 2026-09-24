@@ -3,6 +3,7 @@ import { LiteralCollector } from "./literals.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
 import { extractReexports, MAX_REEXPORTS } from "../lang/common.js";
+import { extractImports, extractPackage } from "./imports.js";
 import { isBanner, isDirective, stripCommentMarkers } from "./doc-text.js";
 import { subtokens } from "../util.js";
 
@@ -33,10 +34,6 @@ export interface CodeInfo {
   // extends/implements edges and the type hierarchy.
   relations?: RawRelation[];
 }
-
-const JS_TS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
-const PY = new Set([".py", ".pyi"]);
-const C_CPP = new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);
 
 // The leading comment block of a file, turned into one summary line. Handles
 // `//`, `#`, and `/* … */` / `""" … """` openers. Stops at the first code line.
@@ -99,158 +96,6 @@ function topDocComment(content: string): string | undefined {
   // First sentence, capped.
   const sentence = /^(.*?[.!?])(\s|$)/.exec(text);
   return (sentence ? sentence[1]! : text).slice(0, 200);
-}
-
-// Rust `use` paths may end in a brace group (`use crate::a::{b, c::d};`, nested
-// allowed). Expand each leaf into a full path, capped — a giant prelude group
-// shouldn't explode into hundreds of refs.
-const MAX_USE_EXPANSION = 16;
-function expandUseGroups(path: string, out: string[] = []): string[] {
-  if (out.length >= MAX_USE_EXPANSION) return out;
-  const brace = path.indexOf("{");
-  if (brace === -1) {
-    const cleaned = path.replace(/\s+as\s+\w+\s*$/, "").replace(/::\s*\*\s*$/, "").replace(/^::/, "").trim();
-    if (cleaned) out.push(cleaned);
-    return out;
-  }
-  const prefix = path.slice(0, brace);
-  let depth = 0;
-  let end = -1;
-  for (let i = brace; i < path.length; i++) {
-    if (path[i] === "{") depth++;
-    else if (path[i] === "}" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) return out; // unbalanced — drop rather than guess
-  const parts: string[] = [];
-  let cur = "";
-  depth = 0;
-  for (const ch of path.slice(brace + 1, end)) {
-    if (ch === "{") depth++;
-    if (ch === "}") depth--;
-    if (ch === "," && depth === 0) {
-      parts.push(cur);
-      cur = "";
-    } else cur += ch;
-  }
-  parts.push(cur);
-  for (const part of parts) {
-    const t = part.trim();
-    if (!t) continue;
-    if (t === "self") expandUseGroups(prefix.replace(/::\s*$/, ""), out);
-    else expandUseGroups(prefix + t, out);
-  }
-  return out;
-}
-
-// Extract import specifiers as written (no resolution). Resolution needs
-// repo-wide context (tsconfig paths, go.mod, python roots) and happens later.
-function extractImports(ext: string, content: string): RawRef[] {
-  const specs = new Set<string>();
-  const lines = content.split(/\r?\n/);
-
-  if (JS_TS.has(ext)) {
-    // Run over the WHOLE content, not line-by-line: a long `import { … } from "x"`
-    // (or `export { … } from "x"`) is routinely wrapped across several lines by
-    // formatters, and a per-line scan never sees the `from` clause — silently
-    // dropping the edge. `[^'"]*?` already excludes quotes, so it can't run past
-    // the statement's own specifier; the `g` flag also catches >1 per line.
-    let m: RegExpExecArray | null;
-    const from = /(?:^|[^\w$.])(?:import|export)\b[^'"]*?\bfrom\s*['"]([^'"]+)['"]/g;
-    while ((m = from.exec(content))) specs.add(m[1]!);
-    const bare = /(?:^|[\n;])\s*import\s*['"]([^'"]+)['"]/g;
-    while ((m = bare.exec(content))) specs.add(m[1]!);
-    const req = /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g;
-    while ((m = req.exec(content))) specs.add(m[1]!);
-    const dyn = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
-    while ((m = dyn.exec(content))) specs.add(m[1]!);
-  } else if (PY.has(ext)) {
-    for (const line of lines) {
-      const from = /^\s*from\s+(\.*[\w.]*)\s+import\b/.exec(line);
-      if (from) {
-        specs.add(from[1]!);
-        continue;
-      }
-      const imp = /^\s*import\s+(.+)$/.exec(line);
-      if (imp) {
-        for (const part of imp[1]!.split(",")) {
-          const name = part.trim().split(/\s+as\s+/)[0]!.trim();
-          if (name && /^[\w.]+$/.test(name)) specs.add(name);
-        }
-      }
-    }
-  } else if (ext === ".go") {
-    let inBlock = false;
-    for (const line of lines) {
-      const t = line.trim();
-      if (inBlock) {
-        if (t === ")") {
-          inBlock = false;
-          continue;
-        }
-        const b = /"([^"]+)"/.exec(t);
-        if (b) specs.add(b[1]!);
-        continue;
-      }
-      if (/^import\s*\($/.test(t)) {
-        inBlock = true;
-        continue;
-      }
-      const single = /^import\s+(?:[\w.]+\s+)?"([^"]+)"/.exec(t);
-      if (single) specs.add(single[1]!);
-    }
-  } else if (ext === ".rs") {
-    let m: RegExpExecArray | null;
-    // `mod foo;` declares a child module that MUST exist as a file (an inline
-    // `mod foo { … }` body has no `;` and is skipped).
-    const modRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm;
-    while ((m = modRe.exec(content))) specs.add(`mod ${m[1]}`);
-    // `use` paths, brace groups expanded. External crates (std, serde, …) are
-    // filtered at resolve time, where the in-repo crate list lives.
-    const useRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);/gm;
-    while ((m = useRe.exec(content))) {
-      for (const p of expandUseGroups(m[1]!.trim())) specs.add(p);
-    }
-  } else if (ext === ".java") {
-    // `import com.a.b.C;` / `import static com.a.b.C.method;` — wildcards kept
-    // as written; the resolver maps packages onto source roots.
-    let m: RegExpExecArray | null;
-    const imp = /^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
-    while ((m = imp.exec(content))) specs.add(m[1]!);
-  } else if (ext === ".rb" || ext === ".rake") {
-    // `require_relative "x"` is relative to the file — emit it as a relative path
-    // (leading "./") so the resolver resolves it against the file's dir. `require
-    // "x"` is resolved against lib roots or is external (a gem).
-    let m: RegExpExecArray | null;
-    const rel = /^\s*require_relative\s+['"]([^'"]+)['"]/gm;
-    while ((m = rel.exec(content))) specs.add(/^\.\.?\//.test(m[1]!) ? m[1]! : "./" + m[1]!);
-    const req = /^\s*require\s+['"]([^'"]+)['"]/gm;
-    while ((m = req.exec(content))) specs.add(m[1]!);
-  } else if (C_CPP.has(ext)) {
-    // Local `#include "foo.h"` — a real in-repo dependency. `<...>` is a system/
-    // third-party header (external) and is deliberately not captured.
-    let m: RegExpExecArray | null;
-    const inc = /^\s*#\s*include\s*"([^"]+)"/gm;
-    while ((m = inc.exec(content))) specs.add(m[1]!);
-  } else if (ext === ".php") {
-    // `use Foo\Bar\Baz;` (namespace, resolved via composer PSR-4) and
-    // `require/include 'file.php'` (relative path, emitted with a leading "./").
-    let m: RegExpExecArray | null;
-    const use = /^\s*use\s+(?:function\s+|const\s+)?\\?([A-Za-z_][\w\\]*)\s*(?:as\s+\w+)?\s*;/gm;
-    while ((m = use.exec(content))) specs.add(m[1]!);
-    const inc = /\b(?:require|include)(?:_once)?\s*\(?\s*['"]([^'"]+)['"]/g;
-    while ((m = inc.exec(content))) specs.add(/^\.\.?\//.test(m[1]!) ? m[1]! : "./" + m[1]!);
-  } else if (ext === ".cs") {
-    // `using Foo.Bar;` — a namespace import, resolved to files declaring that
-    // namespace. Skip alias (`using X = ...`) and resource (`using (...)`) forms.
-    let m: RegExpExecArray | null;
-    const using = /^\s*(?:global\s+)?using\s+(?:static\s+)?([A-Za-z_][\w.]*)\s*;/gm;
-    while ((m = using.exec(content))) specs.add(m[1]!);
-  }
-
-  return [...specs].map((spec) => ({ kind: "import" as const, spec }));
 }
 
 // Control-flow and declaration keywords that syntactically precede `(` but are
@@ -450,12 +295,9 @@ export function collectLiteralsRegex(content: string): CodeLiteral[] | undefined
 export function extractCode(rel: string, ext: string, content: string, opts: { maxCallsPerFile?: number } = {}): CodeInfo {
   // Symbols come from tree-sitter when a grammar is loaded for this extension
   // (AST-exact: real nesting, precise kinds, structural export), else the regex
-  // extractors. Imports/pkg stay on the battle-tested regex path here — their
-  // resolution is covered by resolve tests and the e2e ratchet; the new-language
-  // AST importers land with their resolvers.
-  // `imports: false` because of exactly that: `ast.refs` and `ast.pkg` were
-  // computed by a full extra tree traversal and then discarded right below, in
-  // favour of the regex results. Public `extractAst` still computes them.
+  // extractors. Imports/pkg come from extract/imports.ts on both tiers.
+  // `imports: false` because extractAst would only compute the same refs/pkg
+  // again, for this function to discard.
   const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile, imports: false });
   const raw = ast ? ast.symbols : extractSymbols(rel, ext, content);
   const symbols = raw.slice(0, MAX_FILE_SYMBOLS);
@@ -466,8 +308,9 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // An import specifier is a literal, but it is already modelled — as `refs`,
   // and resolved into real import edges. Leaving it in `literals` would make
   // every shared dependency look like an un-centralized value and bury the
-  // findings that are actually about values.
-  const importSpecs = new Set(refs.map((r) => r.spec));
+  // findings that are actually about values. A soft ref is a derived module
+  // path, not text the file contains, so it never hides a literal.
+  const importSpecs = new Set(refs.filter((r) => !r.soft).map((r) => r.spec));
   const literals = (ast ? (ast.literals.length ? ast.literals : undefined) : collectLiteralsRegex(content))?.filter(
     (l) => !(l.kind === "string" && importSpecs.has(l.value)),
   );
@@ -481,14 +324,7 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
       : {}),
     summary: topDocComment(content),
     refs,
-    // pkg anchors namespace→source-root resolution: Java's `package`, C#'s
-    // `namespace` (block or file-scoped). Both feed the same resolver pattern.
-    pkg:
-      ext === ".java"
-        ? /^\s*package\s+([\w.]+)\s*;/m.exec(content)?.[1]
-        : ext === ".cs"
-          ? /^\s*(?:file-scoped\s+)?namespace\s+([\w.]+)/m.exec(content)?.[1]
-          : undefined,
+    pkg: extractPackage(ext, content),
     idents: ast?.idents,
     // AST call sites when a grammar parsed the file; the conservative regex
     // collector otherwise, so caller indexes exist without the wasm sidecar.

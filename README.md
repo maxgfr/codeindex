@@ -27,7 +27,17 @@ compares](#how-it-compares).
   imports, headings, hashes — with an incremental cache fastpath. Extraction
   runs across worker threads by default (`--workers`, `CODEINDEX_WORKERS`);
   artifacts are byte-identical either way, and anything that would make a
-  worker's result differ falls back to the single-threaded path.
+  worker's result differ falls back to the single-threaded path. JS/TS and
+  Python imports are read from code only: comments, docstrings and
+  string/template-literal text are masked first, so example code quoted in a
+  JSDoc block, a docstring or a code generator's template never becomes an
+  edge (JSDoc `import("./x")` types and `@import` tags, which are real type
+  dependencies, are kept). The same scan runs with or without a grammar, so
+  `extractAst` and the index report the same imports. Python
+  `from pkg import name` also links `pkg/name.py` when `name` is a submodule
+  (and nothing when it is a function or class); PHP group (`use A\{B, C}`) and
+  comma `use` lists and `__DIR__`-anchored includes are followed, and a trait
+  `use` inside a class is not an import.
 - **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
   `grammars pull`) or per-language regex rules (16 languages, always available).
   Each symbol carries its **complete signature** (parameters and return type,
