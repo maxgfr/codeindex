@@ -1,5 +1,5 @@
 import { ENGINE_VERSION, SCHEMA_VERSION } from "./types.js";
-import type { Edge, FileNode, Graph, ModuleNode } from "./types.js";
+import type { Edge, FileNode, Graph, ModuleNode, RawRef } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import type { ModuleInfo } from "./modules.js";
 import { resolveDocLink, resolveImport, type ResolveContext } from "./resolve.js";
@@ -81,7 +81,12 @@ export function buildGraph(
 
   // doc-link and import edges from each file's raw refs.
   for (const f of scan.files) {
+    let soft: RawRef[] | undefined;
     for (const ref of f.refs) {
+      if (ref.soft) {
+        (soft ??= []).push(ref);
+        continue;
+      }
       if (ref.kind === "doc-link") {
         const r = resolveDocLink(f.rel, ref.spec, ctx);
         if (r.kind === "external") continue;
@@ -100,6 +105,19 @@ export function buildGraph(
           importPairs.add(`${f.rel}|${r.target}`);
         }
       }
+    }
+    // Soft refs are guesses — Python `from pkg import name` may bind a submodule
+    // (pkg/name.py) or just an attribute of pkg — so one only counts when it
+    // lands on an in-repo file this file does not already link to: never an
+    // external, never a dangling edge, never extra weight on an existing one.
+    // Resolved after every firm ref of the file, so that verdict does not
+    // depend on where the extractor put the soft ref in the list.
+    for (const ref of soft ?? []) {
+      const r =
+        ref.kind === "doc-link" ? resolveDocLink(f.rel, ref.spec, ctx) : resolveImport(f.rel, f.ext, ref.spec, ctx);
+      if (r.kind !== "resolved" || r.target === f.rel || fileEdgeMap.has(keyOf(f.rel, r.target, ref.kind))) continue;
+      collect(fileEdgeMap, { from: f.rel, to: r.target, kind: ref.kind, weight: 1 });
+      if (ref.kind === "import") importPairs.add(`${f.rel}|${r.target}`);
     }
   }
 
