@@ -584,3 +584,94 @@ describe("a Python module that declares `__all__`", () => {
     expect(vis(syms("m.py", "from .x import Y\nOTHER = 1"))).toEqual(["const OTHER=1"]);
   });
 });
+
+describe("Ruby definitions outside a plain class body", () => {
+  const vis = (all: CodeSymbol[]) => all.map((s) => `${s.kind} ${ids([s])[0]}=${s.exported ? 1 : 0}`);
+
+  it("indexes `class << self` methods as the class's, in a section of their own", () => {
+    const src = [
+      "class W",
+      "  private",
+      "  class << self",
+      "    def create; end",
+      "    private",
+      "    def build; end",
+      "  end",
+      "  def helper; end",
+      "end",
+    ].join("\n");
+    expect(vis(syms("w.rb", src))).toEqual(["class W=1", "def W.create=1", "def W.build=0", "def W.helper=0"]);
+  });
+
+  it("gives a definition wrapped in a visibility call that visibility alone", () => {
+    const src = [
+      "class W",
+      "  # Weighs a job.",
+      "  protected def weight; end",
+      "  private def self.hidden; end",
+      "  private_class_method def self.pcm; end",
+      "  private attr_reader :secret",
+      "  def open; end",
+      "  private",
+      "  public def shown; end",
+      "  module_function def mf; end",
+      "end",
+    ].join("\n");
+    const all = syms("w.rb", src);
+    expect(vis(all)).toEqual([
+      "class W=1",
+      "def W.weight=0",
+      "def W.hidden=0",
+      "def W.pcm=0",
+      "attr W.secret=0",
+      "def W.open=1",
+      "def W.shown=1",
+      "def W.mf=1",
+    ]);
+    expect(find(all, "weight")?.doc).toBe("Weighs a job.");
+  });
+
+  it("walks the block of a class a factory builds", () => {
+    const src = [
+      "Point = Struct.new(:x, :y) do",
+      "  def dist; end",
+      "end",
+      "Pair = Struct.new(:a) { def sum; end }",
+      "Mixin = Module.new do",
+      "  def helper; end",
+      "end",
+      "Value = Data.define(:v)",
+      "LIMIT = Limit.new(5)",
+    ].join("\n");
+    expect(syms("p.rb", src).map((s) => `${s.kind} ${ids([s])[0]}`)).toEqual([
+      "class Point",
+      "def Point.dist",
+      "class Pair",
+      "def Pair.sum",
+      "module Mixin",
+      "def Mixin.helper",
+      "class Value",
+      "const LIMIT",
+    ]);
+  });
+});
+
+describe("a Ruby mixin call on another receiver", () => {
+  // `klass.extend Mixin` inside a hook mixes into `klass`, not into the method
+  // the call sits in; the Ruby stdlib produced "included implements
+  // ClassMethods" and "initialize implements TSort" this way.
+  it("states no relation about the enclosing declaration", () => {
+    const rels = (src: string) => (extractAst("m.rb", ".rb", src)?.relations ?? []).map((r) => `${r.kind} ${r.from} ${r.to}`);
+    const src = [
+      "module Plugin",
+      "  include Base",
+      "  self.extend Helpers",
+      "  def self.included(klass)",
+      "    klass.extend ClassMethods",
+      "  end",
+      "end",
+      "NameError.prepend(Plugin)",
+    ].join("\n");
+    expect(rels(src)).toEqual(["implements Plugin Base", "implements Plugin Helpers"]);
+  });
+});

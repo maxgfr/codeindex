@@ -4,10 +4,10 @@
   "base": {
     "languages": 17,
     "files": 23,
-    "symbols": 332,
-    "calls": 51,
+    "symbols": 336,
+    "calls": 54,
     "relations": 24,
-    "docLabels": 181,
+    "docLabels": 185,
     "sigLabels": 32
   },
   "extraction": [
@@ -262,7 +262,7 @@
       "id": "grammar-vocabulary",
       "label": "Grammar vocabulary",
       "authority": "each tree-sitter grammar's own declared node types, read at runtime from the parser",
-      "value": "21 grammars, 211 declaration-ish types unhandled",
+      "value": "21 grammars, 209 declaration-ish types unhandled",
       "scope": "Names every construct a grammar declares that no extraction rule covers. The denominator is the grammar's, not ours — which is what makes it able to find what nobody thought to label."
     },
     {

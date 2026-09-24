@@ -488,45 +488,55 @@ export function extractAst(
           }
         }
         const childCtx = sectionPublic === ctx.sectionPublic ? ctx : { ...ctx, sectionPublic };
-
-        // Enum members written without an initialiser are a bare identifier
-        // leaf, not a declaration node any table can key on.
-        if (bareKind && c.namedChildren.length === 0 && IDENT_LEAF.test(c.type)) {
-          emit({
-            name: c.text,
-            kind: bareKind,
-            file: rel,
-            line: c.startPosition.row + 1,
-            endLine: endLineOf(c),
-            ...(childCtx.parent ? { parent: childCtx.parent } : {}),
-            exported: childCtx.forcePublic || childCtx.exported,
-            lang,
-          });
-          continue;
+        const wrapped = spec.inlineVisibility?.(c);
+        if (wrapped) {
+          for (const inner of wrapped.nodes) walkMember(inner, bareKind, { ...childCtx, sectionPublic: wrapped.public });
+        } else {
+          walkMember(c, bareKind, childCtx);
         }
-
-        const extras = spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody, publicNames });
-        for (const extra of extras ?? []) {
-          const at = extra.node ?? c;
-          const header = declHeader(at, content);
-          const doc = docCommentFor(at);
-          emit({
-            name: extra.name,
-            kind: extra.kind,
-            file: rel,
-            line: at.startPosition.row + 1,
-            endLine: endLineOf(at),
-            ...(childCtx.parent ? { parent: childCtx.parent } : {}),
-            ...(childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {}),
-            signature: header,
-            ...(doc ? { doc } : {}),
-            exported: visibilityOf(at, header, extra.name, childCtx),
-            lang,
-          });
-        }
-
-        walk(c, childCtx);
       }
+    };
+
+    // One member of a container body: a bare enum member, the extras the spec
+    // reads off it, then the member itself.
+    const walkMember = (c: TSNode, bareKind: string | undefined, childCtx: WalkCtx): void => {
+      // Enum members written without an initialiser are a bare identifier
+      // leaf, not a declaration node any table can key on.
+      if (bareKind && c.namedChildren.length === 0 && IDENT_LEAF.test(c.type)) {
+        emit({
+          name: c.text,
+          kind: bareKind,
+          file: rel,
+          line: c.startPosition.row + 1,
+          endLine: endLineOf(c),
+          ...(childCtx.parent ? { parent: childCtx.parent } : {}),
+          exported: childCtx.forcePublic || childCtx.exported,
+          lang,
+        });
+        return;
+      }
+
+      const extras = spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody, publicNames });
+      for (const extra of extras ?? []) {
+        const at = extra.node ?? c;
+        const header = declHeader(at, content);
+        const doc = spec.docFrom?.(at) ?? docCommentFor(at);
+        emit({
+          name: extra.name,
+          kind: extra.kind,
+          file: rel,
+          line: at.startPosition.row + 1,
+          endLine: endLineOf(at),
+          ...(childCtx.parent ? { parent: childCtx.parent } : {}),
+          ...(childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {}),
+          signature: header,
+          ...(doc ? { doc } : {}),
+          exported: visibilityOf(at, header, extra.name, childCtx),
+          lang,
+        });
+      }
+
+      walk(c, childCtx);
     };
 
     // The context a declaration's body is walked in: its members hang off it,
@@ -861,6 +871,7 @@ export function extractAst(
           inFunctionBody: ctx.inFunctionBody || entersFunction,
           funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
           ...(qualifier ? { parent: qualifier, parentPath: qualifier, ownerKind: "type" } : {}),
+          ...(spec.sectionScopes?.has(type) ? { sectionPublic: true } : {}),
         });
       }
     };

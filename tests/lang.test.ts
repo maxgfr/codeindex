@@ -148,6 +148,12 @@ load_plugin() {
     expect(names).toEqual(expect.arrayContaining(["Api", "Client", "fetch"]));
   });
 
+  it("reads a Ruby definition's inline visibility (regex fallback)", () => {
+    const src = "class W\n  protected def weight; end\n  private_class_method def self.pcm; end\n  public def shown; end\nend\n";
+    const by = Object.fromEntries(extractSymbols("w.rb", ".rb", src).map((s) => [s.name, s.exported]));
+    expect(by).toEqual({ W: true, weight: false, pcm: false, shown: true });
+  });
+
   it("extracts C functions and structs (regex fallback)", () => {
     const names = extractSymbols("a.c", ".c", "typedef struct Node Node;\nint compute(int x) {\n  return x;\n}\n").map((s) => s.name);
     expect(names).toContain("compute");

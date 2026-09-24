@@ -38,8 +38,9 @@ compares](#how-it-compares).
   aliases, record components, constructor `val` parameters and their
   TypeScript (`private readonly dep: Dep`) and PHP 8 (promoted) twins, C `#define`
   macros and the members of a `typedef struct`, Python declarations under
-  `if TYPE_CHECKING:` / `try:` / `with` blocks, Elixir clauses with a `when`
-  guard and `defguard`, and the members of a class
+  `if TYPE_CHECKING:` / `try:` / `with` blocks, Ruby `class << self` methods,
+  `private def x` definitions and the block of `Point = Struct.new(…) do`,
+  Elixir clauses with a `when` guard and `defguard`, and the members of a class
   bound by `module.exports =` or an anonymous `export default class` (a
   default export with no name of its own is named after the file stem). A doc
   comment is found across Rust attributes and TypeScript decorators;
@@ -75,7 +76,7 @@ vocabulary:
 | **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, against ctags' 94.6% on the same files |
 | **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | reports **2,014** declarations ctags does not over 6 real repositories, and reproduces **61.7%–98.8%** of ctags' names — what is left bucketed by kind, per repo below |
 | **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
-| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **211** declaration-ish node types still unhandled |
+| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **209** declaration-ish node types still unhandled |
 
 ### The one head-to-head
 
@@ -165,12 +166,12 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 332 labelled declarations in 23 files |
-| kind accuracy | **100%** | the same 332 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 332 declarations |
-| doc comment attached | **100%** | the 181 declarations labelled with a doc |
+| symbol precision / recall | **100% / 100%** | 336 labelled declarations in 23 files |
+| kind accuracy | **100%** | the same 336 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 336 declarations |
+| doc comment attached | **100%** | the 185 declarations labelled with a doc |
 | complete signature | **100%** | the 32 declarations labelled with a signature |
-| call edges / inheritance (F1) | **100% / 100%** | 51 labelled call sites, 24 relations |
+| call edges / inheritance (F1) | **100% / 100%** | 54 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
 
 `pnpm quality:report` reproduces every number; `tests/quality.test.ts` enforces

@@ -14,6 +14,7 @@
 import type { RawRelation } from "../types.js";
 import type { TSNode } from "./node.js";
 import { findFirst, nameOf, nextDeclarator, readTypeName } from "./node.js";
+import { docCommentFor } from "./doc.js";
 
 /** Type names an inheritance clause lists, skipping type-argument noise. */
 function heritageTargets(clause: TSNode | null | undefined): string[] {
@@ -155,6 +156,21 @@ export interface LangSpec {
    * common `class X { public: … }` case pay for the uncommon one.
    */
   sectionVisibility?: (node: TSNode) => boolean | undefined;
+
+  /**
+   * Containers that open a visibility section of their own, starting public
+   * whatever the enclosing body's section says: Ruby's `class << self`, whose
+   * methods a bare `private` above it does not reach.
+   */
+  sectionScopes?: Set<string>;
+
+  /**
+   * A body child that WRAPS declarations and states their visibility inline —
+   * Ruby's `private def helper`, `protected attr_reader :x`,
+   * `private_class_method def self.build`. The walk visits the wrapped nodes in
+   * its place, as members of the same body, with that visibility for them alone.
+   */
+  inlineVisibility?: (node: TSNode) => { nodes: TSNode[]; public: boolean } | undefined;
 
   /** Force non-exported even inside an `export`ed declaration (TS `private`/`protected` members). */
   privateMember?: (node: TSNode) => boolean;
@@ -453,6 +469,33 @@ export function luaMember(target: TSNode | null | undefined): { name: string; ta
   const table = target.childForFieldName("table");
   const field = target.childForFieldName("field") ?? target.childForFieldName("method");
   return table && field && /^[\w.]+$/.test(table.text) ? { name: field.text, table: table.text } : undefined;
+}
+
+// Ruby's visibility methods, by whether what they wrap ends up public. Called
+// with a definition (`private def x`), they apply to it alone.
+const RUBY_VISIBILITY: Record<string, boolean> = {
+  public: true,
+  private: false,
+  protected: false,
+  module_function: true,
+  public_class_method: true,
+  private_class_method: false,
+};
+
+// `Point = Struct.new(:x, :y) do … end` defines a CLASS, whose block body holds
+// its methods — `Class.new(Base)`, `Module.new` and `Data.define` likewise.
+// Read as a plain constant, the block was never walked.
+const RUBY_CLASS_FACTORY: Record<string, string> = {
+  "Struct.new": "class",
+  "Class.new": "class",
+  "Data.define": "class",
+  "Module.new": "module",
+};
+function rubyFactoryKind(node: TSNode): string | undefined {
+  if (node.childForFieldName("left")?.type !== "constant") return undefined;
+  const call = node.childForFieldName("right");
+  if (call?.type !== "call") return undefined;
+  return RUBY_CLASS_FACTORY[`${call.childForFieldName("receiver")?.text}.${call.childForFieldName("method")?.text}`];
 }
 
 // HCL/Terraform declares everything as a labelled block. Only these top-level
@@ -810,8 +853,37 @@ export const SPECS: Record<string, LangSpec> = {
   ruby: {
     lang: "ruby",
     defs: { method: "def", singleton_method: "def", class: "class", module: "module" },
-    containers: new Set(["class", "module", "body_statement", "program"]),
+    containers: new Set([
+      "class",
+      "module",
+      "body_statement",
+      "program",
+      // `class << self` — its methods are the enclosing class's own.
+      "singleton_class",
+      // The `{ … }` body of a class factory's block (see rubyFactoryKind).
+      "block_body",
+    ]),
+    sectionScopes: new Set(["singleton_class"]),
     exported: always,
+    kindFrom: { assignment: rubyFactoryKind },
+    nameFrom: { assignment: (node) => node.childForFieldName("left")?.text },
+    bodyFrom: { assignment: (node) => node.childForFieldName("right")?.childForFieldName("block")?.childForFieldName("body") ?? undefined },
+    inlineVisibility: (node) => {
+      if (node.type !== "call" || node.childForFieldName("receiver")) return undefined;
+      const pub = RUBY_VISIBILITY[node.childForFieldName("method")?.text ?? ""];
+      if (pub === undefined) return undefined;
+      const nodes = (node.childForFieldName("arguments")?.namedChildren ?? []).filter(
+        (a) => a.type === "method" || a.type === "singleton_method" || a.type === "call",
+      );
+      return nodes.length ? { nodes, public: pub } : undefined;
+    },
+    // A wrapped definition's doc sits above the wrapping call.
+    docFrom: (node) => {
+      const call = node.parent?.type === "argument_list" ? node.parent.parent : null;
+      return call?.type === "call" && RUBY_VISIBILITY[call.childForFieldName("method")?.text ?? ""] !== undefined
+        ? docCommentFor(call)
+        : undefined;
+    },
     // Ruby models every invocation — dotted, parenthesized, or bare command form
     // (`puts "x"`) — as a `call` node whose callee is the `method` field.
     calls: { call: "function" },
@@ -830,10 +902,14 @@ export const SPECS: Record<string, LangSpec> = {
         return to ? [rel("extends", ctx.self, to, node)] : [];
       },
       // `include Runnable` mixes a module in — Ruby's only `implements`. It is a
-      // method call, so nothing but the callee name identifies it.
+      // method call, so nothing but the callee name identifies it. With a
+      // receiver (`klass.extend Mixin`, inside a hook method) it mixes into
+      // something else, not into the enclosing declaration.
       call: (node, ctx) => {
         const method = node.childForFieldName("method");
+        const receiver = node.childForFieldName("receiver");
         if (!ctx.self || !method || !/^(include|prepend|extend)$/.test(method.text)) return [];
+        if (receiver && receiver.type !== "self") return [];
         const out: RawRelation[] = [];
         for (const a of node.childForFieldName("arguments")?.namedChildren ?? []) {
           const to = readTypeName(a);
@@ -844,10 +920,11 @@ export const SPECS: Record<string, LangSpec> = {
     },
     extraMembers: (node, ctx) => {
       if (ctx.inFunctionBody) return [];
-      // `MAX_ATTEMPTS = 5` — a constant is an assignment to a `constant` node.
+      // `MAX_ATTEMPTS = 5` — a constant is an assignment to a `constant` node
+      // (unless it builds a class, which the walk declares as one).
       if (node.type === "assignment") {
         const left = node.childForFieldName("left");
-        return left?.type === "constant" ? [{ name: left.text, kind: "const" }] : [];
+        return left?.type === "constant" && !rubyFactoryKind(node) ? [{ name: left.text, kind: "const" }] : [];
       }
       // `attr_reader :queue` declares real accessor methods; nothing else in the
       // file mentions `queue`, so without this the attribute does not exist.
