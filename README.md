@@ -45,7 +45,12 @@ compares](#how-it-compares).
   and its line span — including the members a declaration-only walk misses:
   interface members, class fields, enum members, every `declare`/`.d.ts`
   declaration, Rust trait method signatures, Go interface method sets, record
-  components and constructor `val` parameters.
+  components and constructor `val` parameters. Vue, Svelte and Astro
+  single-file components are extracted from their `<script>` blocks (and
+  Astro's frontmatter) as the JS/TS their `lang` names, at their real lines:
+  symbols, imports, and calls from both the script and the template, bound in
+  the JS/TS call family. A Svelte prop (`export let`) and an Astro frontmatter
+  export are not module exports, so they are never reported as dead code.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /

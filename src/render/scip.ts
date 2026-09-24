@@ -245,10 +245,11 @@ function makeUnique(base: string, line: number, used: Set<string>): string {
   }
 }
 
-// Collapse TS/JS and C/C++ into one family so a reference never binds across
-// unrelated languages (mirrors calls.ts `familyOf`).
+// Collapse TS/JS (single-file components included) and C/C++ into one family
+// so a reference never binds across unrelated languages (mirrors calls.ts
+// `familyOf`).
 function familyOf(lang: string): string {
-  if (lang === "typescript" || lang === "javascript") return "js";
+  if (lang === "typescript" || lang === "javascript" || lang === "vue" || lang === "svelte" || lang === "astro") return "js";
   if (lang === "c" || lang === "cpp") return "c";
   return lang;
 }

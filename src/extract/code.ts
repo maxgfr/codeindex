@@ -2,8 +2,9 @@ import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector } from "./literals.js";
 import { extractSymbols } from "../lang/registry.js";
 import { extractAst } from "../ast/extract.js";
-import { extractReexports, MAX_REEXPORTS } from "../lang/common.js";
+import { extractReexports, extToLang, MAX_REEXPORTS } from "../lang/common.js";
 import { extractImports, extractPackage } from "./imports.js";
+import { sfcParts } from "./sfc.js";
 import { isBanner, isDirective, stripCommentMarkers } from "./doc-text.js";
 import { subtokens } from "../util.js";
 
@@ -289,31 +290,71 @@ export function collectLiteralsRegex(content: string): CodeLiteral[] | undefined
   return literals.result();
 }
 
+// Two call lists as one: deduped by name+line, sorted by name then line, and
+// cut to the per-file cap — the contract each collector keeps on its own.
+function mergeCalls(
+  a: { name: string; line: number; receiver?: string }[],
+  b: { name: string; line: number; receiver?: string }[],
+  maxCalls = 512,
+): { name: string; line: number; receiver?: string }[] {
+  if (!b.length) return a;
+  const seen = new Set(a.map((c) => `${c.name} ${c.line}`));
+  const out = [...a];
+  for (const c of b) if (!seen.has(`${c.name} ${c.line}`)) out.push(c);
+  return out.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : x.line - y.line)).slice(0, maxCalls);
+}
+
 // `opts.maxCallsPerFile` overrides the per-file call-site cap (default 512) on
 // BOTH extraction tiers — AST and regex — so recall-oriented consumers can raise
 // it. Dedup/sort semantics are unchanged; absent, output is byte-identical.
 export function extractCode(rel: string, ext: string, content: string, opts: { maxCallsPerFile?: number } = {}): CodeInfo {
+  // A single-file component (.vue/.svelte/.astro) is extracted as its script:
+  // the JS/TS tier runs over a copy with the markup blanked, lines unchanged
+  // (see extract/sfc.ts). Its symbols keep the component's own language, which
+  // calls.ts folds into the JS family.
+  const sfc = sfcParts(ext, content);
+  const code = sfc ? sfc.script : content;
+  const codeExt = sfc ? sfc.ext : ext;
   // Symbols come from tree-sitter when a grammar is loaded for this extension
   // (AST-exact: real nesting, precise kinds, structural export), else the regex
   // extractors. Imports/pkg come from extract/imports.ts on both tiers.
   // `imports: false` because extractAst would only compute the same refs/pkg
   // again, for this function to discard.
-  const ast = extractAst(rel, ext, content, { maxCalls: opts.maxCallsPerFile, imports: false });
-  const raw = ast ? ast.symbols : extractSymbols(rel, ext, content);
-  const symbols = raw.slice(0, MAX_FILE_SYMBOLS);
+  const ast = extractAst(rel, codeExt, code, { maxCalls: opts.maxCallsPerFile, imports: false });
+  const raw = ast ? ast.symbols : extractSymbols(rel, codeExt, code);
+  const kept = raw.slice(0, MAX_FILE_SYMBOLS);
+  const symbols = sfc
+    ? kept.map((s) => ({
+        ...s,
+        lang: extToLang(ext),
+        exported: s.exported && !sfc.notExported.some(([from, to]) => s.line >= from && s.line <= to),
+      }))
+    : kept;
   // Add barrel re-exports the local def didn't already cover.
   const known = new Set(symbols.map((s) => s.name));
-  const reexports = extractReexports(rel, content, symbols).filter((s) => !known.has(s.name));
-  const refs = extractImports(ext, content);
+  const reexports = extractReexports(rel, code, symbols).filter((s) => !known.has(s.name));
+  const refs = extractImports(codeExt, code);
   // An import specifier is a literal, but it is already modelled — as `refs`,
   // and resolved into real import edges. Leaving it in `literals` would make
   // every shared dependency look like an un-centralized value and bury the
   // findings that are actually about values. A soft ref is a derived module
   // path, not text the file contains, so it never hides a literal.
   const importSpecs = new Set(refs.filter((r) => !r.soft).map((r) => r.spec));
-  const literals = (ast ? (ast.literals.length ? ast.literals : undefined) : collectLiteralsRegex(content))?.filter(
-    (l) => !(l.kind === "string" && importSpecs.has(l.value)),
-  );
+  // A component's vocabulary and literals still come from the WHOLE file, on
+  // both tiers: the markup's attribute strings are as much its text as the
+  // script's, and the line scanners read both parts the same way.
+  const literals = (
+    ast && !sfc ? (ast.literals.length ? ast.literals : undefined) : collectLiteralsRegex(content)
+  )?.filter((l) => !(l.kind === "string" && importSpecs.has(l.value)));
+  // AST call sites when a grammar parsed the file; the conservative regex
+  // collector otherwise, so caller indexes exist without the wasm sidecar.
+  // `symbols` (this file's own regex-extracted defs) lets the collector
+  // exclude a definition's own name+line from its call candidates.
+  let calls = ast ? ast.calls : collectCallsRegex(code, symbols, opts.maxCallsPerFile);
+  // A template calls what its script imports (`{{ formatDate(d) }}`,
+  // `on:click={() => save(item)}`): those sites are read by the regex
+  // collector from the markup and merged in, under the same cap and order.
+  if (sfc) calls = mergeCalls(calls, collectCallsRegex(sfc.markup, [], opts.maxCallsPerFile), opts.maxCallsPerFile);
   return {
     symbols: [...symbols, ...reexports],
     // A re-export list that hit its own ceiling is truncated too — a barrel that
@@ -326,17 +367,13 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
     refs,
     pkg: extractPackage(ext, content),
     idents: ast?.idents,
-    // AST call sites when a grammar parsed the file; the conservative regex
-    // collector otherwise, so caller indexes exist without the wasm sidecar.
-    // `symbols` (this file's own regex-extracted defs) lets the collector
-    // exclude a definition's own name+line from its call candidates.
-    calls: ast ? ast.calls : collectCallsRegex(content, symbols, opts.maxCallsPerFile),
+    calls,
     importedNames: ast?.importedNames,
     relations: ast?.relations?.length ? ast.relations : undefined,
     // The AST tier reads comments and literals structurally; without a grammar
     // the line scanner above still supplies a vocabulary, so search quality does
     // not silently collapse for a language with no wasm.
-    terms: ast ? ast.terms : collectTermsRegex(content),
+    terms: ast && !sfc ? ast.terms : collectTermsRegex(content),
     literals: literals?.length ? literals : undefined,
   };
 }

@@ -46,6 +46,16 @@ export const EXT_GRAMMAR: Record<string, string> = {
   ".sol": "solidity",
 };
 
+// Single-file components have no grammar of their own: their `<script>` blocks
+// are parsed with the JS/TS grammar their `lang` attribute names (see
+// extract/sfc.ts). Kept out of EXT_GRAMMAR, which maps a file to the grammar
+// that parses the WHOLE file, but warmed with it (grammarKeysForExts).
+const EMBEDDED_GRAMMARS: Record<string, string[]> = {
+  ".vue": ["javascript", "tsx", "typescript"],
+  ".svelte": ["javascript", "tsx", "typescript"],
+  ".astro": ["typescript"],
+};
+
 export function grammarKeyForExt(ext: string): string | undefined {
   return EXT_GRAMMAR[ext];
 }
@@ -202,6 +212,7 @@ export function allGrammarKeys(): string[] {
 export function grammarKeysForExts(exts: Iterable<string>): string[] {
   const keys = new Set<string>();
   for (const ext of exts) {
+    for (const key of EMBEDDED_GRAMMARS[ext] ?? []) keys.add(key);
     const key = EXT_GRAMMAR[ext];
     if (key !== undefined) keys.add(key);
   }
