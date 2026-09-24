@@ -138,6 +138,18 @@ describe("grep cap: truncation is reported, never silent", () => {
     expect(meta.hits).toHaveLength(1);
   });
 
+  it("filesWithMatches returns each matching file's first hit and caps files", () => {
+    const r = both(root(), "hit", { filesWithMatches: true });
+    expect(r.hits.map((h) => `${h.file}:${h.line}`)).toEqual(["a.txt:1", "b.txt:1"]);
+    expect(r).toMatchObject({ truncated: false, filesMatched: 2 });
+    const capped = both(root(), "hit", { filesWithMatches: true, maxHits: 1 });
+    expect(capped.hits.map((h) => h.file)).toEqual(["a.txt"]);
+    expect(capped.truncated).toBe(true);
+    expect(capped.notes.join("\n")).toMatch(/first 1 matching files by path; 2 files match/);
+    const out = cli(["grep", "hit", "--repo", root(), "--files-with-matches"]);
+    expect((JSON.parse(out.stdout) as { file: string }[]).map((h) => h.file)).toEqual(["a.txt", "b.txt"]);
+  });
+
   it("cuts a huge line to a window around the match and reports its column", () => {
     const line = `${"x".repeat(5000)}NEEDLE${"y".repeat(5000)}`;
     const r = both(repo({ "min.js": `${line}\n` }), "NEEDLE");

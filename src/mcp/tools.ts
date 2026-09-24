@@ -329,6 +329,10 @@ export const TOOLS = [
         },
         ignoreCase: { type: "boolean" },
         maxHits: { type: "number", minimum: 1 },
+        filesWithMatches: {
+          type: "boolean",
+          description: "One hit per matching file (its first match); maxHits then caps files",
+        },
         withMeta: {
           type: "boolean",
           description: "Return { hits, truncated, filesMatched, notes? } instead of the bare hit array",

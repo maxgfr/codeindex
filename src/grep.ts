@@ -46,6 +46,9 @@ export interface GrepOptions {
   scope?: string;
   maxHits?: number; // cap AFTER sorting (default 200)
   ignoreCase?: boolean;
+  // One hit per matching file — its first match — so maxHits caps FILES
+  // (`grep -l`, with the first match as evidence instead of a bare path).
+  filesWithMatches?: boolean;
   // The walk's universe knobs, honoured by both backends exactly as walk()
   // honours them (see WalkOptions): gitignore on by default, ignoreDirs
   // REPLACES the default set (`.git` stays skipped), maxFileBytes defaults to
@@ -403,7 +406,7 @@ function rgBackend(
         // No file can contribute more than `remaining` hits to the answer;
         // stopping each file there bounds the output without changing it.
         "--max-count",
-        String(remaining),
+        String(opts.filesWithMatches ? 1 : remaining),
         "--regexp",
         rust,
         "--",
@@ -460,6 +463,7 @@ interface ScanJob {
   flags: string;
   files: [rel: string, abs: string][]; // in path order
   want: number; // hits to collect; past it, a file is only checked for "matches at all"
+  firstOnly: boolean; // stop each file at its first match
   textMax: number;
   deadline: number; // epoch ms: a soft stop between files (the worker is also hard-stopped)
 }
@@ -515,6 +519,7 @@ function scanFiles(job: ScanJob, io: ScanIo): void {
       if (got >= job.want) break; // cap reached: only "does it match" still counts
       got++;
       hits.push([n + 1, m.index + 1, io.clip(lines[n]!, m.index, job.textMax)]);
+      if (job.firstOnly) break;
     }
     if (matched) io.emit({ i, hits });
   }
@@ -604,7 +609,15 @@ function jsBackend(
     .filter((f) => !keep || keep(f.rel))
     .map((f): [string, string] => [f.rel, f.abs])
     .sort((a, b) => byStr(a[0], b[0]));
-  const job: ScanJob = { source: re.source, flags: re.flags, files, want: max + 1, textMax: MAX_TEXT, deadline };
+  const job: ScanJob = {
+    source: re.source,
+    flags: re.flags,
+    files,
+    want: max + 1,
+    firstOnly: opts.filesWithMatches === true,
+    textMax: MAX_TEXT,
+    deadline,
+  };
   const hits: SearchHit[] = [];
   let filesMatched = 0;
   const { stoppedAt } = runScan(job, (ev) => {
@@ -648,8 +661,9 @@ export function grepRepoEx(root: string, pattern: string, opts: GrepOptions = {}
   out ??= jsBackend(root, re, opts, keep, max, deadline);
   notes.push(...out.notes);
   if (out.truncated) {
+    const shown = opts.filesWithMatches ? `${max} matching files by path` : `${max} hits by (file, line)`;
     notes.push(
-      `showing the first ${max} hits by (file, line); ${out.filesMatched} files match in all — raise maxHits (--max-hits) or narrow scope/globs for the rest`,
+      `showing the first ${shown}; ${out.filesMatched} files match in all — raise maxHits (--max-hits) or narrow scope/globs for the rest`,
     );
   }
   return { hits: out.hits, truncated: out.truncated, filesMatched: out.filesMatched, timedOut: out.timedOut ?? false, notes };

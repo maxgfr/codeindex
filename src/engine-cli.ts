@@ -142,8 +142,10 @@ Commands:
   rewrite     Map an expensive tree-wide search onto its indexed equivalent:
               cli.mjs rewrite '<command line>'. Prints the replacement command
               and exits 0, or exits 1 when it has no opinion (run the original).
-              Deliberately conservative — any shell metacharacter or unknown
-              flag refuses the rewrite
+              Understands recursive grep/egrep, rg and git grep (BRE/ERE/Rust
+              patterns restated as JS; -F -w -i -S -l -t -g --include).
+              Deliberately conservative — shell syntax outside single quotes,
+              an unknown flag or an untranslatable pattern refuses the rewrite
   mcp         Run as an MCP server over stdio (33 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
               find_symbol, find_references, lsp_status, onboard, repo_map,
@@ -214,6 +216,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --ignore-case       \`grep\`: case-insensitive matching
   --max-hits <n>      \`grep\`: cap returned hits (default 200). A capped result
                       says so on stderr, with the count of matching files
+  --files-with-matches  \`grep\`: one hit per matching file (its first match), so
+                      --max-hits caps files — \`grep -l\` with evidence
   --timeout-ms <n>    \`grep\`: wall-clock budget for the JavaScript regex engine
                       (default 10000). ripgrep is linear-time; the JS fallback
                       backtracks, so a pathological pattern is stopped at the
@@ -245,6 +249,7 @@ interface CliFlags {
   ignoreCase?: boolean;
   maxHits?: number;
   timeoutMs?: number; // grep: JS regex engine wall-clock budget
+  filesWithMatches?: boolean; // grep: one hit (the first) per matching file
   budgetTokens?: number;
   config?: string; // rules config path
   limit?: number; // search result cap
@@ -301,6 +306,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--ignore-case") flags.ignoreCase = true;
     else if (a === "--max-hits") flags.maxHits = num();
     else if (a === "--timeout-ms") flags.timeoutMs = num();
+    else if (a === "--files-with-matches") flags.filesWithMatches = true;
     else if (a === "--budget-tokens") flags.budgetTokens = num();
     else if (a === "--min-files") flags.minFiles = num();
     else if (a === "--min-count") flags.minCount = num();
@@ -1140,6 +1146,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       scope: flags.scope,
       ignoreCase: flags.ignoreCase,
       maxHits: flags.maxHits,
+      filesWithMatches: flags.filesWithMatches,
       gitignore: flags.gitignore,
       ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
       maxFileBytes: flags.maxBytes,

@@ -383,6 +383,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       scope: str(args.scope),
       ignoreCase: args.ignoreCase === true,
       maxHits: positiveNum(args.maxHits),
+      filesWithMatches: args.filesWithMatches === true,
       timeoutMs: positiveNum(args.timeoutMs),
     });
     // The bare array stays the default shape. `withMeta` opts into the

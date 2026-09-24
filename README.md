@@ -888,15 +888,35 @@ its indexed equivalent, for agent harnesses that intercept shell commands
 
 ```sh
 $ codeindex rewrite 'grep -rn TODO src'
-codeindex grep TODO --scope src
+codeindex grep TODO --scope src --ignore-dir .codeindex
+$ codeindex rewrite "rg -tpy -w 'def main'"
+codeindex grep '\bdef main\b' --include '**/*.py' --include '**/*.pyi' --ignore-dir .codeindex
 ```
 
-It prints the replacement and exits `0`, or exits `1` with empty stdout when it
-has no opinion — run the original. The parser is deliberately conservative: any
-shell metacharacter (pipe, redirect, substitution, chaining), any unrecognized
-flag, a non-recursive `grep`, or more than one search path all refuse the
-rewrite. A refusal costs nothing; a wrong rewrite silently changes what the
-agent asked for.
+It prints the replacement and exits `0`. When it has no opinion, it exits `1`
+with empty stdout, and the host should run the original command. It
+understands recursive `grep`/`egrep`, `rg` and `git grep`:
+
+- **The pattern.** POSIX BRE and ERE and Rust regex syntax, plus `-F`, `-w`
+  and `-i`/`-S`, are restated as the JavaScript regex `codeindex grep` runs.
+  In a BRE, `x+y` stays a literal `+`.
+- **The files.** A path becomes `--scope` (`./` stripped, a file allowed). An
+  `--include`/`-g` base-name glob becomes `**/<glob>`, and `-t` becomes the
+  globs of that ripgrep type. `--ignore-dir .codeindex` turns off the default
+  vendor/build/out/tmp skips, which none of these tools make. Gitignored files,
+  lockfiles and binaries are still left out, on purpose.
+- **The flags.** `-l` becomes `--files-with-matches`, and a pattern that starts
+  with `-` goes behind `--`.
+
+The parser is deliberately conservative. The rewrite is refused when the line
+contains shell syntax outside single quotes (pipe, redirect, substitution,
+chaining, braces, an unquoted glob in a path), an unrecognized or
+output-changing flag (`rg -r` is `--replace`), a non-recursive `grep`, a path
+outside the tree, more than one path, include/exclude rules whose order
+matters, or regex syntax that cannot be translated exactly. A refusal costs
+nothing, while a wrong rewrite would silently change what the agent asked for.
+The test suite runs each supported form through the real tool and through its
+rewrite, and checks that both find the same lines.
 
 ## Versioning
 
