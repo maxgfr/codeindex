@@ -50,3 +50,19 @@ export function findDeadCode(scan: RepoScan): DeadSymbol[] {
   }
   return out.sort((a, b) => byStr(a.tier, b.tier) || byStr(a.file, b.file) || a.line - b.line);
 }
+
+export interface CappedDeadCode {
+  total: number;
+  shown: number;
+  truncated: true;
+  candidates: DeadSymbol[];
+}
+
+// The list capped at `limit`, saying so: on a large repo it runs to thousands
+// of entries, and a capped list that looks complete is worse than a shorter
+// one that admits it. Additive — without a limit (or under it) the payload is
+// the bare array it always was. Shared by the CLI's --limit and MCP's `limit`.
+export function capDeadCode(all: DeadSymbol[], limit?: number): DeadSymbol[] | CappedDeadCode {
+  if (limit === undefined || all.length <= limit) return all;
+  return { total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) };
+}

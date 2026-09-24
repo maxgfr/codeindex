@@ -17,6 +17,7 @@ import { addDef, defsOutside, familyOf, importTargets, importedDefs, pickCandida
 import { enclosingAmong } from "./callers.js";
 import { resolveRelations } from "./relations.js";
 import { byStr } from "./sort.js";
+import { symbolRefReadings } from "./symref.js";
 
 // Internal Map-key separator. Written as an ESCAPE, never as a literal NUL: a
 // literal one makes git, grep and file(1) treat this source as binary, and makes
@@ -197,10 +198,30 @@ export interface Neighborhood {
   edges: SymbolEdge[];
   /** True when the node cap stopped the walk short. */
   truncated?: true;
+  /** The hop limit actually walked, present when a deeper walk was asked for. */
+  depthClamped?: number;
 }
 
 const MAX_DEPTH = 5;
 const MAX_NODES = 400;
+
+// The nodes a symbol ref names (src/symref.ts): an exact id, else the first
+// reading that matches any node. Ids carry the IMMEDIATE parent only
+// (`file#Parent/name`), so a longer `Outer/Parent/name` path is checked on its
+// last segment.
+function rootIdsFor(graph: SymbolGraph, ref: string): string[] {
+  if (graph.nodes.has(ref)) return [ref];
+  for (const reading of symbolRefReadings(ref)) {
+    const parent = reading.parent?.slice(reading.parent.lastIndexOf("/") + 1);
+    const ids = (graph.byName.get(reading.name) ?? []).filter((id) => {
+      const n = graph.nodes.get(id)!;
+      if (reading.file !== undefined && n.file !== reading.file) return false;
+      return parent === undefined || id === `${n.file}#${parent}/${n.name}`;
+    });
+    if (ids.length) return ids;
+  }
+  return [];
+}
 
 /**
  * The bounded neighborhood of a symbol. Breadth-first, so `depth` is the true
@@ -212,16 +233,13 @@ export function neighborhood(
   name: string,
   opts: { depth?: number; direction?: Direction } = {},
 ): Neighborhood {
-  const depthLimit = Math.max(1, Math.min(opts.depth ?? 2, MAX_DEPTH));
+  const requested = opts.depth ?? 2;
+  const depthLimit = Math.max(1, Math.min(requested, MAX_DEPTH));
   const direction = opts.direction ?? "both";
 
-  // A bare name, a `Parent/name` path, or a full `file#Parent/name` id.
-  const rootIds =
-    graph.nodes.has(name)
-      ? [name]
-      : (graph.byName.get(name) ??
-        [...graph.nodes.keys()].filter((id) => id.endsWith(`#${name}`)));
-  const root = rootIds.map((id) => graph.nodes.get(id)!).filter(Boolean);
+  // A bare name, `name@file`, a `Parent/name` path, or a `file#Parent/name` id.
+  const rootIds = rootIdsFor(graph, name);
+  const root = rootIds.map((id) => graph.nodes.get(id)!);
   if (!root.length) return { root: [], nodes: [], edges: [] };
 
   const depthOf = new Map<string, number>();
@@ -261,5 +279,12 @@ export function neighborhood(
     .filter((e) => depthOf.has(e.from) && depthOf.has(e.to))
     .sort((a, b) => byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to));
 
-  return { root, nodes, edges, ...(truncated ? { truncated: true as const } : {}) };
+  return {
+    root,
+    nodes,
+    edges,
+    ...(truncated ? { truncated: true as const } : {}),
+    // Said out loud: `--depth 9` used to walk five hops without a word.
+    ...(requested > MAX_DEPTH ? { depthClamped: MAX_DEPTH } : {}),
+  };
 }

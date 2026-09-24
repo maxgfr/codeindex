@@ -16,6 +16,7 @@ import type { RepoScan } from "./scan.js";
 import { addDef, defsOutside, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
 import { importPairsFor } from "./derived.js";
 import { byStr } from "./sort.js";
+import { refMatches, symbolRefReadings } from "./symref.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -47,10 +48,36 @@ export interface CallerEntry {
 // serializing the index is deterministic without re-sorting).
 export type CallerIndex = Map<string, CallerEntry>;
 
-/** Resolve the explicit name@file form for every entry, including the first
- * homonym that the historical index stores under its unqualified name. */
-export function lookupCallerEntry(index: CallerIndex, name: string): CallerEntry | undefined {
-  return index.get(name) ?? [...index.values()].find((entry) => `${entry.def.name}@${entry.def.file}` === name);
+/**
+ * One symbol's entry, for any ref form src/symref.ts reads (`name`,
+ * `name@file`, `file#Parent/name`, `Parent/name`). A bare name answers with
+ * the key the index stores it under — the first homonym, historically — and
+ * the qualified forms reach every homonym, the first one included.
+ */
+export function lookupCallerEntry(index: CallerIndex, ref: string): CallerEntry | undefined {
+  const direct = index.get(ref);
+  if (direct) return direct;
+  // The literal reading is the key lookup above; the others scan the entries.
+  for (const reading of symbolRefReadings(ref).slice(1)) {
+    for (const entry of index.values()) if (refMatches(reading, entry.def)) return entry;
+  }
+  return undefined;
+}
+
+/**
+ * buildCallerIndex(scan, undefined, opts) restricted to the entries of
+ * `names`, without binding the whole repo: only those names' call sites are
+ * resolved, through the same code path, so every entry is exactly the full
+ * index's and the two cannot drift. A one-shot `callers <name>` on the
+ * TypeScript repo used to resolve 236k call sites to answer about one name.
+ */
+export function callerIndexForNames(scan: RepoScan, names: Iterable<string>, opts: CallerIndexOptions = {}): CallerIndex {
+  return indexCallers(scan, importPairsFor(scan), opts.recall === true, new Set(names));
+}
+
+/** Every name a symbol ref can denote — what callerIndexForNames needs to answer it. */
+export function refNames(ref: string): string[] {
+  return [...new Set(symbolRefReadings(ref).map((r) => r.name))];
 }
 
 // `${from}|${to}` pairs of resolved imports — the same corroboration set the
@@ -67,12 +94,15 @@ export function buildCallerIndex(
   importPairs?: Set<string>,
   opts: CallerIndexOptions = {},
 ): CallerIndex {
-  // Read-only use of the memoized pair set (no copy needed: only .has below).
+  // Read-only use of the memoized pair set (no copy needed: it is only read).
   // The INDEX built here is always fresh — the public path never memoizes it;
   // the default-opts cache lives in derived.ts's callerIndexFor.
-  const pairs = importPairs ?? importPairsFor(scan);
-  const recall = opts.recall === true;
+  return indexCallers(scan, importPairs ?? importPairsFor(scan), opts.recall === true);
+}
 
+// buildCallerIndex's body. `only` restricts it to call sites of those names
+// (callerIndexForNames); every entry it does build is exactly the full index's.
+function indexCallers(scan: RepoScan, pairs: Set<string>, recall: boolean, only?: ReadonlySet<string>): CallerIndex {
   // name → family → def sites (first symbol per (name, file) wins, like
   // resolveCallEdges). CodeSymbol structurally contains Cand's file/lang
   // fields, and pickCandidate returns the selected object unchanged.
@@ -80,20 +110,11 @@ export function buildCallerIndex(
   for (const f of scan.files) {
     for (const s of f.symbols) {
       if (!s.exported || REFERENCE_KINDS.has(s.kind)) continue;
+      if (only && !only.has(s.name)) continue;
       addDef(defs, s.name, s);
     }
   }
   const targetsOf = importTargets(pairs);
-  // Same-file binding also needs non-exported defs (a private helper shadows
-  // an exported symbol of the same name elsewhere).
-  const localDefs = new Map<string, Map<string, CodeSymbol>>();
-  for (const f of scan.files) {
-    const byName = new Map<string, CodeSymbol>();
-    for (const s of f.symbols) {
-      if (!REFERENCE_KINDS.has(s.kind) && !byName.has(s.name)) byName.set(s.name, s);
-    }
-    localDefs.set(f.rel, byName);
-  }
 
   const sites = new Map<string, { def: CodeSymbol; callers: CallerSite[] }>();
   const record = (def: CodeSymbol, caller: CallerSite): void => {
@@ -104,14 +125,21 @@ export function buildCallerIndex(
 
   for (const f of scan.files) {
     if (!f.calls?.length) continue;
+    if (only && !f.calls.some((c) => only.has(c.name))) continue;
     const family = familyOf(f.lang);
-    const own = localDefs.get(f.rel)!;
+    // Same-file binding also needs non-exported defs (a private helper shadows
+    // an exported symbol of the same name elsewhere).
+    const own = new Map<string, CodeSymbol>();
+    for (const s of f.symbols) {
+      if (!REFERENCE_KINDS.has(s.kind) && !own.has(s.name)) own.set(s.name, s);
+    }
     const targets = targetsOf.get(f.rel);
     // Every cross-file call of one name in one file binds the same way — the
     // choice depends on (file, name) only — so resolve each name once per file.
     // null = resolved to "no binding".
     const bound = new Map<string, { def: CodeSymbol; corroborated: boolean } | null>();
     for (const c of f.calls) {
+      if (only && !only.has(c.name)) continue;
       const local = own.get(c.name);
       if (local) {
         // Shadowing: a same-file def wins. Skip the def line itself — a regex
@@ -232,13 +260,25 @@ export interface RawCallerSite {
 export type RawCallerIndex = Map<string, RawCallerSite[]>;
 
 export function buildRawCallerIndex(scan: RepoScan): RawCallerIndex {
+  return indexRawCallers(scan);
+}
+
+/** buildRawCallerIndex(scan).get(name) ?? [], walking only that name's sites. */
+export function rawCallerSitesFor(scan: RepoScan, name: string): RawCallerSite[] {
+  return indexRawCallers(scan, name).get(name) ?? [];
+}
+
+function indexRawCallers(scan: RepoScan, only?: string): RawCallerIndex {
   const byName = new Map<string, RawCallerSite[]>();
   for (const f of scan.files) {
     if (!f.calls?.length) continue;
-    // Pre-filter this file's symbols ONCE, then reuse the small per-file list
-    // for every call site's enclosingSymbol lookup below (see enclosingAmong).
-    const symbols = f.symbols.filter((s) => !REFERENCE_KINDS.has(s.kind));
+    // Pre-filter this file's symbols ONCE (on its first kept site), then reuse
+    // the small per-file list for every call site's enclosingSymbol lookup
+    // below (see enclosingAmong).
+    let symbols: CodeSymbol[] | undefined;
     for (const c of f.calls) {
+      if (only !== undefined && c.name !== only) continue;
+      symbols ??= f.symbols.filter((s) => !REFERENCE_KINDS.has(s.kind));
       const site: RawCallerSite = { file: f.rel, line: c.line };
       if (c.receiver !== undefined) site.receiver = c.receiver;
       const enc = enclosingAmong(symbols, c.line);

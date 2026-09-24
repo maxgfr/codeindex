@@ -378,6 +378,44 @@ codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
 ```
 
+### Naming a symbol
+
+`callers`, `hierarchy`, `implementations` and `callgraph` (and MCP `callers`,
+`find_references`, `type_hierarchy`, `implementations`, `call_graph`) read a
+symbol the same way, so an id copied out of one answer pastes into the next:
+
+| form | means |
+|---|---|
+| `greet` | the name. A single-answer command picks the first homonym; `find_references` covers them all, and then tags each call site with the declaring file it binds to (`def`) |
+| `greet@src/lib/greet.ts` | the declaration in that file — any homonym, the first included |
+| `src/lib/greet.ts#greet`, `src/a.ts#Greeter/hello` | a symbol id, as `callgraph` prints it |
+| `Greeter/hello` | a member of `Greeter` |
+
+An unknown symbol is an error (exit 2; MCP `isError`). A known one that no call
+site binds to is still an answer, and says why it is empty:
+
+```jsonc
+// codeindex callers register_blueprint --repo flask
+{
+  "name": "register_blueprint",
+  "error": "no tracked callers for \"register_blueprint\"",
+  "defs": [ /* src/flask/sansio/app.py:570, src/flask/sansio/blueprints.py:256 */ ],
+  "unresolvedSites": 74,   // sites naming it that bind to no single definition
+  "sample": [ /* the first five */ ],
+  "hint": "…"
+}
+```
+
+`callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
+any binding, with its receiver and enclosing symbol. `callgraph` walks at most 5
+hops and says `depthClamped` when asked for more. `neighbors` reports every edge
+kind linking each neighbour — an incoming import and an outgoing inferred call to
+the same file are two links, strongest evidence first — and rejects an unknown
+`--kind`. File arguments (`complexity`, `impact`, `neighbors`) may be written
+`./path`, absolute or with backslashes; `complexity` exits 2 on a file the index
+does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
+`{ total, shown, truncated, candidates }` like MCP `dead_code`.
+
 ## Values with no single source of truth
 
 `codeindex literals` reports the defect a compiler cannot: **one value written

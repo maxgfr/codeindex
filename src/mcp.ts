@@ -14,20 +14,21 @@ import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
+import { buildCallerIndex, lookupCallerEntry, rawCallerSitesFor } from "./callers.js";
 import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
-import { implementationsOf } from "./relations.js";
+import { implementationsOf, typeEntry } from "./relations.js";
 import { neighborhood, type Direction } from "./symbolgraph.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
-import { findDeadCode } from "./deadcode.js";
+import { capDeadCode, findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
-import { symbolsOverview, findSymbol, findReferences } from "./query.js";
+import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef } from "./query.js";
+import { formatSymbolRef } from "./symref.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
@@ -210,15 +211,35 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const lookup = str(args.name);
     if (args.lsp === true && !lookup) throw new Error("callers with lsp:true requires `name` (or name@file)");
     const scan = readScan();
+    if (args.raw === true) {
+      // Every site by callee name, before any binding. One name only: the whole
+      // raw index is the library's (buildRawCallerIndex), too big for a turn.
+      if (!lookup) throw new Error("callers with raw:true requires `name`");
+      if (args.lsp === true || args.recall === true) throw new Error("callers raw:true takes neither lsp nor recall");
+      return JSON.stringify(rawCallersOf(scan, lookup), null, 2);
+    }
     const index = args.recall === true ? buildCallerIndex(scan, undefined, { recall: true }) : callerIndexFor(scan);
     if (lookup) {
+      // The LSP tier parses `Parent/name@file`; hand it that spelling of
+      // whichever ref form was used.
+      const reading = resolveSymbolRef(scan, lookup)?.reading;
+      const lspRef = reading ? formatSymbolRef(reading) : lookup;
       const entry = lookupCallerEntry(index, lookup);
       if (entry) {
-        const result = args.lsp === true ? await callersWithLsp(scan, repo, lookup, entry) : entry;
+        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry) : entry;
         return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
       }
-      const absent = { error: `no tracked callers for "${lookup}"` };
-      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lookup, absent) : absent, null, 2);
+      // A symbol that exists but binds no site says how many sites name it
+      // anyway; one that does not exist at all is an error, as it is for
+      // type_hierarchy, implementations and call_graph.
+      const absent = explainNoCallers(scan, lookup, index);
+      if (!absent) {
+        const named = rawCallerSitesFor(scan, lookup).length;
+        throw new Error(
+          `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : ""),
+        );
+      }
+      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
     for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(v) : v;
@@ -259,7 +280,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // The static answer is computed FIRST and passed in, so the LSP tier is
     // structurally incapable of removing anything from it — it can only append
     // a labelled `lsp` block. Absent config → no block at all, byte-compat.
-    const result = args.lsp === true ? await referencesWithLsp(scan, repo, symName, statik) : statik;
+    // The tier locates the declared NAME on its line: pass the name a
+    // qualified ref (`name@file`, `file#Parent/name`) resolved to.
+    const leaf = resolveSymbolRef(scan, symName)?.reading.name ?? symName;
+    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik) : statik;
     return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
   }
   if (name === "lsp_status") {
@@ -303,11 +327,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name === "dead_code") {
-    const all = findDeadCode(readScan());
-    const limit = num(args.limit);
     // Additive: without `limit` the payload is exactly what it always was.
-    if (limit === undefined || all.length <= limit) return JSON.stringify(all, null, 2);
-    return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
+    return JSON.stringify(capDeadCode(findDeadCode(readScan()), num(args.limit)), null, 2);
   }
   if (name === "duplicated_literals") {
     const report = findLiteralDuplications(readScan(), {
@@ -479,24 +500,30 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
     return JSON.stringify(status, null, 2);
   }
+  // An unknown symbol is an ERROR (isError: true) in the navigation tools, as
+  // it is on the CLI (exit 2) — no longer an `{error}` object in a successful
+  // result, which a client cannot tell from an answer without parsing it.
   if (name === "type_hierarchy") {
-    const hierarchy = hierarchyFor(readScan());
+    const scan = readScan();
+    const hierarchy = hierarchyFor(scan);
     const wanted = str(args.name);
     if (!wanted) {
       const obj: Record<string, unknown> = {};
       for (const [key, entry] of hierarchy) obj[key] = entry;
       return JSON.stringify(obj, null, 2);
     }
-    const entry = hierarchy.get(wanted);
-    if (!entry) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
+    const entry = typeEntry(hierarchy, wanted, resolveSymbolRef(scan, wanted)?.defs);
+    if (!entry) throw new Error(`no type named ${wanted}`);
     return JSON.stringify(entry, null, 2);
   }
   if (name === "implementations") {
     const wanted = str(args.name);
     if (!wanted) throw new Error("`name` is required");
-    const hierarchy = hierarchyFor(readScan());
-    if (!hierarchy.has(wanted)) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
-    return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted) }, null, 2);
+    const scan = readScan();
+    const hierarchy = hierarchyFor(scan);
+    const declarations = resolveSymbolRef(scan, wanted)?.defs;
+    if (!typeEntry(hierarchy, wanted, declarations)) throw new Error(`no type named ${wanted}`);
+    return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted, declarations) }, null, 2);
   }
   if (name === "call_graph") {
     const symbol = str(args.symbol);
@@ -507,7 +534,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       ...(positiveNum(args.depth) !== undefined ? { depth: positiveNum(args.depth)! } : {}),
       direction: dir,
     });
-    if (!result.root.length) return JSON.stringify({ error: `no symbol named ${symbol}` }, null, 2);
+    if (!result.root.length) throw new Error(`no symbol named ${symbol}`);
     return JSON.stringify(result, null, 2);
   }
   if (name === "check_rules") {

@@ -8,9 +8,10 @@ import { join } from "node:path";
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { readText } from "./walk.js";
-import type { CallerSite } from "./callers.js";
+import { rawCallerSitesFor, type CallerIndex, type CallerSite, type RawCallerSite } from "./callers.js";
 import { callerIndexFor, fileByRelFor, identSetsFor, symbolsByNameFor, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
+import { refMatches, symbolRefReadings, type SymbolRef } from "./symref.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -120,30 +121,120 @@ export function findSymbol(scan: RepoScan, namePath: string, opts: FindSymbolOpt
   return capped;
 }
 
+export interface ResolvedSymbolRef {
+  reading: SymbolRef; // the reading of the ref that matched (src/symref.ts)
+  defs: CodeSymbol[]; // its declarations, sorted by (file, line)
+}
+
+// The declarations a symbol ref names — `name`, `name@file`, `file#name`,
+// `file#Parent/name` or `Parent/name` (src/symref.ts) — from the first
+// reading that matches anything. undefined when nothing in the index answers.
+// Re-exports and `export default X` point at a declaration; they never are one.
+export function resolveSymbolRef(scan: RepoScan, ref: string): ResolvedSymbolRef | undefined {
+  const byName = symbolsByNameFor(scan);
+  for (const reading of symbolRefReadings(ref)) {
+    // filter creates an owned array before sorting, so callers cannot change
+    // the cached declaration order or contents.
+    const defs = (byName.get(reading.name) ?? []).filter((s) => !REFERENCE_KINDS.has(s.kind) && refMatches(reading, s));
+    if (defs.length) return { reading, defs: defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line) };
+  }
+  return undefined;
+}
+
+// `callers --raw <ref>` (MCP raw:true): every call site of a name before any
+// binding. Raw sites are keyed by the name as called, so a qualified ref
+// (`name@file`, `file#Parent/name`) reads as the name it qualifies.
+export function rawCallersOf(scan: RepoScan, ref: string): { name: string; sites: RawCallerSite[] } {
+  const sites = rawCallerSitesFor(scan, ref);
+  const name = sites.length ? ref : resolveSymbolRef(scan, ref)?.reading.name;
+  return name === undefined || name === ref ? { name: ref, sites } : { name, sites: rawCallerSitesFor(scan, name) };
+}
+
+// Why `callers <ref>` has no entry to show for a symbol that does exist.
+//
+// The caller index only keeps a site it could bind to ONE definition, so "no
+// tracked callers" used to cover both "nothing calls this" and "74 sites call
+// it by name, but two same-named definitions tie on proximity and none was
+// kept" (flask's register_blueprint). Counting the raw sites that no entry of
+// the name absorbed tells the two apart, and says where to look next.
+export interface NoTrackedCallers {
+  name: string; // the ref as asked
+  error: string;
+  defs: { name: string; kind: string; file: string; line: number }[];
+  // Call sites naming the symbol that no binding rule attached to any of its
+  // definitions: ambiguous homonyms, the JS/TS import gate, another family.
+  unresolvedSites: number;
+  sample: { file: string; line: number; receiver?: string }[]; // first five, (file, line) order
+  hint: string;
+}
+
+// undefined when `ref` declares nothing at all — an unknown symbol, which
+// callers report as an error rather than as an empty answer. `index` must hold
+// every entry of the resolved name: the full index, or callerIndexForNames
+// over refNames(ref).
+export function explainNoCallers(scan: RepoScan, ref: string, index: CallerIndex): NoTrackedCallers | undefined {
+  const resolved = resolveSymbolRef(scan, ref);
+  if (!resolved) return undefined;
+  const name = resolved.reading.name;
+  const key = (file: string, line: number): string => `${line}:${file}`;
+  // Sites some homonym's entry already holds are bound, not lost; a site on
+  // one of the name's own declaration lines is the regex tier re-matching the
+  // declaration, which the binder skips on purpose.
+  const accounted = new Set<string>();
+  for (const entry of index.values()) {
+    if (entry.def.name === name) for (const c of entry.callers) accounted.add(key(c.file, c.line));
+  }
+  for (const d of symbolsByNameFor(scan).get(name) ?? []) accounted.add(key(d.file, d.line));
+  const unresolved = rawCallerSitesFor(scan, name).filter((s) => !accounted.has(key(s.file, s.line)));
+  return {
+    name: ref,
+    error: `no tracked callers for "${ref}"`,
+    defs: resolved.defs.map((d) => ({ name: d.name, kind: d.kind, file: d.file, line: d.line })),
+    unresolvedSites: unresolved.length,
+    sample: unresolved.slice(0, 5).map((s) => (s.receiver !== undefined ? { file: s.file, line: s.line, receiver: s.receiver } : { file: s.file, line: s.line })),
+    hint: unresolved.length
+      ? `${unresolved.length} call site(s) name "${name}" but none could be bound to a single definition; ` +
+        "raw mode (CLI --raw, MCP raw:true) lists every site, recall mode (--recall, recall:true) relaxes the JS/TS import gate"
+      : `no call site in the index names "${name}"`,
+  };
+}
+
 export interface SymbolReferences {
   defs: CodeSymbol[]; // where the name is declared
   // Line-precise call sites bound by the caller index (family-gated, import-
-  // corroborated for JS/TS) — the highest-confidence reference tier.
-  callSites: CallerSite[];
+  // corroborated for JS/TS) — the highest-confidence reference tier. When the
+  // answer spans homonyms declared in several files, each site names the
+  // declaring file it binds to in `def`.
+  callSites: (CallerSite & { def?: string })[];
   // Files whose collected identifiers reference the name (AST idents / doc
   // mentions) — file-level, name-based: may include homonym false positives.
   referencingFiles: string[];
 }
 
 // Who references this symbol? Merges the caller index (line-precise) with the
-// identifier/mention pass (file-level), each tier labeled by its field.
-export function findReferences(scan: RepoScan, name: string): SymbolReferences {
-  // Share the name index with findSymbol. filter creates an owned array before
-  // sorting, so callers cannot change the cached declaration order or contents.
-  const defs = (symbolsByNameFor(scan).get(name) ?? []).filter((s) => !REFERENCE_KINDS.has(s.kind));
-  defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
+// identifier/mention pass (file-level), each tier labeled by its field. `ref`
+// takes every form resolveSymbolRef reads; a bare name covers all homonyms.
+export function findReferences(scan: RepoScan, ref: string): SymbolReferences {
+  const resolved = resolveSymbolRef(scan, ref);
+  const defs = resolved?.defs ?? [];
+  const name = resolved?.reading.name ?? ref;
 
+  // Every declaring file's entry, not just the one the bare name is keyed by:
+  // the index keeps the first homonym under `name` and each other one under
+  // `name@file` (the same lookup findDeadCode does).
   const index = callerIndexFor(scan);
-  const entry = index.get(name);
-  // COPY, not alias: the caller index is memoized per scan (src/derived.ts),
-  // so handing out the cached array would let a consumer mutation poison
-  // every later findReferences on this scan.
-  const callSites = entry ? [...entry.callers] : [];
+  const bare = index.get(name);
+  const declaring = [...new Set(defs.map((d) => d.file))];
+  const callSites: SymbolReferences["callSites"] = [];
+  for (const file of declaring) {
+    const entry = bare?.def.file === file ? bare : index.get(`${name}@${file}`);
+    if (!entry) continue;
+    // COPY, not alias: the caller index is memoized per scan (src/derived.ts),
+    // so handing out the cached sites would let a consumer mutation poison
+    // every later findReferences on this scan.
+    for (const site of entry.callers) callSites.push(declaring.length > 1 ? { ...site, def: file } : { ...site });
+  }
+  callSites.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
 
   const referencingFiles = new Set<string>();
   const unique = uniqueDefsFor(scan);

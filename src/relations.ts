@@ -19,6 +19,7 @@ import type { Edge, RawRelation } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { addDef, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
 import { byStr } from "./sort.js";
+import { refMatches, symbolRefReadings } from "./symref.js";
 
 // Internal Map-key separator. Written as an ESCAPE, never as a literal NUL: a
 // literal one makes git, grep and file(1) treat this source as binary, and makes
@@ -252,8 +253,9 @@ export function buildTypeHierarchy(scan: RepoScan, importPairs: Set<string>): Ma
 export function implementationsOf(
   hierarchy: Map<string, TypeHierarchyEntry>,
   name: string,
+  declarations?: readonly { name: string; file: string }[],
 ): HierarchyRef[] {
-  const root = hierarchy.get(name);
+  const root = typeEntry(hierarchy, name, declarations);
   if (!root) return [];
   const seen = new Set<string>([`${root.name}${SEP}${root.file}`]);
   const out: HierarchyRef[] = [];
@@ -266,8 +268,11 @@ export function implementationsOf(
         if (seen.has(key)) continue;
         seen.add(key);
         out.push(child);
-        const entry = hierarchy.get(child.name) ?? hierarchy.get(`${child.name}@${child.file}`);
-        if (entry && entry.file === child.file) next.push(entry);
+        // Not `get(name) ?? get(name@file)`: for any homonym but the first,
+        // the bare key answers with ANOTHER file's type and the walk stopped
+        // there, dropping everything below a second same-named subtype.
+        const entry = entryAt(hierarchy, child.name, child.file);
+        if (entry) next.push(entry);
       }
     }
     frontier = next;
@@ -275,10 +280,36 @@ export function implementationsOf(
   return out.sort((a, b) => byStr(a.name, b.name) || byStr(a.file, b.file));
 }
 
-/** The declaration `name` refers to, for callers that only have a name. */
+/**
+ * The type a symbol ref names — `Name`, `Name@file`, `file#Name` (see
+ * src/symref.ts). A bare name answers with the key the hierarchy stores it
+ * under (the first homonym); the qualified forms reach every homonym.
+ *
+ * Entries do not record where a type is nested, so a ref constraining the
+ * PARENT (`Outer/Inner`, `file#Outer/Inner`) is settled by `declarations`:
+ * what the ref resolved to against the scan (query.ts resolveSymbolRef).
+ */
 export function typeEntry(
   hierarchy: Map<string, TypeHierarchyEntry>,
   name: string,
+  declarations?: readonly { name: string; file: string }[],
 ): TypeHierarchyEntry | undefined {
-  return hierarchy.get(name);
+  const direct = hierarchy.get(name);
+  if (direct) return direct;
+  for (const reading of symbolRefReadings(name).slice(1)) {
+    if (reading.parent !== undefined) continue;
+    for (const e of hierarchy.values()) if (refMatches(reading, e)) return e;
+  }
+  for (const d of declarations ?? []) {
+    const e = entryAt(hierarchy, d.name, d.file);
+    if (e) return e;
+  }
+  return undefined;
+}
+
+// The entry for the type `name` declared in `file`: the bare key holds the
+// first homonym, `name@file` every other (buildTypeHierarchy's keying).
+function entryAt(hierarchy: Map<string, TypeHierarchyEntry>, name: string, file: string): TypeHierarchyEntry | undefined {
+  const bare = hierarchy.get(name);
+  return bare?.file === file ? bare : hierarchy.get(`${name}@${file}`);
 }

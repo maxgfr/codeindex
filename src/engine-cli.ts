@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import {
@@ -21,20 +21,22 @@ import { scanRepoParallel } from "./pool.js";
 import { preloadSessionLazy, INDEX_DIR } from "./preload.js";
 import { parseCacheEntries } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
-import { buildTypeHierarchy, implementationsOf } from "./relations.js";
-import { computeImportPairs } from "./callers.js";
-import { buildSymbolGraph, neighborhood } from "./symbolgraph.js";
-import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
+import { implementationsOf, typeEntry } from "./relations.js";
+import { neighborhood } from "./symbolgraph.js";
+import { buildCallerIndex, buildRawCallerIndex, callerIndexForNames, lookupCallerEntry, rawCallerSitesFor, refNames } from "./callers.js";
+import { hierarchyFor, symbolGraphFor } from "./derived.js";
+import { explainNoCallers, rawCallersOf, resolveSymbolRef } from "./query.js";
+import { formatSymbolRef } from "./symref.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
-import { findDeadCode } from "./deadcode.js";
+import { capDeadCode, findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
-import { impactOf, neighborsOf } from "./traverse.js";
+import { EDGE_KINDS, impactOf, neighborsOf } from "./traverse.js";
 import { deltaFor, formatDeltaPanel } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
@@ -63,11 +65,16 @@ Commands:
   symbols     Symbol index (symbols.json bytes) to stdout or --out
   scip        SCIP code-intelligence index (protobuf bytes) into --out
               (default index.scip; --out - writes to stdout)
-  callers     Per-symbol caller index (JSON); optional <name> or <name@file>
-              selects one symbol; --lsp appends language-server incoming calls
+  callers     Per-symbol caller index (JSON); an optional <symbol> selects one
+              (unknown symbol: exit 2; a symbol no site binds to: its defs and
+              how many call sites name it anyway); --lsp appends language-server
+              incoming calls; --raw lists every call site by name, unresolved
   hierarchy   Type hierarchy: extends/implements, and what extends/implements it
   implementations  Everything implementing/extending a type (transitively)
-  callgraph   Bounded symbol-to-symbol neighborhood (--depth, --direction)
+  callgraph   Bounded symbol-to-symbol neighborhood (--depth up to 5,
+              --direction)
+              A <symbol> above is any of: name, name@file, file#name,
+              file#Parent/name (a callgraph id), Parent/name
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
@@ -121,17 +128,23 @@ Commands:
               (--min-files, --min-count, --include-tests)
   deadcode    Dead-code candidates in two labeled tiers: 'unreferenced' (no
               call site binds AND nothing references the name) and 'uncalled'
-              (referenced — re-export, type position — but never called)
+              (referenced — re-export, type position — but never called);
+              --limit <n> caps the list as {total, shown, truncated, candidates}
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
-              positional for one file; omit for the repo-wide top
+              positional for one file; omit for the repo-wide top (--limit,
+              default 50)
   risk        Complexity × git-churn ranking (JSON; --since <ref> to bound)
   delta       Review panel for the git diff: changed files -> enclosing symbols ->
               blast radius -> risk score with explained reasons
               (--base <ref> | --staged, --depth <n>, --json)
   impact      Reverse dependency closure of a file or module: everything that
               transitively imports/uses/calls it (--depth <n>; JSON)
-  neighbors   Graph neighbours of a file or module, both directions
-              (--depth <n>, --kind import,call,use,doc-link,mention; JSON)
+  neighbors   Graph neighbours of a file or module, both directions: every
+              edge kind linking each neighbour, strongest evidence first
+              (--depth <n>, --kind import,call,use,extends,implements,
+              doc-link,mention; JSON)
+              File arguments (complexity, impact, neighbors) may be written
+              ./path, repo-absolute or with backslashes
   mermaid     Mermaid diagram of the module graph; pass a module positional to
               focus on one neighborhood
   rewrite     Map an expensive tree-wide search onto its indexed equivalent:
@@ -188,7 +201,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       entirely. Stale/absent/corrupt → a normal cold build
   --no-index-cache    Never reuse a persisted index; always build from scratch
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
-  --limit <n>         Max results for \`search\` (default 20)
+  --limit <n>         Max results: \`search\` (default 20), \`complexity\` (50),
+                      \`risk\` (20), \`deadcode\` (default all)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
   --exact             \`search\`: drop results that carry no verbatim term match
@@ -206,6 +220,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
+  --raw               \`callers\`: every call site by callee name, with no binding
+                      at all (receiver and enclosing symbol per site)
   --ignore-case       \`grep\`: case-insensitive matching
   --max-hits <n>      \`grep\`: cap returned hits (default 200)
   --min-files <n>     \`literals\`: distinct files a value must span (default 2)
@@ -244,6 +260,7 @@ interface CliFlags {
   semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
   lsp?: boolean; // callers: append language-server incoming calls
   recall?: boolean; // callers: recall-oriented binding
+  raw?: boolean; // callers: unresolved call sites by name
   run?: boolean; // `embed serve`: actually run the docker command (default: print)
   probe?: boolean; // `lsp status`: start each server to read its real capabilities
   projectRoot?: string; // scip: override Metadata.project_root
@@ -310,12 +327,21 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--semantic") flags.semantic = true;
     else if (a === "--lsp") flags.lsp = true;
     else if (a === "--recall") flags.recall = true;
+    else if (a === "--raw") flags.raw = true;
     else if (a === "--run") flags.run = true;
     else if (a === "--probe") flags.probe = true;
     else if (a === "--base") flags.base = next();
     else if (a === "--staged") flags.staged = true;
     else if (a === "--depth") flags.depth = num();
-    else if (a === "--kind") flags.kind = next();
+    else if (a === "--kind") {
+      // Validated here, like --direction: an unknown kind filtered the walk
+      // down to nothing and answered an empty list on exit 0.
+      const v = next();
+      const kinds = v.split(",").map((k) => k.trim()).filter(Boolean);
+      const bad = kinds.filter((k) => !(EDGE_KINDS as readonly string[]).includes(k));
+      if (!kinds.length || bad.length) throw new Error(`--kind expects a comma-separated list of ${EDGE_KINDS.join("|")}, got "${bad.join(",") || v}"`);
+      flags.kind = kinds.join(",");
+    }
     else if (a === "--rank") {
       const v = next();
       if (v !== "graph" && v !== "lexical") throw new Error(`--rank expects graph|lexical, got "${v}"`);
@@ -336,6 +362,18 @@ function parseFlags(args: string[]): CliFlags {
 function emit(content: string, out?: string): void {
   if (out) writeFileSync(out, content);
   else process.stdout.write(content);
+}
+
+// A file argument as the user wrote it — `./src/a.ts`, an absolute path, a
+// Windows `src\a.ts` — spelled the way the index keys files: repo-relative,
+// forward slashes. The literal comes first (a module slug, or a rel that
+// really contains a backslash); a differing normalized spelling second.
+// `complexity ./src/a.ts` used to answer [] and `impact ./src/a.ts` "no such
+// file" for a file the relative spelling found.
+function fileArgReadings(repo: string, arg: string): string[] {
+  let rel = (isAbsolute(arg) ? relative(repo, arg) : arg).replace(/\\/g, "/");
+  while (rel.startsWith("./")) rel = rel.slice(2);
+  return rel !== arg && rel !== "" && rel !== ".." && !rel.startsWith("../") ? [arg, rel] : [arg];
 }
 
 function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexOptions {
@@ -774,22 +812,46 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     }
   } else if (cmd === "callers") {
     if (flags.lsp && !flags.positional) throw new Error("callers --lsp requires a symbol: callers <name> --lsp");
+    if (flags.raw && (flags.lsp || flags.recall)) throw new Error("callers --raw lists call sites before any binding: it takes neither --lsp nor --recall");
     const scan = await readScan();
-    const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
-    if (flags.positional) {
-      const entry = lookupCallerEntry(index, flags.positional) ?? { error: `no tracked callers for "${flags.positional}"` };
-      const result = flags.lsp ? await callersWithLsp(scan, flags.repo, flags.positional, entry) : entry;
+    const ref = flags.positional;
+    if (flags.raw) {
+      if (ref) {
+        emit(JSON.stringify(rawCallersOf(scan, ref), null, 2) + "\n", flags.out);
+      } else {
+        const obj: Record<string, unknown> = {};
+        for (const [name, sites] of buildRawCallerIndex(scan)) obj[name] = sites;
+        emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
+      }
+    } else if (ref) {
+      // Only the names the ref can denote are bound — the whole-repo index is
+      // the expensive part of a one-shot query, and nothing else needs it.
+      const index = callerIndexForNames(scan, refNames(ref), { recall: flags.recall });
+      const entry = lookupCallerEntry(index, ref);
+      const answer = entry ?? explainNoCallers(scan, ref, index);
+      if (!answer) {
+        const named = rawCallerSitesFor(scan, ref).length;
+        throw new Error(
+          `no symbol named "${ref}" in the index` +
+            (named ? ` (${named} call site(s) use the name; \`callers --raw ${ref}\` lists them)` : ""),
+        );
+      }
+      // The LSP tier parses `Parent/name@file`; hand it that spelling of
+      // whichever ref form was used.
+      const reading = resolveSymbolRef(scan, ref)?.reading;
+      const result = flags.lsp ? await callersWithLsp(scan, flags.repo, reading ? formatSymbolRef(reading) : ref, answer) : answer;
       emit(JSON.stringify(result, null, 2) + "\n", flags.out);
     } else {
+      const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
       const obj: Record<string, unknown> = {};
       for (const [name, entry] of index) obj[name] = entry;
       emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
     }
   } else if (cmd === "hierarchy") {
     const scan = await readScan();
-    const hierarchy = buildTypeHierarchy(scan, computeImportPairs(scan));
+    const hierarchy = hierarchyFor(scan);
     if (flags.positional) {
-      const entry = hierarchy.get(flags.positional);
+      const entry = typeEntry(hierarchy, flags.positional, resolveSymbolRef(scan, flags.positional)?.defs);
       if (!entry) throw new Error(`no type named ${flags.positional}`);
       emit(JSON.stringify(entry, null, 2) + "\n", flags.out);
     } else {
@@ -800,16 +862,21 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "implementations") {
     if (!flags.positional) throw new Error("implementations needs a type name: cli.mjs implementations <Name> --repo <dir>");
     const scan = await readScan();
-    const hierarchy = buildTypeHierarchy(scan, computeImportPairs(scan));
-    if (!hierarchy.has(flags.positional)) throw new Error(`no type named ${flags.positional}`);
+    const hierarchy = hierarchyFor(scan);
+    const declarations = resolveSymbolRef(scan, flags.positional)?.defs;
+    if (!typeEntry(hierarchy, flags.positional, declarations)) throw new Error(`no type named ${flags.positional}`);
     emit(
-      JSON.stringify({ name: flags.positional, implementations: implementationsOf(hierarchy, flags.positional) }, null, 2) + "\n",
+      JSON.stringify(
+        { name: flags.positional, implementations: implementationsOf(hierarchy, flags.positional, declarations) },
+        null,
+        2,
+      ) + "\n",
       flags.out,
     );
   } else if (cmd === "callgraph") {
     if (!flags.positional) throw new Error("callgraph needs a symbol: cli.mjs callgraph <Symbol> --repo <dir>");
     const scan = await readScan();
-    const graph = buildSymbolGraph(scan, computeImportPairs(scan));
+    const graph = symbolGraphFor(scan);
     const result = neighborhood(graph, flags.positional, {
       ...(flags.depth !== undefined ? { depth: flags.depth } : {}),
       ...(flags.direction ? { direction: flags.direction } : {}),
@@ -1067,7 +1134,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const { ok, couplings } = changeCoupling(flags.repo, { since: flags.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
   } else if (cmd === "deadcode") {
-    emit(JSON.stringify(findDeadCode(await readScan()), null, 2) + "\n", flags.out);
+    emit(JSON.stringify(capDeadCode(findDeadCode(await readScan()), flags.limit), null, 2) + "\n", flags.out);
   } else if (cmd === "literals") {
     const report = findLiteralDuplications(await readScan(), {
       minFiles: flags.minFiles,
@@ -1077,11 +1144,20 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(JSON.stringify(report, null, 2) + "\n", flags.out);
   } else if (cmd === "complexity") {
     const scan = await readScan();
-    emit(JSON.stringify(symbolComplexity(scan, flags.positional), null, 2) + "\n", flags.out);
+    let rel = flags.positional;
+    if (rel !== undefined) {
+      // An unknown file answered [] on exit 0, exactly like a file with no
+      // symbols: say which it is.
+      const known = new Set(scan.files.map((f) => f.rel));
+      const hit = fileArgReadings(flags.repo, rel).find((r) => known.has(r));
+      if (hit === undefined) throw new Error(`no such file in the index: ${rel}`);
+      rel = hit;
+    }
+    emit(JSON.stringify(symbolComplexity(scan, rel, flags.limit), null, 2) + "\n", flags.out);
   } else if (cmd === "risk") {
     const scan = await readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
-    emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn) }, null, 2) + "\n", flags.out);
+    emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, flags.limit) }, null, 2) + "\n", flags.out);
   } else if (cmd === "delta") {
     const { graph, symbols } = await readArtifacts();
     const res = deltaFor(flags.repo, graph, symbols, {
@@ -1094,14 +1170,22 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "impact") {
     if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
     const { graph } = await readArtifacts();
-    const res = impactOf(graph, flags.positional, flags.depth ?? Infinity);
+    let res: ReturnType<typeof impactOf>;
+    for (const target of fileArgReadings(flags.repo, flags.positional)) {
+      res = impactOf(graph, target, flags.depth ?? Infinity);
+      if (res) break;
+    }
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "neighbors") {
     if (!flags.positional) throw new Error("neighbors needs a target: cli.mjs neighbors <file|module> --repo <dir>");
     const { graph } = await readArtifacts();
-    const kinds = flags.kind ? new Set(flags.kind.split(",").map((k) => k.trim()).filter(Boolean)) : undefined;
-    const res = neighborsOf(graph, flags.positional, flags.depth ?? 1, kinds);
+    const kinds = flags.kind ? new Set(flags.kind.split(",")) : undefined; // validated by parseFlags
+    let res: ReturnType<typeof neighborsOf>;
+    for (const target of fileArgReadings(flags.repo, flags.positional)) {
+      res = neighborsOf(graph, target, flags.depth ?? 1, kinds);
+      if (res) break;
+    }
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "mermaid") {

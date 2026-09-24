@@ -7,6 +7,8 @@
 import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protocol.js";
 
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
+// One symbol syntax for every navigation tool (src/symref.ts).
+const symbolRefDescription = "name, name@file, file#name, file#Parent/name (a call_graph id) or Parent/name";
 const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -40,18 +42,23 @@ export const TOOLS = [
   {
     name: "callers",
     description:
-      "Who calls a function? Per-symbol caller index: each defined symbol with the exact (file, line) call sites that bind to it. Omit `name` for the full index.",
+      "Who calls a function? Per-symbol caller index: each defined symbol with the exact (file, line) call sites that bind to it. Omit `name` for the full index. An unknown symbol is an error; a known one no site binds to answers with its defs and how many call sites name it anyway (`unresolvedSites`, `sample`).",
     inputSchema: {
       type: "object",
       properties: {
         ...repoProp,
         ...conciseProp,
-        name: { type: "string", description: "Symbol name to look up" },
+        name: { type: "string", description: symbolRefDescription },
         lsp: { type: "boolean", description: "Append incoming calls from configured language servers and agreement with static callers. Requires name; name@file disambiguates. Unsupported servers and failures keep the static answer with a stated reason (default false)." },
         recall: {
           type: "boolean",
           description:
             "Recall-oriented binding: relax the JS/TS import gate to unique repo-wide names, labelling each site corroborated|unique-name (default false = precision)",
+        },
+        raw: {
+          type: "boolean",
+          description:
+            "Every call site of `name` as written, before any binding: {name, sites:[{file, line, receiver?, enclosingSymbol?}]}. Requires name (default false)",
         },
       },
       required: ["repo"],
@@ -111,7 +118,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         ...repoProp,
-        name: { type: "string", description: "Symbol name" },
+        name: { type: "string", description: `${symbolRefDescription}; a bare name covers every homonym` },
         ...conciseProp,
         lsp: {
           type: "boolean",
@@ -394,7 +401,7 @@ export const TOOLS = [
       "How do types relate? For one type: the base classes it extends, the interfaces/traits it implements, and — the reverse direction, which no other tool answers — what extends or implements IT, plus any declared supertype with no definition in this repo. Omit `name` for the whole hierarchy.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Type name to look up" } },
+      properties: { ...repoProp, name: { type: "string", description: `Type to look up — ${symbolRefDescription}` } },
       required: ["repo"],
     },
   },
@@ -404,7 +411,7 @@ export const TOOLS = [
       "Who implements this interface (or extends this class)? Walks the hierarchy TRANSITIVELY, so a class implementing a sub-interface of the one asked about is included. The tool to reach for before changing an interface.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Interface/trait/class name" } },
+      properties: { ...repoProp, name: { type: "string", description: `Interface/trait/class — ${symbolRefDescription}` } },
       required: ["repo", "name"],
     },
   },
@@ -416,7 +423,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         ...repoProp,
-        symbol: { type: "string", description: "Symbol name to centre on" },
+        symbol: { type: "string", description: `Symbol to centre on — ${symbolRefDescription}` },
         depth: { type: "number", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
         direction: { type: "string", description: "out | in | both (default both)" },
       },
@@ -480,6 +487,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       nodes: { type: "array", items: anyObj },
       edges: { type: "array", items: anyObj },
       truncated: { type: "boolean" },
+      depthClamped: { type: "integer" },
     },
     required: ["root", "nodes", "edges"],
   },
@@ -524,12 +532,23 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       },
     ],
   },
-  // The whole index (symbol name -> entry), one entry, or the not-found notice.
+  // The whole index (symbol name -> entry), one entry, the no-callers notice,
+  // or (raw:true) one name's unresolved sites.
   callers: {
     oneOf: [
       { type: "object", additionalProperties: anyObj },
       { type: "object", properties: { def: anyObj, callers: { type: "array", items: anyObj }, lsp: anyObj }, required: ["def", "callers"] },
-      { type: "object", properties: { error: { type: "string" } }, required: ["error"] },
+      {
+        type: "object",
+        properties: {
+          error: { type: "string" },
+          defs: { type: "array", items: anyObj },
+          unresolvedSites: { type: "integer" },
+          sample: { type: "array", items: anyObj },
+        },
+        required: ["error"],
+      },
+      { type: "object", properties: { name: { type: "string" }, sites: { type: "array", items: anyObj } }, required: ["name", "sites"] },
     ],
   },
   workspaces: {
