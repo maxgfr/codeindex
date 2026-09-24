@@ -468,6 +468,29 @@ to stderr too. Nothing here changes an artifact.
 directory or a file (its module), and fails on anything else rather than
 printing an empty diagram.
 
+## SCIP export
+
+`codeindex scip` writes a [SCIP](https://github.com/sourcegraph/scip) index
+that `scip lint` accepts without a finding. Symbols are global, one namespace
+per file, and follow the declaration chain with the suffix each kind calls
+for:
+
+```text
+codeindex . . . `src/app.py`/create_app().index().     a function nested in a function
+codeindex . . . `src/app.py`/create_app().Task#run().  a method of a class nested in one
+codeindex . . . `context.go`/Context#BindWith().       a Go method declared in deprecated.go
+codeindex . . . `shapes.ts`/Geo/area().                a function in a namespace
+codeindex . . . `shapes.ts`/over(16).                  a repeated overload, told apart by its line
+```
+
+Every symbol kind maps to its SCIP `Kind` (property, field, enum member,
+constructor, getter, macro, namespace, package, …), and a Go method declared
+in another file of its package hangs off the type it belongs to. A re-export
+(`export { X } from`, `from .app import X as X`) is a reference to the
+declaration it forwards, not a second definition; `export * from` names nothing
+and emits nothing. A member whose owner is not in the index (a type from
+another crate) keeps a `Owner#` descriptor under its own file.
+
 ## Docker
 
 `ghcr.io/maxgfr/codeindex` ships the same zero-dependency bundle (`engine.mjs`
