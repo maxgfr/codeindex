@@ -585,8 +585,8 @@ function parseCargoManifest(text: string, dir: string): CargoManifest {
 // importing file is found by a simple scan.
 function buildRustCrates(root: string, fileSet: Set<string>): RustCrate[] {
   const manifests: CargoManifest[] = [];
-  for (const rel of [...fileSet].sort(byStr)) {
-    if (rel !== "Cargo.toml" && !rel.endsWith("/Cargo.toml")) continue;
+  const rels = [...fileSet].filter((rel) => rel === "Cargo.toml" || rel.endsWith("/Cargo.toml"));
+  for (const rel of rels.sort(byStr)) {
     manifests.push(parseCargoManifest(readText(join(root, rel)), rel.includes("/") ? posix.dirname(rel) : ""));
   }
   // A virtual workspace manifest has no crate of its own.
@@ -877,8 +877,8 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
   // Dart packages: each pubspec.yaml's top-level `name`, so `package:x/y.dart`
   // resolves to <that dir>/lib/y.dart when x is a package of this repo.
   const dartPackages = new Map<string, string>();
-  for (const rel of [...fileSet].sort(byStr)) {
-    if (rel !== "pubspec.yaml" && !rel.endsWith("/pubspec.yaml")) continue;
+  const pubspecs = [...fileSet].filter((rel) => rel === "pubspec.yaml" || rel.endsWith("/pubspec.yaml"));
+  for (const rel of pubspecs.sort(byStr)) {
     const m = /^name:[ \t]*["']?(\w+)["']?[ \t]*(?:#.*)?$/m.exec(readText(join(scan.root, rel)));
     if (m && !dartPackages.has(m[1]!)) dartPackages.set(m[1]!, rel.includes("/") ? posix.dirname(rel) : "");
   }
