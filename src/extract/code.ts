@@ -18,7 +18,7 @@ export interface CodeInfo {
   // A cap truncated `symbols` — propagated onto the FileRecord.
   truncated?: true;
   refs: RawRef[]; // import refs (raw specifiers, unresolved)
-  pkg?: string; // Java: the file's own `package x.y.z;` — used to derive source roots
+  pkg?: string; // the file's own package/namespace (Java, Kotlin, Scala, C#) — anchors import resolution
   idents?: string[]; // distinctive identifiers referenced (AST path) — feeds `use` edges
   // Call-site callee names (+ immediate receiver for qualified calls) — feeds
   // call edges and receiver-gated sink catalogs.
@@ -37,6 +37,9 @@ export interface CodeInfo {
 const JS_TS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 const PY = new Set([".py", ".pyi"]);
 const C_CPP = new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);
+const KOTLIN = new Set([".kt", ".kts"]);
+const SCALA = new Set([".scala", ".sc"]);
+const SHELL = new Set([".sh", ".bash", ".zsh", ".ksh", ".fish"]);
 
 // The leading comment block of a file, turned into one summary line. Handles
 // `//`, `#`, and `/* … */` / `""" … """` openers. Stops at the first code line.
@@ -145,6 +148,92 @@ function expandUseGroups(path: string, out: string[] = []): string[] {
   return out;
 }
 
+// A dotted JVM import path as the resolver wants it: backquotes dropped
+// (Kotlin's `a.`fun`.B`), a wildcard written `.*` whatever the language
+// spelled (Scala 2's `._`), and anything that is not a plain dotted name
+// rejected.
+function jvmPath(raw: string): string | undefined {
+  const p = raw.replace(/`/g, "").replace(/^_root_\./, "").trim().replace(/\._$/, ".*");
+  return /^\w+(?:\.\w+)*(?:\.\*)?$/.test(p) ? p : undefined;
+}
+
+// One Scala import clause into full dotted paths: `a.b.C`, `a.b.C as D`,
+// `a.b._` / `a.b.*`, and selector groups `a.b.{C, D => E, _}`. A `given` or
+// wildcard selector imports the whole prefix (`a.b.*`); a hiding selector
+// (`C => _`) imports nothing.
+function expandScalaImport(clause: string, out: string[]): void {
+  const brace = clause.indexOf("{");
+  if (brace === -1) {
+    const p = jvmPath(clause.split(/\s+as\s+/)[0]!.replace(/\.given$/, ".*"));
+    if (p && out.length < MAX_USE_EXPANSION) out.push(p);
+    return;
+  }
+  const prefix = clause.slice(0, brace).trim().replace(/\.$/, "");
+  const close = clause.indexOf("}", brace);
+  if (close === -1) return; // unbalanced — drop rather than guess
+  for (const sel of clause.slice(brace + 1, close).split(",")) {
+    const [name = "", rename] = sel.split(/=>|\bas\b/).map((s) => s.trim());
+    if (!name || rename === "_") continue;
+    const whole = name === "_" || name === "*" || /^given\b/.test(name);
+    const p = jvmPath(whole ? prefix + ".*" : prefix + "." + name);
+    if (p && out.length < MAX_USE_EXPANSION) out.push(p);
+  }
+}
+
+// The script-relative spellings of a sourced path — `"$(dirname "$0")/x"`,
+// `"$(dirname "${BASH_SOURCE[0]}")/x"`, `"${BASH_SOURCE%/*}/x"` — rewritten to
+// `./x` so the resolver reads them against the script's own directory.
+const SHELL_SELF_DIR =
+  /^(["']?)(?:\$\(\s*dirname\s+(["']?)\$(?:0|\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE)\2\s*\)|\$\{(?:BASH_SOURCE(?:\[0\])?|0)%\/\*\})\//;
+
+// The file a `source`/`.` line names, or undefined when it is not a literal:
+// any other expansion ($VAR, ~, globs, command substitution) depends on the
+// environment the script runs in, and an absolute path is outside the repo.
+function shellSourcePath(arg: string): string | undefined {
+  const w = /^(?:"([^"]*)"|'([^']*)'|([^\s;&|)#"']+))/.exec(arg.trim().replace(SHELL_SELF_DIR, "$1./"));
+  const p = w?.[1] ?? w?.[2] ?? w?.[3];
+  return p && !/[$`~*?]/.test(p) && !p.startsWith("/") ? p : undefined;
+}
+
+// Scala's package: the clauses heading the file, chained (`package a` then
+// `package b` nest into `a.b`). A `package object foo` after them holds the
+// members of package `….foo`, so that is the file's package.
+function scalaPackage(content: string): string | undefined {
+  const parts: string[] = [];
+  let inComment = false;
+  for (const raw of content.split("\n")) {
+    const line = raw.trim();
+    if (inComment) {
+      inComment = !line.includes("*/");
+      continue;
+    }
+    if (!line || line.startsWith("//")) continue;
+    if (line.startsWith("/*")) {
+      inComment = !line.includes("*/");
+      continue;
+    }
+    const m = /^package[ \t]+(object[ \t]+)?([\w.`]+)/.exec(line);
+    if (!m) break;
+    parts.push(m[2]!.replace(/`/g, ""));
+    if (m[1]) break;
+  }
+  return parts.length ? parts.join(".") : undefined;
+}
+
+// The file's own package, which anchors namespace→file resolution: Java's
+// `package x;`, C#'s `namespace x` (block or file-scoped), Kotlin's `package
+// x` and Scala's (see scalaPackage).
+function packageDecl(ext: string, content: string): string | undefined {
+  if (ext === ".java") return /^\s*package\s+([\w.]+)\s*;/m.exec(content)?.[1];
+  if (ext === ".cs") return /^\s*(?:file-scoped\s+)?namespace\s+([\w.]+)/m.exec(content)?.[1];
+  if (KOTLIN.has(ext)) {
+    const m = /^[ \t]*package[ \t]+([\w.`]+)/m.exec(content);
+    return m ? m[1]!.replace(/`/g, "") : undefined;
+  }
+  if (SCALA.has(ext)) return scalaPackage(content);
+  return undefined;
+}
+
 // Extract import specifiers as written (no resolution). Resolution needs
 // repo-wide context (tsconfig paths, go.mod, python roots) and happens later.
 function extractImports(ext: string, content: string): RawRef[] {
@@ -248,6 +337,73 @@ function extractImports(ext: string, content: string): RawRef[] {
     let m: RegExpExecArray | null;
     const using = /^\s*(?:global\s+)?using\s+(?:static\s+)?([A-Za-z_][\w.]*)\s*;/gm;
     while ((m = using.exec(content))) specs.add(m[1]!);
+  } else if (KOTLIN.has(ext)) {
+    // `import a.b.C`, `import a.b.*`, `import a.b.C as D` — Java's dotted form
+    // without the `;`, so .java/.kt/.scala share one resolver.
+    let m: RegExpExecArray | null;
+    const imp = /^[ \t]*import[ \t]+([\w.`*]+)/gm;
+    while ((m = imp.exec(content))) {
+      const p = jvmPath(m[1]!);
+      if (p) specs.add(p);
+    }
+  } else if (SCALA.has(ext)) {
+    // `import a.B, c.D` holds several clauses; a selector group may wrap lines.
+    let m: RegExpExecArray | null;
+    const imp = /^[ \t]*import[ \t]+((?:[^\n;{]|\{[^}]*\})+)/gm;
+    while ((m = imp.exec(content))) {
+      const out: string[] = [];
+      let depth = 0;
+      let cur = "";
+      for (const ch of m[1]!.replace(/\/\/.*$/gm, "")) {
+        if (ch === "{") depth++;
+        else if (ch === "}") depth--;
+        if (ch === "," && depth === 0) {
+          expandScalaImport(cur, out);
+          cur = "";
+        } else cur += ch;
+      }
+      expandScalaImport(cur, out);
+      for (const p of out) specs.add(p);
+    }
+  } else if (ext === ".dart") {
+    // `import`/`export` and `part 'x.dart'` (a piece of THIS library kept in
+    // another file). `part of` names the owning library back — the library's
+    // own `part` already links the pair. URIs stay as written: `dart:` is the
+    // SDK, `package:` is mapped onto pubspec.yaml names at resolve time.
+    let m: RegExpExecArray | null;
+    const re = /^[ \t]*(?:import|export|part)[ \t]+(?:'([^'\n]+)'|"([^"\n]+)")/gm;
+    while ((m = re.exec(content))) specs.add(m[1] ?? m[2]!);
+  } else if (ext === ".lua") {
+    // `require("a.b")`, `require "a.b"`, `require 'a.b'`: a module name the
+    // resolver maps onto package.path's `?.lua` and `?/init.lua`.
+    let m: RegExpExecArray | null;
+    const re = /\brequire\s*\(?\s*['"]([\w-]+(?:[./][\w-]+)*)['"]/g;
+    while ((m = re.exec(content))) specs.add(m[1]!);
+  } else if (SHELL.has(ext)) {
+    // `source f` / `. f`, at a line start or after `;`, `&&`, `||`, `then`, `do`.
+    let m: RegExpExecArray | null;
+    const re = /(?:^|[;&|]|\b(?:then|do|else)\b)[ \t]*(?:source|\.)[ \t]+([^\n]+)/gm;
+    while ((m = re.exec(content))) {
+      const p = shellSourcePath(m[1]!);
+      if (p) specs.add(p);
+    }
+  } else if (ext === ".ex" || ext === ".exs") {
+    // `alias A.B`, `alias A.{B, C}`, `import A`, `require A`, `use A, opts` —
+    // module names, resolved through the repo's defmodule index. `__MODULE__`
+    // forms need the enclosing module and are skipped.
+    let m: RegExpExecArray | null;
+    const re = /^[ \t]*(?:alias|import|require|use)[ \t]+([A-Z]\w*(?:\.[A-Z]\w*)*)(?:\.\{([^}]*)\})?/gm;
+    while ((m = re.exec(content))) {
+      if (m[2] === undefined) {
+        specs.add(m[1]!);
+        continue;
+      }
+      let n = 0;
+      for (const part of m[2].split(",")) {
+        const name = part.trim();
+        if (/^[A-Z]\w*(?:\.[A-Z]\w*)*$/.test(name) && n++ < MAX_USE_EXPANSION) specs.add(m[1] + "." + name);
+      }
+    }
   }
 
   return [...specs].map((spec) => ({ kind: "import" as const, spec }));
@@ -481,14 +637,9 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
       : {}),
     summary: topDocComment(content),
     refs,
-    // pkg anchors namespace→source-root resolution: Java's `package`, C#'s
-    // `namespace` (block or file-scoped). Both feed the same resolver pattern.
-    pkg:
-      ext === ".java"
-        ? /^\s*package\s+([\w.]+)\s*;/m.exec(content)?.[1]
-        : ext === ".cs"
-          ? /^\s*(?:file-scoped\s+)?namespace\s+([\w.]+)/m.exec(content)?.[1]
-          : undefined,
+    // pkg anchors namespace→file resolution (Java/Kotlin/Scala packages, C#
+    // namespaces) — see packageDecl.
+    pkg: packageDecl(ext, content),
     idents: ast?.idents,
     // AST call sites when a grammar parsed the file; the conservative regex
     // collector otherwise, so caller indexes exist without the wasm sidecar.

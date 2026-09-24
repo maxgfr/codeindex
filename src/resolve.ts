@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import { join } from "node:path";
 import type { RepoScan } from "./scan.js";
+import type { FileRecord } from "./types.js";
 import { readText } from "./walk.js";
 import { byStr } from "./sort.js";
 
@@ -67,16 +68,26 @@ interface RustCrate {
   rootFile?: string; // src/lib.rs or src/main.rs, whichever exists
 }
 
-// The index a JVM import resolves against: every lookup is one Map read, where
-// probing each source root per import cost a Maven repo with hundreds of roots
-// ~0.5ms a spec (and `java.util.List` probes them all before going external).
+// The index a JVM import resolves against, one for .java, .kt and .scala
+// together so a Kotlin file importing a Java class (or the reverse) links.
+// Every lookup is one Map read, where probing each source root per import cost
+// a Maven repo with hundreds of roots ~0.5ms a spec (and `java.util.List`
+// probes them all before going external).
 interface JvmIndex {
-  // Fully-qualified name -> the file declaring it: a .java file by its path
-  // under a source root (the shortest root wins, as the root order always did).
+  // Fully-qualified name -> the file declaring it. A .java file answers by its
+  // path under a source root (the shortest root wins, as the root order always
+  // did). A Kotlin/Scala file need not sit in a dir matching its package, so
+  // it answers by its `package` plus each top-level declaration, then plus its
+  // own stem (and Kotlin's `<Stem>Kt` file facade, the class Java sees), where
+  // no .java file or declaration claimed the name.
   types: Map<string, string>;
   // Package -> its representative file, for wildcard imports: the first .java
-  // file of the package dir under the shortest root holding one.
+  // file of the package dir under the shortest root holding one, else the
+  // byStr-first Kotlin/Scala file declaring the package.
   packages: Map<string, string>;
+  // Scala file -> its package: Scala resolves an import relative to the
+  // enclosing packages when the absolute name finds nothing.
+  scalaPkg: Map<string, string>;
 }
 
 export interface ResolveContext {
@@ -95,11 +106,16 @@ export interface ResolveContext {
   phpPsr4: { prefix: string; dir: string }[]; // composer PSR-4 namespace prefix -> dir, longest first
   csharpNamespaces: Map<string, string[]>; // C# namespace -> files declaring it (sorted)
   // Both indexes below are derived from the fields above, and built on first
-  // use when absent, so a hand-built context still resolves.
+  // use when absent, so a hand-built context still resolves (its JVM index
+  // then Java-only: Kotlin/Scala need the scan's packages and symbols).
   jvm?: JvmIndex;
   // Every dotted prefix of a C# namespace -> the byStr-first file of any
   // namespace at or under it: `using System;` is one lookup, not a scan.
   csharpPrefix?: Map<string, string>;
+  // Optional for the same reason; absent, those imports resolve as external.
+  dartPackages?: Map<string, string>; // pubspec.yaml `name` -> its dir
+  luaRoots?: string[]; // dirs a Lua `require("a.b")` resolves against, shortest first
+  elixirModules?: Map<string, string>; // defmodule name -> the byStr-first file declaring it
   warnings: string[]; // build-time config issues (e.g. an unparseable tsconfig)
   // Memo of JS/TS resolutions keyed by "<importing dir>\0<spec>" — resolveJs is
   // a pure function of those two (its tsconfig scope, workspace and probe
@@ -151,6 +167,10 @@ const JS_TS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".c
 const SFC_HTML = new Set([".vue", ".svelte", ".astro", ".html", ".htm"]);
 const PY = new Set([".py", ".pyi"]);
 const C_CPP = new Set([".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"]);
+const KOTLIN = new Set([".kt", ".kts"]);
+const SCALA = new Set([".scala", ".sc"]);
+const JVM_OTHER = new Set([...KOTLIN, ...SCALA]); // the JVM languages besides Java
+const SHELL = new Set([".sh", ".bash", ".zsh", ".ksh", ".fish"]);
 
 // Directory names that hold build output. An exports-map target under one of
 // these usually has its source under `src/` (or at the package root) instead.
@@ -727,6 +747,40 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
   }
   for (const arr of csharpNamespaces.values()) arr.sort(byStr);
 
+  const javaRootList = [...javaRoots].sort(byLen);
+
+  // Dart packages: each pubspec.yaml's top-level `name`, so `package:x/y.dart`
+  // resolves to <that dir>/lib/y.dart when x is a package of this repo.
+  const dartPackages = new Map<string, string>();
+  for (const rel of [...fileSet].sort(byStr)) {
+    if (rel !== "pubspec.yaml" && !rel.endsWith("/pubspec.yaml")) continue;
+    const m = /^name:[ \t]*["']?(\w+)["']?[ \t]*(?:#.*)?$/m.exec(readText(join(scan.root, rel)));
+    if (m && !dartPackages.has(m[1]!)) dartPackages.set(m[1]!, rel.includes("/") ? posix.dirname(rel) : "");
+  }
+
+  // Lua roots for `require("a.b")`: package.path's default `./?.lua` read from
+  // the repo root, plus the dirs Lua code conventionally lives under — `lua/`
+  // (Neovim plugins and configs), `src/`, `lib/`.
+  const luaRoots = new Set<string>([""]);
+  for (const d of dirSet) {
+    const base = d.slice(d.lastIndexOf("/") + 1);
+    if (base === "lua" || base === "src" || base === "lib") luaRoots.add(d);
+  }
+
+  // Elixir modules: `defmodule A.B` -> its file. A nested `defmodule C` inside
+  // it is A.B.C (the AST tier reports it with its parent chain).
+  const elixirModules = new Map<string, string>();
+  for (const f of scan.files) {
+    if (f.ext !== ".ex" && f.ext !== ".exs") continue;
+    for (const s of f.symbols) {
+      if (s.kind !== "module") continue;
+      const outer = s.parentPath ? s.parentPath.replace(/\//g, ".") : s.parent;
+      const name = outer ? outer + "." + s.name : s.name;
+      const cur = elixirModules.get(name);
+      if (cur === undefined || byStr(f.rel, cur) < 0) elixirModules.set(name, f.rel);
+    }
+  }
+
   return {
     fileSet,
     dirSet,
@@ -734,7 +788,11 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     tsConfigs,
     goModules,
     rustCrates,
-    javaRoots: [...javaRoots].sort(byLen),
+    javaRoots: javaRootList,
+    jvm: buildJvmIndex({ filesByDir, javaRoots: javaRootList }, scan.files),
+    dartPackages,
+    luaRoots: [...luaRoots].sort(byLen),
+    elixirModules,
     pyRoots: [...pyRootSet].sort(byLen),
     workspacePackages,
     packageScopes,
@@ -1074,14 +1132,44 @@ function* javaPackagesOf(dir: string, rootRank: Map<string, number>): Generator<
   }
 }
 
-// The JVM index for .java files, from the file set and the source roots.
-// Where several roots hold the same name, the shortest root wins: the order
-// the per-root probe it replaces tried them in.
-function buildJvmIndex(ctx: Pick<ResolveContext, "filesByDir" | "javaRoots">): JvmIndex {
+// The JVM index. Its .java part comes from the file set and the source roots;
+// where several roots hold the same name, the shortest root wins — the order
+// the per-root probe it replaces tried them in. The Kotlin/Scala part needs
+// each file's package and symbols, so it only exists when built from a scan.
+function buildJvmIndex(ctx: Pick<ResolveContext, "filesByDir" | "javaRoots">, files: FileRecord[] = []): JvmIndex {
+  const index: JvmIndex = { types: new Map(), packages: new Map(), scalaPkg: new Map() };
+  addJavaToIndex(index, ctx);
+  // Java first, so a .java file keeps every name it answered to before
+  // Kotlin/Scala joined the index: a pure-Java repo resolves exactly as before.
+  const other = files.filter((f) => JVM_OTHER.has(f.ext) && f.pkg).sort((a, b) => byStr(a.rel, b.rel));
+  const claim = (map: Map<string, string>, key: string, rel: string): void => {
+    if (!map.has(key)) map.set(key, rel);
+  };
+  for (const f of other) {
+    if (SCALA.has(f.ext)) index.scalaPkg.set(f.rel, f.pkg!);
+    claim(index.packages, f.pkg!, f.rel);
+    for (const s of f.symbols) {
+      // A nested member is not importable by `pkg.name`, and Scala's AST tier
+      // reports the package clause itself as a symbol.
+      if (!s.parent && s.kind !== "package") claim(index.types, f.pkg + "." + s.name, f.rel);
+    }
+  }
+  // The stem fallback, only after every declaration had its say: a missed
+  // declaration (`enum class X` in X.kt) still links, and never steals a name.
+  for (const f of other) {
+    const stem = f.rel.slice(f.rel.lastIndexOf("/") + 1, f.rel.length - f.ext.length);
+    if (!/^\w+$/.test(stem)) continue;
+    claim(index.types, f.pkg + "." + stem, f.rel);
+    if (KOTLIN.has(f.ext)) claim(index.types, f.pkg + "." + stem + "Kt", f.rel);
+  }
+  return index;
+}
+
+// The .java part of the JVM index (see buildJvmIndex).
+function addJavaToIndex(index: JvmIndex, ctx: Pick<ResolveContext, "filesByDir" | "javaRoots">): void {
   const rootRank = new Map(ctx.javaRoots.map((r, i) => [r, i]));
-  const types = new Map<string, string>();
-  const packages = new Map<string, string>();
-  if (!rootRank.size) return { types, packages };
+  if (!rootRank.size) return;
+  const { types, packages } = index;
   const typeRank = new Map<string, number>(); // the rank of the root each kept entry came from
   const pkgRank = new Map<string, number>();
   const keep = (map: Map<string, string>, ranks: Map<string, number>, key: string, rank: number, file: string) => {
@@ -1103,25 +1191,42 @@ function buildJvmIndex(ctx: Pick<ResolveContext, "filesByDir" | "javaRoots">): J
       }
     }
   }
-  return { types, packages };
 }
 
-function resolveJava(spec: string, ctx: ResolveContext): Resolution {
-  if (!ctx.javaRoots.length) return { kind: "external" };
-  const jvm = (ctx.jvm ??= buildJvmIndex(ctx));
+// The file a dotted JVM import names, if the index knows it.
+function lookupJvm(jvm: JvmIndex, spec: string): string | undefined {
   const segs = spec.split(".");
-  let hit: string | undefined;
   if (segs[segs.length - 1] === "*") {
-    // Wildcard import: the package directory — resolve to its
-    // lexicographically-first .java file (the Go-package pattern).
-    hit = jvm.packages.get(segs.slice(0, -1).join("."));
-  } else {
-    hit = jvm.types.get(segs.join("."));
-    // `import com.a.Outer.Inner` (nested class) or `import static com.a.C.m` —
-    // peel trailing segments until a type file matches.
-    for (let n = segs.length - 1; n >= 2 && !hit; n--) hit = jvm.types.get(segs.slice(0, n).join("."));
+    segs.pop();
+    // A package: its representative file (the Go-package pattern).
+    const pkg = jvm.packages.get(segs.join("."));
+    if (pkg) return pkg;
+    // Else the members of a type — `import static a.B.*`, Kotlin's
+    // `import a.Obj.*` — which live in that type's file.
   }
-  // stdlib/third-party (java.util.*, com.google.*) simply never match a root.
+  // `import com.a.Outer.Inner` (nested class) or `import static com.a.C.m` —
+  // peel trailing segments until a type file matches.
+  for (let n = segs.length; n >= Math.min(2, segs.length); n--) {
+    const hit = jvm.types.get(n === segs.length ? segs.join(".") : segs.slice(0, n).join("."));
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+// Java, Kotlin and Scala imports, through the one index so a file in any of
+// them links to a class declared in another. Unmatched names (the JDK,
+// kotlinx, third-party jars, generated classes like Android's `R`) are
+// external: no guess at a same-package file.
+function resolveJvm(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
+  const jvm = (ctx.jvm ??= buildJvmIndex(ctx));
+  let hit = lookupJvm(jvm, spec);
+  // Scala 2 reads an import relative to the enclosing packages too:
+  // `package com.acme` then `import util.Helper` names com.acme.util.Helper.
+  // Tried innermost first, and only once the absolute name found nothing.
+  const pkg = hit ? undefined : jvm.scalaPkg.get(fromRel);
+  for (let p = pkg; p && !hit; p = p.includes(".") ? p.slice(0, p.lastIndexOf(".")) : undefined) {
+    hit = lookupJvm(jvm, p + "." + spec);
+  }
   return hit ? { kind: "resolved", target: hit } : { kind: "external" };
 }
 
@@ -1196,6 +1301,56 @@ function buildCsharpPrefix(namespaces: Map<string, string[]>): Map<string, strin
   return out;
 }
 
+// Dart: `import 'x.dart'` / `part 'x.dart'` relative to the file, and
+// `package:name/x.dart` into <pubspec dir of name>/lib/x.dart. `dart:` (the
+// SDK), other schemes and packages not in the repo are external. A missing
+// `x.g.dart`-style target (build_runner's `.g`/`.freezed`/`.mocks` outputs,
+// protobuf's `.pb`) is generated code that is rarely committed, so it is
+// external too; any other missing target is dangling.
+function resolveDart(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
+  let p: string;
+  const pkg = /^package:([^/]+)\/(.+)$/.exec(spec);
+  if (pkg) {
+    const dir = ctx.dartPackages?.get(pkg[1]!);
+    if (dir === undefined) return { kind: "external" };
+    p = norm(posix.join(dir, "lib", pkg[2]!));
+  } else {
+    if (/^[a-z][\w+.-]*:/i.test(spec) || spec.startsWith("/")) return { kind: "external" };
+    p = norm(posix.join(fromRel.includes("/") ? posix.dirname(fromRel) : "", spec));
+  }
+  if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
+  if (ctx.fileSet.has(p)) return { kind: "resolved", target: p };
+  return /\.[\w-]+\.dart$/.test(p.slice(p.lastIndexOf("/") + 1))
+    ? { kind: "external" }
+    : { kind: "dangling", reason: "missing-module" };
+}
+
+// Lua: `require("a.b")` probes package.path's `?.lua` then `?/init.lua` under
+// each Lua root enclosing the file (nearest first), then the file's own dir,
+// then every other root. A miss is a rock or a C module: external.
+function resolveLua(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
+  const name = spec.replace(/\./g, "/");
+  const fromDir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
+  const roots = ctx.luaRoots ?? [""];
+  const enclosing = roots.filter((r) => !r || fromDir === r || fromDir.startsWith(r + "/")).reverse();
+  const order = [...enclosing, fromDir, ...roots.filter((r) => !enclosing.includes(r))];
+  for (const root of order) {
+    const hit = firstExisting(ctx, [posix.join(root, name + ".lua"), posix.join(root, name, "init.lua")]);
+    if (hit) return { kind: "resolved", target: hit };
+  }
+  return { kind: "external" };
+}
+
+// Shell: a literal `source`/`.` path. Run from its own dir or from the repo
+// root are the two usual ways a script meets its relative paths, so both are
+// probed. A miss is external: sourcing a virtualenv's `bin/activate` or a
+// generated env file is routine, and neither is a broken in-repo link.
+function resolveShell(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
+  const fromDir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
+  const hit = firstExisting(ctx, [posix.join(fromDir, spec), spec]);
+  return hit ? { kind: "resolved", target: hit } : { kind: "external" };
+}
+
 // Resolve an import specifier for a file of the given extension.
 export function resolveImport(
   fromRel: string,
@@ -1234,10 +1389,19 @@ export function resolveImport(
   }
   if (ext === ".go") return resolveGo(fromRel, spec, ctx);
   if (ext === ".rs") return resolveRust(fromRel, spec, ctx);
-  if (ext === ".java") return resolveJava(spec, ctx);
+  if (ext === ".java" || JVM_OTHER.has(ext)) return resolveJvm(fromRel, spec, ctx);
   if (C_CPP.has(ext)) return resolveC(fromRel, spec, ctx);
   if (ext === ".rb" || ext === ".rake") return resolveRuby(fromRel, spec, ctx);
   if (ext === ".php") return resolvePhp(fromRel, spec, ctx);
   if (ext === ".cs") return resolveCsharp(spec, ctx);
+  if (ext === ".dart") return resolveDart(fromRel, spec, ctx);
+  if (ext === ".lua") return resolveLua(fromRel, spec, ctx);
+  if (SHELL.has(ext)) return resolveShell(fromRel, spec, ctx);
+  if (ext === ".ex" || ext === ".exs") {
+    // `alias`/`import`/`use`/`require` of a module this repo defines; the
+    // rest (Kernel, Ecto, Phoenix…) are external.
+    const target = ctx.elixirModules?.get(spec);
+    return target ? { kind: "resolved", target } : { kind: "external" };
+  }
   return { kind: "external" };
 }
