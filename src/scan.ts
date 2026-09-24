@@ -89,7 +89,10 @@ export interface ScanOptions {
 export interface ExtractedRecord {
   size: number;
   mtimeMs: number;
-  record: FileRecord;
+  hash: string; // sha1 of the content the worker read
+  // Absent when that hash equalled the cache entry's: the worker skipped the
+  // extraction whose result the cache's hash-hit branch would discard.
+  record?: FileRecord;
 }
 
 function countLines(s: string): number {
@@ -295,15 +298,22 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     // comparison below stay in its original position. Consulting it any earlier
     // would skip the hash-hit branch, and a bare `touch` — same content, new
     // mtime — would then report the scan as changed and rewrite every artifact.
+    //
+    // A record-less entry (the worker's hash matched the cache) is usable only
+    // while it still matches THIS cache entry, which sends it down the hash-hit
+    // branch; anything else is read and extracted here.
     const pre = opts.extracted?.get(f.rel);
-    const preUsable = pre && pre.size === f.size && pre.mtimeMs === f.mtimeMs ? pre : undefined;
+    const preUsable =
+      pre && pre.size === f.size && pre.mtimeMs === f.mtimeMs && (pre.record || pre.hash === cached?.hash)
+        ? pre
+        : undefined;
 
     // Read + hash (the staleness oracle stays exact); only EXTRACTION is cached. A
     // hash hit reuses the previous record — content is byte-identical, so every
     // derived field is too. classify()/extToLang() depend only on the path, so
     // kind/lang are stable across the hit.
     const content = preUsable ? undefined : readText(f.abs);
-    const hash = preUsable ? preUsable.record.hash : sha1(content!);
+    const hash = preUsable ? preUsable.hash : sha1(content!);
     if (cached && cached.hash === hash) {
       // The hash is over the DECODED text, so it is blind to bytes the decoder
       // drops: every binary hashes as sha1(""), a BOM or a UTF-16 odd trailing
@@ -325,7 +335,7 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     allReused = false;
     cacheDirty = true;
 
-    if (preUsable) {
+    if (preUsable?.record) {
       files.push(preUsable.record);
       continue;
     }

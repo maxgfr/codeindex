@@ -33,6 +33,11 @@ interface Job {
   abs: string;
   rel: string;
   ext: string;
+  // The content hash the cache holds for this path, when it holds one. A file
+  // queued because its (size, mtime) changed is very often byte-identical — a
+  // bare touch, a branch round-trip, a CI cache restore — and scanRepo then
+  // reuses the cached record and discards whatever the worker built.
+  cachedHash?: string;
 }
 
 interface WorkerInput {
@@ -46,7 +51,8 @@ interface WorkerOutput {
   // thread's — a mismatch means this worker would have silently used the regex
   // tier for some language, so the run is discarded.
   ready: string[];
-  records: { rel: string; size: number; mtimeMs: number; record: FileRecord }[];
+  // `record` is absent when the content hashed to the job's cachedHash.
+  records: { rel: string; size: number; mtimeMs: number; hash: string; record?: FileRecord }[];
 }
 
 // The URL a worker should import to reach THIS engine.
@@ -115,10 +121,19 @@ export async function runExtractWorker(input: WorkerInput, post: (out: WorkerOut
       continue; // vanished mid-run — the main thread re-reads it (and drops it)
     }
     const content = readText(job.abs);
-    const record = buildCodeRecord(job.rel, job.ext, size, content, sha1(content), extToLang(job.ext), {
+    const hash = sha1(content);
+    // Hash first: on a match scanRepo keeps the cached record, so extracting
+    // would be pure waste. After a `touch` of every file this was the whole
+    // run — the pool re-extracted the repo 5x slower (11x the CPU) than the
+    // sequential scan that only hashed it.
+    if (hash === job.cachedHash) {
+      records.push({ rel: job.rel, size, mtimeMs, hash });
+      continue;
+    }
+    const record = buildCodeRecord(job.rel, job.ext, size, content, hash, extToLang(job.ext), {
       maxCallsPerFile: input.maxCallsPerFile,
     });
-    records.push({ rel: job.rel, size, mtimeMs, record });
+    records.push({ rel: job.rel, size, mtimeMs, hash, record });
   }
   post({ ready, records });
 }
@@ -253,7 +268,7 @@ export async function extractInParallel(
                 void w.terminate();
                 return;
               }
-              for (const r of m.records) out.set(r.rel, { size: r.size, mtimeMs: r.mtimeMs, record: r.record });
+              for (const r of m.records) out.set(r.rel, r.record ? { size: r.size, mtimeMs: r.mtimeMs, hash: r.hash, record: r.record } : { size: r.size, mtimeMs: r.mtimeMs, hash: r.hash });
               if (inflight === 0) dispatch(); // the readiness message: prime a second batch
               else inflight--;
               dispatch();
@@ -340,7 +355,7 @@ export async function scanRepoParallel(
     ) {
       continue;
     }
-    jobs.push({ abs: f.abs, rel: f.rel, ext: f.ext });
+    jobs.push(cached ? { abs: f.abs, rel: f.rel, ext: f.ext, cachedHash: cached.hash } : { abs: f.abs, rel: f.rel, ext: f.ext });
   }
   if (jobs.length === 0) return scanRepo(root, scanOpts);
   const workersForced = opts.workers !== undefined || (process.env["CODEINDEX_WORKERS"] ?? "") !== "";
