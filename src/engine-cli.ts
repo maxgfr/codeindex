@@ -651,6 +651,16 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     loadArtifacts?: () => IndexArtifacts | undefined;
   } | undefined> | undefined;
   let preloaded: { scan: RepoScan; arts?: IndexArtifacts; loadArtifacts?: () => IndexArtifacts | undefined } | undefined;
+  // A read command answering from a scan that kept no file says so once, as
+  // `index` and `scan` do: an empty answer otherwise looks like "no match".
+  let warnedEmpty = false;
+  const noteEmpty = (scan: RepoScan): RepoScan => {
+    if (scan.files.length === 0 && !warnedEmpty) {
+      warnedEmpty = true;
+      warnEmptyScan(flags);
+    }
+    return scan;
+  };
   const tryPreload = async (): Promise<typeof preloaded> => {
     if (preloadPromise) return preloadPromise;
     if (preloadTried) return preloaded;
@@ -662,7 +672,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       warmPresentGrammars,
       indexDir,
     ).then((p) => {
-      if (p) preloaded = { scan: p.scan, arts: p.arts, loadArtifacts: p.loadArtifacts };
+      if (p) preloaded = { scan: noteEmpty(p.scan), arts: p.arts, loadArtifacts: p.loadArtifacts };
       // The default location being empty is the normal first run; an index the
       // user NAMED being unusable is a mistake worth one line (a typo'd path
       // otherwise just looks like a slow command).
@@ -683,7 +693,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       scanRepoParallel(flags.repo, {
         ...scanOptions(flags, precomputedWalk),
         workers: flags.workers,
-      }),
+      }).then(noteEmpty),
     ));
   };
   let readArtifactsPromise: Promise<IndexArtifacts> | undefined;

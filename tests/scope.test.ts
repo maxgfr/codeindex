@@ -213,6 +213,15 @@ describe("CLI warnings for path flags that match nothing", { timeout: 60_000 }, 
     expect(slash.count).toBe(FILES.length - 1);
   });
 
+  it("a read command answering from an empty scan says so", () => {
+    const root = fixture();
+    const res = spawnSync(process.execPath, [CLI, "search", "flask", "--repo", root, "--no-ast", "--scope", "src", "--include", "*.py"], {
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(0);
+    expect(res.stderr).toMatch(/no file of .* was indexed.*'\*\*\/\*\.py' any depth/);
+  });
+
   it("an empty result under a rooted include glob names the any-depth spelling", () => {
     const root = fixture();
     const { count, stderr } = run(root, "--scope", "src", "--include", "*.py");
