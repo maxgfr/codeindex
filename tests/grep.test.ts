@@ -87,6 +87,13 @@ describe("grep universe: walk flags, scope and globs", () => {
     expect(files(both(root, "NEEDLE", { globs: ["**/*.ts"] }))).toEqual(["src/a.ts"]);
   });
 
+  it("hands rg only the exclusions both glob dialects read alike", () => {
+    const root = repo({ "sub/a.txt": "NEEDLE\n", "a.txt": "NEEDLE\n", "gen/g.txt": "NEEDLE\n" });
+    // `!sub` names a path, not a tree; `{a,b}` is not alternation here.
+    expect(files(both(root, "NEEDLE", { globs: ["!sub", "!{a,b}.txt"] }))).toEqual(["a.txt", "gen/g.txt", "sub/a.txt"]);
+    expect(files(both(root, "NEEDLE", { globs: ["!gen/**"] }))).toEqual(["a.txt", "sub/a.txt"]);
+  });
+
   it("ANDs scope with globs, and a scope may be a file or a ./ or absolute spelling", () => {
     const root = repo({
       "binding/a.go": "Default\n",

@@ -333,12 +333,16 @@ function universeArgs(opts: GrepOptions): string[] {
   for (const l of LOCKFILES) args.push("--iglob", `!**/${l}`);
   for (const ext of BINARY_EXT) args.push("--iglob", `!**/*${ext}`);
   args.push("--glob", "!*.min.js", "--glob", "!*.min.css");
-  // Negated user globs only NARROW, so they may prune rg's walk early; the JS
-  // keep-predicate re-applies every user glob afterwards regardless. Positive
-  // globs are never passed: an rg whitelist glob overrides .gitignore and the
+  // The JS keep-predicate applies every user glob afterwards, so rg only gets
+  // what can prune its walk without ever dropping a file that predicate keeps:
+  // a tree exclusion (`!dir/**`) with no braces or classes, where the two glob
+  // dialects agree. Anything else could over-exclude — rg reads `{a,b}` as
+  // alternation and prunes a DIRECTORY matching `!x` — so it is not passed.
+  // Positive globs never are: an rg whitelist glob overrides .gitignore and the
   // junk-dir exclusions above (`-g 'src/**'` searched src/node_modules).
   for (const g of opts.globs ?? []) {
-    if (g.startsWith("!")) args.push("--glob", `!/${g.slice(1).replace(/^\//, "")}`);
+    const body = g.slice(1).replace(/^\//, "");
+    if (g.startsWith("!") && body.endsWith("/**") && !/[{}[\]\\!]/.test(body)) args.push("--glob", `!/${body}`);
   }
   if (opts.ignoreCase) args.push("--ignore-case");
   return args;
