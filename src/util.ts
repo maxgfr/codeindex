@@ -9,6 +9,10 @@ export interface ShResult {
   stdout: string;
   stderr: string;
   missing: boolean;
+  // The spawn error's code when the call did not complete normally (ENOBUFS:
+  // stdout outgrew maxBuffer; ETIMEDOUT: killed by the timeout). `stdout` then
+  // holds only what arrived before the kill.
+  errorCode?: string;
 }
 
 // Run a command synchronously. Sync keeps the CLI simple and deterministic
@@ -18,23 +22,24 @@ export interface ShResult {
 export function sh(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined> } = {},
+  opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined>; maxBufferBytes?: number } = {},
 ): ShResult {
   const res = spawnSync(cmd, args, {
     cwd: opts.cwd,
     input: opts.input,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 120_000,
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: opts.maxBufferBytes ?? 64 * 1024 * 1024,
     env: opts.env ?? process.env,
   });
-  const missing = !!res.error && (res.error as NodeJS.ErrnoException).code === "ENOENT";
+  const code = res.error ? (res.error as NodeJS.ErrnoException).code : undefined;
   return {
     ok: !res.error && res.status === 0,
     status: res.status,
     stdout: res.stdout ?? "",
     stderr: res.stderr ?? (res.error ? String(res.error.message) : ""),
-    missing,
+    missing: code === "ENOENT",
+    ...(code ? { errorCode: code } : {}),
   };
 }
 

@@ -311,16 +311,29 @@ export const TOOLS = [
   {
     name: "grep",
     description:
-      "Search file contents (ripgrep when available, deterministic JS fallback otherwise). Returns sorted (file, line, text) hits.",
+      "Search file contents with a JavaScript regular expression (ripgrep when available, a deterministic JS scan otherwise — same results either way). Returns hits sorted by (file, line): {file, line, col, text}, `col` being the 1-based UTF-16 column of the first match and `text` the line, cut to a window around the match when longer than 300 chars. Capped at maxHits (default 200): set `withMeta: true` to get `{ hits, truncated, filesMatched, notes? }` and know whether the list is complete. A pattern too slow for the JS engine is stopped at `timeoutMs` (default 10000) and the response is then always that envelope, with `timedOut: true`.",
     inputSchema: {
       type: "object",
       properties: {
         ...repoProp,
-        pattern: { type: "string", description: "Regular expression to search for" },
-        scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
-        globs: { type: "array", items: { type: "string" }, description: "Restrict to matching paths" },
+        pattern: { type: "string", description: "JavaScript regular expression to search for" },
+        scope: {
+          type: "string",
+          description: "Restrict to one directory or file (repo-relative). ANDed with `globs`",
+        },
+        globs: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Restrict to matching paths. Rooted at the repo: '*.ts' matches root-level files only, '**/*.ts' any depth; a '!' prefix excludes (exclusion wins)",
+        },
         ignoreCase: { type: "boolean" },
         maxHits: { type: "number", minimum: 1 },
+        withMeta: {
+          type: "boolean",
+          description: "Return { hits, truncated, filesMatched, notes? } instead of the bare hit array",
+        },
+        timeoutMs: { type: "number", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" },
       },
       required: ["repo", "pattern"],
     },

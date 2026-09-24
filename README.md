@@ -466,6 +466,39 @@ node scripts/test-docker.mjs codeindex:qa codeindex-embed:qa
 The [engine validation report](docs/engine-validation-2026-09-07.md) records the
 tested architecture and runtime checks.
 
+## Text search (`grep`)
+
+`codeindex grep '<regex>' --repo .` returns JSON hits sorted by file then line:
+`{file, line, col, text}`. It uses ripgrep when it is on `PATH` and a pure-JS
+scan otherwise, and both give the same answer:
+
+- **One dialect.** The pattern is a JavaScript regular expression on both
+  backends. Before it reaches ripgrep it is translated so that `\w`, `\b` and
+  `\d` stay ASCII and `.` still stops at `\r`, as they do in JavaScript.
+  Anything that cannot be translated exactly (lookaround, backreferences) runs
+  on the JS engine instead, and a note on stderr says so. Syntax that
+  JavaScript would read as a literal but you probably meant as an operator
+  (`\A`, `\z`, `[[:alpha:]]`, `\x{41}`) is rejected with an explanation.
+- **One file universe.** grep searches the files every other command indexes.
+  `--ignore-dir`, `--no-gitignore` and `--max-bytes` apply to it too. `--scope`
+  (a directory or a single file) is ANDed with `--include`/`--exclude`. Globs
+  are rooted at the repo: `*.ts` matches root-level files only, `**/*.ts`
+  matches at any depth.
+- **Bounded output.** Results stop at `--max-hits` (default 200). When the cap
+  cuts the list, stderr says so and gives the number of matching files. A line
+  longer than 300 characters comes back as a window around the match, and
+  `col` gives the match's position in the full line.
+- **Bounded time.** ripgrep's regex engine runs in linear time. JavaScript's
+  can backtrack exponentially (`(a+)+b`), so the JS scan runs in a worker thread
+  with a time limit (`--timeout-ms`, default 10000). When the limit is reached,
+  the hits from the files already scanned are returned, together with a note
+  naming the file where the scan stopped.
+
+The MCP `grep` tool returns the bare hit array by default. With
+`withMeta: true` it returns `{ hits, truncated, filesMatched, notes? }`. A
+result cut short by the time limit always comes back in that form, with
+`timedOut: true`.
+
 ## Search
 
 `codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six

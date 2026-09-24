@@ -20,7 +20,7 @@ import { implementationsOf } from "./relations.js";
 import { neighborhood, type Direction } from "./symbolgraph.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
-import { grepRepo } from "./grep.js";
+import { grepRepoEx } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { findDeadCode } from "./deadcode.js";
@@ -375,16 +375,24 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "grep") {
     const pattern = str(args.pattern);
     if (!pattern) throw new Error("`pattern` is required");
-    // `scope` was CLI-only: the a205c34 fix folded it into the CLI's glob list
-    // but this handler ignored scanOpts entirely.
-    const scope = str(args.scope);
-    const globs = strArray(args.globs);
-    const hits = grepRepo(repo, pattern, {
-      globs: scope ? [...(globs ?? []), `${scope.replace(/\/+$/, "")}/**`] : globs,
+    // `scope` is its own predicate, ANDed with `globs` (it used to be OR-ed in
+    // as one more glob, so scope+globs widened the search instead of
+    // narrowing it), and may name a file as well as a directory.
+    const res = grepRepoEx(repo, pattern, {
+      globs: strArray(args.globs),
+      scope: str(args.scope),
       ignoreCase: args.ignoreCase === true,
       maxHits: positiveNum(args.maxHits),
+      timeoutMs: positiveNum(args.timeoutMs),
     });
-    return JSON.stringify(hits, null, 2);
+    // The bare array stays the default shape. `withMeta` opts into the
+    // envelope; a result the time budget cut short always gets it, since a
+    // partial answer shaped like a complete one would be a silent lie.
+    if (args.withMeta === true || res.timedOut) {
+      const { hits, truncated, filesMatched, timedOut, notes } = res;
+      return JSON.stringify({ hits, truncated, filesMatched, ...(timedOut ? { timedOut } : {}), ...(notes.length ? { notes } : {}) }, null, 2);
+    }
+    return JSON.stringify(res.hits, null, 2);
   }
   if (name === "search") {
     const query = str(args.query);

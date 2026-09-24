@@ -27,7 +27,7 @@ import { buildSymbolGraph, neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
-import { grepRepo } from "./grep.js";
+import { grepRepoEx } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { findDeadCode } from "./deadcode.js";
@@ -70,7 +70,12 @@ Commands:
   callgraph   Bounded symbol-to-symbol neighborhood (--depth, --direction)
   workspaces  Monorepo packages + dependency graph (JSON)
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
-  grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
+  grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits sorted by
+              file, line: {file, line, col, text}; a line over 300 chars is
+              cut to a window around the match). JavaScript regex dialect on
+              both backends (ripgrep when on PATH, a JS scan otherwise).
+              --scope is ANDed with --include/--exclude and may name a file;
+              globs are rooted: '*.ts' is root-level, '**/*.ts' any depth
   search      Keyless BM25 lexical search over symbol names, path segments,
               markdown headings and summaries: cli.mjs search "<query>" --repo <dir>.
               --semantic fuses in an embedding tier (RRF) — the HTTP endpoint
@@ -207,7 +212,14 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       the JS/TS import gate to unique repo-wide names and labels
                       each site corroborated|unique-name
   --ignore-case       \`grep\`: case-insensitive matching
-  --max-hits <n>      \`grep\`: cap returned hits (default 200)
+  --max-hits <n>      \`grep\`: cap returned hits (default 200). A capped result
+                      says so on stderr, with the count of matching files
+  --timeout-ms <n>    \`grep\`: wall-clock budget for the JavaScript regex engine
+                      (default 10000). ripgrep is linear-time; the JS fallback
+                      backtracks, so a pathological pattern is stopped at the
+                      budget and the partial result is flagged on stderr
+  --                  End of options: the next argument is the positional even
+                      when it starts with '-' (\`grep -- --out\`)
   --min-files <n>     \`literals\`: distinct files a value must span (default 2)
   --min-count <n>     \`literals\`: total occurrences required (default 3)
   --include-tests     \`literals\`: count test files too. Off by default — a test
@@ -232,6 +244,7 @@ interface CliFlags {
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
+  timeoutMs?: number; // grep: JS regex engine wall-clock budget
   budgetTokens?: number;
   config?: string; // rules config path
   limit?: number; // search result cap
@@ -287,6 +300,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--max-calls") flags.maxCalls = num();
     else if (a === "--ignore-case") flags.ignoreCase = true;
     else if (a === "--max-hits") flags.maxHits = num();
+    else if (a === "--timeout-ms") flags.timeoutMs = num();
     else if (a === "--budget-tokens") flags.budgetTokens = num();
     else if (a === "--min-files") flags.minFiles = num();
     else if (a === "--min-count") flags.minCount = num();
@@ -327,7 +341,14 @@ function parseFlags(args: string[]): CliFlags {
       flags.direction = v;
     }
     else if (a === "--json") flags.json = true;
-    else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
+    else if (a === "--") {
+      // End of options: the NEXT token is the positional however it is
+      // spelled, so `grep -- --out` searches for "--out" instead of
+      // redirecting output to a file named after the next token. Flags may
+      // still follow it — a host that appends them keeps working.
+      if (flags.positional !== undefined) throw new Error(`unexpected "--": the positional is already "${flags.positional}"`);
+      flags.positional = next();
+    } else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
   return flags;
@@ -428,6 +449,7 @@ const VALUE_FLAGS = new Set([
   "--max-bytes",
   "--max-calls",
   "--max-hits",
+  "--timeout-ms",
   "--budget-tokens",
   "--min-files",
   "--min-count",
@@ -1109,18 +1131,24 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(renderMermaid(graph, { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
-    // `--scope <dir>` is documented as global sugar for `--include '<dir>/**'`;
-    // every other command gets it via scanOptions, but grep bypasses the scan
-    // and builds its own glob list — so it has to fold the sugar in itself, or
-    // the flag would be silently ignored here alone.
-    const scopeGlobs = flags.scope ? [`${flags.scope.replace(/\/+$/, "")}/**`] : [];
-    const globs = [...scopeGlobs, ...flags.include, ...flags.exclude.map((g) => `!${g}`)];
-    const hits = grepRepo(flags.repo, flags.positional, {
-      globs: globs.length ? globs : undefined,
+    // grep bypasses the scan, so the global walk and path flags are threaded
+    // through by hand: --scope is ANDed with --include/--exclude (a file or a
+    // directory), and --ignore-dir/--no-gitignore/--max-bytes change which
+    // files exist exactly as they do for every scanning command.
+    const res = grepRepoEx(flags.repo, flags.positional, {
+      globs: flags.include.length || flags.exclude.length ? [...flags.include, ...flags.exclude.map((g) => `!${g}`)] : undefined,
+      scope: flags.scope,
       ignoreCase: flags.ignoreCase,
       maxHits: flags.maxHits,
+      gitignore: flags.gitignore,
+      ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
+      maxFileBytes: flags.maxBytes,
+      timeoutMs: flags.timeoutMs,
     });
-    emit(JSON.stringify(hits, null, 2) + "\n", flags.out);
+    emit(JSON.stringify(res.hits, null, 2) + "\n", flags.out);
+    // stdout stays the bare hit array; a partial answer (capped, or cut by the
+    // JS engine's time budget) is flagged on stderr so it is never silent.
+    for (const note of res.notes) process.stderr.write(`codeindex grep: ${note}\n`);
   } else {
     process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
     process.exitCode = 2;
