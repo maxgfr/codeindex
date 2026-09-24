@@ -86,6 +86,65 @@ describe("parseGitignore semantics", () => {
     expect(test(r, "packages/other/x.gen.ts")).toBe(false);
     expect(test(r, "x.gen.ts")).toBe(false);
   });
+
+  // git's wildmatch (WM_PATHNAME) refuses `/` in a bracket expression, negated
+  // or not — checked with `git check-ignore --no-index`, which ignores none of
+  // these paths. `[!x]` compiled to a bare `[^x]` and crossed the separator.
+  it("a bracket expression never matches `/`", () => {
+    const r = parseGitignore("a[!x]b\nx/c[!x]d\ne[.-0]f\n", "");
+    expect(test(r, "a/b")).toBe(false);
+    expect(test(r, "sub/a/b")).toBe(false);
+    expect(test(r, "x/c/d")).toBe(false);
+    expect(test(r, "e/f")).toBe(false);
+    // …while still matching a non-`/` character as before.
+    expect(test(r, "sub/ayb")).toBe(true);
+    expect(test(r, "x/cyd")).toBe(true);
+    expect(test(r, "e.f")).toBe(true);
+  });
+
+  // parseGitignore attaches a cheaper matcher to each rule (basename compare,
+  // suffix test, literal-prefix precheck). It is a pure speedup: over every
+  // pattern shape and path below it must return exactly the full regex's
+  // verdict, which stays the reference semantics.
+  it("each rule's fast matcher agrees with its full-path regex", () => {
+    const patterns = [
+      "node_modules", "*.log", "*.py[cod]", "[Tt]humbs.db", "**", "***", "*", "foo*", "*foo*", "a?c",
+      "\\*lit", "\\#x", "a\\ b", "a\\\\b", "trail\\", "build/", "/anchored", "/a*", "docs/*.md", "**/deep",
+      "a/**/b", "a/**", "x/c[!x]d", "*.[", "[", "a**b", "**x", ".env*", "!keep.log", "lib/*.js",
+      "**/*.gen.ts", "*~", ".#*", "*.min.[jt]s", "sub/", "/sub/x", "[!a]*", "*[", "?",
+    ];
+    const paths = [
+      "node_modules", "a/node_modules", "pkg/node_modules", "pkg/sub/node_modules", "pkg/sub/x.log", "x.log",
+      "pkg/x.log", "pkgx/a.log", "foo", "afoo", "foox", "pkg/afoox", "a/b", "abc", "a/c", "pkg/abc", "*lit",
+      "pkg/*lit", "#x", "a b", "a\\b", "trail\\", "build", "pkg/build", "anchored", "pkg/anchored", "ab",
+      "pkg/ab", "docs/x.md", "docs/a/x.md", "pkg/docs/x.md", "pkg/sub/docs/x.md", "deep", "a/deep",
+      "pkg/a/deep", "a/x/b", "a/x/y/b", "pkg/a/b", "pkg/a/x/b", "x/c/d", "x/cad", "pkg/x/cyd", "x.[", "[",
+      "pkg/[", "a*b", "axyb", "x", "abx", ".env", ".env.local", "pkg/.env.x", "keep.log", "lib/x.js",
+      "lib/a/x.js", "pkg/lib/x.js", "src/x.gen.ts", "pkg/x.gen.ts", "pkg/sub/deep/y.gen.ts", "file~",
+      ".#file", "pkg", "pkg/sub", "pkg/sub/x", "sub/x", "m.min.js", "pkg/m.min.ts", "m.min.cs", "b", "pkg/b",
+      "a", "pkg/a", "Thumbs.db", "pkg/thumbs.db", "m.pyc", "pkg/sub/m.pyd",
+    ];
+    let checked = 0;
+    for (const base of ["", "pkg", "pkg/sub"]) {
+      for (const rule of parseGitignore(patterns.join("\n"), base)) {
+        expect(rule.test).toBeDefined();
+        for (const rel of paths) {
+          const name = rel.slice(rel.lastIndexOf("/") + 1);
+          expect([rule.re.source, rel, rule.test!(rel, name)]).toEqual([rule.re.source, rel, rule.re.test(rel)]);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(3 * 30 * paths.length);
+  });
+
+  it("last match wins when the chain is scanned from its end", () => {
+    const r = [...parseGitignore("*.log\n!keep*.log\n", ""), ...parseGitignore("keep-not.log\n", "pkg")];
+    expect(test(r, "a.log")).toBe(true);
+    expect(test(r, "keep.log")).toBe(false);
+    expect(test(r, "pkg/keep-not.log")).toBe(true); // the deeper rule is later: it wins
+    expect(test(r, "keep-not.log")).toBe(false); // …only under its own directory
+  });
 });
 
 describe("walk honors .gitignore", () => {
