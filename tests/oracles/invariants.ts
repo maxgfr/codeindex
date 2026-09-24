@@ -129,8 +129,7 @@ function isFileStemDefaultExport(rel: string, name: string, span: string): boole
  * WHY: a Terraform block's identity is its label list — `resource "aws_instance"
  * "worker"` is addressed as `aws_instance.worker`, which is how Terraform itself
  * names it (src/ast/specs.ts), and the two labels are separate `string_lit`
- * nodes with a quote and a space between them. Lua reaches the same shape from
- * the other direction: a table function is named `M.alias`.
+ * nodes with a quote and a space between them.
  *
  * This is not a loosened check — it is the SAME check applied at the granularity
  * at which the name was composed. Every segment must still be present in the

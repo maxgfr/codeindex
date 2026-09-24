@@ -3,7 +3,7 @@ import { LiteralCollector } from "../extract/literals.js";
 import { byStr } from "../sort.js";
 import { grammarKeyFor, grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
 import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
-import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, type LangSpec } from "./specs.js";
+import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, luaMember, type LangSpec } from "./specs.js";
 import { declHeader } from "./signature.js";
 import { docCommentFor, docstringFor } from "./doc.js";
 import { stripCommentMarkers } from "../extract/doc-text.js";
@@ -712,8 +712,7 @@ export function extractAst(
       // `local alias = function(y) … end` — an assignment_statement pairs a
       // `variable_list` of targets with an `expression_list` of values (fields
       // name/value, index-aligned). Only function-valued targets become
-      // symbols, named after the full target text (dotted/colon names stay
-      // whole — regex-tier parity).
+      // symbols; a table field is the table's member (see luaMember).
       if (spec.assignments && type === "assignment_statement") {
         const vars = node.children.find((c) => c.type === "variable_list");
         const vals = node.children.find((c) => c.type === "expression_list");
@@ -721,21 +720,21 @@ export function extractAst(
         const values = vals?.namedChildren ?? [];
         const pairs = Math.min(targets.length, values.length);
         for (let i = 0; i < pairs; i++) {
-          const target = targets[i]!;
-          const value = values[i]!;
-          if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
+          const member = luaMember(targets[i]);
+          if (values[i]!.type !== "function_definition" || !member) continue;
           const header = declHeader(node, content);
           const doc = docCommentFor(node);
+          const parent = member.table ?? ctx.parent;
           emit({
-            name: target.text,
+            name: member.name,
             kind: "function",
             file: rel,
             line: node.startPosition.row + 1,
             endLine: endLineOf(node),
-            ...(ctx.parent ? { parent: ctx.parent } : {}),
+            ...(parent ? { parent } : {}),
             signature: header,
             ...(doc ? { doc } : {}),
-            exported: visibilityOf(node, header, target.text, { ...ctx, exported: nowExported }),
+            exported: visibilityOf(node, header, member.name, { ...ctx, exported: nowExported }),
             lang,
           });
         }

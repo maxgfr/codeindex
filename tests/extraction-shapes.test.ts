@@ -1,4 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildCallerIndex } from "../src/callers.js";
+import { scanRepo } from "../src/scan.js";
 import { extractAst } from "../src/ast/extract.js";
 import { grammarKeyFor, grammarKeysForExts, grammarReady } from "../src/ast/loader.js";
 import type { CodeSymbol } from "../src/types.js";
@@ -413,5 +418,44 @@ describe("an Elixir definition with a guard", () => {
       ["M.<~>", "function", true],
     ]);
     expect(r.calls.map((c) => `${c.name}:${c.line}`)).toEqual(["is_atom:8", "is_integer:2", "is_integer:7", "is_pos:4"]);
+  });
+});
+
+describe("a Lua function stored in a table", () => {
+  // Named "M.go" whole, it never met its call sites, which record `u.go()` as
+  // "go": no module function had a caller, and deadcode flagged every one.
+  it("is the table's member, named by its last segment", () => {
+    const src = [
+      "local M = {}",
+      "function M.go() end",
+      "function M:start(a) end",
+      "function M.sub.deep() end",
+      "M.alias, M.sub.other = function() end, function() end",
+      "M[key] = function() end",
+      "local function helper() end",
+      "return M",
+    ].join("\n");
+    expect(syms("u.lua", src).map((s) => [s.parent, s.name, s.exported])).toEqual([
+      ["M", "go", true],
+      ["M", "start", true],
+      ["M.sub", "deep", true],
+      ["M", "alias", true],
+      ["M.sub", "other", true],
+      [undefined, "helper", false],
+    ]);
+  });
+
+  it("binds the caller of a required module's function", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lua-"));
+    try {
+      mkdirSync(join(dir, "lib"));
+      writeFileSync(join(dir, "lib", "u.lua"), "local M = {}\nfunction M.go() end\nreturn M\n");
+      writeFileSync(join(dir, "init.lua"), 'local u = require("lib.u")\nu.go()\n');
+      const entry = buildCallerIndex(scanRepo(dir, { gitignore: false })).get("go");
+      expect(entry?.def).toMatchObject({ file: "lib/u.lua", parent: "M" });
+      expect(entry?.callers).toEqual([expect.objectContaining({ file: "init.lua", line: 2 })]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

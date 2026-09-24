@@ -364,6 +364,21 @@ const isElixirGuard = (n: TSNode): boolean =>
   n.type === "binary_operator" && n.childForFieldName("operator")?.text === "when";
 const elixirHead = (arg: TSNode): TSNode => (isElixirGuard(arg) ? (arg.childForFieldName("left") ?? arg) : arg);
 
+// A Lua function stored in a table — `function M.go()`, `function M:start()`,
+// `M.alias = function() end` — is the table's MEMBER, the way a Go receiver or
+// a Rust impl owns its methods: named by its last segment, parented to the
+// table path. Named "M.go" whole, it could never meet a call site, which reads
+// `u.go()` as "go" — so no module function had a caller and deadcode flagged
+// every one. Undefined for a target that is not a plain name path (`t[k]`).
+export function luaMember(target: TSNode | null | undefined): { name: string; table?: string } | undefined {
+  if (!target) return undefined;
+  if (target.type === "identifier") return { name: target.text };
+  if (target.type !== "dot_index_expression" && target.type !== "method_index_expression") return undefined;
+  const table = target.childForFieldName("table");
+  const field = target.childForFieldName("field") ?? target.childForFieldName("method");
+  return table && field && /^[\w.]+$/.test(table.text) ? { name: field.text, table: table.text } : undefined;
+}
+
 // HCL/Terraform declares everything as a labelled block. Only these top-level
 // block types name something a reader looks up; `lifecycle`, `ingress` and the
 // rest are nested configuration, and treating them as symbols would bury the
@@ -1442,5 +1457,7 @@ export const SPECS: Record<string, LangSpec> = {
     // is the `table` field in both qualified forms.
     calls: { function_call: "function" },
     assignments: true, // `M.alias = function(z) … end` (assignment_statement shape)
+    nameFrom: { function_declaration: (node) => luaMember(node.childForFieldName("name"))?.name },
+    parentFrom: { function_declaration: (node) => luaMember(node.childForFieldName("name"))?.table },
   },
 };

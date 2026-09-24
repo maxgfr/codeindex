@@ -44,8 +44,9 @@ compares](#how-it-compares).
   comment is found across Rust attributes and TypeScript decorators;
   visibility is read from a declaration's modifiers, never from its parameter
   names or default values; an out-of-line C++ definition (`void
-  Widget::draw()`) belongs to its class; and a `.h` header is parsed as C++
-  when its content is (a namespace, class or template), as C otherwise.
+  Widget::draw()`) belongs to its class, and a Lua `function M.go()` to its
+  table; and a `.h` header is parsed as C++ when its content is (a namespace,
+  class or template), as C otherwise.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /

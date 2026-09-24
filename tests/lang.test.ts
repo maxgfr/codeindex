@@ -153,9 +153,18 @@ load_plugin() {
     expect(names).toContain("compute");
   });
 
-  it("extracts Lua functions", () => {
-    const names = extractSymbols("a.lua", ".lua", "function M.setup()\nend\nlocal function helper()\nend\n").map((s) => s.name);
-    expect(names.length).toBeGreaterThan(0);
+  it("extracts Lua functions, a table function as the table's member", () => {
+    const syms = extractSymbols(
+      "a.lua",
+      ".lua",
+      "function M.setup()\nend\nfunction M.sub:start()\nend\nM.alias = function()\nend\nlocal function helper()\nend\n",
+    );
+    expect(syms.map((s) => [s.parent, s.name, s.exported])).toEqual([
+      ["M", "setup", true],
+      ["M.sub", "start", true],
+      ["M", "alias", true],
+      [undefined, "helper", false],
+    ]);
     expect(languageOf(".lua")).toBe("lua");
   });
 

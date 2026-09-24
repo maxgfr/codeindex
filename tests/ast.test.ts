@@ -325,9 +325,12 @@ describe("Lua AST extraction", () => {
   it("extracts declaration- and assignment-style functions; `local function` is not exported", () => {
     const syms = extractAst("m.lua", ".lua", src)!.symbols;
     expect(syms.find((s) => s.name === "hidden")!.exported).toBe(false); // local function → file-local
-    expect(syms.find((s) => s.name === "M.add")!.exported).toBe(true); // dotted name kept whole
-    expect(syms.find((s) => s.name === "M:method")!.exported).toBe(true); // colon method form
-    const alias = syms.find((s) => s.name === "M.alias")!; // assignment-style def
+    // A table function is the table's member: named by its last segment (what
+    // a call site records), parented to the table.
+    expect(syms.find((s) => s.name === "add" && s.parent === "M")!.exported).toBe(true);
+    expect(syms.find((s) => s.name === "method" && s.parent === "M")!.exported).toBe(true); // colon method form
+    expect(syms.some((s) => /[.:]/.test(s.name))).toBe(false);
+    const alias = syms.find((s) => s.name === "alias" && s.parent === "M")!; // assignment-style def
     expect(alias.kind).toBe("function");
     expect(alias.line).toBe(15);
     expect(alias.endLine).toBe(17);
