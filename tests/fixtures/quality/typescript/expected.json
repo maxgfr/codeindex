@@ -33,7 +33,11 @@
         { "name": "signPayload", "kind": "function", "doc": true },
         { "name": "DEFAULT_TIMEOUT_MS", "kind": "const", "exported": false },
         { "name": "Delivery", "kind": "namespace" },
-        { "name": "isTerminal", "parent": "Delivery", "kind": "function" }
+        { "name": "isTerminal", "parent": "Delivery", "kind": "function" },
+        { "name": "PayloadSigner", "kind": "class", "doc": true },
+        { "name": "secret", "parent": "PayloadSigner", "kind": "property", "exported": false },
+        { "name": "algorithm", "parent": "PayloadSigner", "kind": "property", "doc": true },
+        { "name": "constructor", "parent": "PayloadSigner", "kind": "method" }
       ],
       "calls": ["createHash", "digest", "nextDelay", "signPayload", "update"],
       "relations": [

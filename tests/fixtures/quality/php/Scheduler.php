@@ -27,6 +27,14 @@ class Scheduler extends BaseWorker implements Runnable
     /** Jobs waiting for a slot. */
     private array $pending = [];
 
+    public function __construct(
+        private readonly Clock $clock,
+        /** How many jobs run at once. */
+        public int $capacity = 4,
+        int $seed = 0,
+    ) {
+    }
+
     /** Drain the pending queue. */
     public function start(): void
     {

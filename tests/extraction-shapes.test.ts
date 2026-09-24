@@ -492,3 +492,47 @@ describe("an export list", () => {
     ]);
   });
 });
+
+describe("a constructor parameter that declares a property", () => {
+  const props = (all: CodeSymbol[]) =>
+    all.filter((s) => s.kind === "property").map((s) => `${ids([s])[0]}:${s.line}=${s.exported ? 1 : 0} ${s.signature}`);
+
+  // NestJS/Angular inject every dependency this way, and PHP 8 promotes the
+  // same way; neither declares the property anywhere else.
+  it("is a TypeScript class property when it carries a modifier", () => {
+    const src = [
+      "export class Service {",
+      "  constructor(",
+      "    private readonly dep: Dep,",
+      "    public pub: string,",
+      "    plain: number,",
+      "    protected prot?: number,",
+      "    override readonly o = 1,",
+      "  ) {}",
+      "  run(x: number) {}",
+      "}",
+      "function f() { class Local { constructor(public q: number) {} } }",
+    ].join("\n");
+    expect(props(syms("s.ts", src))).toEqual([
+      "Service.dep:3=0 private readonly dep: Dep",
+      "Service.pub:4=1 public pub: string",
+      "Service.prot:6=0 protected prot?: number",
+      "Service.o:7=1 override readonly o = 1",
+    ]);
+  });
+
+  it("is a PHP class property when the constructor promotes it", () => {
+    const src = [
+      "<?php",
+      "class Svc {",
+      "    public function __construct(",
+      "        private readonly Repo $repo,",
+      "        public string $name = '',",
+      "        int $plain = 0,",
+      "    ) {}",
+      "    public function run(public int $x) {}",
+      "}",
+    ].join("\n");
+    expect(props(syms("Svc.php", src))).toEqual(["Svc.repo:4=0 private readonly Repo $repo", "Svc.name:5=1 public string $name = ''"]);
+  });
+});

@@ -502,19 +502,20 @@ export function extractAst(
         }
 
         for (const extra of spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody }) ?? []) {
-          const header = declHeader(c, content);
-          const doc = docCommentFor(c);
+          const at = extra.node ?? c;
+          const header = declHeader(at, content);
+          const doc = docCommentFor(at);
           emit({
             name: extra.name,
             kind: extra.kind,
             file: rel,
-            line: c.startPosition.row + 1,
-            endLine: endLineOf(c),
+            line: at.startPosition.row + 1,
+            endLine: endLineOf(at),
             ...(childCtx.parent ? { parent: childCtx.parent } : {}),
             ...(childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {}),
             signature: header,
             ...(doc ? { doc } : {}),
-            exported: visibilityOf(c, header, extra.name, childCtx),
+            exported: visibilityOf(at, header, extra.name, childCtx),
             lang,
           });
         }

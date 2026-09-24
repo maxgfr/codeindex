@@ -57,6 +57,23 @@
           "doc": true
         },
         {
+          "name": "clock",
+          "parent": "Scheduler",
+          "kind": "property",
+          "exported": false
+        },
+        {
+          "name": "capacity",
+          "parent": "Scheduler",
+          "kind": "property",
+          "doc": true
+        },
+        {
+          "name": "__construct",
+          "parent": "Scheduler",
+          "kind": "method"
+        },
+        {
           "name": "start",
           "parent": "Scheduler",
           "kind": "method",

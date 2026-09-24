@@ -193,9 +193,14 @@ export interface LangSpec {
    * The last resort: extra symbols a container child declares that no table
    * above can describe. Used by Python (module/class-scope assignments are the
    * only way constants and dataclass fields exist) and Ruby (`MAX = 5`,
-   * `attr_reader :queue`).
+   * `attr_reader :queue`). An extra is placed, signed and given visibility from
+   * the child itself, or from `node` when the declaring part is narrower — one
+   * constructor parameter that declares a property (TypeScript, PHP).
    */
-  extraMembers?: (node: TSNode, ctx: { ownerKind?: string; inFunctionBody: boolean }) => { name: string; kind: string }[];
+  extraMembers?: (
+    node: TSNode,
+    ctx: { ownerKind?: string; inFunctionBody: boolean },
+  ) => { name: string; kind: string; node?: TSNode }[];
 
   /**
    * Inheritance the declaration states: `extends` / `implements` targets, keyed
@@ -409,6 +414,38 @@ const TERRAFORM_SPEC: LangSpec = {
   },
 };
 
+// A constructor parameter with a visibility, `readonly` or `override` modifier
+// DECLARES a class property — TypeScript's parameter property, the form every
+// NestJS/Angular service injects its dependencies with. PHP 8 spells the same
+// thing `property_promotion_parameter`. The constructor's other parameters are
+// arguments. Parented to the class (the constructor's container), not to the
+// constructor.
+function tsParameterProperties(node: TSNode, ctx: { inFunctionBody: boolean }): { name: string; kind: string; node: TSNode }[] {
+  if (ctx.inFunctionBody || node.type !== "method_definition" || node.childForFieldName("name")?.text !== "constructor") return [];
+  const out: { name: string; kind: string; node: TSNode }[] = [];
+  for (const p of node.childForFieldName("parameters")?.namedChildren ?? []) {
+    if (p.type !== "required_parameter" && p.type !== "optional_parameter") continue;
+    // `readonly` is an anonymous token; the other two are named modifier nodes.
+    if (!p.children.some((c) => c.type === "accessibility_modifier" || c.type === "override_modifier" || c.type === "readonly"))
+      continue;
+    const name = p.childForFieldName("pattern");
+    if (name?.type === "identifier") out.push({ name: name.text, kind: "property", node: p });
+  }
+  return out;
+}
+
+function phpPromotedProperties(node: TSNode, ctx: { inFunctionBody: boolean }): { name: string; kind: string; node: TSNode }[] {
+  if (ctx.inFunctionBody || node.type !== "method_declaration") return [];
+  if (!/^__construct$/i.test(node.childForFieldName("name")?.text ?? "")) return [];
+  const out: { name: string; kind: string; node: TSNode }[] = [];
+  for (const p of node.childForFieldName("parameters")?.namedChildren ?? []) {
+    if (p.type !== "property_promotion_parameter") continue;
+    const name = p.childForFieldName("name")?.text.replace(/^\$/, "");
+    if (name) out.push({ name, kind: "property", node: p });
+  }
+  return out;
+}
+
 // TypeScript is the base for tsx and javascript, so it is a named const rather
 // than indexed back out of SPECS (which noUncheckedIndexedAccess would widen to
 // `LangSpec | undefined`, breaking the derived spreads below).
@@ -530,6 +567,7 @@ const TS_SPEC: LangSpec = {
   imports: { import_statement: "string" },
   calls: { call_expression: "function", new_expression: "constructor" },
   assignments: true,
+  extraMembers: tsParameterProperties,
   relationsFrom: {
     class_declaration: tsHeritage,
     abstract_class_declaration: tsHeritage,
@@ -977,6 +1015,7 @@ export const SPECS: Record<string, LangSpec> = {
       member_call_expression: "member",
       object_creation_expression: "constructor",
     },
+    extraMembers: phpPromotedProperties,
     nameFrom: {
       property_declaration: (node) => findFirst(node, (n) => n.type === "variable_name")?.text.replace(/^\$/, ""),
       const_declaration: (node) => findFirst(node, (n) => n.type === "const_element")?.namedChildren[0]?.text,

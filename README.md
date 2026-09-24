@@ -35,7 +35,8 @@ compares](#how-it-compares).
   and its line span — including the members a declaration-only walk misses:
   interface members, class fields, enum members, every `declare`/`.d.ts`
   declaration, Rust trait method signatures, Go interface method sets and type
-  aliases, record components and constructor `val` parameters, C `#define`
+  aliases, record components, constructor `val` parameters and their
+  TypeScript (`private readonly dep: Dep`) and PHP 8 (promoted) twins, C `#define`
   macros and the members of a `typedef struct`, Python declarations under
   `if TYPE_CHECKING:` / `try:` / `with` blocks, Elixir clauses with a `when`
   guard and `defguard`, and the members of a class
@@ -162,10 +163,10 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 315 labelled declarations in 22 files |
-| kind accuracy | **100%** | the same 315 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 315 declarations |
-| doc comment attached | **100%** | the 176 declarations labelled with a doc |
+| symbol precision / recall | **100% / 100%** | 322 labelled declarations in 22 files |
+| kind accuracy | **100%** | the same 322 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 322 declarations |
+| doc comment attached | **100%** | the 179 declarations labelled with a doc |
 | complete signature | **100%** | the 32 declarations labelled with a signature |
 | call edges / inheritance (F1) | **100% / 100%** | 51 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
