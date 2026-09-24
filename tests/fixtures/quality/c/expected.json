@@ -25,6 +25,7 @@
         { "name": "acme_stats_t", "kind": "type", "doc": true },
         { "name": "done", "parent": "acme_stats_t", "kind": "field", "doc": true },
         { "name": "failed", "parent": "acme_stats_t", "kind": "field" },
+        { "name": "retried", "parent": "acme_stats_t", "kind": "field" },
         { "name": "on_done", "parent": "acme_stats_t", "kind": "method", "doc": true },
         { "name": "acme_status_t", "kind": "type", "doc": true },
         { "name": "ACME_OK", "parent": "acme_status_t", "kind": "enum-member" },

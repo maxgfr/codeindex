@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 MAX_ATTEMPTS = 5
+BASE_DELAY, MAX_DELAY = 1.0, 60.0
 _DEFAULT_QUEUE = "jobs"
 
 try:

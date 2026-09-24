@@ -14,6 +14,9 @@ export interface TSNode {
   namedChildCount: number;
   namedChild(i: number): TSNode | null;
   childForFieldName(name: string): TSNode | null;
+  // Every child under a field a grammar repeats — the several `declarator`s of
+  // `int x, y;`, the several `name`s of Go's `var a, b int`.
+  childrenForFieldName(name: string): TSNode[];
   children: TSNode[];
   // ONE marshal + ONE wasm call for the whole child list, memoized on the node —
   // versus `namedChildCount` plus a `namedChild(i)` round-trip per index. Every

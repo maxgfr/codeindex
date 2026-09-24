@@ -6,7 +6,7 @@ import "fmt"
 // MaxAttempts bounds how often a job is retried.
 const MaxAttempts = 5
 
-var defaultQueue = "jobs"
+var defaultQueue, deadQueue = "jobs", "dead"
 
 // Runnable is anything the scheduler can drive.
 type Runnable interface {
@@ -20,6 +20,8 @@ type JobSpec struct {
 	// Name identifies the job.
 	Name     string
 	Attempts int
+	// Priority and weight order the queue.
+	Priority, weight int
 }
 
 // Scheduler runs jobs with exponential backoff between retries.

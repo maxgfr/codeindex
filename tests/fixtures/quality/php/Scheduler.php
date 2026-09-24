@@ -25,7 +25,7 @@ class Scheduler extends BaseWorker implements Runnable
     public const MAX_ATTEMPTS = 5;
 
     /** Jobs waiting for a slot. */
-    private array $pending = [];
+    private array $pending = [], $failed = [];
 
     public function __construct(
         private readonly Clock $clock,

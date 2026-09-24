@@ -36,21 +36,24 @@ compares](#how-it-compares).
   interface members, class fields, enum members, every `declare`/`.d.ts`
   declaration, Rust trait method signatures, Go interface method sets and type
   aliases, record components, constructor `val` parameters and their
-  TypeScript (`private readonly dep: Dep`) and PHP 8 (promoted) twins, C `#define`
-  macros and the members of a `typedef struct`, Python declarations under
-  `if TYPE_CHECKING:` / `try:` / `with` blocks, Ruby `class << self` methods,
-  `private def x` definitions and the block of `Point = Struct.new(…) do`,
-  Elixir clauses with a `when` guard and `defguard`, and the members of a class
-  bound by `module.exports =` or an anonymous `export default class` (a
-  default export with no name of its own is named after the file stem). A doc
-  comment is found across Rust attributes and TypeScript decorators;
-  visibility is read from a declaration's modifiers, never from its parameter
-  names or default values, and a Python module's `__all__` (when written as a
-  literal) decides which of its top-level names are public — the names it
-  imports and lists become `reexport` symbols; an out-of-line C++ definition (`void
-  Widget::draw()`) belongs to its class, and a Lua `function M.go()` to its
-  table; and a `.h` header is parsed as C++ when its content is (a namespace,
-  class or template), as C otherwise.
+  TypeScript (`private readonly dep: Dep`) and PHP 8 (promoted) twins, every
+  name of a multi-name declaration (`var a, b int`, `int x, y;`,
+  `a, b = 1, 2`), C `#define` macros and the members of a `typedef struct`,
+  Python declarations under `if TYPE_CHECKING:` / `try:` / `with` blocks, Ruby
+  `class << self` methods, `private def x` definitions and the block of
+  `Point = Struct.new(…) do`, Elixir clauses with a `when` guard and
+  `defguard`, and the members of a class bound by `module.exports =` or an
+  anonymous `export default class` (a default export with no name of its own
+  is named after the file stem). A doc comment is found across Rust
+  attributes and TypeScript decorators. Visibility is read from a
+  declaration's modifiers, never from its parameter names or default values;
+  an `export { … }` list marks only the bindings of its own scope; and a
+  Python module's `__all__` (when written as literals) decides which of its
+  top-level names are public, the names it imports and lists becoming
+  `reexport` symbols. An out-of-line C++ definition (`void Widget::draw()`)
+  belongs to its class, and a Lua `function M.go()` to its table; a `.h`
+  header is parsed as C++ when its content is (a namespace, class or
+  template), as C otherwise.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
@@ -166,10 +169,10 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 336 labelled declarations in 23 files |
-| kind accuracy | **100%** | the same 336 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 95.2% on Go | the same 336 declarations |
-| doc comment attached | **100%** | the 185 declarations labelled with a doc |
+| symbol precision / recall | **100% / 100%** | 346 labelled declarations in 23 files |
+| kind accuracy | **100%** | the same 346 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.8% on Go | the same 346 declarations |
+| doc comment attached | **100%** | the 188 declarations labelled with a doc |
 | complete signature | **100%** | the 32 declarations labelled with a signature |
 | call edges / inheritance (F1) | **100% / 100%** | 54 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |

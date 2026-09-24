@@ -57,6 +57,13 @@
           "doc": true
         },
         {
+          "name": "failed",
+          "parent": "Scheduler",
+          "kind": "property",
+          "exported": false,
+          "doc": true
+        },
+        {
           "name": "clock",
           "parent": "Scheduler",
           "kind": "property",

@@ -100,6 +100,12 @@
           "exported": false
         },
         {
+          "name": "failed",
+          "parent": "Scheduler",
+          "kind": "field",
+          "exported": false
+        },
+        {
           "name": "start",
           "parent": "Scheduler",
           "kind": "method",

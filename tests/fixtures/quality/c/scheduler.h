@@ -39,7 +39,7 @@ typedef struct acme_scheduler acme_scheduler_t;
 typedef struct acme_stats {
   /** Jobs that ran to completion. */
   unsigned done;
-  unsigned failed;
+  unsigned failed, retried;
   /** Called after every finished job. */
   void (*on_done)(const struct acme_job *job);
 } acme_stats_t;

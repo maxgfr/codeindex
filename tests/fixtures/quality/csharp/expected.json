@@ -72,6 +72,12 @@
           "exported": false
         },
         {
+          "name": "failed",
+          "parent": "Scheduler",
+          "kind": "field",
+          "exported": false
+        },
+        {
           "name": "Attempted",
           "parent": "Scheduler",
           "kind": "event",

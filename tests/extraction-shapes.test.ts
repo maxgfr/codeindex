@@ -675,3 +675,79 @@ describe("a Ruby mixin call on another receiver", () => {
     expect(rels(src)).toEqual(["implements Plugin Base", "implements Plugin Helpers"]);
   });
 });
+
+describe("a declaration that binds several names", () => {
+  // The single-name readers stopped at the first, so `var a, b` or `int x, y;`
+  // indexed `a` and `x` and silently dropped the rest.
+  const vis = (rel: string, src: string) => syms(rel, src).map((s) => `${s.kind} ${ids([s])[0]}=${s.exported ? 1 : 0}`);
+
+  it("declares every name it lists, each with its own visibility", () => {
+    expect(vis("s.go", "package p\nvar Single, double = 1, 2\nconst A, b = 1, 2\ntype Box struct {\n\ta, B int\n\tEmbedded\n}")).toEqual([
+      "package p=0",
+      "var Single=1",
+      "var double=0",
+      "const A=1",
+      "const b=0",
+      "type Box=1",
+      "field Box.a=0",
+      "field Box.B=1",
+    ]);
+    expect(vis("S.java", "class S {\n  private final List<String> items = List.of(), others;\n  public int a = 1, b;\n}")).toEqual([
+      "class S=0",
+      "field S.items=0",
+      "field S.others=0",
+      "field S.a=1",
+      "field S.b=1",
+    ]);
+    expect(vis("S.cs", "class S {\n  private List<int> _items = new(), _other;\n  public event EventHandler A, B;\n}")).toEqual([
+      "class S=0",
+      "field S._items=0",
+      "field S._other=0",
+      "event S.A=1",
+      "event S.B=1",
+    ]);
+    expect(vis("S.php", "<?php\nclass S {\n  public static int $count = 0, $other = 1;\n  const A = 1, B = 2;\n}")).toEqual([
+      "class S=1",
+      "property S.count=1",
+      "property S.other=1",
+      "const S.A=1",
+      "const S.B=1",
+    ]);
+  });
+
+  it("reads each C/C++ declarator to its name", () => {
+    expect(vis("p.c", "struct P { int x, *y, z[3]; };\nint ga, *gb;")).toEqual([
+      "struct P=1",
+      "field P.x=1",
+      "field P.y=1",
+      "field P.z=1",
+      "const ga=1",
+      "const gb=1",
+    ]);
+    expect(vis("p.cpp", "class W {\n public:\n  std::string s, t;\n  int a, &b = a;\n};")).toEqual([
+      "class W=1",
+      "field W.s=1",
+      "field W.t=1",
+      "field W.a=1",
+      "field W.b=1",
+    ]);
+  });
+
+  it("binds every Python target of a tuple or chained assignment", () => {
+    const src = "a, b = 1, 2\n(c, d) = 3, 4\ng, *rest = [1, 2]\nx, obj.attr = 1, 2\nh = _i = 7\nclass K:\n    lo, hi = 0, 9";
+    expect(vis("m.py", src)).toEqual([
+      "const a=1",
+      "const b=1",
+      "const c=1",
+      "const d=1",
+      "const g=1",
+      "const rest=1",
+      "const x=1",
+      "const h=1",
+      "const _i=0",
+      "class K=1",
+      "field K.lo=1",
+      "field K.hi=1",
+    ]);
+  });
+});

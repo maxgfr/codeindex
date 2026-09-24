@@ -18,6 +18,11 @@
           "exported": false
         },
         {
+          "name": "deadQueue",
+          "kind": "var",
+          "exported": false
+        },
+        {
           "name": "Runnable",
           "kind": "type",
           "doc": true
@@ -48,6 +53,19 @@
           "name": "Attempts",
           "parent": "JobSpec",
           "kind": "field"
+        },
+        {
+          "name": "Priority",
+          "parent": "JobSpec",
+          "kind": "field",
+          "doc": true
+        },
+        {
+          "name": "weight",
+          "parent": "JobSpec",
+          "kind": "field",
+          "exported": false,
+          "doc": true
         },
         {
           "name": "Scheduler",

@@ -4,6 +4,8 @@
     "service.py": {
       "symbols": [
         { "name": "MAX_ATTEMPTS", "kind": "const" },
+        { "name": "BASE_DELAY", "kind": "const" },
+        { "name": "MAX_DELAY", "kind": "const" },
         { "name": "_DEFAULT_QUEUE", "kind": "const", "exported": false },
         { "name": "_fast_loads", "kind": "const", "exported": false },
         { "name": "parse_payload", "kind": "function", "doc": true },

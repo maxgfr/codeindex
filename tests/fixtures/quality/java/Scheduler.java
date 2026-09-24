@@ -41,7 +41,7 @@ public class Scheduler extends BaseWorker implements Runnable {
   /** Bounds how often a job is retried. */
   public static final int MAX_ATTEMPTS = 5;
 
-  private final List<JobSpec> pending = new ArrayList<>();
+  private final List<JobSpec> pending = new ArrayList<>(), failed = new ArrayList<>();
 
   /** Drain the pending queue. */
   @Override

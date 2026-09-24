@@ -833,19 +833,23 @@ export function extractAst(
           const doc = docOf(node);
           const parent = qualifier ?? ctx.parent;
           const parentPath = qualifier ?? ctx.parentPath;
-          emit({
-            name,
-            kind,
-            file: rel,
-            line: node.startPosition.row + 1,
-            endLine: endLineOf(node),
-            ...(parent ? { parent } : {}),
-            ...(parentPath && parentPath !== parent ? { parentPath } : {}),
-            signature: header,
-            ...(doc ? { doc } : {}),
-            exported: visibilityOf(node, header, name, { ...ctx, exported: nowExported }),
-            lang,
-          });
+          // `var a, b int` / `int x, y;` declare every name they list.
+          const several = spec.namesFrom?.[type]?.(node);
+          for (const each of several && several.length > 1 ? several : [name]) {
+            emit({
+              name: each,
+              kind,
+              file: rel,
+              line: node.startPosition.row + 1,
+              endLine: endLineOf(node),
+              ...(parent ? { parent } : {}),
+              ...(parentPath && parentPath !== parent ? { parentPath } : {}),
+              signature: header,
+              ...(doc ? { doc } : {}),
+              exported: visibilityOf(node, header, each, { ...ctx, exported: nowExported }),
+              lang,
+            });
+          }
           collectRelations(node, name);
           walkBody(node, bodyCtx(name, kind, parentPath, ctx, nowExported));
           return;

@@ -4,10 +4,10 @@
   "base": {
     "languages": 17,
     "files": 23,
-    "symbols": 336,
+    "symbols": 346,
     "calls": 54,
     "relations": 24,
-    "docLabels": 185,
+    "docLabels": 188,
     "sigLabels": 32
   },
   "extraction": [
@@ -88,7 +88,7 @@
         "symbolsRecall": 1,
         "symbolsF1": 1,
         "kindAccuracy": 1,
-        "exportedAccuracy": 0.9524,
+        "exportedAccuracy": 0.9583,
         "docCoverage": 1,
         "sigCoverage": 1,
         "callsF1": 1,

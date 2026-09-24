@@ -31,7 +31,7 @@ public class Scheduler : BaseWorker, IRunnable
     /// <summary>Bounds how often a job is retried.</summary>
     public const int MaxAttempts = 5;
 
-    private readonly List<JobSpec> pending = new();
+    private readonly List<JobSpec> pending = new(), failed = new();
 
     /// <summary>Raised after every attempt.</summary>
     public event AttemptHandler? Attempted;

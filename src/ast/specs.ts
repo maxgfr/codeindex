@@ -107,6 +107,15 @@ export interface LangSpec {
   nameFrom?: Record<string, (node: TSNode) => string | undefined>;
 
   /**
+   * Every name a declaration node binds, for a node that can bind SEVERAL —
+   * Go's `var a, b = 1, 2`, Java's `int x, y;`, PHP's `public $a, $b;`, C's
+   * `int x, *y;`. The single-name readers stop at the first, so the rest of the
+   * list was never indexed. Each name becomes a symbol sharing the node's line,
+   * signature and doc; a node binding one name is read as before.
+   */
+  namesFrom?: Record<string, (node: TSNode) => string[]>;
+
+  /**
    * Per-node-type kind chooser, for one node type that is two declarations.
    * C++ spells a method declaration and a data member both `field_declaration`,
    * and a namespace-scope constant and a free function both `declaration`;
@@ -364,7 +373,27 @@ function pythonAll(root: TSNode): Set<string> | undefined {
 const hasFunctionDeclarator = (node: TSNode): boolean =>
   findFirst(node, (n) => n.type === "function_declarator" || n.type === "operator_cast") !== undefined;
 
+// The names a repeated field holds, in source order: Go's `name`s, the
+// `variable_declarator`s of Java and C#. A grammar can file the separating
+// commas under the field too (Go's const_spec does), so only identifiers count.
+const fieldNames = (field: string) => (node: TSNode): string[] =>
+  node.childrenForFieldName(field).flatMap((n) => (/identifier$/.test(n.type) ? n.text : []));
+const csharpDeclaratorNames = (node: TSNode): string[] =>
+  (childOfType(node, "variable_declaration")?.namedChildren ?? []).flatMap((d) =>
+    d.type === "variable_declarator" ? (d.childForFieldName("name")?.text ?? []) : [],
+  );
+const declaratorNames = (node: TSNode): string[] =>
+  node.childrenForFieldName("declarator").flatMap((d) => d.childForFieldName("name")?.text ?? []);
+
 // --- C and C++ share their preprocessor and their `typedef struct` idiom -----
+
+// `int x, *y, z[3];` — one name per `declarator`, each at the end of its own
+// chain (pointer, array, init, function declarators wrap it). A bare
+// identifier declarator IS the name.
+const cDeclaratorNames = (node: TSNode): string[] =>
+  node
+    .childrenForFieldName("declarator")
+    .flatMap((d) => (d.namedChildren.length > 0 ? (nameOf(d) ?? []) : /identifier$/.test(d.type) ? d.text : []));
 
 const TAGGED_SPECIFIER: Record<string, string> = {
   struct_specifier: "struct",
@@ -780,10 +809,22 @@ export const SPECS: Record<string, LangSpec> = {
       if (node.type !== "expression_statement") return [];
       const assign = node.namedChildren[0];
       if (!assign || assign.type !== "assignment") return [];
-      const left = assign.childForFieldName("left");
-      if (!left || left.type !== "identifier") return [];
       if (underMainGuard(node)) return [];
-      return [{ name: left.text, kind: ctx.ownerKind === "class" ? "field" : "const" }];
+      // `a, b = 1, 2` and `a = b = 0` bind every name they list; an attribute
+      // or subscript target (`self.x, y = …`) binds nothing here.
+      const names: string[] = [];
+      for (let a: TSNode | null = assign; a?.type === "assignment"; a = a.childForFieldName("right")) {
+        const left = a.childForFieldName("left");
+        if (left?.type === "identifier") names.push(left.text);
+        else if (left && /^(pattern_list|tuple_pattern|list_pattern)$/.test(left.type)) {
+          for (const t of left.namedChildren) {
+            const bound = t.type === "list_splat_pattern" ? t.namedChildren[0] : t;
+            if (bound?.type === "identifier") names.push(bound.text);
+          }
+        }
+      }
+      const kind = ctx.ownerKind === "class" ? "field" : "const";
+      return names.map((name) => ({ name, kind }));
     },
   },
   go: {
@@ -840,6 +881,7 @@ export const SPECS: Record<string, LangSpec> = {
       // undefined skips it, and the relation below records the embedding instead.
       field_declaration: (node) => node.childForFieldName("name")?.text,
     },
+    namesFrom: { var_spec: fieldNames("name"), const_spec: fieldNames("name"), field_declaration: fieldNames("name") },
     relationsFrom: {
       // Embedding IS Go's inheritance: `type Audited struct { Scheduler }`
       // promotes every Scheduler method onto Audited.
@@ -991,6 +1033,7 @@ export const SPECS: Record<string, LangSpec> = {
       // Same declarator shape as a field.
       constant_declaration: (node) => findFirst(node, (n) => n.type === "variable_declarator")?.childForFieldName("name")?.text,
     },
+    namesFrom: { field_declaration: declaratorNames, constant_declaration: declaratorNames },
     relationsFrom: {
       class_declaration: (node, ctx) => {
         if (!ctx.self) return [];
@@ -1141,6 +1184,12 @@ export const SPECS: Record<string, LangSpec> = {
       // reader cannot see, so every indexer was dropped.
       indexer_declaration: () => "this[]",
     },
+    namesFrom: {
+      // One level deeper than Java's: the declarators hang off a
+      // variable_declaration.
+      field_declaration: (node) => csharpDeclaratorNames(node),
+      event_field_declaration: (node) => csharpDeclaratorNames(node),
+    },
     relationsFrom: {
       class_declaration: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : []),
       struct_declaration: (node, ctx) => (ctx.self ? firstIsBase(childOfType(node, "base_list"), ctx.self, node) : []),
@@ -1178,6 +1227,14 @@ export const SPECS: Record<string, LangSpec> = {
     nameFrom: {
       property_declaration: (node) => findFirst(node, (n) => n.type === "variable_name")?.text.replace(/^\$/, ""),
       const_declaration: (node) => findFirst(node, (n) => n.type === "const_element")?.namedChildren[0]?.text,
+    },
+    namesFrom: {
+      property_declaration: (node) =>
+        node.namedChildren.flatMap((e) =>
+          e.type === "property_element" ? (e.childForFieldName("name")?.text.replace(/^\$/, "") ?? []) : [],
+        ),
+      const_declaration: (node) =>
+        node.namedChildren.flatMap((e) => (e.type === "const_element" ? (e.namedChildren[0]?.text ?? []) : [])),
     },
     relationsFrom: {
       class_declaration: (node, ctx) => {
@@ -1237,6 +1294,7 @@ export const SPECS: Record<string, LangSpec> = {
     nameFrom: {
       preproc_def: (node) => (isIncludeGuard(node) ? undefined : node.childForFieldName("name")?.text),
     },
+    namesFrom: { field_declaration: cDeclaratorNames, declaration: cDeclaratorNames },
     bodyFrom: { type_definition: typedefBody },
     extraMembers: typedefTag,
   },
@@ -1294,6 +1352,7 @@ export const SPECS: Record<string, LangSpec> = {
       friend_declaration: (node) => nameOf(node) ?? (node.namedChildren[0] ? nameOf(node.namedChildren[0]) : undefined),
       preproc_def: (node) => (isIncludeGuard(node) ? undefined : node.childForFieldName("name")?.text),
     },
+    namesFrom: { field_declaration: cDeclaratorNames, declaration: cDeclaratorNames },
     parentFrom: {
       function_definition: cppMemberScope,
       declaration: cppMemberScope,

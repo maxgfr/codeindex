@@ -60,7 +60,7 @@
       "symbolsRecall": 1,
       "symbolsF1": 1,
       "kindAccuracy": 1,
-      "exportedAccuracy": 0.9524,
+      "exportedAccuracy": 0.9583,
       "docCoverage": 1,
       "sigCoverage": 1,
       "callsF1": 1,
