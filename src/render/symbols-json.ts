@@ -70,7 +70,10 @@ export function buildSymbolIndex(
     }
   }
 
-  const defs: SymbolIndex["defs"] = {};
+  // Prototype-less maps: on a plain `{}`, `defs["__proto__"] = [...]` hits the
+  // prototype setter instead of creating a key, and a symbol of that name
+  // vanished from the artifact. Serializes byte-identically for every other name.
+  const defs: SymbolIndex["defs"] = Object.create(null);
   for (const name of [...defsByName.keys()].sort(byStr)) {
     defs[name] = defsByName
       .get(name)!
@@ -78,7 +81,7 @@ export function buildSymbolIndex(
       .sort((a, b) => byStr(a.file, b.file) || a.line - b.line || byStr(a.kind, b.kind));
   }
 
-  const refsOut: SymbolIndex["refs"] = {};
+  const refsOut: SymbolIndex["refs"] = Object.create(null);
   for (const name of [...refs.keys()].sort(byStr)) {
     const files = [...refs.get(name)!].sort(byStr);
     if (files.length) refsOut[name] = files;

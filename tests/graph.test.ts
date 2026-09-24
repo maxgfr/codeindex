@@ -7,6 +7,7 @@ import { scanRepo } from "../src/scan.js";
 import { buildResolveContext } from "../src/resolve.js";
 import { buildModules } from "../src/modules.js";
 import { buildGraph } from "../src/graph.js";
+import { buildSymbolIndex, renderSymbolsJson } from "../src/render/symbols-json.js";
 import type { Edge, RawRef } from "../src/types.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
@@ -187,5 +188,19 @@ describe("buildGraph — soft refs", () => {
       ],
     });
     expect(edgesFrom(g, "app/views.py")).toEqual(["app/__init__.py:1", "app/core.py:1", "app/util.py:1"]);
+  });
+});
+
+describe("buildSymbolIndex", () => {
+  it("keeps symbols named like Object.prototype members, __proto__ included", () => {
+    const root = mkdtempSync(join(tmpdir(), "ui-proto-"));
+    writeFileSync(
+      join(root, "a.ts"),
+      "export interface Weird { __proto__: object; constructor: Function; toString(): string }\n" +
+        "export const __proto__ = 2;\n",
+    );
+    const index = JSON.parse(renderSymbolsJson(buildSymbolIndex(scanRepo(root))));
+    expect(Object.keys(index.defs)).toEqual(["Weird", "__proto__", "constructor", "toString"]);
+    expect(index.defs.__proto__.map((d: { kind: string }) => d.kind).sort()).toEqual(["const", "property"]);
   });
 });
