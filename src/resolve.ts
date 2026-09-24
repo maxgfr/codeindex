@@ -24,7 +24,11 @@ interface TsPath {
 interface TsConfigScope {
   dir: string; // the config's own directory (posix, "" = repo root) — scope test
   baseUrl: string; // repo-relative posix dir the `targets` resolve against
-  paths: TsPath[];
+  // True only when the config (or its extends chain) DECLARES baseUrl: tsc then
+  // also resolves a bare name (`components/Card`) against it. `paths` without
+  // baseUrl (TS 4.1+) anchors the targets but gives bare names no such base.
+  baseUrlSet: boolean;
+  paths: TsPath[]; // tsc precedence order: exact aliases, then longest prefix
 }
 
 // One subpath of a package.json `exports` map, conditions already flattened into
@@ -40,6 +44,14 @@ interface WorkspacePackage {
   dir: string; // posix dir of its package.json, "" for root
   exportEntries: ExportEntry[]; // empty when the package declares no `exports`
   mainCandidates: string[]; // source/main/module/types fields, priority order
+  tsconfig?: string; // the `tsconfig` field — what `"extends": "<name>"` loads
+}
+
+// One package.json's scope for `#subpath` imports. Node resolves `#x` against
+// the NEAREST package.json only (named or not), never a further-up one.
+interface PackageScope {
+  dir: string; // posix dir of the package.json, "" for root
+  importEntries: ExportEntry[]; // its `imports` map; empty when it declares none
 }
 
 interface GoModule {
@@ -63,8 +75,9 @@ export interface ResolveContext {
   goModules: GoModule[]; // every in-repo go.mod, deepest dir first
   rustCrates: RustCrate[]; // every in-repo Cargo.toml [package], deepest dir first
   javaRoots: string[]; // dirs that java package paths resolve against
-  pyRoots: string[]; // posix dirs that are python import roots ("" allowed)
+  pyRoots: string[]; // python import roots (sys.path entries), shortest first ("" allowed)
   workspacePackages: WorkspacePackage[]; // monorepo pkg name -> its dir + entry points
+  packageScopes: PackageScope[]; // every package.json with its `imports` map, deepest dir first
   cIncludeRoots: string[]; // dirs a C/C++ `#include "x"` resolves against (besides the file's dir)
   rubyLibRoots: string[]; // dirs a Ruby bare `require` resolves against
   phpPsr4: { prefix: string; dir: string }[]; // composer PSR-4 namespace prefix -> dir, longest first
@@ -76,6 +89,9 @@ export interface ResolveContext {
   // import the same handful of specifiers over and over. Each hit skips ~20
   // normalize+probe rounds. Optional so a hand-built context still works.
   jsMemo?: Map<string, Resolution>;
+  // The same memo for Python, same key: resolvePython also only reads the
+  // importer's directory (relative base, enclosing roots).
+  pyMemo?: Map<string, Resolution>;
   // Per-directory sorted file lists by extension ("<ext>\0<dir>"), for the
   // Go-package / Java-wildcard "first file in the directory" rule.
   dirFilesMemo?: Map<string, string[]>;
@@ -221,34 +237,70 @@ function tolerantJsonParse(text: string): unknown {
 // a package specifier (a node_modules base we don't index) or a missing file.
 // A bare non-relative target ("base.json", written without the "./" prefix —
 // tsc accepts it) is probed relative to the config's own directory too; only
-// when no such file exists is it treated as a package base (external), so a
-// true package extends like "@tsconfig/node18" stays external.
-function resolveExtends(fileSet: Set<string>, fromDir: string, ext: string): string | undefined {
+// when no such file exists is it treated as a package base, so a true package
+// extends like "@tsconfig/node18" stays external.
+//
+// A package base can still be IN the repo: Turborepo's layout is a
+// `packages/typescript-config` workspace named `@repo/typescript-config` that
+// apps extend as "@repo/typescript-config/base.json". tsc resolves that like a
+// module, so we do too against the workspace packages: `<name>` loads the
+// package's `tsconfig` field or its tsconfig.json, `<name>/<sub>` loads
+// <sub>(.json) or <sub>/tsconfig.json inside it.
+function resolveExtends(
+  fileSet: Set<string>,
+  fromDir: string,
+  ext: string,
+  packages: WorkspacePackage[],
+): string | undefined {
   const base = norm(posix.join(fromDir, ext));
   const cands = ext.endsWith(".json") ? [base] : [base + ".json", posix.join(base, "tsconfig.json")];
   for (const c of cands) if (fileSet.has(c)) return c;
+  if (ext.startsWith(".") || ext.startsWith("/")) return undefined;
+  for (const pkg of packages) {
+    let pkgCands: string[];
+    if (ext === pkg.name) {
+      pkgCands = [...(pkg.tsconfig ? [pkg.tsconfig] : []), "tsconfig.json"];
+    } else if (ext.startsWith(pkg.name + "/")) {
+      const sub = ext.slice(pkg.name.length + 1);
+      pkgCands = sub.endsWith(".json") ? [sub] : [sub + ".json", posix.join(sub, "tsconfig.json")];
+    } else continue;
+    for (const c of pkgCands) {
+      const p = norm(posix.join(pkg.dir, c));
+      if (!p.startsWith("..") && fileSet.has(p)) return p;
+    }
+    return undefined; // the longest matching package name owns the specifier
+  }
   return undefined;
 }
 
 interface TsEffective {
-  baseUrl?: string; // as written, relative to baseUrlDir
+  baseUrl?: string; // as written, relative to baseUrlDir (a `${configDir}` prefix kept verbatim)
   baseUrlDir: string; // dir of the config that DECLARED baseUrl
-  paths?: Record<string, string[]>;
+  paths?: Record<string, string[]>; // targets as written, `${configDir}` kept verbatim
   pathsDir: string; // dir of the config that DECLARED paths
 }
 
-// Read a tsconfig/jsconfig and fold in its `extends` chain (in-repo, relative
-// bases only), child overriding base — so a monorepo package whose baseUrl/paths
-// live in a shared base (the dominant Nx/Turborepo/lerna layout) still
-// contributes its aliases. baseUrl and paths are each tracked with the dir of the
-// config that DECLARED them (TS resolves them relative to that file). Cycles are
-// broken via `seen`; a missing relative base is surfaced as a warning.
+// The TS 5.5 `${configDir}` template: a path starting with it is relative to
+// the config being COMPILED — the leaf that extends a shared base — not to the
+// base that wrote it. That is its whole point: one shared base serving many
+// projects. So it is carried verbatim through the extends fold and substituted
+// per leaf.
+const CONFIG_DIR = "${configDir}";
+
+// Read a tsconfig/jsconfig and fold in its `extends` chain (in-repo bases only:
+// relative files or workspace packages), child overriding base — so a monorepo
+// package whose baseUrl/paths live in a shared base (the dominant
+// Nx/Turborepo/lerna layout) still contributes its aliases. baseUrl and paths
+// are each tracked with the dir of the config that DECLARED them (TS resolves
+// them relative to that file, `${configDir}` aside). Cycles are broken via
+// `seen`; a missing relative base is surfaced as a warning.
 function readTsConfig(
   root: string,
   fileSet: Set<string>,
   rel: string,
   warnings: string[],
   seen: Set<string>,
+  packages: WorkspacePackage[],
 ): TsEffective | undefined {
   if (seen.has(rel)) return undefined;
   seen.add(rel);
@@ -264,12 +316,12 @@ function readTsConfig(
   const exts = cfg.extends === undefined ? [] : Array.isArray(cfg.extends) ? cfg.extends : [cfg.extends];
   for (const ext of exts) {
     if (typeof ext !== "string") continue;
-    const baseRel = resolveExtends(fileSet, dir, ext);
+    const baseRel = resolveExtends(fileSet, dir, ext, packages);
     if (!baseRel) {
       if (/^\.\.?\//.test(ext)) warnings.push(`${rel} extends "${ext}" which is missing — its path aliases were ignored`);
       continue; // bare specifiers (node_modules tooling bases) carry no repo paths
     }
-    const inherited = readTsConfig(root, fileSet, baseRel, warnings, seen);
+    const inherited = readTsConfig(root, fileSet, baseRel, warnings, seen, packages);
     if (inherited?.baseUrl !== undefined) {
       eff.baseUrl = inherited.baseUrl;
       eff.baseUrlDir = inherited.baseUrlDir;
@@ -280,7 +332,7 @@ function readTsConfig(
     }
   }
   const co = cfg.compilerOptions;
-  if (co?.baseUrl !== undefined) {
+  if (typeof co?.baseUrl === "string") {
     eff.baseUrl = co.baseUrl;
     eff.baseUrlDir = dir;
   }
@@ -344,6 +396,41 @@ function parseExportEntries(exportsField: unknown): ExportEntry[] {
   return entries;
 }
 
+// Parse a package.json `imports` field (`"#internal/*": "./src/lib/*.ts"`) into
+// the same ordered entries as `exports` — same value grammar, same precedence;
+// only the keys differ (`#…` instead of `./…`).
+function parseImportEntries(importsField: unknown): ExportEntry[] {
+  if (importsField === null || typeof importsField !== "object" || Array.isArray(importsField)) return [];
+  const entries: ExportEntry[] = [];
+  for (const [key, value] of Object.entries(importsField)) {
+    if (!key.startsWith("#")) continue;
+    const targets: string[] = [];
+    flattenExportTargets(value, targets);
+    if (targets.length) entries.push({ key, star: key.includes("*"), targets });
+  }
+  entries.sort((a, b) => Number(a.star) - Number(b.star) || b.key.length - a.key.length || byStr(a.key, b.key));
+  return entries;
+}
+
+// The targets of the first entry matching `key` (entries are already in
+// precedence order), with a wildcard entry's `*` filled in; undefined when no
+// entry matches. Shared by `exports` subpaths and `imports` specifiers.
+function matchEntryTargets(entries: ExportEntry[], key: string): string[] | undefined {
+  for (const entry of entries) {
+    if (!entry.star) {
+      if (entry.key === key) return entry.targets;
+      continue;
+    }
+    const starAt = entry.key.indexOf("*");
+    const pre = entry.key.slice(0, starAt);
+    const post = entry.key.slice(starAt + 1);
+    if (!key.startsWith(pre) || !key.endsWith(post) || key.length < pre.length + post.length) continue;
+    const fill = key.slice(pre.length, key.length - post.length);
+    return entry.targets.map((t) => t.replace(/\*/g, fill));
+  }
+  return undefined;
+}
+
 // Parse a go.mod's `replace` directives (single-line and block form), keeping
 // only relative targets that stay inside the repo — those are the directives
 // that rewire one in-repo module onto another's source tree.
@@ -386,12 +473,61 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     }
   }
 
+  // Workspace packages: map each in-repo package.json `name` to its directory so
+  // bare cross-package imports (`@scope/pkg`) resolve to in-repo source, not
+  // "external". Longest name first so `@scope/a-b` wins over `@scope/a`. Also
+  // keep its `exports` map and main-ish fields — modern monorepo packages route
+  // subpath imports (`@scope/pkg/utils`) through `exports`, and probing those
+  // declared entry points beats guessing `src/index`. Parsed BEFORE tsconfigs:
+  // a tsconfig may `extends` a config shipped by one of these packages.
+  const warnings: string[] = [];
+  const pkgWarnings: string[] = []; // appended after the tsconfig ones (their historic order)
+  const workspacePackages: WorkspacePackage[] = [];
+  const packageScopes: PackageScope[] = [];
+  for (const rel of fileSet) {
+    if (rel !== "package.json" && !rel.endsWith("/package.json")) continue;
+    // Parse with the same JSONC-tolerant path as tsconfig (some package.json carry
+    // comments/trailing commas); a truly unparseable one is surfaced, not silently
+    // dropped — losing it erases every cross-package edge for that workspace.
+    const pkg = tolerantJsonParse(readText(join(scan.root, rel))) as
+      | {
+          name?: string;
+          exports?: unknown;
+          imports?: unknown;
+          source?: unknown;
+          main?: unknown;
+          module?: unknown;
+          types?: unknown;
+          tsconfig?: unknown;
+        }
+      | undefined;
+    if (pkg === undefined) {
+      pkgWarnings.push(`unparseable ${rel} — skipped for workspace resolution`);
+      continue;
+    }
+    const dir = rel.includes("/") ? posix.dirname(rel) : "";
+    // Every package.json bounds a `#subpath` scope, named or not.
+    packageScopes.push({ dir, importEntries: parseImportEntries(pkg.imports) });
+    if (typeof pkg.name !== "string") continue;
+    const mainCandidates = [pkg.source, pkg.main, pkg.module, pkg.types].filter(
+      (v): v is string => typeof v === "string",
+    );
+    workspacePackages.push({
+      name: pkg.name,
+      dir,
+      exportEntries: parseExportEntries(pkg.exports),
+      mainCandidates,
+      ...(typeof pkg.tsconfig === "string" ? { tsconfig: pkg.tsconfig } : {}),
+    });
+  }
+  workspacePackages.sort((a, b) => b.name.length - a.name.length);
+  packageScopes.sort((a, b) => b.dir.length - a.dir.length || byStr(a.dir, b.dir));
+
   // tsconfig/jsconfig path aliases. Collect EVERY config, not just the root one
   // (each monorepo package declares its own baseUrl/paths), and fold in each
   // config's `extends` chain so aliases declared in a shared base config still
   // resolve. An import resolves against the nearest enclosing config. Unparseable
   // or missing configs surface as build warnings rather than vanishing silently.
-  const warnings: string[] = [];
   const tsConfigs: TsConfigScope[] = [];
   for (const rel of fileSet) {
     const base = rel.slice(rel.lastIndexOf("/") + 1);
@@ -402,25 +538,47 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     const isRootBase = rel === "tsconfig.base.json";
     if (base !== "tsconfig.json" && base !== "jsconfig.json" && !isRootBase) continue;
     const dir = rel.includes("/") ? posix.dirname(rel) : "";
-    const eff = readTsConfig(scan.root, fileSet, rel, warnings, new Set<string>());
-    if (!eff?.paths) continue; // no aliases to contribute
-    const tsPaths: TsPath[] = [];
-    for (const [alias, targets] of Object.entries(eff.paths)) {
-      if (!Array.isArray(targets)) continue;
-      const star = alias.endsWith("*");
-      tsPaths.push({ prefix: star ? alias.slice(0, -1) : alias, star, targets });
-    }
-    if (!tsPaths.length) continue; // only path-alias configs affect resolution
+    const eff = readTsConfig(scan.root, fileSet, rel, warnings, new Set<string>(), workspacePackages);
+    // A config contributes when it declares aliases OR a baseUrl: CRA/Next.js
+    // style `"baseUrl": "src"` with no `paths` is how `import "components/Card"`
+    // resolves, and dropping it lost every such import without a trace.
+    if (!eff || (!eff.paths && eff.baseUrl === undefined)) continue;
     // `paths` resolve against baseUrl when set (relative to the config that
     // declared baseUrl), else relative to the config that declared `paths`.
     const baseUrl =
-      eff.baseUrl !== undefined
-        ? norm(posix.join(eff.baseUrlDir, eff.baseUrl)).replace(/^\.$/, "")
-        : eff.pathsDir;
-    tsConfigs.push({ dir, baseUrl, paths: tsPaths });
+      eff.baseUrl === undefined
+        ? eff.pathsDir
+        : eff.baseUrl.startsWith(CONFIG_DIR)
+          ? norm(posix.join(dir, eff.baseUrl.slice(CONFIG_DIR.length))).replace(/^\.$/, "")
+          : norm(posix.join(eff.baseUrlDir, eff.baseUrl)).replace(/^\.$/, "");
+    // A `${configDir}` target is this leaf's dir, re-expressed relative to
+    // baseUrl so resolveJs keeps joining every target the same way.
+    const fromBase = posix.relative(baseUrl, dir) || ".";
+    const tsPaths: TsPath[] = [];
+    for (const [alias, targets] of Object.entries(eff.paths ?? {})) {
+      if (!Array.isArray(targets)) continue;
+      const star = alias.endsWith("*");
+      tsPaths.push({
+        prefix: star ? alias.slice(0, -1) : alias,
+        star,
+        targets: targets
+          .filter((t): t is string => typeof t === "string")
+          .map((t) => (t.startsWith(CONFIG_DIR) ? posix.join(fromBase, t.slice(CONFIG_DIR.length)) : t)),
+      });
+    }
+    // tsc's precedence, not object order: an exact alias beats any pattern, and
+    // among patterns the longest prefix wins (findBestPatternMatch). First-match
+    // in declaration order sent "@/components/Button" to "@/*" whenever that
+    // broader pattern happened to be listed first.
+    tsPaths.sort(
+      (a, b) => Number(a.star) - Number(b.star) || b.prefix.length - a.prefix.length || byStr(a.prefix, b.prefix),
+    );
+    if (!tsPaths.length && eff.baseUrl === undefined) continue; // nothing affects resolution
+    tsConfigs.push({ dir, baseUrl, baseUrlSet: eff.baseUrl !== undefined, paths: tsPaths });
   }
   // Nearest-enclosing first: deepest dir wins; the root ("") is the fallback.
   tsConfigs.sort((a, b) => b.dir.length - a.dir.length);
+  warnings.push(...pkgWarnings);
 
   // Every go.mod, not just the one nearest the root — multi-module repos (a Go
   // service beside a Go CLI) are normal. Deepest dir first so the module
@@ -466,46 +624,41 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     else if (dir.endsWith("/" + pkgPath)) javaRoots.add(dir.slice(0, -pkgPath.length - 1));
   }
 
-  // Python roots: dirs containing __init__.py / pyproject.toml / setup.py, plus root.
-  const pyRoots = new Set<string>([""]);
+  // Python import roots: the sys.path entries an absolute `import a.b` resolves
+  // against. A package dir is NOT one — Python 3 has no implicit relative
+  // imports, and treating `src/flask/` as a root bound the stdlib's
+  // `import typing` to src/flask/typing.py (and every other stdlib name to a
+  // same-named package module), while never adding the `src/` that `import
+  // flask` actually needs. The roots are, as mypy's crawl-up finds them:
+  //  - the repo root;
+  //  - the dir holding a TOP-LEVEL package: a dir with __init__.py whose parent
+  //    has none and sits inside no regular package (`src/` in a src layout,
+  //    `lib/` in ansible's);
+  //  - every pyproject.toml / setup.py / setup.cfg dir, and its `src/` if any
+  //    (src-layout single modules and namespace packages have no __init__.py to
+  //    anchor on).
+  // Known gap, shared with mypy: a PEP 420 namespace dir (`google/cloud/`, no
+  // __init__.py) looks like a root too, so a stdlib-named package under it
+  // (`google/cloud/logging/`) still captures `import logging`.
+  const pyPkgDirs = new Set<string>();
+  const pyRootSet = new Set<string>([""]);
   for (const rel of fileSet) {
-    const base = rel.split("/").pop()!;
-    if (base === "__init__.py" || base === "pyproject.toml" || base === "setup.py") {
-      pyRoots.add(rel.includes("/") ? posix.dirname(rel) : "");
+    const base = rel.slice(rel.lastIndexOf("/") + 1);
+    const dir = rel.includes("/") ? posix.dirname(rel) : "";
+    if (base === "__init__.py" || base === "__init__.pyi") pyPkgDirs.add(dir);
+    else if (base === "pyproject.toml" || base === "setup.py" || base === "setup.cfg") {
+      pyRootSet.add(dir);
+      const src = dir ? dir + "/src" : "src";
+      if (dirSet.has(src)) pyRootSet.add(src);
     }
   }
-
-  // Workspace packages: map each in-repo package.json `name` to its directory so
-  // bare cross-package imports (`@scope/pkg`) resolve to in-repo source, not
-  // "external". Longest name first so `@scope/a-b` wins over `@scope/a`. Also
-  // keep its `exports` map and main-ish fields — modern monorepo packages route
-  // subpath imports (`@scope/pkg/utils`) through `exports`, and probing those
-  // declared entry points beats guessing `src/index`.
-  const workspacePackages: WorkspacePackage[] = [];
-  for (const rel of fileSet) {
-    if (rel !== "package.json" && !rel.endsWith("/package.json")) continue;
-    // Parse with the same JSONC-tolerant path as tsconfig (some package.json carry
-    // comments/trailing commas); a truly unparseable one is surfaced, not silently
-    // dropped — losing it erases every cross-package edge for that workspace.
-    const pkg = tolerantJsonParse(readText(join(scan.root, rel))) as
-      | { name?: string; exports?: unknown; source?: unknown; main?: unknown; module?: unknown; types?: unknown }
-      | undefined;
-    if (pkg === undefined) {
-      warnings.push(`unparseable ${rel} — skipped for workspace resolution`);
-      continue;
-    }
-    if (typeof pkg.name !== "string") continue;
-    const mainCandidates = [pkg.source, pkg.main, pkg.module, pkg.types].filter(
-      (v): v is string => typeof v === "string",
-    );
-    workspacePackages.push({
-      name: pkg.name,
-      dir: rel.includes("/") ? posix.dirname(rel) : "",
-      exportEntries: parseExportEntries(pkg.exports),
-      mainCandidates,
-    });
+  for (const pkgDir of pyPkgDirs) {
+    if (!pkgDir) continue; // a package AT the repo root: nothing above it to hold it
+    const parent = pkgDir.includes("/") ? posix.dirname(pkgDir) : "";
+    let inPackage = false;
+    for (let d = parent; d && !inPackage; d = d.includes("/") ? posix.dirname(d) : "") inPackage = pyPkgDirs.has(d);
+    if (!inPackage) pyRootSet.add(parent);
   }
-  workspacePackages.sort((a, b) => b.name.length - a.name.length);
 
   // C/C++ include roots: dirs literally named include/inc, plus the repo root, so
   // `#include "a/b.h"` resolves whether written relative to the file or to a root.
@@ -564,8 +717,9 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     goModules,
     rustCrates,
     javaRoots: [...javaRoots].sort(byLen),
-    pyRoots: [...pyRoots],
+    pyRoots: [...pyRootSet].sort(byLen),
     workspacePackages,
+    packageScopes,
     cIncludeRoots: [...cIncludeRoots].sort(byLen),
     rubyLibRoots: [...rubyLibRoots].sort(byLen),
     phpPsr4,
@@ -588,8 +742,12 @@ export function resolveDocLink(fromRel: string, spec: string, ctx: ResolveContex
   let target = spec.split("#")[0]!.split("?")[0]!;
   if (!target) return { kind: "external" }; // pure in-page anchor
   if (target.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(target)) return { kind: "external" };
-  const base = fromRel.includes("/") ? posix.dirname(fromRel) : "";
-  const p = norm(posix.join(base, target));
+  // A leading "/" is repo-root-relative — how GitHub/GitLab render
+  // `[bench](/BENCHMARKS.md)` — not relative to the linking file's dir.
+  const rooted = target.startsWith("/");
+  const base = rooted || !fromRel.includes("/") ? "" : posix.dirname(fromRel);
+  let p = norm(posix.join(base, rooted ? target.slice(1) : target));
+  if (p === ".") p = ""; // the repo root itself (`/`, or `./` from a root doc)
   if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
   const hit = firstExisting(ctx, [
     p, p + ".md", p + ".mdx",
@@ -599,11 +757,11 @@ export function resolveDocLink(fromRel: string, spec: string, ctx: ResolveContex
   if (hit) return { kind: "resolved", target: hit };
   // A link to a real directory (even one without a README/index) is valid — it's
   // just not a file-node edge. Don't cry "broken link".
-  if (ctx.dirSet.has(p)) return { kind: "external" };
+  if (!p || ctx.dirSet.has(p)) return { kind: "external" };
   return { kind: "dangling", reason: "missing-target" };
 }
 
-function resolveJs(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
+function resolveJs(fromRel: string, rawSpec: string, ctx: ResolveContext): Resolution {
   const probe = (p: string): string | undefined =>
     firstExisting(ctx, [...JS_EXT_PROBES.map((e) => p + e), ...JS_INDEX.map((i) => posix.join(p, i))]);
   // TS/NodeNext style writes `import "./x.js"` for a source file `x.ts` — so if a
@@ -614,6 +772,23 @@ function resolveJs(fromRel: string, spec: string, ctx: ResolveContext): Resoluti
     const noJs = p.replace(/\.(js|jsx|mjs|cjs)$/, "");
     return noJs !== p ? probe(noJs) : undefined;
   };
+  // Probe a package-dir-relative entry-point path, then dist→src remaps of it:
+  // exports/imports maps usually point at compiled output (`./dist/esm/index.js`)
+  // while only the source tree is committed — peel build dirs and retry under `src/`.
+  const probeEntry = (pkgDir: string, entry: string): string | undefined => {
+    for (const cand of [entry, ...distToSrcCandidates(entry)]) {
+      const hit = tryResolve(norm(posix.join(pkgDir, cand)));
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+
+  // A bundler resource query (Vite `?worker`/`?inline`/`?url`/`?raw`, webpack
+  // `?raw`) picks HOW a file loads, not WHICH file: probe without it. The raw
+  // specifier still names a dangling edge (graph.ts writes `ref.spec`).
+  const q = rawSpec.indexOf("?");
+  const spec = q === -1 ? rawSpec : rawSpec.slice(0, q);
+  if (!spec) return { kind: "external" };
 
   if (spec.startsWith(".")) {
     const base = fromRel.includes("/") ? posix.dirname(fromRel) : "";
@@ -625,8 +800,10 @@ function resolveJs(fromRel: string, spec: string, ctx: ResolveContext): Resoluti
 
   // tsconfig path aliases (e.g. "@/x" -> "src/x"), nearest enclosing config first.
   let aliasFallback: Resolution | undefined;
+  let bareBase: string | undefined; // baseUrl of the nearest in-scope config declaring one
   for (const cfg of ctx.tsConfigs) {
     if (cfg.dir && fromRel !== cfg.dir && !fromRel.startsWith(cfg.dir + "/")) continue; // out of scope
+    if (bareBase === undefined && cfg.baseUrlSet) bareBase = cfg.baseUrl;
     let matched = false;
     for (const tp of cfg.paths) {
       if (!(tp.star ? spec.startsWith(tp.prefix) : spec === tp.prefix)) continue;
@@ -652,42 +829,44 @@ function resolveJs(fromRel: string, spec: string, ctx: ResolveContext): Resoluti
     if (matched) break; // the nearest matching config wins; stop scanning broader ones
   }
 
+  // baseUrl: tsc resolves any bare name against it after `paths` — even after a
+  // pattern matched and missed. Only a hit counts: third-party names come
+  // through here too, and a miss must stay external, never dangling. A rooted
+  // "/x" is not a bare name (tsc never applies baseUrl to it).
+  if (bareBase !== undefined && !spec.startsWith("/")) {
+    const hit = tryResolve(norm(posix.join(bareBase, spec)));
+    if (hit) return { kind: "resolved", target: hit };
+  }
+
+  // package.json `imports` (`#internal/x`): matched in the nearest package.json
+  // only — Node never consults a further-up one — with the same target
+  // flattening and dist→src probing as `exports`. A bare-package target, or one
+  // resolving nowhere, stays external: a '#' name is never a workspace package.
+  if (spec.startsWith("#")) {
+    const scope = ctx.packageScopes.find((s) => !s.dir || fromRel.startsWith(s.dir + "/"));
+    const targets = scope ? matchEntryTargets(scope.importEntries, spec) : undefined;
+    for (const t of targets ?? []) {
+      const hit = scope && t.startsWith("./") ? probeEntry(scope.dir, t) : undefined;
+      if (hit) return { kind: "resolved", target: hit };
+    }
+    return aliasFallback ?? { kind: "external" };
+  }
+
   // Monorepo workspace package: resolve `@scope/pkg`(`/subpath`) to in-repo source.
   for (const pkg of ctx.workspacePackages) {
     if (spec !== pkg.name && !spec.startsWith(pkg.name + "/")) continue;
     const sub = spec.slice(pkg.name.length).replace(/^\//, "");
-    // Probe a pkg-relative entry-point path, then dist→src remaps of it: exports
-    // maps usually point at compiled output (`./dist/esm/index.js`) while only
-    // the source tree is committed — peel build dirs and retry under `src/`.
-    const probeEntry = (entry: string): string | undefined => {
-      for (const cand of [entry, ...distToSrcCandidates(entry)]) {
-        const hit = tryResolve(norm(posix.join(pkg.dir, cand)));
-        if (hit) return hit;
-      }
-      return undefined;
-    };
     // 1) The declared `exports` map — first matching key wins (Node precedence:
     //    exact before wildcard, longest first — already sorted at parse time).
-    const subKey = sub ? "./" + sub : ".";
-    for (const entry of pkg.exportEntries) {
-      let fill: string | undefined;
-      if (entry.star) {
-        const starAt = entry.key.indexOf("*");
-        const pre = entry.key.slice(0, starAt);
-        const post = entry.key.slice(starAt + 1);
-        if (!subKey.startsWith(pre) || !subKey.endsWith(post) || subKey.length < pre.length + post.length) continue;
-        fill = subKey.slice(pre.length, subKey.length - post.length);
-      } else if (entry.key !== subKey) continue;
-      for (const t of entry.targets) {
-        const hit = probeEntry(fill === undefined ? t : t.replace(/\*/g, fill));
-        if (hit) return { kind: "resolved", target: hit };
-      }
-      break; // the matching key resolved nowhere — fall through to the heuristics
+    //    A matching key that resolves nowhere falls through to the heuristics.
+    for (const t of matchEntryTargets(pkg.exportEntries, sub ? "./" + sub : ".") ?? []) {
+      const hit = probeEntry(pkg.dir, t);
+      if (hit) return { kind: "resolved", target: hit };
     }
     // 2) Declared main-ish fields for the bare specifier.
     if (!sub) {
       for (const m of pkg.mainCandidates) {
-        const hit = probeEntry(m);
+        const hit = probeEntry(pkg.dir, m);
         if (hit) return { kind: "resolved", target: hit };
       }
     }
@@ -727,9 +906,17 @@ function resolvePython(fromRel: string, spec: string, ctx: ResolveContext): Reso
     return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
   }
 
-  // Absolute import: only an edge if it resolves inside the repo (same-package);
-  // otherwise it's a third-party/stdlib import — external, not dangling.
+  // Absolute import: only an edge if it resolves inside the repo; otherwise it
+  // is a third-party/stdlib import — external, not dangling. Roots enclosing the
+  // importer go first, nearest first, so in a multi-project repo a file's own
+  // project wins a top-level name two projects share; then every other root,
+  // shortest first (pyRoots' order).
+  const enclosing: string[] = [];
+  const others: string[] = [];
   for (const root of ctx.pyRoots) {
+    (!root || fromRel.startsWith(root + "/") ? enclosing : others).push(root);
+  }
+  for (const root of [...enclosing.reverse(), ...others]) {
     const hit = probeModule(root, spec);
     if (hit) return { kind: "resolved", target: hit };
   }
@@ -739,13 +926,15 @@ function resolvePython(fromRel: string, spec: string, ctx: ResolveContext): Reso
 function resolveGo(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
   if (!ctx.goModules.length) return { kind: "external" };
   // Go imports a package (directory); resolve to the lexicographically-first
-  // .go file in that dir as the representative node.
+  // NON-test .go file in that dir as the representative node. A `_test.go` file
+  // is not part of the package an importer links against — picking one (it
+  // only has to sort first: `api_test.go` < `handler.go`) made production code
+  // look like it depends on a test. A test-only dir falls back to its first file.
   const probePkg = (dir: string): Resolution => {
     const d = norm(dir).replace(/^\.$/, "");
     const inDir = filesInDir(ctx, d, ".go");
-    return inDir.length
-      ? { kind: "resolved", target: inDir[0]! }
-      : { kind: "dangling", reason: "missing-package" };
+    const rep = inDir.find((f) => !f.endsWith("_test.go")) ?? inDir[0];
+    return rep ? { kind: "resolved", target: rep } : { kind: "dangling", reason: "missing-package" };
   };
   // The importing file's own module (nearest enclosing; goModules is deepest-first).
   const home = ctx.goModules.find((g) => !g.dir || fromRel === g.dir || fromRel.startsWith(g.dir + "/"));
@@ -949,13 +1138,15 @@ export function resolveImport(
   spec: string,
   ctx: ResolveContext,
 ): Resolution {
-  // Asset imports (`import logo from './x.svg'`) target files walk() skips on
-  // purpose — a bundler dependency, not a broken code edge.
-  const dot = spec.lastIndexOf(".");
-  if (dot !== -1 && ASSET_EXT.has(spec.slice(dot).toLowerCase().replace(/[?#].*$/, ""))) {
-    return { kind: "external" };
-  }
   if (JS_TS.has(ext) || SFC_HTML.has(ext)) {
+    // Asset imports (`import logo from './x.svg'`) target files walk() skips on
+    // purpose — a bundler dependency, not a broken code edge. JS-family only:
+    // elsewhere the text after the last dot is a name, not an extension —
+    // Python `from .map import f`, Java `import com.acme.Map`, C# `using X.Svg`.
+    const dot = spec.lastIndexOf(".");
+    if (dot !== -1 && ASSET_EXT.has(spec.slice(dot).toLowerCase().replace(/[?#].*$/, ""))) {
+      return { kind: "external" };
+    }
     const dir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
     const key = dir + "\0" + spec;
     const memo = (ctx.jsMemo ??= new Map());
@@ -965,7 +1156,17 @@ export function resolveImport(
     // let one consumer's edit reach every later import of the same spec.
     return { ...r };
   }
-  if (PY.has(ext)) return resolvePython(fromRel, spec, ctx);
+  if (PY.has(ext)) {
+    // Memoized like JS (a package's modules repeat the same imports), which
+    // also keeps a big repo's absolute stdlib imports from re-probing every
+    // root per file.
+    const dir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
+    const key = dir + "\0" + spec;
+    const memo = (ctx.pyMemo ??= new Map());
+    let r = memo.get(key);
+    if (!r) memo.set(key, (r = resolvePython(fromRel, spec, ctx)));
+    return { ...r };
+  }
   if (ext === ".go") return resolveGo(fromRel, spec, ctx);
   if (ext === ".rs") return resolveRust(fromRel, spec, ctx);
   if (ext === ".java") return resolveJava(spec, ctx);
