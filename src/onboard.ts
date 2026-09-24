@@ -40,6 +40,9 @@ export interface OnboardBrief {
 
 const README_NAMES = ["README.md", "README.markdown", "README.rst", "README.txt", "README"];
 
+// Fewest commits the "Where work concentrates" section ranks from.
+const MIN_HOTSPOT_COMMITS = 10;
+
 /**
  * The repository's own one-line self-description, when it has one.
  *
@@ -114,13 +117,18 @@ export function onboardBrief(scan: RepoScan, graph: Graph, opts: OnboardOptions 
 
   // Where work concentrates. Git-only, and silent when there is no history —
   // an empty section would read as "nothing is hot", which is not what an
-  // unmeasurable repository means.
-  const { churn, ok: churnOk } = gitChurn(scan.root);
-  if (churnOk && churn.size) {
-    const hotspots = rankHotspots(scan, churn, 8);
+  // unmeasurable repository means — or too little of it to rank: a handful of
+  // commits (a young repository, a CI clone of depth 2) says what changed
+  // lately, not where work concentrates.
+  const history = gitChurn(scan.root);
+  if (history.ok && history.commits >= MIN_HOTSPOT_COMMITS) {
+    const hotspots = rankHotspots(scan, history.churn, 8);
     if (hotspots.length) {
-      lines.push("## Where work concentrates", "", "Files ranked by commits × size — where changes and defects cluster.", "");
-      for (const spot of hotspots) lines.push(`- \`${spot.rel}\` — ${spot.commits} commits, ${spot.lines} lines`);
+      const shallow = history.shallow ? ` Shallow clone: only ${history.commits} commits of history are visible.` : "";
+      lines.push("## Where work concentrates", "", `Files ranked by commits × size — where changes and defects cluster.${shallow}`, "");
+      for (const spot of hotspots) {
+        lines.push(`- \`${spot.rel}\` — ${spot.commits} commits, ${spot.lines} lines${spot.test ? " (test)" : ""}`);
+      }
       lines.push("");
     }
   }

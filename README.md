@@ -376,6 +376,7 @@ codeindex implementations Runnable --repo .   # who implements it, transitively
 codeindex callgraph buildGraph --repo . --depth 2
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
+codeindex hotspots --repo . --since "6 months ago"   # where work concentrates
 ```
 
 ## Values with no single source of truth
@@ -425,6 +426,51 @@ An arrow function returning a value (`export const getPath = () => "/a/b"`) is
 a *consumer*, not a source of truth, and is reported as a call site. A lookup
 table (`export const ROUTES = { … }`) genuinely is one, and is reported as a
 holder.
+
+## What git history says
+
+Four commands read the commit history rather than the code: `churn` (commits
+per file), `hotspots` (churn × size: where work and defects concentrate),
+`risk` (churn × complexity) and `coupling` (files that change together).
+
+```sh
+codeindex hotspots --repo . --since "6 months ago" --limit 10
+codeindex coupling --repo . --hidden        # co-change that no import explains
+codeindex churn    --repo packages/api      # one package of a monorepo
+```
+
+- **Paths are relative to `--repo`**, which may be any directory inside the git
+  repository: point it at one package of a monorepo and history is limited to
+  that package, keyed the way its index is.
+- **`--since` takes a ref or a date**: a tag, branch or sha (commits after it),
+  or `2024-01-01` / `"6 months ago"`. Anything else is an error (exit 2), never
+  an empty window that reads as "nothing changed".
+- **Every answer says what it could read.** Outside a repository, or before the
+  first commit, `ok`/`churnOk` is `false` and `error` says why. A **shallow
+  clone** answers with `shallow: true`: counts are lower bounds, and the clone's
+  boundary commit is left out, because git compares it with an empty tree and
+  it would count as a change to every file (a depth-1 CI checkout therefore has
+  no visible history at all).
+- **`hotspots` ranks only files that changed** in the window and labels test
+  files `test: true`.
+- **`coupling` works over the index**: pairs are limited to indexed files, so
+  deleted paths drop out and `--scope`/`--include`/`--exclude` apply. Each pair
+  says whether a graph edge (import, call, use, inheritance, doc link) already
+  `linked` the two files; `--hidden` keeps only the pairs with no such edge.
+  Pairs whose names already declare them (same directory, same name up to the
+  first dot: `x.po`/`x.mo`, `x.js`/`x.min.js`, `x.ts`/`x.test.ts`) are left
+  out. Pairs are ranked by `confidence`, the lower bound of the 95% Wilson
+  interval for `strength`: 12 shared commits out of 13 rank above a thinly
+  evidenced 3 out of 3. `--min-together` (default 3) and `--max-commit-files`
+  (default 30) tune the mining. The second one skips mass-refactor commits by
+  their whole size, including files outside `--repo`.
+- **Renames are not followed.** Rename detection is the expensive part of
+  `git log`, and on a blobless partial clone it downloads blobs. A file's
+  history before a rename stays under its old path.
+- The output does not depend on the user's git config (colour, diff prefixes,
+  signature display, external diff drivers). One `git log` pass is shared by
+  all four commands and reused while HEAD stays the same, so an MCP session
+  asking for `onboard`, `hotspots` and `risk` reads the history once.
 
 ## Docker
 

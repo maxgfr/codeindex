@@ -19,7 +19,7 @@ import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
 import { implementationsOf } from "./relations.js";
 import { neighborhood, type Direction } from "./symbolgraph.js";
 import { detectWorkspaces } from "./workspaces.js";
-import { gitChurn } from "./git.js";
+import { gitChurn, historyStatus } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
@@ -138,7 +138,7 @@ function errMessage(e: unknown): string {
 // the repo's grammars first; defaulting to "warm" keeps a newly added scan tool
 // correct without having to be listed here.
 const SCANLESS_TOOLS = new Set([
-  "workspaces", "churn", "coupling", "grep",
+  "workspaces", "churn", "grep",
   "write_memory", "read_memory", "list_memories", "delete_memory",
   "embed_status",
   // scan_summary counts and classifies by path only — it never parses, so the
@@ -229,10 +229,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     return JSON.stringify({ packages: info.packages, cycle: info.cycle ?? null, topoOrder: info.topoOrder }, null, 2);
   }
   if (name === "churn") {
-    const { churn, ok } = gitChurn(repo, { since: str(args.since) });
+    const res = gitChurn(repo, { since: str(args.since) });
     const sorted: Record<string, number> = {};
-    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
-    return JSON.stringify({ ok, churn: sorted }, null, 2);
+    for (const k of [...res.churn.keys()].sort()) sorted[k] = res.churn.get(k)!;
+    return JSON.stringify({ ok: res.ok, ...historyStatus(res), churn: sorted }, null, 2);
   }
   if (name === "symbols_overview") {
     const file = str(args.file);
@@ -335,8 +335,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const scan = readScan();
     if (args.risk === true) {
       // `since` was accepted by the CLI's `risk` but silently dropped here.
-      const { churn, ok } = gitChurn(repo, { since: str(args.since) });
-      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, positiveNum(args.top)) }, null, 2);
+      const res = gitChurn(repo, { since: str(args.since) });
+      const risks = riskHotspots(scan, res.churn, positiveNum(args.top));
+      return JSON.stringify({ churnOk: res.ok, ...historyStatus(res), risks }, null, 2);
     }
     return JSON.stringify(symbolComplexity(scan, str(args.file), positiveNum(args.top)), null, 2);
   }
@@ -365,12 +366,21 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   }
   if (name === "hotspots") {
     const scan = readScan();
-    const { churn, ok } = gitChurn(repo, { since: str(args.since) });
-    return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2);
+    const res = gitChurn(repo, { since: str(args.since) });
+    const hotspots = rankHotspots(scan, res.churn, positiveNum(args.limit));
+    return JSON.stringify({ churnOk: res.ok, ...historyStatus(res), hotspots }, null, 2);
   }
   if (name === "coupling") {
-    const { ok, couplings } = changeCoupling(repo, { since: str(args.since) });
-    return JSON.stringify({ ok, couplings }, null, 2);
+    const { graph } = readArtifacts();
+    const res = changeCoupling(repo, {
+      since: str(args.since),
+      graph,
+      hidden: args.hidden === true,
+      minTogether: positiveNum(args.minTogether),
+      maxCommitFiles: positiveNum(args.maxCommitFiles),
+      maxPairs: positiveNum(args.limit),
+    });
+    return JSON.stringify({ ok: res.ok, ...historyStatus(res), couplings: res.couplings }, null, 2);
   }
   if (name === "grep") {
     const pattern = str(args.pattern);

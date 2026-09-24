@@ -7,6 +7,10 @@
 import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protocol.js";
 
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
+const sinceProp = {
+  type: "string",
+  description: 'Only count commits after this ref (tag, branch, sha) or since this date ("2024-01-01", "6 months ago"); anything else is an error',
+};
 const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
@@ -65,10 +69,11 @@ export const TOOLS = [
   },
   {
     name: "churn",
-    description: "Per-file git commit counts (whole history, or since a ref) — the churn half of hotspot analysis.",
+    description:
+      "Per-file git commit counts (whole history, or a since window) — the churn half of hotspot analysis. Paths are relative to repo; `shallow: true` means a shallow clone (counts are lower bounds), `error` says why `ok` is false.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+      properties: { ...repoProp, since: sinceProp },
       required: ["repo"],
     },
   },
@@ -162,20 +167,31 @@ export const TOOLS = [
   {
     name: "hotspots",
     description:
-      "Where does work concentrate? Files ranked by git churn × size (commits × log2 lines). High-scoring files are where changes and defects cluster.",
+      "Where does work concentrate? Files changed in the window, ranked by git churn × size (commits × log2 lines); test files carry `test: true`. High-scoring files are where changes and defects cluster.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+      properties: {
+        ...repoProp,
+        since: sinceProp,
+        limit: { type: "number", minimum: 1, description: "Max files (default 20)" },
+      },
       required: ["repo"],
     },
   },
   {
     name: "coupling",
     description:
-      "Change coupling: pairs of files that repeatedly change in the same commits — hidden dependencies no import shows. strength 1.0 = every change to one touched the other.",
+      "Change coupling: pairs of indexed files that repeatedly change in the same commits. strength 1.0 = every change to one touched the other; ranked by `confidence` (the strength a pair's history supports); `linked: false` = no graph edge joins them — a hidden dependency.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only mine commits after this ref" } },
+      properties: {
+        ...repoProp,
+        since: sinceProp,
+        hidden: { type: "boolean", description: "Only pairs no graph edge links (default false)" },
+        minTogether: { type: "number", minimum: 1, description: "Commits a pair must share (default 3)" },
+        maxCommitFiles: { type: "number", minimum: 1, description: "Skip commits touching more files, as mass refactors (default 30)" },
+        limit: { type: "number", minimum: 1, description: "Max pairs (default 100)" },
+      },
       required: ["repo"],
     },
   },
@@ -288,7 +304,7 @@ export const TOOLS = [
         ...repoProp,
         file: { type: "string" },
         risk: { type: "boolean", description: "Return complexity × git-churn risk ranking instead" },
-        since: { type: "string", description: "Only count risk churn after this ref" },
+        since: { ...sinceProp, description: "Only count risk churn after this ref (tag, branch, sha) or since this date" },
         top: { type: "number", minimum: 1, description: "Cap ranked symbols" },
       },
       required: ["repo"],
@@ -471,6 +487,9 @@ export const TOOLS = [
 // engine adding a field must not turn a strict client's success into a failure.
 const strArr = { type: "array", items: { type: "string" } };
 const anyObj = { type: "object" };
+// git-history answers (churn, hotspots, coupling): why `ok` is false, and
+// whether a shallow clone truncated the history. Present only when they apply.
+const historyProps = { error: { type: "string" }, shallow: { type: "boolean" }, note: { type: "string" } };
 
 export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   call_graph: {
@@ -543,7 +562,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   churn: {
     type: "object",
-    properties: { ok: { type: "boolean" }, churn: { type: "object", additionalProperties: { type: "integer" } } },
+    properties: { ok: { type: "boolean" }, ...historyProps, churn: { type: "object", additionalProperties: { type: "integer" } } },
     required: ["ok", "churn"],
   },
   find_references: {
@@ -596,12 +615,12 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   hotspots: {
     type: "object",
-    properties: { churnOk: { type: "boolean" }, hotspots: { type: "array", items: anyObj } },
+    properties: { churnOk: { type: "boolean" }, ...historyProps, hotspots: { type: "array", items: anyObj } },
     required: ["churnOk", "hotspots"],
   },
   coupling: {
     type: "object",
-    properties: { ok: { type: "boolean" }, couplings: { type: "array", items: anyObj } },
+    properties: { ok: { type: "boolean" }, ...historyProps, couplings: { type: "array", items: anyObj } },
     required: ["ok", "couplings"],
   },
   duplicated_literals: {
