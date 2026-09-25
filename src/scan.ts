@@ -132,7 +132,7 @@ export function buildCodeRecord(
     record.calls = code.calls;
     record.importedNames = code.importedNames;
     record.truncated = code.truncated;
-    record.minified = code.minified;
+    record.generated = code.generated;
     record.relations = code.relations;
     record.terms = code.terms;
     record.literals = code.literals;

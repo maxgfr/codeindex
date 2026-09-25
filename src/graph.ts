@@ -250,7 +250,7 @@ export function buildGraph(
       lines: f.lines,
       degIn: degIn.get(f.rel) ?? 0,
       degOut: degOut.get(f.rel) ?? 0,
-      ...(f.minified ? { minified: true as const } : {}),
+      ...(f.generated ? { generated: f.generated } : {}),
     }))
     .sort((a, b) => byStr(a.rel, b.rel));
 

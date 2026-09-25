@@ -5,7 +5,7 @@ import { extractAst } from "../ast/extract.js";
 import { extractReexports, extToLang, MAX_REEXPORTS } from "../lang/common.js";
 import { extractImports, extractPackage } from "./imports.js";
 import { sfcParts } from "./sfc.js";
-import { isMinified } from "./minified.js";
+import { generatedKind, type GeneratedKind } from "./generated.js";
 import { fileSummary, stripCommentMarkers } from "./doc-text.js";
 import { subtokens } from "../util.js";
 
@@ -20,9 +20,9 @@ export interface CodeInfo {
   summary?: string;
   // A cap truncated `symbols` — propagated onto the FileRecord.
   truncated?: true;
-  // Minified JS: only the summary and imports were extracted (see
-  // extract/minified.ts) — propagated onto the FileRecord.
-  minified?: true;
+  // Build output (minified code, a bundle): only the summary and imports were
+  // extracted (see extract/generated.ts) — propagated onto the FileRecord.
+  generated?: GeneratedKind;
   refs: RawRef[]; // import refs (raw specifiers, unresolved)
   pkg?: string; // Java: the file's own `package x.y.z;` — used to derive source roots
   idents?: string[]; // distinctive identifiers referenced (AST path) — feeds `use` edges
@@ -249,11 +249,13 @@ function mergeCalls(
 // BOTH extraction tiers — AST and regex — so recall-oriented consumers can raise
 // it. Dedup/sort semantics are unchanged; absent, output is byte-identical.
 export function extractCode(rel: string, ext: string, content: string, opts: { maxCallsPerFile?: number } = {}): CodeInfo {
-  // A minified bundle keeps its place in the index, its summary and its imports
-  // (real edges, whoever wrote them) — and nothing else: its symbols and call
-  // sites are one-letter noise (see extract/minified.ts). The flag says so.
-  if (isMinified(ext, content)) {
-    return { symbols: [], minified: true, summary: fileSummary(ext, content), refs: extractImports(ext, content) };
+  // Build output keeps its place in the index, its summary and its imports
+  // (real edges, whoever wrote them) — and nothing else: a minified file's
+  // symbols and call sites are one-letter noise, a bundle's are copies of its
+  // sources' (see extract/generated.ts). The flag says which.
+  const generated = generatedKind(ext, content);
+  if (generated) {
+    return { symbols: [], generated, summary: fileSummary(ext, content), refs: extractImports(ext, content) };
   }
   // A single-file component (.vue/.svelte/.astro) is extracted as its script:
   // the JS/TS tier runs over a copy with the markup blanked, lines unchanged

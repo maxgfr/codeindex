@@ -217,11 +217,12 @@ export interface FileRecord {
   // A per-file extraction cap truncated this record's symbols. Same doctrine as
   // the walk's `capped`: a bounded result says so instead of looking complete.
   truncated?: true;
-  // Minified JavaScript (detected from the content, whatever the file is
-  // named): the record keeps its summary and imports, but no symbols, calls or
-  // vocabulary — they would be one-letter noise. Set so an empty record is
-  // never mistaken for an empty file.
-  minified?: true;
+  // Build output detected from the content, whatever the file is named:
+  // "minified" JavaScript or a "bundle" (esbuild, webpack). The record keeps its
+  // summary and imports, but no symbols, calls or vocabulary — one-letter noise
+  // for the first, copies of the sources' definitions for the second. Set so an
+  // empty record is never mistaken for an empty file.
+  generated?: "minified" | "bundle";
   // Inheritance stated by declarations in this file (cap 256, deduped, sorted).
   // Resolved into `extends`/`implements` edges by the graph builder.
   relations?: RawRelation[];
@@ -256,8 +257,8 @@ export interface FileNode {
   pagerank?: number;
   // Present (true) only when the path classifies as a test file (tests-map.ts).
   testFile?: true;
-  // Present (true) only for minified JS, indexed without symbols (FileRecord.minified).
-  minified?: true;
+  // Present only for build output indexed without symbols (FileRecord.generated).
+  generated?: "minified" | "bundle";
 }
 
 export interface ModuleNode {
