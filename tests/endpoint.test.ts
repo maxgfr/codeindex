@@ -1,5 +1,8 @@
 import { execFile, execFileSync } from "node:child_process";
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import http from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -11,6 +14,7 @@ import {
   embedEndpointUrl,
   embedViaEndpoint,
   encodeQueryViaEndpoint,
+  endpointModelId,
   healthzUrl,
   probeEndpoint,
   resolveEmbedEndpoint,
@@ -35,6 +39,7 @@ interface Mock {
   url: string;
   close: () => Promise<void>;
   embedCalls: number;
+  texts: string[][]; // each POST's texts, in arrival order
 }
 
 // Spin up an in-process HTTP embedding server implementing the v2.11 protocol
@@ -43,7 +48,7 @@ interface Mock {
 async function startMock(
   override?: (req: http.IncomingMessage, res: http.ServerResponse, texts: string[]) => boolean,
 ): Promise<Mock> {
-  const mock: Mock = { url: "", close: async () => {}, embedCalls: 0 };
+  const mock: Mock = { url: "", close: async () => {}, embedCalls: 0, texts: [] };
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -56,6 +61,7 @@ async function startMock(
       req.on("end", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { texts: string[] };
         mock.embedCalls++;
+        mock.texts.push(body.texts);
         if (override && override(req, res, body.texts)) return; // test handled it
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ vectors: body.texts.map(embedText) }));
@@ -181,6 +187,67 @@ describe("endpoint tier — same quantize pipeline as the static tier", () => {
   });
 });
 
+describe("endpoint tier — reuse and parallel batches", () => {
+  it("previous donates every vector whose unit text is unchanged; only new texts are sent", async () => {
+    const m = await mock();
+    const scan = scanRepo(REPO);
+    const first = await buildEndpointIndex(scan, { url: m.url });
+    const sent = m.texts.flat().length;
+    expect(sent).toBe(new Set(first.records.map((r) => r.textHash)).size); // one POST per distinct text
+
+    const again = await buildEndpointIndex(scan, { url: m.url, previous: first });
+    expect(m.texts.flat().length).toBe(sent); // nothing re-sent
+    expect(again).toEqual(first);
+
+    // A different model id (another model behind the URL) shares nothing.
+    await buildEndpointIndex(scan, { url: m.url, previous: first, modelId: "endpoint@other" });
+    expect(m.texts.flat().length).toBe(2 * sent);
+  });
+
+  it("batches in flight at once still land in corpus order", async () => {
+    // Answer later batches FIRST: the index must not depend on arrival order.
+    let n = 0;
+    const m = await mock((_req, res, texts) => {
+      const delay = 40 - 10 * n++;
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ vectors: texts.map(embedText) }));
+      }, Math.max(delay, 0));
+      return true;
+    });
+    const scan = scanRepo(REPO);
+    const serial = await buildEndpointIndex(scan, { url: (await mock()).url, batchSize: 3, concurrency: 1 });
+    const parallel = await buildEndpointIndex(scan, { url: m.url, batchSize: 3, concurrency: 4 });
+    expect(m.embedCalls).toBeGreaterThan(3);
+    expect(parallel).toEqual(serial);
+  });
+
+  it("one failed batch fails the build, and the remaining batches are not sent", async () => {
+    const m = await mock((_req, res) => {
+      res.writeHead(500);
+      res.end();
+      return true;
+    });
+    const scan = scanRepo(REPO);
+    await expect(buildEndpointIndex(scan, { url: m.url, batchSize: 1, concurrency: 2 })).rejects.toThrow(/HTTP 500/);
+    await new Promise((r) => setTimeout(r, 50)); // let a request still in flight arrive
+    expect(scan.files.length).toBeGreaterThan(4);
+    expect(m.embedCalls).toBeLessThanOrEqual(2);
+  });
+
+  it("endpointModelId fingerprints the model behind the URL", async () => {
+    const a = await endpointModelId({ url: (await mock()).url });
+    expect(a).toMatch(/^endpoint@[0-9a-f]{16}$/);
+    expect(await endpointModelId({ url: (await mock()).url })).toBe(a);
+    const other = await mock((_req, res, texts) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ vectors: texts.map((t) => embedText(t).reverse()) }));
+      return true;
+    });
+    expect(await endpointModelId({ url: other.url })).not.toBe(a);
+  });
+});
+
 describe("probeEndpoint", () => {
   it("returns true when /healthz answers 200, false when the endpoint is down", async () => {
     const m = await mock();
@@ -242,6 +309,51 @@ describe("CLI wiring — endpoint precedence, success and degradation (exit 0)",
     const parsed = JSON.parse(stdout) as { semanticSymbol?: string }[];
     expect(parsed.length).toBeGreaterThan(0);
     expect(parsed.every((r) => r.semanticSymbol === undefined)).toBe(true); // pure lexical
+  });
+
+  it("with an index present, `search --semantic` caches endpoint vectors beside it and re-sends only new texts", async () => {
+    const repo = join(mkdtempSync(join(tmpdir(), "ci-endpoint-cache-")), "mini-repo");
+    cpSync(REPO, repo, { recursive: true });
+    try {
+      const env = { CODEINDEX_EMBED_ENDPOINT: undefined, CODEINDEX_EMBED_DIR: undefined };
+      let swapped = false; // flips the model behind the same URL
+      const m = await mock((_req, res, texts) => {
+        if (!swapped) return false;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ vectors: texts.map((t) => embedText(t).reverse()) }));
+        return true;
+      });
+      const q = ["search", "http client retry", "--repo", repo, "--semantic"];
+      // No index yet: nothing is written into the repo.
+      const bare = await run(q, { ...env, CODEINDEX_EMBED_ENDPOINT: m.url });
+      expect(bare.status).toBe(0);
+      expect(existsSync(join(repo, ".codeindex", "embed-cache"))).toBe(false);
+
+      expect((await run(["index", "--repo", repo, "--out", join(repo, ".codeindex")], env)).status).toBe(0);
+      const before = m.texts.length;
+      const first = await run(q, { ...env, CODEINDEX_EMBED_ENDPOINT: m.url });
+      expect(first.status).toBe(0);
+      expect(readdirSync(join(repo, ".codeindex", "embed-cache"))).toEqual([expect.stringMatching(/^endpoint-[0-9a-f]{12}\.bin$/)]);
+      const corpus = m.texts.slice(before).flat().length;
+
+      const mark = m.texts.length;
+      const second = await run(q, { ...env, CODEINDEX_EMBED_ENDPOINT: m.url });
+      expect(second.stdout).toBe(first.stdout);
+      // the fingerprint text and the query — no corpus text at all
+      expect(m.texts.slice(mark).map((t) => t.length)).toEqual([1, 1]);
+      expect(corpus).toBeGreaterThan(2);
+      expect(m.texts.at(-1)).toEqual(["http client retry"]);
+      expect(bare.stdout).toBe(first.stdout);
+
+      // A different model behind the same URL misses the cache and re-sends
+      // the whole corpus (plus the fingerprint text and the query).
+      swapped = true;
+      const mark2 = m.texts.length;
+      expect((await run(q, { ...env, CODEINDEX_EMBED_ENDPOINT: m.url })).status).toBe(0);
+      expect(m.texts.slice(mark2).flat().length).toBe(corpus);
+    } finally {
+      rmSync(join(repo, ".."), { recursive: true, force: true });
+    }
   });
 
   it("`embed status` reports endpointReachable=false when the endpoint is down", async () => {

@@ -47,12 +47,15 @@ import {
   resolveEmbedPullUrl,
   fetchEmbedModel,
 } from "./embed/model.js";
-import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
+import { buildEmbeddingIndex, sameEmbeddings, serializeEmbeddings } from "./embed/index.js";
+import { readEmbeddingsFile, writeEmbeddingsFileAtomic } from "./embed/persist.js";
 import { explainSemantic } from "./embed/search.js";
 import {
   resolveEmbedEndpoint,
   buildEndpointIndex,
+  embedEndpointUrl,
   encodeQueryViaEndpoint,
+  endpointModelId,
   probeEndpoint,
 } from "./embed/endpoint.js";
 import { have, sh } from "./util.js";
@@ -216,6 +219,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --semantic          \`search\`: RRF-fuse an embedding tier with lexical — the
                       HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
                       local static model (lexical-only when neither is available).
+                      Reuses <index>/embeddings.bin (static) or caches endpoint
+                      vectors under <index>/embed-cache/ when an index exists
                       --exact, --rank and --explain apply to its lexical side;
                       rows only the embedding side found have empty matchedTerms
                       and a semanticSymbol + line
@@ -784,7 +789,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       let embedNote = "";
       let embedMeta: CacheMeta["embed"];
       if (model) {
-        const index = buildEmbeddingIndex(scan, model);
+        // The previous embeddings.bin donates every vector whose unit text is
+        // unchanged: an incremental index re-encodes only what changed, and
+        // the bytes are the same as a from-scratch build's.
+        const index = buildEmbeddingIndex(scan, model, { previous: readEmbeddingsFile(embedPath) });
         const bytes = serializeEmbeddings(index);
         writeFileSync(embedPath, bytes);
         embedMeta = { embedVersion: EMBED_VERSION, modelId: model.modelId, sha1: sha1(bytes) };
@@ -900,7 +908,19 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         // (a stderr note, exit 0) — NOT to the static model.
         let fused: ReturnType<typeof explainSemantic> | undefined;
         try {
-          const index = await buildEndpointIndex(scan);
+          // Endpoint vectors are not byte-deterministic, so they never go
+          // into embeddings.bin. They are still worth keeping between runs —
+          // otherwise every search re-POSTs the whole corpus — so, when this
+          // repo has an index (`index` wrote cache.json), they are cached
+          // beside it under the endpoint's URL and model fingerprint, and a
+          // search sends only the units whose text is new.
+          const cacheFile = existsSync(join(flags.repo, indexDir, "cache.json"))
+            ? join(flags.repo, indexDir, "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`)
+            : undefined;
+          const modelId = cacheFile ? await endpointModelId() : undefined;
+          const previous = cacheFile ? readEmbeddingsFile(cacheFile) : undefined;
+          const index = await buildEndpointIndex(scan, { previous, modelId });
+          if (cacheFile && !sameEmbeddings(previous, index)) writeEmbeddingsFileAtomic(cacheFile, serializeEmbeddings(index));
           const queryVec = await encodeQueryViaEndpoint(flags.positional);
           fused = explainSemantic(scan, flags.positional, index, { ...searchOpts, queryVec });
         } catch (e) {
@@ -923,7 +943,12 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           );
           lexical();
         } else {
-          const index = buildEmbeddingIndex(scan, model);
+          // Reuse the embeddings.bin `index` wrote: a vector is reused only
+          // for the same unit text under the same model and EMBED_VERSION, so
+          // after an edit only the changed units are encoded, and a stale or
+          // foreign file costs a re-encode, never a wrong ranking.
+          const previous = readEmbeddingsFile(join(flags.repo, indexDir, "embeddings.bin"));
+          const index = buildEmbeddingIndex(scan, model, { previous });
           answer(explainSemantic(scan, flags.positional, index, { ...searchOpts, model }));
         }
       }
@@ -997,7 +1022,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       const model = loadEmbedModel(modelDir)!;
       mkdirSync(flags.out, { recursive: true });
       const scan = await readScan();
-      const index = buildEmbeddingIndex(scan, model);
+      const index = buildEmbeddingIndex(scan, model, { previous: readEmbeddingsFile(join(flags.out, "embeddings.bin")) });
       writeFileSync(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
     } else if (sub === "pull") {

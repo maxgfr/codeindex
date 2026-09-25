@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -21,7 +21,8 @@ import {
 } from "../src/embed/model.js";
 import type { EmbedPullTarget } from "../src/engine.js";
 import { basicTokenize, encode, intDot, roundHalfToEven, tokenize, wordpiece } from "../src/embed/encode.js";
-import { buildEmbeddingIndex, deserializeEmbeddings, embeddingUnits, serializeEmbeddings } from "../src/embed/index.js";
+import { buildEmbeddingIndex, deserializeEmbeddings, embeddingUnits, serializeEmbeddings, type EmbeddingIndex } from "../src/embed/index.js";
+import { readEmbeddingsFile } from "../src/embed/persist.js";
 import { explainSemantic, searchSemantic } from "../src/embed/search.js";
 import { explainQuery, searchIndex } from "../src/bm25.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
@@ -318,6 +319,77 @@ describe("embeddings index — serialize / determinism", () => {
   });
 });
 
+// embeddings.bin used to be written and never read: every `search --semantic`
+// re-encoded the whole corpus (9.4 s on microsoft/TypeScript). A previous index
+// now donates the vector of every unchanged unit — and only under the same
+// EMBED_VERSION and model, since that is what makes a vector reusable.
+describe("reusing a previous embedding index", () => {
+  const scan = scanOf([
+    file("src/auth/service.ts", { symbols: ["AuthService", "verifyAuthToken"] }),
+    file("src/http/client.ts", { symbols: ["HttpClient", "retryRequest"] }),
+  ]);
+  // A previous index whose every vector is a marker no encode would produce,
+  // so a reused vector is visible in the result.
+  const marked = (idx: EmbeddingIndex, patch: Partial<EmbeddingIndex> = {}): EmbeddingIndex => ({
+    ...idx,
+    ...patch,
+    records: idx.records.map((r) => ({ ...r, vec: new Int8Array(idx.dim).fill(7) })),
+  });
+
+  it("a rebuild from a previous index is byte-identical to a fresh one", () => {
+    const fresh = buildEmbeddingIndex(scan, model());
+    const bin = serializeEmbeddings(fresh);
+    const reused = buildEmbeddingIndex(scan, model(), { previous: deserializeEmbeddings(bin) });
+    expect(Buffer.from(serializeEmbeddings(reused)).equals(Buffer.from(bin))).toBe(true);
+    expect(fresh.records.every((r) => /^[0-9a-f]{16}$/.test(r.textHash ?? ""))).toBe(true);
+  });
+
+  it("reuses by unit text: an unchanged unit takes the previous vector, a changed one is encoded", () => {
+    const previous = marked(buildEmbeddingIndex(scan, model()));
+    const edited = scanOf([scan.files[0]!, file("src/http/client.ts", { symbols: ["HttpClient", "retryRequest"], summary: "now documented" })]);
+    const out = buildEmbeddingIndex(edited, model(), { previous });
+    const sevens = out.records.map((r) => r.vec.every((v) => v === 7));
+    expect(out.records.map((r) => r.file)).toEqual(["src/auth/service.ts", "src/auth/service.ts", "src/http/client.ts", "src/http/client.ts"]);
+    expect(sevens).toEqual([true, true, false, false]);
+  });
+
+  it("nothing is reused across a model, dim or EMBED_VERSION change", () => {
+    const base = buildEmbeddingIndex(scan, model());
+    for (const patch of [{ modelId: "another-model" }, { embedVersion: EMBED_VERSION - 1 }, { dim: base.dim + 1 }]) {
+      const out = buildEmbeddingIndex(scan, model(), { previous: marked(base, patch) });
+      expect(out).toEqual(base);
+    }
+  });
+
+  it("deserialize rejects a malformed header; readEmbeddingsFile turns every failure into undefined", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-embed-read-"));
+    try {
+      const good = serializeEmbeddings(buildEmbeddingIndex(scan, model()));
+      const header = (json: string): Uint8Array => {
+        const h = new TextEncoder().encode(json);
+        const out = new Uint8Array(8 + h.length);
+        out.set([0x43, 0x49, 0x45, 0x31]);
+        new DataView(out.buffer).setUint32(4, h.length, true);
+        out.set(h, 8);
+        return out;
+      };
+      expect(() => deserializeEmbeddings(header('{"embedVersion":2}'))).toThrow(/malformed header/);
+      expect(() => deserializeEmbeddings(header("{not json"))).toThrow();
+      expect(() => deserializeEmbeddings(good.subarray(0, good.length - 1))).toThrow(/truncated body/);
+      const cases: [string, Uint8Array | undefined][] = [
+        ["missing.bin", undefined],
+        ["garbage.bin", new TextEncoder().encode("not an index")],
+        ["truncated.bin", good.subarray(0, good.length - 1)],
+        ["good.bin", good],
+      ];
+      for (const [name, bytes] of cases) if (bytes) writeFileSync(join(dir, name), bytes);
+      expect(cases.map(([name]) => readEmbeddingsFile(join(dir, name)) !== undefined)).toEqual([false, false, false, true]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("searchSemantic — RRF fusion + degradation", () => {
   const scan = scanOf([
     file("src/auth/service.ts", { symbols: ["AuthService", "verifyAuthToken"] }),
@@ -480,6 +552,48 @@ describe("CLI embed + search --semantic", () => {
     runWithModel(["index", "--repo", REPO, "--out", out]);
     expect(existsSync(join(out, "graph.json"))).toBe(true);
     expect(existsSync(join(out, "embeddings.bin"))).toBe(true);
+  });
+
+  it("`search --semantic` reads the embeddings.bin `index` wrote, and ignores one from another model", () => {
+    const repo = join(mkdtempSync(join(tmpdir(), "ci-embed-reuse-")), "mini-repo");
+    tmpDirs.push(join(repo, ".."));
+    cpSync(REPO, repo, { recursive: true });
+    const q = ["search", "http client retry", "--repo", repo, "--semantic"];
+    const fresh = runWithModel(q).stdout;
+    expect(runWithModel(["index", "--repo", repo, "--out", join(repo, ".codeindex")]).status).toBe(0);
+    const bin = join(repo, ".codeindex", "embeddings.bin");
+    expect(runWithModel(q).stdout).toBe(fresh);
+
+    // Zero every stored vector: if search reads the file, no file keeps a
+    // positive similarity and the embedding side contributes nothing.
+    const onDisk = deserializeEmbeddings(readFileSync(bin));
+    const zeroed = { ...onDisk, records: onDisk.records.map((r) => ({ ...r, vec: new Int8Array(onDisk.dim) })) };
+    writeFileSync(bin, serializeEmbeddings(zeroed));
+    const fromZeroed = JSON.parse(runWithModel(q).stdout) as { semanticSymbol?: string }[];
+    expect(fromZeroed.every((r) => r.semanticSymbol === undefined)).toBe(true);
+
+    // The same bytes under another model id are not trusted.
+    writeFileSync(bin, serializeEmbeddings({ ...zeroed, modelId: "another-model" }));
+    expect(runWithModel(q).stdout).toBe(fresh);
+    // Nor is a corrupt file.
+    writeFileSync(bin, "garbage");
+    expect(runWithModel(q).stdout).toBe(fresh);
+  });
+
+  it("an incremental `index` reuses the previous embeddings.bin and writes the bytes a fresh build would", () => {
+    const repo = join(mkdtempSync(join(tmpdir(), "ci-embed-incr-")), "mini-repo");
+    tmpDirs.push(join(repo, ".."));
+    cpSync(REPO, repo, { recursive: true });
+    const out = join(repo, ".codeindex");
+    runWithModel(["index", "--repo", repo, "--out", out]);
+    writeFileSync(join(repo, "src", "extra.ts"), "export function chargePayment(): void {}\n");
+    runWithModel(["index", "--repo", repo, "--out", out]);
+    const fresh = mkdtempSync(join(tmpdir(), "ci-embed-incr-fresh-"));
+    tmpDirs.push(fresh);
+    runWithModel(["embed", "build", "--repo", repo, "--out", fresh]);
+    const incremental = readFileSync(join(out, "embeddings.bin"));
+    expect(incremental.equals(readFileSync(join(fresh, "embeddings.bin")))).toBe(true);
+    expect(deserializeEmbeddings(incremental).records.some((r) => r.symbol === "chargePayment")).toBe(true);
   });
 
   it("`search --semantic` with a model returns fused JSON, byte-identical across runs", () => {

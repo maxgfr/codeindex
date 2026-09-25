@@ -170,7 +170,7 @@ export {
 } from "./embed/model.js";
 export type { StaticEmbedModel, EmbedPullTarget } from "./embed/model.js";
 export { encode, quantize, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
-export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits } from "./embed/index.js";
+export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits, unitHash } from "./embed/index.js";
 export type { EmbeddingIndex, EmbeddingRecord, EmbeddingUnit } from "./embed/index.js";
 export { searchSemantic, explainSemantic } from "./embed/search.js";
 export type { SemanticSearchOptions, SemanticSearchResult, SemanticQueryExplanation, ExplainedSemanticSearch } from "./embed/search.js";
@@ -186,6 +186,7 @@ export {
   healthzUrl,
   probeEndpoint,
   encodeQueryViaEndpoint,
+  endpointModelId,
   buildEndpointIndex,
 } from "./embed/endpoint.js";
 export type { EmbedEndpointOptions } from "./embed/endpoint.js";

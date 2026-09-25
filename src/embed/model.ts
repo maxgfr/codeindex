@@ -20,8 +20,8 @@ import { join } from "node:path";
 // UNTOUCHED — embeddings are a purely additive sidecar with zero impact on the
 // graph.json / symbols.json consumers.
 //
-// 2: symbol units carry their doc comment, re-exports get no unit, and the
-// header records a corpus fingerprint (see serializeEmbeddings).
+// 2: symbol units carry their doc comment, re-exports get no unit, and each
+// header record carries its unit's text hash (see serializeEmbeddings).
 export const EMBED_VERSION = 2;
 
 // The default sub-directory a `pull` writes into and a `status` reports.

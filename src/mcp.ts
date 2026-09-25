@@ -37,6 +37,8 @@ import { explainQuery, type RankMode } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
+import { readEmbeddingsFile } from "./embed/persist.js";
+import { INDEX_DIR } from "./preload.js";
 import { explainSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
 import { IGNORE_DIRS, walk, type WalkResult } from "./walk.js";
@@ -434,7 +436,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
         // The corpus index is memoized per (endpoint, scan state) — the query
         // itself is always re-encoded fresh (it differs per call).
         try {
-          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, () => buildEndpointIndex(scan));
+          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, (previous) =>
+            buildEndpointIndex(scan, { previous }),
+          );
           const queryVec = await encodeQueryViaEndpoint(query);
           return answer(explainSemantic(scan, query, index, { ...lexOpts, queryVec }), "endpoint");
         } catch (e) {
@@ -444,9 +448,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       const modelDir = resolveEmbedModelDir(repo);
       const { model, error: modelError } = tryLoadEmbedModel(modelDir, memoizedEmbedModel);
       if (model) {
-        const index = await memoizedEmbeddingIndex(
-          { mode: "static", identity: `${modelDir}#${model.modelId}`, scan },
-          () => buildEmbeddingIndex(scan, model),
+        // First build in this process: the embeddings.bin `index` wrote, if
+        // any, donates every vector whose unit text is unchanged.
+        const index = await memoizedEmbeddingIndex({ mode: "static", identity: `${modelDir}#${model.modelId}`, scan }, (previous) =>
+          buildEmbeddingIndex(scan, model, { previous: previous ?? readEmbeddingsFile(join(repo, INDEX_DIR, "embeddings.bin")) }),
         );
         return answer(explainSemantic(scan, query, index, { ...lexOpts, model }), "static");
       }

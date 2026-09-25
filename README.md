@@ -612,8 +612,14 @@ codeindex search "http client retry" --repo . --semantic
 ```
 
 `codeindex index` also writes `embeddings.bin` next to `graph.json` when a model
-is present. Fusion reuses the engine's `rrf` helper (k=60); `SCHEMA_VERSION` is
-untouched (a dedicated `EMBED_VERSION` keys the sidecar).
+is present, and `search --semantic` reads it back instead of re-encoding the
+corpus: a stored vector is reused only for the same unit text under the same
+model and `EMBED_VERSION`, so after an edit only the changed units are encoded,
+and a stale, foreign or corrupt file costs a re-encode, never a wrong ranking
+(microsoft/TypeScript, 244k units: 12.1 s to encode, 2.3 s to read and reuse).
+`index` and `embed build` reuse the previous file the same way and write the
+bytes a fresh build would. Fusion reuses the engine's `rrf` helper (k=60);
+`SCHEMA_VERSION` is untouched (a dedicated `EMBED_VERSION` keys the sidecar).
 
 #### Three embedding modes (precedence: endpoint > static > none)
 
@@ -645,13 +651,14 @@ CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
 ```
 offset 0            "CIE1"      4-byte ASCII magic (a foreign file fails loudly)
 offset 4            uint32 LE   header length
-offset 8            UTF-8 JSON  { embedVersion, modelId, dim, count, records:[{file,symbol,line}] }
+offset 8            UTF-8 JSON  { embedVersion, modelId, dim, count, records:[{file,symbol,line,hash}] }
 offset 8+headerLen  int8 body   count × dim signed bytes, row-major
 ```
 
 No absolute path and no timestamp; records follow scan order, so two builds of
-an unchanged repo are byte-identical. `EMBED_VERSION` + `modelId` + `dim`
-invalidate a stale or foreign artifact. Granularity is per-symbol (name +
+an unchanged repo are byte-identical. `hash` is 64 bits of the sha1 of the text
+the record encodes — what makes a vector reusable. `EMBED_VERSION` + `modelId` +
+`dim` invalidate a stale or foreign artifact. Granularity is per-symbol (name +
 signature + doc comment + file summary + path segments), with a per-file
 fallback for symbol-less files so every file with content is represented.
 Re-exports get no unit of their own: the defining file already has one, and a
@@ -663,7 +670,8 @@ measured with the official model (MRR: flask 0.8307 vs 0.8232, gin 0.7862 vs
 **Fusion is by RANK, never a score blend**: BM25 scores and integer dot products
 live on incomparable scales, so `searchSemantic` uses the shared `rrf` helper
 (k=60) and adds `semanticSymbol` — the corpus symbol whose embedding was closest
-for that file — additively to the lexical result. A file the lexical side
+for that file, when that similarity is positive — additively to the lexical
+result. A file the lexical side
 ranked keeps every lexical field (`matchedFields`, `line`, `symbolHits`,
 `fuzzyTerms`, `bridgedOnly`); a file only the embedding side found has an empty
 `matchedTerms` and the `line` of its closest symbol. `--exact` and `--rank`
@@ -684,9 +692,16 @@ the client derives two routes:
 Any dimension is accepted and vectors need not be pre-normalized — the engine
 L2-normalizes and int8-quantizes whatever it receives, through the *same* tail
 as the static tier, so ranking stays a pure integer dot product. Requests time
-out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000). Endpoint corpus vectors
-are built at search time and **never serialized**: that tier is deterministic
-per image digest, not byte-golden, so pin the digest. The reference server is
+out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000); a corpus goes out in
+batches of 64, four in flight. Endpoint corpus vectors are **never written to
+`embeddings.bin`**: that tier is deterministic per image digest, not
+byte-golden, so pin the digest. When the repo has an index (`index` wrote
+`.codeindex/cache.json`), `search --semantic` keeps them in
+`.codeindex/embed-cache/endpoint-<url hash>.bin`, keyed by the unit text and by
+a fingerprint of the model (the vector of one fixed text, fetched each run), so
+the next search sends only new texts and a different model behind the same URL
+starts over. Without an index, nothing is written into the repo. The MCP server
+does the same in memory: after an edit it re-sends only the changed units. The reference server is
 `docker/embed/` (transformers.js + all-MiniLM-L6-v2, baked in at build, offline
 at run, non-root, `:8756`).
 

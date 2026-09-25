@@ -116,7 +116,9 @@ export function explainSemantic(
       const res: SemanticSearchResult = lex
         ? { ...lex, score: Number(score.toFixed(4)) }
         : { file, score: Number(score.toFixed(4)), matchedTerms: [], topSymbols: [], ...(sem?.line ? { line: sem.line } : {}) };
-      if (sem?.symbol) res.semanticSymbol = sem.symbol;
+      // Only a file the embedding side actually ranked (positive similarity)
+      // has a closest symbol worth naming; at zero or below it is noise.
+      if (sem?.symbol && sem.score > 0) res.semanticSymbol = sem.symbol;
       return res;
     });
   return { results, explain: explainFused(lexical.explain, results, lexByFile) };
