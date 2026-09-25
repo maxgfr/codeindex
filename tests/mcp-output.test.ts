@@ -236,6 +236,18 @@ describe("SDK conformance of the advertised tool list", () => {
     }
   });
 
+  // validateArgs skips a property with no `type`, so an untyped argument
+  // would be read with no guard at all — the silent misreads it exists for.
+  it("types every input property with a shape validateArgs checks", () => {
+    const checked = new Set(["string", "number", "boolean", "array"]);
+    for (const tool of toolsFor(undefined, "2025-11-25") as { name: string; inputSchema: { properties?: Record<string, { type?: string; enum?: unknown[] }> } }[]) {
+      for (const [key, prop] of Object.entries(tool.inputSchema.properties ?? {})) {
+        expect(checked.has(prop.type ?? ""), `${tool.name}.${key}: ${prop.type}`).toBe(true);
+        if (prop.enum) expect(prop.enum.every((v) => typeof v === prop.type), `${tool.name}.${key} enum`).toBe(true);
+      }
+    }
+  });
+
   it("sends a capped response as a tool error without structuredContent, for every schema-declaring tool", async () => {
     // A cap this small withholds every payload, so each call exercises the
     // notice path. Before, the notice was a non-error result with no

@@ -343,6 +343,7 @@ export const TOOLS = [
         },
         rank: {
           type: "string",
+          enum: ["lexical", "graph"],
           description:
             'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus — see SearchOptions.rank.',
         },
@@ -418,7 +419,7 @@ export const TOOLS = [
         ...repoProp,
         symbol: { type: "string", description: "Symbol name to centre on" },
         depth: { type: "number", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
-        direction: { type: "string", description: "out | in | both (default both)" },
+        direction: { type: "string", enum: ["out", "in", "both"], description: "out | in | both (default both)" },
       },
       required: ["repo", "symbol"],
     },

@@ -758,6 +758,14 @@ claude mcp add codeindex -- codeindex mcp
 and persists it as the `onboarding` memory, so the second session reads instead
 of rebuilding.
 
+Arguments are checked against each tool's schema before anything is walked or
+scanned: types, required arguments and enums (`call_graph`'s `direction`,
+`search`'s `rank`). A mistake comes back at once as a tool error that names the
+argument, never as a default applied in silence. `file` arguments accept
+`./src/a.ts`, an absolute path inside the repository or `src\a.ts`. A file the
+index does not hold is an error suggesting indexed files with the same name,
+not an empty answer.
+
 ### Smaller read responses
 
 MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`

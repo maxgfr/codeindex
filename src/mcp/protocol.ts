@@ -33,8 +33,8 @@ export const RICH_TOOLS_SINCE = "2025-06-18"; // Tool.title, resource_link conte
 // with no way to tell why.
 //
 // Only the shapes these schemas actually use are checked (string / number /
-// boolean / array-of-string) — this is a guard against silent misreads, not a
-// JSON Schema implementation. The spec (2025-11-25) is explicit that input
+// boolean / array / array-of-string, and a string `enum`) — this is a guard
+// against silent misreads, not a JSON Schema implementation. The spec (2025-11-25) is explicit that input
 // validation failures belong in a Tool Execution Error, not a protocol error,
 // precisely so the model can read the message and retry.
 //
@@ -52,6 +52,7 @@ export function validateArgs(
     items?: { type?: string };
     minimum?: number;
     maximum?: number;
+    enum?: readonly unknown[];
     description?: string;
   }>;
   for (const key of schema.required ?? []) {
@@ -79,13 +80,20 @@ export function validateArgs(
       continue;
     }
     if (spec.type === "array") {
-      if (actual !== "array") return `\`${key}\` must be an array of strings, got ${actual}`;
-      if (spec.items?.type === "string" && !(value as unknown[]).every((x) => typeof x === "string")) {
-        return `\`${key}\` must be an array of strings`;
-      }
+      // "of strings" only where the schema says so: check_rules' `rules` is an
+      // array of objects, and telling the caller otherwise sent it astray.
+      const strings = spec.items?.type === "string";
+      const expected = strings ? "an array of strings" : "an array";
+      if (actual !== "array") return `\`${key}\` must be ${expected}, got ${actual}`;
+      if (strings && !(value as unknown[]).every((x) => typeof x === "string")) return `\`${key}\` must be ${expected}`;
       continue;
     }
     if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
+    // `direction: "sideways"` used to become "both", and `rank: "pagerank"`
+    // lexical, with nothing in the answer to say the option was not understood.
+    if (spec.enum && !spec.enum.includes(value)) {
+      return `\`${key}\` must be one of ${spec.enum.map((v) => JSON.stringify(v)).join(", ")}, got ${JSON.stringify(value)}`;
+    }
   }
   return undefined;
 }

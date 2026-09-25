@@ -10,12 +10,14 @@
 // with no main-module guard — see src/engine.ts — so that command does nothing.
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
 import { readFileSync, statSync, watch as watchFs, type FSWatcher } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
-import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
+import { callerIndexFor, fileByRelFor, hierarchyFor, symbolGraphFor } from "./derived.js";
+import { byStr } from "./sort.js";
+import type { RepoScan } from "./scan.js";
 import { implementationsOf } from "./relations.js";
 import { neighborhood, type Direction } from "./symbolgraph.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -133,6 +135,28 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+// A `file` argument, as the index spells it: repo-relative, `/`-separated.
+//
+// Agents pass `./gin.go`, an absolute path they just read, or `src\a.ts`, and
+// every spelling but the indexed one answered an empty `[]` — indistinguishable
+// from "this file declares nothing" — or, for an edit, "no symbol matches".
+// An exact indexed spelling is taken as is, so no working call changes. A path
+// that names nothing indexed is an error with same-basename suggestions, since
+// the empty answer is precisely what hid the mistake.
+function indexedFile(scan: RepoScan, repo: string, file: string): string {
+  const byRel = fileByRelFor(scan);
+  if (byRel.has(file)) return file;
+  const rel = relative(repo, resolve(repo, file.replaceAll("\\", "/"))).split(sep).join("/");
+  if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) throw new Error(`\`file\` is outside the repository: ${file}`);
+  if (byRel.has(rel)) return rel;
+  const name = basename(rel);
+  const near = scan.files.filter((f) => basename(f.rel) === name).map((f) => f.rel).sort(byStr).slice(0, 5);
+  throw new Error(
+    `file not in the index: ${file}` +
+      (near.length ? ` — did you mean ${near.join(", ")}?` : " (paths are repo-relative, as symbols_overview and find_symbol report them)"),
+  );
+}
+
 // "There is no such symbol/type" from a lookup tool. Its text stays the
 // `{ "error": ... }` JSON it always was, but it travels as a tool execution
 // error (isError): it is not a result, and a declared outputSchema describes
@@ -166,7 +190,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     throw new Error(`repository root is not a readable directory: ${repo}`);
   }
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
-  // `search`'s optional structural prior; anything else falls back to the default.
+  // `search`'s optional structural prior. The schema's enum has already
+  // rejected anything else, so a typo no longer falls back to lexical in silence.
   const rankArg = str(args.rank);
   const rankOpt: { rank?: RankMode } = rankArg === "graph" || rankArg === "lexical" ? { rank: rankArg } : {};
   // Scan-needing tools warm the present-language grammars (re-derived per call)
@@ -249,7 +274,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "symbols_overview") {
     const file = str(args.file);
     if (!file) throw new Error("`file` is required");
-    const overview = symbolsOverview(readScan(), file);
+    const scan = readScan();
+    const overview = symbolsOverview(scan, indexedFile(scan, repo, file));
     return JSON.stringify(args.concise === true ? overview.map((s) => symbolLocation(s, s.name)) : overview, null, 2);
   }
   if (name === "find_symbol") {
@@ -283,7 +309,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
     const scan = readScan();
     const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
-    const result = fn(scan, namePath, body, str(args.file));
+    const file = str(args.file);
+    const result = fn(scan, namePath, body, file === undefined ? undefined : indexedFile(scan, repo, file));
     // A write WE just performed must not be trusted to the stat oracle: an
     // edit landing in the same mtime tick with the same byte count would pass
     // the (size, mtimeMs) fastpath and serve a stale scan. Drop the whole
@@ -350,7 +377,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       const { churn, ok } = gitChurn(repo, { since: str(args.since) });
       return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, positiveNum(args.top)) }, null, 2);
     }
-    return JSON.stringify(symbolComplexity(scan, str(args.file), positiveNum(args.top)), null, 2);
+    const file = str(args.file);
+    const rel = file === undefined ? undefined : indexedFile(scan, repo, file);
+    return JSON.stringify(symbolComplexity(scan, rel, positiveNum(args.top)), null, 2);
   }
   if (name === "mermaid") {
     const { graph } = readArtifacts();

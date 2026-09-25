@@ -1504,6 +1504,18 @@ describe("validateArgs", () => {
     expect(validateArgs(schema, { limit: undefined, substring: null, future: "whatever" })).toBeUndefined();
   });
 
+  it("enforces a declared enum instead of falling back to the default in silence", () => {
+    const enumerated = { properties: { direction: { type: "string", enum: ["out", "in", "both"] } } };
+    expect(validateArgs(enumerated, { direction: "in" })).toBeUndefined();
+    expect(validateArgs(enumerated, { direction: "sideways" })).toBe('`direction` must be one of "out", "in", "both", got "sideways"');
+  });
+
+  it("says 'an array' when the items are not strings", () => {
+    const untyped = { properties: { rules: { type: "array" } } };
+    expect(validateArgs(untyped, { rules: { from: "a" } })).toBe("`rules` must be an array, got object");
+    expect(validateArgs(untyped, { rules: [{ from: "a" }] })).toBeUndefined();
+  });
+
   it("checks the declared required list, naming the argument and what it is for", () => {
     const required = {
       properties: { repo: { type: "string", description: "Absolute path to the repository root" }, namePath: { type: "string" } },
@@ -1513,6 +1525,72 @@ describe("validateArgs", () => {
     expect(validateArgs(required, { repo: "/x", namePath: null })).toBe("`namePath` is required");
     expect(validateArgs(required, { repo: "/x", namePath: "A" })).toBeUndefined();
   });
+});
+
+// `file` arguments are matched against the index's repo-relative spelling.
+// `./src/util.ts`, an absolute path or `src\util.ts` used to answer an empty
+// `[]` — indistinguishable from a file that declares nothing — and an edit
+// qualified that way reported that no symbol matched.
+describe("file arguments", () => {
+  it("accepts ./, absolute and backslash spellings of an indexed file", async () => {
+    const spellings = ["src/util.ts", "./src/util.ts", join(REPO, "src", "util.ts"), "src\\util.ts", "src//util.ts"];
+    const res = await mcpSession([
+      ...spellings.map((file, i) => ({ id: i + 1, method: "tools/call", params: { name: "symbols_overview", arguments: { repo: REPO, file } } })),
+      { id: 10, method: "tools/call", params: { name: "complexity", arguments: { repo: REPO, file: "./src/util.ts" } } },
+      { id: 11, method: "tools/call", params: { name: "complexity", arguments: { repo: REPO, file: "src/util.ts" } } },
+    ]);
+    const canonical = res.get(1)!.result!.content![0]!.text;
+    expect(JSON.parse(canonical).map((s: { name: string }) => s.name)).toContain("backoff");
+    spellings.forEach((file, i) => {
+      expect(res.get(i + 1)!.result!.isError, file).toBeUndefined();
+      expect(res.get(i + 1)!.result!.content![0]!.text, file).toBe(canonical);
+    });
+    expect(res.get(10)!.result!.content![0]!.text).toBe(res.get(11)!.result!.content![0]!.text);
+    expect(JSON.parse(res.get(11)!.result!.content![0]!.text).length).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("reports a file the index does not hold, with same-name suggestions", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "symbols_overview", arguments: { repo: REPO, file: "util.ts" } } },
+      { id: 2, method: "tools/call", params: { name: "complexity", arguments: { repo: REPO, file: "nope.go" } } },
+      { id: 3, method: "tools/call", params: { name: "symbols_overview", arguments: { repo: REPO, file: "../outside.ts" } } },
+      { id: 4, method: "tools/call", params: { name: "insert_after_symbol", arguments: { repo: REPO, namePath: "backoff", body: "x", file: "nope.ts" } } },
+    ]);
+    const text = (id: number) => res.get(id)!.result!.content![0]!.text;
+    for (const id of [1, 2, 3, 4]) expect(res.get(id)!.result!.isError, String(id)).toBe(true);
+    expect(text(1)).toBe("file not in the index: util.ts — did you mean src/util.ts?");
+    expect(text(2)).toMatch(/^file not in the index: nope\.go \(paths are repo-relative/);
+    expect(text(3)).toBe("`file` is outside the repository: ../outside.ts");
+    // Rejected before the edit could touch anything.
+    expect(text(4)).toMatch(/^file not in the index: nope\.ts/);
+  }, 20_000);
+
+  it("resolves an edit's ./-qualified file to the indexed one", async () => {
+    const repo = tmpFixtureCopy("ci-edit-file-");
+    const res = await mcpSession([
+      {
+        id: 1,
+        method: "tools/call",
+        params: { name: "insert_after_symbol", arguments: { repo, namePath: "backoff", file: "./src/util.ts", body: "export const AFTER = 1;" } },
+      },
+    ]);
+    expect(res.get(1)!.result!.isError).toBeUndefined();
+    expect(JSON.parse(res.get(1)!.result!.content![0]!.text).file).toBe("src/util.ts");
+    expect(readFileSync(join(repo, "src", "util.ts"), "utf8")).toContain("export const AFTER = 1;");
+  }, 20_000);
+
+  it("rejects an enum value a tool does not understand", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "call_graph", arguments: { repo: REPO, symbol: "HttpClient", direction: "sideways" } } },
+      { id: 2, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", rank: "pagerank" } } },
+      { id: 3, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", rank: "graph" } } },
+    ]);
+    expect(res.get(1)!.result!.isError).toBe(true);
+    expect(res.get(1)!.result!.content![0]!.text).toMatch(/`direction` must be one of "out", "in", "both"/);
+    expect(res.get(2)!.result!.isError).toBe(true);
+    expect(res.get(2)!.result!.content![0]!.text).toMatch(/`rank` must be one of "lexical", "graph"/);
+    expect(res.get(3)!.result!.isError).toBeUndefined();
+  }, 20_000);
 });
 
 // Everything checkable from the request alone used to be checked only after
