@@ -235,7 +235,10 @@ export function buildCommandTable(engine, mount) {
         } catch (error) {
           throw new Error(`The rules config is not valid JSON: ${error.message}`);
         }
-        return { kind: "json", data: engine.checkRules(session.artifacts.graph, engine.parseRules(parsed)) };
+        // The scan lets the `literals` builtin see every duplication, not
+        // only the headline graph.json carries.
+        const { scan, graph } = session.artifacts;
+        return { kind: "json", data: engine.checkRules(graph, engine.parseRules(parsed), { scan }) };
       },
     },
     rewrite: {
