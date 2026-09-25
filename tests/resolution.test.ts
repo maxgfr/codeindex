@@ -40,6 +40,7 @@ const REPO_FILES = {
   "src/b.ts": 'import { gone } from "./gone";\nexport const b = gone;\n',
   "src/c.ts": 'import { gone } from "./gone";\nexport const c = 1;\n',
   "src/Main.kt": "package a\nimport b.Util\nfun main() { Util.x() }\n",
+  "src/App.swift": "import Foundation\nfunc main() {}\n",
   "docs/guide.md": "# Guide\n\nSee [a](../src/a.ts), [missing](./nope.md), [the sources](../src/) and [site](https://example.com/x).\n",
   "config.json": '{ "k": 1 }\n',
 };
@@ -76,7 +77,10 @@ describe("resolutionReport", () => {
   });
 
   it("says when a code language yields no import edges, and skips config-only languages", () => {
-    expect(row("kotlin")).toMatchObject({ files: 1, refs: 0, note: "no imports extracted from 1 file — this language gets no import edges" });
+    expect(row("swift")).toMatchObject({ files: 1, refs: 0, note: "no imports extracted from 1 file — this language gets no import edges" });
+    // Kotlin has an extractor and a resolver: an import outside the repo is
+    // simply external, never "unsupported".
+    expect(row("kotlin")).toMatchObject({ files: 1, refs: 1, external: 1, unsupported: 0 });
     expect(report.languages.map((l) => l.lang)).not.toContain("json");
   });
 
@@ -92,10 +96,10 @@ describe("resolutionReport", () => {
 
   it("labels imports from a language with no resolver as unsupported", () => {
     const scan = scanRepo(root);
-    scan.files.find((f) => f.rel === "src/Main.kt")!.refs.push({ kind: "import", spec: "b.Util" });
-    const kt = resolutionReport(scan, { lang: "kotlin" }).languages;
-    expect(kt).toHaveLength(1);
-    expect(kt[0]).toMatchObject({ refs: 1, unsupported: 1, external: 0, note: "no import resolver for this language — its 1 import never become edges" });
+    scan.files.find((f) => f.rel === "src/App.swift")!.refs.push({ kind: "import", spec: "Foundation" });
+    const sw = resolutionReport(scan, { lang: "swift" }).languages;
+    expect(sw).toHaveLength(1);
+    expect(sw[0]).toMatchObject({ refs: 1, unsupported: 1, external: 0, note: "no import resolver for this language — its 1 import never become edges" });
   });
 
   it("filters to one language, caps the top lists, and rejects an unknown language", () => {

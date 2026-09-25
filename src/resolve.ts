@@ -1497,9 +1497,17 @@ function resolveShell(fromRel: string, spec: string, ctx: ResolveContext): Resol
 // `external`, so its imports can never become edges — the resolution report
 // calls those `unsupported` rather than letting them pass as third-party.
 // Keep in step with the dispatch below.
-const RESOLVER_EXTS = new Set([".go", ".rs", ".java", ".rb", ".rake", ".php", ".cs"]);
+const RESOLVER_EXTS = new Set([".go", ".rs", ".java", ".rb", ".rake", ".php", ".cs", ".dart", ".lua", ".ex", ".exs"]);
 export function hasImportResolver(ext: string): boolean {
-  return JS_TS.has(ext) || SFC_HTML.has(ext) || PY.has(ext) || C_CPP.has(ext) || RESOLVER_EXTS.has(ext);
+  return (
+    JS_TS.has(ext) ||
+    SFC_HTML.has(ext) ||
+    PY.has(ext) ||
+    C_CPP.has(ext) ||
+    JVM_OTHER.has(ext) ||
+    SHELL.has(ext) ||
+    RESOLVER_EXTS.has(ext)
+  );
 }
 
 // Resolve an import specifier for a file of the given extension.
