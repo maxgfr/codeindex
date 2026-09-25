@@ -36,7 +36,7 @@ import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { impactOf, neighborsOf } from "./traverse.js";
-import { deltaFor, formatDeltaPanel } from "./delta.js";
+import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, parseEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
@@ -134,7 +134,8 @@ Commands:
   delta       Review panel for the git diff: changed files -> enclosing symbols ->
               blast radius -> risk score with explained reasons; a deleted or
               renamed file that is still imported is listed under \`broken\`
-              with its importers (--base <ref> | --staged, --depth <n>, --json)
+              with its importers (--base <ref> | --staged, --depth <n>, --json).
+              Paths under the --index directory are not part of the review
   impact      Reverse dependency closure of a file or module: everything that
               transitively imports/uses/calls it (--depth <n>; JSON)
   neighbors   Graph neighbours of a file or module, both directions
@@ -549,17 +550,19 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   // already returned above. The walk is done ONCE here to derive the present
   // extensions, then handed to the scan via precomputedWalk so the tree is
   // traversed a single time. --no-ast keeps the regex tier: no walk, no warm —
-  // scanRepo walks itself, exactly as before.
+  // scanRepo walks itself, exactly as before. `delta` walks only once it knows
+  // the diff is not empty (see there): the walk alone is seconds on a large
+  // repo, and a clean worktree needs no index at all.
   const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags.positional !== "build");
-  let precomputedWalk: WalkResult | undefined;
-  if (scans && !flags.noAst) {
-    precomputedWalk = walk(flags.repo, {
+  const walkRepo = (): WalkResult =>
+    walk(flags.repo, {
       maxFileBytes: flags.maxBytes,
       maxFiles: flags.maxFiles,
       gitignore: flags.gitignore,
       ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
     });
-  }
+  let precomputedWalk: WalkResult | undefined;
+  if (scans && !flags.noAst && cmd !== "delta") precomputedWalk = walkRepo();
   let grammarsWarmed = false;
   const warmPresentGrammars = async (): Promise<void> => {
     if (grammarsWarmed || flags.noAst || !precomputedWalk) return;
@@ -1127,14 +1130,18 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const risks = riskHotspots(scan, res.churn, flags.limit);
     emit(JSON.stringify({ churnOk: res.ok, ...historyStatus(res), risks }, null, 2) + "\n", flags.out);
   } else if (cmd === "delta") {
-    const { scan, graph, symbols } = await readArtifacts();
-    const res = deltaFor(flags.repo, graph, symbols, {
-      base: flags.base,
-      staged: flags.staged,
-      depth: flags.depth,
-      scan,
-    });
-    if ("error" in res) throw new Error(res.error);
+    // The git side first: it needs no index, and on a clean worktree it is the
+    // whole answer. Loading the artifacts to report "no changes" cost 8 s on a
+    // 66k-file repo.
+    const opts = { base: flags.base, staged: flags.staged, depth: flags.depth, indexDir };
+    const diff = readDeltaDiff(flags.repo, opts);
+    if ("error" in diff) throw new Error(diff.error);
+    let res = emptyDelta(diff, flags.depth);
+    if (diff.files.length) {
+      if (!flags.noAst) precomputedWalk = walkRepo();
+      const { scan, graph, symbols } = await readArtifacts();
+      res = deltaOfDiff(diff, graph, symbols, { ...opts, scan });
+    }
     emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);
   } else if (cmd === "impact") {
     if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");

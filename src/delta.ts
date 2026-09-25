@@ -5,7 +5,7 @@
 // CORRECT is not this engine's job. Reasons matter more than the number: every
 // point of the score is explained by one reason string carrying its numbers, so
 // a reviewer can disagree with a signal instead of with an opaque total.
-import { posix } from "node:path";
+import { isAbsolute, posix, relative, resolve, sep } from "node:path";
 import type { Graph, ModuleNode, SymbolIndex } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import type { DiffFile, DiffSpec, Hunk } from "./git.js";
@@ -26,6 +26,9 @@ export interface DeltaOptions {
   // way to see who still imports a deleted or renamed file: the graph of the
   // worktree no longer holds that file, so no edge points at it.
   scan?: RepoScan;
+  // The persisted index directory, relative to the repo (default .codeindex):
+  // its files are the engine's output, never part of a review.
+  indexDir?: string;
 }
 
 export interface ChangedSymbol {
@@ -209,7 +212,7 @@ export function brokenImports(
 
 // The pure core: graph + symbols + parsed diff → the full result. No git, no
 // filesystem — unit-testable with synthetic inputs. `broken` comes from
-// brokenImports (deltaFor computes it when it has the scan).
+// brokenImports (deltaOfDiff computes it when it has the scan).
 export function computeDelta(
   graph: Graph,
   symbols: SymbolIndex | undefined,
@@ -229,14 +232,14 @@ export function computeDelta(
   const fileByRel = new Map(graph.files.map((f) => [f.rel, f]));
   const moduleBySlug = new Map(graph.modules.map((m) => [m.slug, m]));
 
+  // Defs of the changed indexed files only: symbols.defs spans the whole repo
+  // (hundreds of thousands of entries on a large one), and a review touches a
+  // handful of files.
   const defsByFile = new Map<string, NamedDef[]>();
-  if (symbols) {
-    for (const [name, entries] of Object.entries(symbols.defs)) {
-      for (const d of entries) {
-        let arr = defsByFile.get(d.file);
-        if (!arr) defsByFile.set(d.file, (arr = []));
-        arr.push({ name, ...d });
-      }
+  for (const df of diff.files) if (df.status !== "deleted" && fileByRel.has(df.path)) defsByFile.set(df.path, []);
+  if (symbols && defsByFile.size) {
+    for (const name of Object.keys(symbols.defs)) {
+      for (const d of symbols.defs[name]!) defsByFile.get(d.file)?.push({ name, ...d });
     }
     for (const arr of defsByFile.values()) arr.sort((a, b) => a.line - b.line || byStr(a.name, b.name));
   }
@@ -510,17 +513,35 @@ export function computeDelta(
   };
 }
 
-// Git plumbing → computeDelta, against a graph the caller already built. The
-// caller owns index freshness: a consumer serving a PERSISTED graph must gate
-// on its own staleness oracle first, because symbol line-mapping is only
-// correct against an index built from the same bytes, and a confidently wrong
-// attribution is worse than "rebuild first".
-export function deltaFor(
-  repo: string,
-  graph: Graph,
-  symbols: SymbolIndex | undefined,
-  opts: DeltaOptions = {},
-): DeltaResult | DeltaError {
+// The git side of a review, on its own: the base, the changed files and their
+// hunks. It needs no index, so a caller can run it first and skip loading the
+// artifacts when there is nothing to review.
+export interface DeltaDiff {
+  base: DeltaResult["base"];
+  files: DiffFile[];
+  hunks: Map<string, Hunk[]>;
+  notes: string[];
+}
+
+// The engine's own output directory, and anything else the walker would never
+// index, is not part of a review: `index --out .codeindex` (the documented
+// default) otherwise showed up as three unindexed files in every delta, and an
+// untracked node_modules/ as thousands. Tracked paths are kept outside the
+// index directory: a committed change is the diff's own even where the walker
+// does not look, and the panel lists it as unindexed. Untracked paths are
+// judged by the walker's default ignore set.
+function reviewFilter(repo: string, indexDir: string | undefined): (path: string, tracked: boolean) => boolean {
+  const idx = relative(resolve(repo), resolve(repo, indexDir ?? ".codeindex")).split(sep).join("/");
+  const inIndex = idx && !idx.startsWith("..") && !isAbsolute(idx) ? (p: string) => p === idx || p.startsWith(`${idx}/`) : () => false;
+  return (path, tracked) => {
+    if (inIndex(path)) return false;
+    if (tracked) return true;
+    const dirs = path.split("/").slice(0, -1);
+    return !dirs.some((d) => IGNORE_DIRS.has(d) || d.startsWith(".codeindex-edit-"));
+  };
+}
+
+export function readDeltaDiff(repo: string, opts: DeltaOptions = {}): DeltaDiff | DeltaError {
   if (!have("git")) return { error: "git is required for delta and was not found on PATH" };
   if (!isGitWorktree(repo)) return { error: `delta needs a git worktree — ${repo} is not inside one` };
 
@@ -537,16 +558,36 @@ export function deltaFor(
     base = { ref: r.ref, mergeBase: r.mergeBase, staged: false };
   }
 
+  const keep = reviewFilter(repo, opts.indexDir);
   const spec: DiffSpec = opts.staged ? { staged: true } : { mergeBase: base.mergeBase };
-  const files = diffFiles(repo, spec);
+  const files = diffFiles(repo, spec).filter((f) => keep(f.path, true));
   if (!opts.staged) {
     const known = new Set(files.map((f) => f.path));
     for (const u of untrackedFiles(repo)) {
-      if (!known.has(u)) files.push({ path: u, status: "added" });
+      if (!known.has(u) && keep(u, false)) files.push({ path: u, status: "added" });
     }
   }
+  return { base, files, hunks: files.length ? diffHunks(repo, spec) : new Map(), notes };
+}
 
-  const removed = files.flatMap((f) =>
+// A review with nothing in it, answered without an index.
+export function emptyDelta(diff: DeltaDiff, depth: number = DEFAULT_DELTA_DEPTH): DeltaResult {
+  return { base: diff.base, depth, changes: [], modules: [], dangling: [], broken: [], deleted: [], unindexed: [], notes: diff.notes };
+}
+
+// A read diff → computeDelta, against a graph the caller already built. The
+// caller owns index freshness: a consumer serving a PERSISTED graph must gate
+// on its own staleness oracle first, because symbol line-mapping is only
+// correct against an index built from the same bytes, and a confidently wrong
+// attribution is worse than "rebuild first".
+export function deltaOfDiff(
+  diff: DeltaDiff,
+  graph: Graph,
+  symbols: SymbolIndex | undefined,
+  opts: DeltaOptions = {},
+): DeltaResult {
+  const notes = [...diff.notes];
+  const removed = diff.files.flatMap((f) =>
     f.status === "deleted"
       ? [{ path: f.path }]
       : f.status === "renamed" && f.oldPath !== undefined
@@ -556,13 +597,18 @@ export function deltaFor(
   let broken: BrokenImport[] = [];
   if (removed.length && opts.scan) broken = brokenImports(opts.scan, graph, removed);
   else if (removed.length) notes.push("no scan supplied — importers of removed files were not traced");
+  return computeDelta(graph, symbols, { ...diff, notes, broken }, opts.depth ?? DEFAULT_DELTA_DEPTH);
+}
 
-  return computeDelta(
-    graph,
-    symbols,
-    { files, hunks: diffHunks(repo, spec), base, notes, broken },
-    opts.depth ?? DEFAULT_DELTA_DEPTH,
-  );
+// Git plumbing → computeDelta in one call (see deltaOfDiff on freshness).
+export function deltaFor(
+  repo: string,
+  graph: Graph,
+  symbols: SymbolIndex | undefined,
+  opts: DeltaOptions = {},
+): DeltaResult | DeltaError {
+  const diff = readDeltaDiff(repo, opts);
+  return "error" in diff ? diff : deltaOfDiff(diff, graph, symbols, opts);
 }
 
 // The human panel. Stdout-only by design: delta output is ephemeral per-worktree

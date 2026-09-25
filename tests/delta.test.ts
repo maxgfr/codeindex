@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { brokenImports, computeDelta, deltaFor, formatDeltaPanel, RISK_WEIGHTS } from "../src/delta.js";
+import { brokenImports, computeDelta, deltaFor, deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff, RISK_WEIGHTS } from "../src/delta.js";
 import type { DeltaResult } from "../src/delta.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 
@@ -156,6 +156,76 @@ describe("delta: importers of a removed file", () => {
       const res = computeDelta(graph, symbols, { files, hunks: new Map(), base, broken });
       expect(res.modules.map((m) => m.slug)).toEqual(["lib"]);
       expect(res.modules[0]!.impact).toEqual({ directFiles: 1, transitiveFiles: 1, modules: ["cli"] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delta: what the diff side ignores", () => {
+  it("drops the engine's own index and untracked paths the walker never indexes", () => {
+    const root = repo(HUB_REPO);
+    try {
+      write(root, {
+        ".codeindex/graph.json": "{}\n",
+        ".codeindex/memories/onboarding.md": "# brief\n",
+        "node_modules/pkg/index.js": "module.exports = 1;\n",
+        ".codeindex-edit-x1/hub.ts": "export const x = 1;\n",
+      });
+      const diff = readDeltaDiff(root);
+      if ("error" in diff) throw new Error(diff.error);
+      expect(diff.files).toEqual([]);
+      expect(formatDeltaPanel(emptyDelta(diff))).toMatch(/^codeindex: no changes vs main/);
+      // A real untracked source file is still part of the review.
+      write(root, { "app/new.ts": "export const n = 1;\n" });
+      const res = delta(root);
+      expect(res.changes.map((c) => c.path)).toEqual(["app/new.ts"]);
+      expect(res.unindexed).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a custom --index directory, tracked or not, and keeps other tracked paths", () => {
+    const root = repo({ ...HUB_REPO, "vendor/dep.js": "module.exports = 1;\n", "idx/old.json": "{}\n" });
+    try {
+      write(root, {
+        "idx/graph.json": "{}\n",
+        "idx/old.json": "{\"x\":1}\n",
+        "vendor/dep.js": "module.exports = 2;\n",
+      });
+      const withDefault = readDeltaDiff(root);
+      if ("error" in withDefault) throw new Error(withDefault.error);
+      expect(withDefault.files.map((f) => f.path).sort()).toEqual(["idx/graph.json", "idx/old.json", "vendor/dep.js"]);
+      const diff = readDeltaDiff(root, { indexDir: "idx" });
+      if ("error" in diff) throw new Error(diff.error);
+      // A tracked change under an ignored directory is still the diff's: the
+      // panel lists it as unindexed rather than hiding it.
+      expect(diff.files.map((f) => f.path)).toEqual(["vendor/dep.js"]);
+      expect(deltaOfDiff(diff, buildIndexArtifacts(root).graph, undefined).unindexed).toEqual(["vendor/dep.js"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delta: symbol attribution reads only the changed files' defs", () => {
+  it("attributes hunks exactly as before when the repo holds many other defs", () => {
+    const root = repo(HUB_REPO);
+    try {
+      write(root, { "app/b.ts": 'import { hub } from "../lib/hub";\nexport const b = hub() * 2;\n' });
+      const res = delta(root);
+      expect(res.changes).toEqual([
+        {
+          path: "app/b.ts",
+          status: "modified",
+          linesAdded: 1,
+          linesDeleted: 1,
+          module: "app",
+          hunks: [{ start: 2, end: 2 }],
+          symbols: [{ name: "b", kind: "const", exported: true, line: 2, endLine: 2 }],
+        },
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

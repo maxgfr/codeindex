@@ -490,6 +490,15 @@ codeindex delta --repo . --staged --json  # the staged changeset, as JSON
   under `broken` with their importer (and `renamedTo` for a move), the module
   the file was removed from is scored even when nothing else in it changed,
   and the importers count as its direct dependents.
+- **The engine's own output is not part of a review.** Paths under the index
+  directory (`--index`, default `.codeindex`) are dropped from the diff, and so
+  are untracked files in directories the walker never indexes (`node_modules/`,
+  `dist/`, …). A tracked change in such a directory stays listed as
+  `unindexed`.
+- **The diff is read before the index.** A clean worktree answers
+  `no changes` without loading or walking anything (0.4 s instead of 15 s on a
+  66k-file repository), and symbol attribution reads only the changed files'
+  definitions.
 
 ## Docker
 
