@@ -9,8 +9,8 @@
 // (NOT `node scripts/engine.mjs mcp`: engine.mjs is a side-effect-free library
 // with no main-module guard — see src/engine.ts — so that command does nothing.
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
-import { readFileSync, statSync, watch as watchFs, type FSWatcher } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { readFileSync, realpathSync, statSync, watch as watchFs, type FSWatcher } from "node:fs";
+import { isAbsolute, join, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
@@ -34,7 +34,7 @@ import { onboardBrief } from "./onboard.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
-import { checkRules, parseRules } from "./rules.js";
+import { checkRules, parseRules, parseRulesText, type ArchRule } from "./rules.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
@@ -526,19 +526,33 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // which had no MCP equivalent, so a repo with a committed rules file had to
     // have it re-pasted into every call.
     const configPath = str(args.configPath);
-    let payload: unknown = args.rules;
-    if (payload === undefined && configPath) {
-      const abs = isAbsolute(configPath) ? configPath : join(repo, configPath);
+    let rules: ArchRule[];
+    if (args.rules !== undefined) rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
+    else if (configPath) {
+      // The path comes from the client, and the error below used to echo the
+      // start of whatever it named (`/etc/passwd` included): only a file
+      // inside the repository is read, symlinks resolved first.
+      const unreadable = new Error(`cannot read rules config ${configPath}`);
+      let abs: string;
       try {
-        payload = JSON.parse(readFileSync(abs, "utf8"));
-      } catch (e) {
-        throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
+        abs = realpathSync(isAbsolute(configPath) ? configPath : join(repo, configPath));
+      } catch {
+        throw unreadable;
       }
-    }
-    if (payload === undefined) throw new Error("`rules` (or `configPath`) is required");
-    const rules = parseRules(payload); // throws a descriptive error on a malformed payload
-    const { graph } = readArtifacts();
-    return JSON.stringify(checkRules(graph, rules), null, 2);
+      const root = realpathSync(repo);
+      if (!abs.startsWith(root.endsWith(sep) ? root : root + sep)) {
+        throw new Error(`rules config must be a file inside the repository: ${configPath}`);
+      }
+      let text: string;
+      try {
+        text = readFileSync(abs, "utf8");
+      } catch {
+        throw unreadable;
+      }
+      rules = parseRulesText(text, configPath);
+    } else throw new Error("`rules` (or `configPath`) is required");
+    const { scan, graph } = readArtifacts();
+    return JSON.stringify(checkRules(graph, rules, { scan }), null, 2);
   }
   if (name === "delta") {
     // The CLI's review panel, for an agent that just edited files over this

@@ -13,12 +13,16 @@
 //               entrypoint-looking basenames (index/main/cli/…);
 //     literals — values with no single source of truth (see literals.ts):
 //               a constant holds the value and other files rewrite it, or
-//               several constants hold the same one. Reads the duplications
-//               the pipeline stamped onto the graph, so it needs no rescan.
+//               several constants hold the same one. Computed from the scan
+//               (CheckRulesOptions.scan) with the rule's own thresholds.
+// A forbidden rule whose `from` or `to` globs match no indexed file can never
+// fire; it is reported as an `unmatched` warning instead of passing silently.
 // Violations are sorted deterministically (rule, from, to, kind) so two runs on
 // the same graph are byte-identical.
 import type { EdgeKind, Graph, LiteralDuplication } from "./types.js";
+import type { RepoScan } from "./scan.js";
 import { compileGlobs } from "./glob.js";
+import { findLiteralDuplications } from "./literals.js";
 import { byStr } from "./sort.js";
 
 export type RuleSeverity = "error" | "warn";
@@ -40,8 +44,22 @@ export interface BuiltinRule {
   // a fix. "uncentralized" also flags values nothing owns yet, which is a
   // design decision rather than a defect and is noisy as a gate.
   tiers?: LiteralDuplication["tier"][];
+  // `literals` only: the thresholds of `codeindex literals` (--min-files,
+  // --min-count, --include-tests), with the same defaults.
+  minFiles?: number;
+  minCount?: number;
+  includeTests?: boolean;
   severity?: RuleSeverity;
   comment?: string;
+}
+
+export interface CheckRulesOptions {
+  // The scan the graph was built from. The `literals` builtin needs it to see
+  // every duplication: graph.json carries a 24-entry headline sorted
+  // competing-first, so a gate on `bypassed` read from it alone passed while
+  // `codeindex literals` listed violations. Without a scan the rule falls back
+  // to that headline, which is complete only when it holds fewer than 24.
+  scan?: RepoScan;
 }
 
 export type ArchRule = ForbiddenEdgeRule | BuiltinRule;
@@ -50,14 +68,34 @@ export interface RuleViolation {
   rule: string;
   from: string;
   to: string; // for a cycle: the full path, "a -> b -> a"
-  kind: EdgeKind | "cycle" | "orphan" | "literal";
+  kind: EdgeKind | "cycle" | "orphan" | "literal" | "unmatched";
   severity: RuleSeverity;
   comment?: string;
 }
 
-const EDGE_KINDS = new Set<string>(["contains", "doc-link", "import", "call", "use", "mention"]);
+// Every EdgeKind, checked both ways by the compiler: a kind added to the union
+// and not here (as extends/implements once were) fails to build instead of
+// being rejected in configs.
+const EDGE_KIND_TABLE: Record<EdgeKind, true> = {
+  contains: true,
+  "doc-link": true,
+  import: true,
+  call: true,
+  extends: true,
+  implements: true,
+  use: true,
+  mention: true,
+};
+const EDGE_KINDS = new Set<string>(Object.keys(EDGE_KIND_TABLE));
 const SEVERITIES = new Set<string>(["error", "warn"]);
 const BUILTINS = new Set<string>(["cycles", "orphans", "literals"]);
+const TIERS = new Set<string>(["competing", "bypassed", "uncentralized"]);
+// The keys each rule shape reads. Anything else is a typo (`sevrity`, `tier`)
+// that would otherwise leave a default in force without a word.
+const COMMON_KEYS = ["name", "severity", "comment"];
+const FORBIDDEN_KEYS = new Set([...COMMON_KEYS, "from", "to", "kind"]);
+const BUILTIN_KEYS = new Set([...COMMON_KEYS, "builtin"]);
+const LITERALS_KEYS = new Set([...BUILTIN_KEYS, "tiers", "minFiles", "minCount", "includeTests"]);
 // Gate default: the two tiers that name a concrete fix.
 const GATED_TIERS: LiteralDuplication["tier"][] = ["competing", "bypassed"];
 
@@ -90,6 +128,29 @@ function toList(v: string | string[]): string[] {
   return Array.isArray(v) ? v : [v];
 }
 
+// Parse a rules file's text. The error names the file and the position but
+// never echoes its content: over MCP the path comes from the client.
+export function parseRulesText(text: string, source: string): ArchRule[] {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch (e) {
+    const pos = /position (\d+)/.exec(e instanceof Error ? e.message : "");
+    let where = "";
+    if (pos) {
+      const before = text.slice(0, Number(pos[1]));
+      const line = before.split("\n").length;
+      where = ` (line ${line}, column ${before.length - before.lastIndexOf("\n")})`;
+    }
+    throw new Error(`rules config ${source} is not valid JSON${where}`);
+  }
+  try {
+    return parseRules(payload);
+  } catch (e) {
+    throw new Error(`rules config ${source}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 // Validate an untrusted rules payload (CLI --config file, MCP inline JSON) into
 // a typed rules array. Accepts either a bare array or a `{ rules: [...] }`
 // wrapper. Throws a descriptive error on the first malformed entry.
@@ -98,9 +159,15 @@ export function parseRules(input: unknown): ArchRule[] {
   if (!Array.isArray(raw)) throw new Error("rules config must be an array (or an object with a `rules` array)");
   return raw.map((entry, i) => {
     const at = `rules[${i}]`;
-    if (typeof entry !== "object" || entry === null) throw new Error(`${at}: must be an object`);
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new Error(`${at}: must be an object`);
     const r = entry as Record<string, unknown>;
     if (typeof r.name !== "string" || !r.name) throw new Error(`${at}: \`name\` (non-empty string) is required`);
+    const allowed = r.builtin === undefined ? FORBIDDEN_KEYS : r.builtin === "literals" ? LITERALS_KEYS : BUILTIN_KEYS;
+    const unknown = Object.keys(r).filter((k) => !allowed.has(k)).sort(byStr);
+    if (unknown.length) {
+      const shape = r.builtin === undefined ? "a forbidden-edge rule" : `builtin "${String(r.builtin)}"`;
+      throw new Error(`${at} (${r.name}): unknown key${unknown.length > 1 ? "s" : ""} ${unknown.map((k) => `\`${k}\``).join(", ")} — ${shape} takes ${[...allowed].join(", ")}`);
+    }
     if (r.severity !== undefined && !SEVERITIES.has(r.severity as string))
       throw new Error(`${at} (${r.name}): \`severity\` must be "error" or "warn"`);
     if (r.comment !== undefined && typeof r.comment !== "string")
@@ -108,12 +175,27 @@ export function parseRules(input: unknown): ArchRule[] {
     if (r.builtin !== undefined) {
       if (!BUILTINS.has(r.builtin as string))
         throw new Error(`${at} (${r.name}): \`builtin\` must be "cycles", "orphans" or "literals"`);
+      // A tier typo, or a bare string, used to select nothing: the gate passed.
+      if (r.tiers !== undefined) {
+        const ok = Array.isArray(r.tiers) && r.tiers.length > 0 && r.tiers.every((t) => TIERS.has(t as string));
+        if (!ok) throw new Error(`${at} (${r.name}): \`tiers\` must be a non-empty array of ${[...TIERS].join(", ")}`);
+      }
+      for (const key of ["minFiles", "minCount"] as const) {
+        const v = r[key];
+        if (v !== undefined && !(typeof v === "number" && Number.isInteger(v) && v >= 1))
+          throw new Error(`${at} (${r.name}): \`${key}\` must be a positive integer`);
+      }
+      if (r.includeTests !== undefined && typeof r.includeTests !== "boolean")
+        throw new Error(`${at} (${r.name}): \`includeTests\` must be a boolean`);
       return {
         name: r.name,
         builtin: r.builtin,
         severity: r.severity,
         comment: r.comment,
         ...(r.tiers !== undefined ? { tiers: r.tiers } : {}),
+        ...(r.minFiles !== undefined ? { minFiles: r.minFiles } : {}),
+        ...(r.minCount !== undefined ? { minCount: r.minCount } : {}),
+        ...(r.includeTests !== undefined ? { includeTests: r.includeTests } : {}),
       } as BuiltinRule;
     }
     const glob = (field: "from" | "to"): string | string[] => {
@@ -222,7 +304,7 @@ function findImportCycles(graph: Graph): { start: string; path: string[] }[] {
 // Validate `rules` against the built graph. Pure and deterministic: violations
 // are fully sorted; severity defaults to "error"; a rule's `comment` (when set)
 // is echoed onto each of its violations.
-export function checkRules(graph: Graph, rules: ArchRule[]): RuleViolation[] {
+export function checkRules(graph: Graph, rules: ArchRule[], opts: CheckRulesOptions = {}): RuleViolation[] {
   const out: RuleViolation[] = [];
   const emit = (rule: ArchRule, v: Omit<RuleViolation, "rule" | "severity" | "comment">): void => {
     out.push({
@@ -233,6 +315,22 @@ export function checkRules(graph: Graph, rules: ArchRule[]): RuleViolation[] {
     });
   };
   const fileSet = new Set(graph.files.map((f) => f.rel));
+  // One literals pass per distinct threshold set, shared by the rules using it.
+  const literalRuns = new Map<string, LiteralDuplication[]>();
+  const duplicationsFor = (rule: BuiltinRule): LiteralDuplication[] => {
+    if (!opts.scan) return graph.literalDuplications ?? [];
+    const key = `${rule.minFiles ?? ""}\0${rule.minCount ?? ""}\0${rule.includeTests === true}`;
+    let dups = literalRuns.get(key);
+    if (!dups) {
+      dups = findLiteralDuplications(opts.scan, {
+        minFiles: rule.minFiles,
+        minCount: rule.minCount,
+        includeTests: rule.includeTests,
+      }).duplications;
+      literalRuns.set(key, dups);
+    }
+    return dups;
+  };
 
   for (const rule of rules) {
     if ("builtin" in rule) {
@@ -242,7 +340,7 @@ export function checkRules(graph: Graph, rules: ArchRule[]): RuleViolation[] {
         }
       } else if (rule.builtin === "literals") {
         const wanted = new Set(rule.tiers?.length ? rule.tiers : GATED_TIERS);
-        for (const d of graph.literalDuplications ?? []) {
+        for (const d of duplicationsFor(rule)) {
           if (!wanted.has(d.tier)) continue;
           // `from` is where the value is DEFINED (or the first site rewriting
           // it, when nothing defines it) and `to` names the value, so a CI log
@@ -266,6 +364,17 @@ export function checkRules(graph: Graph, rules: ArchRule[]): RuleViolation[] {
     const fromMatch = compileGlobs(toList(rule.from));
     const toMatch = compileGlobs(toList(rule.to));
     if (!fromMatch || !toMatch) continue; // empty glob list — matches nothing
+    // A glob side matching no indexed file (a typo, a moved directory) makes
+    // the rule vacuous: it passes forever. Always a warning, whatever the
+    // rule's severity — the rule is misconfigured, the architecture is not
+    // shown to be wrong.
+    let vacuous = false;
+    for (const [side, match] of [["from", fromMatch], ["to", toMatch]] as const) {
+      if (graph.files.some((f) => match(f.rel))) continue;
+      vacuous = true;
+      out.push({ rule: rule.name, from: toList(rule[side]).join(", "), to: `\`${side}\` matches no indexed file`, kind: "unmatched", severity: "warn" });
+    }
+    if (vacuous) continue;
     const kinds = rule.kind?.length ? new Set<string>(rule.kind) : null;
     for (const e of graph.fileEdges) {
       if (e.dangling || !fileSet.has(e.to)) continue;

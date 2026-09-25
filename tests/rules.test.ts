@@ -1,14 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { checkRules, parseRules, type ArchRule } from "../src/rules.js";
+import { checkRules, parseRules, parseRulesText, type ArchRule } from "../src/rules.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import type { Edge, FileNode, Graph } from "../src/types.js";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
+const clientModule = new URL("../scripts/bench/mcp-client.mjs", import.meta.url).href;
 
 // Hand-built graphs: checkRules only reads files (rel/fileKind/degIn/degOut),
 // fileEdges and moduleEdges, so a minimal Graph isolates each rule semantics.
@@ -136,6 +137,63 @@ describe("parseRules", () => {
     expect(() => parseRules([{ name: "r", from: "a", to: "b", severity: "fatal" }])).toThrow(/severity/);
     expect(() => parseRules([{ name: "r", from: "a", to: "b", kind: ["teleport"] }])).toThrow(/kind/);
   });
+
+  it("accepts every edge kind the graph emits, extends and implements included", () => {
+    const kinds = ["contains", "doc-link", "import", "call", "extends", "implements", "use", "mention"] as const;
+    for (const k of kinds) expect(parseRules([{ name: "r", from: "a", to: "b", kind: [k] }])[0]).toMatchObject({ kind: [k] });
+  });
+
+  it("rejects a literals `tiers` that would select nothing, instead of disabling the gate", () => {
+    const lit = { name: "gate", builtin: "literals" };
+    expect(() => parseRules([{ ...lit, tiers: "competing" }])).toThrow(/`tiers` must be a non-empty array of competing, bypassed, uncentralized/);
+    expect(() => parseRules([{ ...lit, tiers: ["competng"] }])).toThrow(/`tiers`/);
+    expect(() => parseRules([{ ...lit, tiers: [] }])).toThrow(/`tiers`/);
+    expect(() => parseRules([{ ...lit, minFiles: 0 }])).toThrow(/`minFiles` must be a positive integer/);
+    expect(() => parseRules([{ ...lit, includeTests: "yes" }])).toThrow(/`includeTests` must be a boolean/);
+    expect(parseRules([{ ...lit, tiers: ["bypassed"], minFiles: 3, minCount: 4, includeTests: true }])[0]).toEqual({
+      ...lit,
+      severity: undefined,
+      comment: undefined,
+      tiers: ["bypassed"],
+      minFiles: 3,
+      minCount: 4,
+      includeTests: true,
+    });
+  });
+
+  it("rejects keys the rule shape does not read, so a typo cannot leave a default in force", () => {
+    expect(() => parseRules([{ name: "r", from: "a", to: "b", sevrity: "warn" }])).toThrow(
+      /rules\[0\] \(r\): unknown key `sevrity` — a forbidden-edge rule takes name, severity, comment, from, to, kind/,
+    );
+    expect(() => parseRules([{ name: "c", builtin: "cycles", tiers: ["competing"] }])).toThrow(/unknown key `tiers` — builtin "cycles"/);
+    expect(() => parseRules([{ name: "l", builtin: "literals", tier: ["competing"] }])).toThrow(/unknown key `tier`/);
+  });
+
+  it("names the rules file in a JSON error, without echoing its content", () => {
+    expect(() => parseRulesText('{\n  bad: 1 }', "codeindex.rules.json")).toThrow(
+      /^rules config codeindex\.rules\.json is not valid JSON \(line 2, column 3\)$/,
+    );
+    let msg = "";
+    try {
+      parseRulesText("root:x:0:0:root:/root:/bin/bash\n", "/etc/passwd");
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toMatch(/^rules config \/etc\/passwd is not valid JSON/);
+    expect(msg).not.toContain("root:x");
+    expect(() => parseRulesText('[{"name":"r","from":"a"}]', "x.json")).toThrow(/^rules config x\.json: rules\[0\] \(r\): `to`/);
+  });
+});
+
+describe("checkRules — vacuous rules", () => {
+  it("reports a forbidden rule whose globs match no indexed file as an unmatched warning", () => {
+    const g = graphOf([fileNode("render/a.ts", { degOut: 1 }), fileNode("lib/b.ts", { degIn: 1 })], [edge("render/a.ts", "lib/b.ts")]);
+    expect(checkRules(g, [{ name: "typo", from: "rendr/**", to: ["lib/**"] }])).toEqual([
+      { rule: "typo", from: "rendr/**", to: "`from` matches no indexed file", kind: "unmatched", severity: "warn" },
+    ]);
+    // Both sides matching and no offending edge is a passing rule, not a vacuous one.
+    expect(checkRules(g, [{ name: "ok", from: "lib/**", to: "render/**" }])).toEqual([]);
+  });
 });
 
 // A synthetic monorepo written to a temp dir and run through the REAL pipeline:
@@ -219,4 +277,90 @@ describe("rules on a synthetic monorepo (real pipeline)", () => {
     expect(warnOut.errors).toBe(0);
     expect(warnOut.warnings).toBe(1);
   });
+});
+
+// 25 values each held by constants in three files (competing), plus one route
+// that a constant holds and two other files rewrite (bypassed). graph.json
+// carries 24 duplications, competing first, so the bypassed one is not on it.
+function writeLiteralsRepo(): string {
+  const repo = mkdtempSync(join(tmpdir(), "ci-rules-lit-"));
+  for (const f of ["a", "b", "c"]) {
+    const lines = Array.from({ length: 25 }, (_, i) => `export const K${f.toUpperCase()}${i} = "value-number-${String(i).padStart(2, "0")}";`);
+    writeFileSync(join(repo, `${f}.ts`), lines.join("\n") + "\n");
+  }
+  writeFileSync(join(repo, "route.ts"), 'export const ROUTE = "/api/bypassed/path";\n');
+  writeFileSync(join(repo, "use1.ts"), 'export function u1() {\n  return fetch("/api/bypassed/path");\n}\n');
+  writeFileSync(join(repo, "use2.ts"), 'export function u2() {\n  return fetch("/api/bypassed/path");\n}\n');
+  return repo;
+}
+
+describe("checkRules — literals reads the whole duplication list", () => {
+  const BYPASS: ArchRule[] = [{ name: "bypass-gate", builtin: "literals", tiers: ["bypassed"] }];
+
+  it("finds a violation past the 24-entry graph headline when given the scan", () => {
+    const repo = writeLiteralsRepo();
+    try {
+      const { scan, graph } = buildIndexArtifacts(repo);
+      expect(graph.literalDuplications).toHaveLength(24);
+      expect(graph.literalDuplications!.every((d) => d.tier === "competing")).toBe(true);
+      expect(checkRules(graph, BYPASS)).toEqual([]); // the headline alone cannot see it
+      expect(checkRules(graph, BYPASS, { scan })).toEqual([
+        {
+          rule: "bypass-gate",
+          from: "route.ts:1",
+          to: 'bypassed "/api/bypassed/path" (3 sites, 3 files)',
+          kind: "literal",
+          severity: "error",
+        },
+      ]);
+      expect(checkRules(graph, [{ name: "c", builtin: "literals", tiers: ["competing"] }], { scan })).toHaveLength(25);
+      // The rule's own thresholds apply, as `codeindex literals --min-files 4` would.
+      expect(checkRules(graph, [{ ...BYPASS[0]!, minFiles: 4 } as ArchRule], { scan })).toEqual([]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("CLI `rules` fails the gate on it", () => {
+    const repo = writeLiteralsRepo();
+    try {
+      const config = join(repo, "codeindex.rules.json");
+      writeFileSync(config, JSON.stringify(BYPASS));
+      const res = spawnSync(process.execPath, [CLI, "rules", "--repo", repo, "--config", config], { encoding: "utf8" });
+      expect(res.status).toBe(1);
+      expect(JSON.parse(res.stdout)).toMatchObject({ errors: 1, warnings: 0 });
+      writeFileSync(config, "[{ oops }]");
+      const bad = spawnSync(process.execPath, [CLI, "rules", "--repo", repo, "--config", config], { encoding: "utf8" });
+      expect(bad.status).not.toBe(0);
+      expect(bad.stderr).toContain(`rules config ${config} is not valid JSON (line 1, column 4)`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("MCP check_rules reads a configPath inside the repository only", async () => {
+    const repo = writeLiteralsRepo();
+    const outside = mkdtempSync(join(tmpdir(), "ci-rules-out-"));
+    const { startMcpClient } = await import(/* @vite-ignore */ clientModule);
+    const client = startMcpClient(process.execPath, [CLI, "mcp", "--repo", repo], { timeoutMs: 30_000 });
+    try {
+      expect((await client.handshake()).ok).toBe(true);
+      writeFileSync(join(repo, "rules.json"), JSON.stringify(BYPASS));
+      writeFileSync(join(outside, "secret.txt"), "root:x:0:0:root:/root:/bin/bash\n");
+      const call = (args: Record<string, unknown>) => client.request("tools/call", { name: "check_rules", arguments: args });
+      const inside = await call({ configPath: "rules.json" });
+      expect(inside.result.isError).not.toBe(true);
+      expect(JSON.parse(inside.result.content[0].text)).toHaveLength(1);
+      const escaped = await call({ configPath: join(outside, "secret.txt") });
+      expect(escaped.result.isError).toBe(true);
+      expect(escaped.result.content[0].text).toMatch(/must be a file inside the repository/);
+      expect(escaped.result.content[0].text).not.toContain("root:x");
+      const dotdot = await call({ configPath: "../" + outside.split("/").pop() + "/secret.txt" });
+      expect(dotdot.result.content[0].text).toMatch(/must be a file inside the repository/);
+    } finally {
+      await client.close();
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

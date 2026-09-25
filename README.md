@@ -412,7 +412,10 @@ codeindex literals --repo . --include-tests               # count test files too
 ```
 
 As a CI gate, via the `literals` builtin rule (defaults to the two actionable
-tiers; `tiers` narrows it):
+tiers; `tiers` narrows it, and `minFiles`/`minCount`/`includeTests` take the
+command's thresholds). The rule computes the whole list, so it fails on exactly
+what `codeindex literals` reports, not only on the 24-entry headline that
+`graph.json` carries:
 
 ```json
 [{ "name": "no-uncentralized-routes", "builtin": "literals", "tiers": ["competing"] }]
@@ -421,6 +424,13 @@ tiers; `tiers` narrows it):
 ```sh
 codeindex rules --repo . --config codeindex.rules.json    # exit 1 on violations
 ```
+
+A rules config is validated strictly, because a gate that silently checks
+nothing is worse than none. A key the rule does not read (`sevrity`), an unknown
+tier, or an edge kind the graph does not emit fails with exit 2 and names the
+file. A forbidden-edge rule whose `from` or `to` globs match no indexed file
+can never fire, so it is reported as an `unmatched` warning. Over MCP,
+`check_rules` reads a `configPath` only when it resolves inside the repository.
 
 An arrow function returning a value (`export const getPath = () => "/a/b"`) is
 a *consumer*, not a source of truth, and is reported as a call site. A lookup

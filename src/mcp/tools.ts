@@ -442,7 +442,7 @@ export const TOOLS = [
   {
     name: "check_rules",
     description:
-      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"} (module-level import cycles; edge-less code files). Returns deterministic violations with severity error|warn — a CI gate.',
+      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"|"literals"} (module-level import cycles; code files nothing connects to; values with no single source of truth, narrowed by tiers?/minFiles?/minCount?/includeTests?). Unknown keys are rejected; a forbidden rule whose globs match no indexed file comes back as an `unmatched` warning. Returns deterministic violations with severity error|warn — a CI gate.',
     inputSchema: {
       type: "object",
       properties: {
@@ -452,7 +452,7 @@ export const TOOLS = [
         configPath: {
           type: "string",
           description:
-            "Read the rules from this JSON file instead (repo-relative or absolute) — the CLI's --config. Ignored when `rules` is given.",
+            "Read the rules from this JSON file instead — the CLI's --config. Repo-relative, or absolute; either way it must resolve inside the repository. Ignored when `rules` is given.",
         },
       },
       required: ["repo"],

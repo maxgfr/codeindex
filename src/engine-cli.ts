@@ -38,7 +38,7 @@ import { renderMermaid } from "./viz.js";
 import { impactOf, neighborsOf } from "./traverse.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
-import { checkRules, parseRules } from "./rules.js";
+import { checkRules, parseRulesText } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, parseEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
@@ -108,7 +108,9 @@ Commands:
                                  CODEINDEX_GRAMMARS_URL
   rules       Architecture rules (forbidden edges, cycles, orphans, literals)
               validated against the link-graph: --config <codeindex.rules.json>;
-              exits 1 on any error-severity violation (a CI gate)
+              exits 1 on any error-severity violation (a CI gate), 2 on an
+              invalid config (unknown key, tier or edge kind); a forbidden
+              rule matching no file is an \`unmatched\` warning
   repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
   hotspots    Churn × size ranking of the files where work concentrates: only
               files changed in the window, tests labelled (JSON; --since, --limit)
@@ -1074,9 +1076,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     }
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));
-    const { graph } = await readArtifacts();
-    const violations = checkRules(graph, rules);
+    const rules = parseRulesText(readFileSync(flags.config, "utf8"), flags.config);
+    const { scan, graph } = await readArtifacts();
+    const violations = checkRules(graph, rules, { scan });
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
     if (errors > 0) process.exitCode = 1; // the CI gate
