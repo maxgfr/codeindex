@@ -9,8 +9,12 @@
 //     cycles  — module-level import cycles (each strongly-connected component
 //               is reported once, as a canonical shortest cycle from its
 //               lexicographically smallest module);
-//     orphans — code files with no resolved in/out edges, excluding
-//               entrypoint-looking basenames (index/main/cli/…);
+//     orphans — code files nothing connects to: no resolved in/out edge,
+//               not a test, not entrypoint-looking (index/main/cli/…), in a
+//               language the repo's imports reach at all, and — for Go, Java,
+//               Kotlin and Scala, where a directory is a package whose files
+//               see each other without imports — in a package nothing
+//               connects to either;
 //     literals — values with no single source of truth (see literals.ts):
 //               a constant holds the value and other files rewrite it, or
 //               several constants hold the same one. Computed from the scan
@@ -116,7 +120,51 @@ const ENTRYPOINT_STEMS = new Set([
   "__main__",
   "mod",
   "lib",
+  // Loaded by a server or a framework from configuration, never imported.
+  "wsgi",
+  "asgi",
+  "manage",
 ]);
+
+// Languages whose unit of visibility is the directory. A Go file calling an
+// unexported helper in a sibling file, or a Java class using a package-private
+// one, creates no edge — the import resolves to one representative file of the
+// package — so file-level emptiness says nothing about such a file.
+const PACKAGE_DIR_LANGS = new Set(["go", "java", "kotlin", "scala"]);
+
+const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+
+function findOrphans(graph: Graph): string[] {
+  // Languages some resolved code edge (import, call, use, inheritance)
+  // reaches, at either end. A language nothing can import (SQL, shell, a lone
+  // .proto) has no such edge by construction, and listing its files says
+  // nothing about dead code.
+  const langOf = new Map(graph.files.map((f) => [f.rel, f.lang]));
+  const importable = new Set<string>();
+  for (const e of graph.fileEdges) {
+    if (e.dangling || e.kind === "contains" || e.kind === "doc-link" || e.kind === "mention") continue;
+    const from = langOf.get(e.from);
+    const to = langOf.get(e.to);
+    if (from !== undefined) importable.add(from);
+    if (to !== undefined) importable.add(to);
+  }
+  // A package is connected when anything points into it (the import's
+  // representative may even be a _test.go file) or a non-test file in it
+  // reaches out. A test's own imports do not make the code it tests live.
+  const connectedPackages = new Set<string>();
+  for (const f of graph.files) {
+    if (!PACKAGE_DIR_LANGS.has(f.lang)) continue;
+    if (f.degIn > 0 || (f.degOut > 0 && !f.testFile)) connectedPackages.add(`${f.lang}\0${dirOf(f.rel)}`);
+  }
+  const out: string[] = [];
+  for (const f of graph.files) {
+    if (f.fileKind !== "code" || f.degIn !== 0 || f.degOut !== 0) continue;
+    if (f.testFile || !importable.has(f.lang) || isEntrypointLike(f.rel)) continue;
+    if (PACKAGE_DIR_LANGS.has(f.lang) && connectedPackages.has(`${f.lang}\0${dirOf(f.rel)}`)) continue;
+    out.push(f.rel);
+  }
+  return out;
+}
 
 function isEntrypointLike(rel: string): boolean {
   const base = rel.split("/").pop()!;
@@ -353,11 +401,7 @@ export function checkRules(graph: Graph, rules: ArchRule[], opts: CheckRulesOpti
           });
         }
       } else {
-        for (const f of graph.files) {
-          if (f.fileKind !== "code" || f.degIn !== 0 || f.degOut !== 0) continue;
-          if (isEntrypointLike(f.rel)) continue;
-          emit(rule, { from: f.rel, to: f.rel, kind: "orphan" });
-        }
+        for (const rel of findOrphans(graph)) emit(rule, { from: rel, to: rel, kind: "orphan" });
       }
       continue;
     }

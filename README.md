@@ -432,6 +432,13 @@ file. A forbidden-edge rule whose `from` or `to` globs match no indexed file
 can never fire, so it is reported as an `unmatched` warning. Over MCP,
 `check_rules` reads a `configPath` only when it resolves inside the repository.
 
+The `orphans` builtin lists code files nothing connects to. It leaves out tests,
+entrypoint-looking names (`index`, `main`, `cli`, `wsgi`, …), languages that no
+import, call or use edge in the repository reaches (SQL, shell scripts), and,
+in Go, Java, Kotlin and Scala, files whose package is connected: files in one
+directory see each other without imports, so an unexported helper called from
+a sibling file has no edge of its own.
+
 An arrow function returning a value (`export const getPath = () => "/a/b"`) is
 a *consumer*, not a source of truth, and is reported as a call site. A lookup
 table (`export const ROUTES = { … }`) genuinely is one, and is reported as a

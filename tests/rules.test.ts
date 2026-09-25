@@ -25,6 +25,7 @@ function fileNode(rel: string, o: Partial<FileNode> = {}): FileNode {
     lines: 1,
     degIn: o.degIn ?? 0,
     degOut: o.degOut ?? 0,
+    ...(o.testFile ? { testFile: true as const } : {}),
   };
 }
 
@@ -109,16 +110,57 @@ describe("checkRules — builtins", () => {
   });
 
   it("orphans: flags edge-less code files but skips docs and entrypoint-looking names", () => {
-    const g = graphOf([
-      fileNode("src/dead.ts"), // orphan
-      fileNode("src/index.ts"), // entrypoint-looking — excluded
-      fileNode("src/main.py"), // entrypoint-looking — excluded
-      fileNode("notes.md", { fileKind: "doc" }), // not code — excluded
-      fileNode("src/used.ts", { degIn: 1 }), // has an edge — excluded
-    ]);
+    const g = graphOf(
+      [
+        fileNode("src/dead.ts"), // orphan
+        fileNode("src/index.ts"), // entrypoint-looking — excluded
+        fileNode("src/main.py"), // entrypoint-looking — excluded
+        fileNode("notes.md", { fileKind: "doc" }), // not code — excluded
+        fileNode("src/used.ts", { degIn: 1 }), // has an edge — excluded
+        fileNode("src/caller.ts", { degOut: 1 }),
+      ],
+      [edge("src/caller.ts", "src/used.ts")],
+    );
     expect(checkRules(g, [{ name: "no-orphans", builtin: "orphans", severity: "warn" }])).toEqual([
       { rule: "no-orphans", from: "src/dead.ts", to: "src/dead.ts", kind: "orphan", severity: "warn" },
     ]);
+  });
+});
+
+describe("checkRules — orphans that are not", () => {
+  const ORPHANS: ArchRule[] = [{ name: "o", builtin: "orphans" }];
+  const go = (rel: string, o: Partial<FileNode> = {}): FileNode => ({ ...fileNode(rel, o), lang: "go" });
+
+  it("counts a Go file as connected when its package is: siblings see each other without imports", () => {
+    const g = graphOf(
+      [
+        go("gin.go", { degOut: 1 }),
+        go("path.go"), // cleanPath is called from gin.go, unexported: no edge
+        go("codec/json/api.go", { degIn: 1 }), // the import's representative file
+        go("codec/json/sonic.go"), // a build variant of the same package
+        go("dead/dead.go"), // a package nothing imports
+        go("lonely/a_test.go", { degOut: 1, testFile: true }), // a test reaching out
+        go("lonely/lonely.go"), // does not make lonely.go live
+      ],
+      [edge("gin.go", "codec/json/api.go")],
+    );
+    expect(checkRules(g, ORPHANS).map((v) => v.from)).toEqual(["dead/dead.go", "lonely/lonely.go"]);
+  });
+
+  it("skips tests, and languages no code edge in the repo reaches", () => {
+    const g = graphOf(
+      [
+        fileNode("app/a.py", { degOut: 1 }),
+        fileNode("app/b.py", { degIn: 1 }),
+        fileNode("app/unused.py"),
+        fileNode("tests/test_x.py", { testFile: true }),
+        { ...fileNode("schema.sql"), lang: "sql" },
+        { ...fileNode("on-create.sh"), lang: "shell" },
+        { ...fileNode("app/wsgi.py") },
+      ].map((f) => (f.lang === "typescript" ? { ...f, lang: "python" } : f)),
+      [edge("app/a.py", "app/b.py"), edge("README.md", "schema.sql", "doc-link")],
+    );
+    expect(checkRules(g, ORPHANS).map((v) => v.from)).toEqual(["app/unused.py"]);
   });
 });
 
