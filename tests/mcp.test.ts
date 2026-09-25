@@ -1321,6 +1321,40 @@ describe("MCP --repo pin", () => {
   // filling the whole LRU with one repository. The canonical spelling is what
   // reaches the session cache and the size guard alike, and the guard's
   // notice shows it.
+  it("offers the persisted artifact only while it is the answer", async () => {
+    const repo = tmpFixtureCopy("ci-cap-e2e-");
+    execFileSync(process.execPath, [CLI, "index", "--repo", repo, "--out", join(repo, ".codeindex")], { stdio: "pipe" });
+    const graphCall = (id: number, args: Record<string, unknown> = {}) => ({
+      id,
+      method: "tools/call",
+      params: { name: "graph", arguments: { repo, ...args } },
+    });
+    const run = () =>
+      mcpSession(
+        [
+          { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+          graphCall(2),
+          graphCall(3, { scope: "src" }),
+        ],
+        undefined,
+        [CLI, "mcp", "--max-response-bytes", "40"],
+      );
+    const notice = (m: RpcMsg) => JSON.parse(m.result!.content![0]!.text) as { artifact?: string; artifactNote?: string };
+
+    const fresh = await run();
+    expect(notice(fresh.get(2)!).artifact).toBe(join(repo, ".codeindex", "graph.json"));
+    expect(fresh.get(2)!.result!.content![1]).toMatchObject({ type: "resource_link", name: "graph.json" });
+    // A scoped graph is not what graph.json holds.
+    expect(notice(fresh.get(3)!).artifact).toBeUndefined();
+    expect(notice(fresh.get(3)!).artifactNote).toBeUndefined();
+
+    writeFileSync(join(repo, "src", "util.ts"), readFileSync(join(repo, "src", "util.ts"), "utf8") + "export function staleProbe() {}\n");
+    const stale = await run();
+    expect(notice(stale.get(2)!).artifact).toBeUndefined();
+    expect(notice(stale.get(2)!).artifactNote).toMatch(/does not match this answer/);
+    expect(stale.get(2)!.result!.content).toHaveLength(1);
+  }, 30_000);
+
   it("canonicalizes every spelling of a repo path to one root", async () => {
     const rel = relative(process.cwd(), REPO);
     const spellings = [REPO, `${REPO}/`, rel, `./${rel}`, `${REPO}/src/..`];
@@ -1477,13 +1511,57 @@ describe("capResponse — a guard, not a default page size", () => {
     expect(parsed.narrower).toMatch(/scope|repo_map|mermaid/);
   });
 
-  it("points at the persisted artifact when one exists", () => {
+  it("points at the persisted artifact when it holds exactly the withheld payload", () => {
     const dir = tmpFixtureCopy("ci-cap-");
     mkdirSync(join(dir, ".codeindex"), { recursive: true });
-    writeFileSync(join(dir, ".codeindex", "graph.json"), "{}");
-    const parsed = JSON.parse(capResponse("x".repeat(5000), "graph", dir, 1000));
-    expect(parsed.artifact).toBe(join(dir, ".codeindex", "graph.json"));
-    expect(parsed.artifactNote).toMatch(/on disk/);
+    const payload = `{"big":"${"x".repeat(5000)}"}`;
+    // The persisted rendering ends in a newline the tool response may lack.
+    for (const onDisk of [payload, payload + "\n"]) {
+      writeFileSync(join(dir, ".codeindex", "graph.json"), onDisk);
+      const parsed = JSON.parse(capResponse(payload, "graph", dir, 1000));
+      expect(parsed.artifact).toBe(join(dir, ".codeindex", "graph.json"));
+      expect(parsed.artifactNote).toMatch(/on disk/);
+    }
+  });
+
+  // It used to be offered whenever the file EXISTED — including after an edit
+  // since the last index, when it no longer held what the call would return.
+  it("does not vouch for an artifact that differs from the payload", () => {
+    const dir = tmpFixtureCopy("ci-cap-stale-");
+    mkdirSync(join(dir, ".codeindex"), { recursive: true });
+    const payload = `{"big":"${"x".repeat(5000)}"}`;
+    for (const onDisk of ["{}", payload.replace("x", "y"), payload + "\n\n"]) {
+      writeFileSync(join(dir, ".codeindex", "graph.json"), onDisk);
+      const parsed = JSON.parse(capResponse(payload, "graph", dir, 1000));
+      expect(parsed.artifact).toBeUndefined();
+      expect(parsed.artifactNote).toMatch(/does not match this answer/);
+      expect(parsed.artifactNote).toContain(`codeindex index --repo ${dir}`);
+    }
+  });
+
+  it("mentions no artifact for a narrowed request, which no artifact answers", () => {
+    const dir = tmpFixtureCopy("ci-cap-narrow-");
+    mkdirSync(join(dir, ".codeindex"), { recursive: true });
+    const payload = `{"big":"${"x".repeat(5000)}"}`;
+    writeFileSync(join(dir, ".codeindex", "graph.json"), payload);
+    const parsed = JSON.parse(capResponse(payload, "graph", dir, 1000, false));
+    expect(parsed.artifact).toBeUndefined();
+    expect(parsed.artifactNote).toBeUndefined();
+  });
+
+  // A generic "pass a `limit`" sent find_symbol callers after an argument it
+  // does not take. Iterates the live catalogue, so a hint added for a new tool
+  // is checked too.
+  it("names only arguments the tool itself takes in its narrowing hint", () => {
+    for (const tool of TOOLS) {
+      const { narrower } = JSON.parse(capResponse("x".repeat(100), tool.name, repo, 10)) as { narrower: string };
+      const props = Object.keys(tool.inputSchema.properties);
+      for (const [, arg] of narrower.matchAll(/`([^`]+)`/g)) {
+        expect(props, `${tool.name}: hint names \`${arg}\``).toContain(arg);
+      }
+    }
+    expect(JSON.parse(capResponse("x".repeat(100), "find_symbol", repo, 10)).narrower).toMatch(/`maxResults`/);
+    expect(JSON.parse(capResponse("x".repeat(100), "grep", repo, 10)).narrower).toMatch(/`maxHits`/);
   });
 
   it("tells you how to create the artifact when there is none", () => {

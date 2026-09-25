@@ -855,8 +855,9 @@ error it is.
 Responses are capped (`--max-response-bytes`, default 1 MB). Under the cap
 nothing changes. Over it — where a whole-repo `graph` on a large monorepo runs
 to millions of tokens and no client can accept it — the response is replaced by
-a short notice naming the size, the artifact already on disk, and the narrower
-tool that answers the question. The notice is sent as a tool error
+a short notice naming the size, the arguments of that tool that narrow it, and
+the persisted artifact when one on disk holds exactly the withheld answer
+(checked byte for byte; a stale one gets the command that refreshes it). The notice is sent as a tool error
 (`isError: true`): the model reads it and narrows the call, and a client that
 validates `structuredContent` is not handed a result that cannot conform. Most
 tools also take a `limit`/`maxResults`/`top`/`maxEdges` argument to stay well

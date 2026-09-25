@@ -832,7 +832,15 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     try {
       const repo = repoRoot(args, defaultRepo);
       const raw = await callTool(name, args, repo);
-      const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
+      // Narrowed or projected, the answer is not what a whole-repo artifact
+      // holds, so the size guard must not point at one.
+      const narrowed =
+        str(args.scope) !== undefined ||
+        strArray(args.include) !== undefined ||
+        strArray(args.exclude) !== undefined ||
+        str(args.name) !== undefined ||
+        args.concise === true;
+      const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES, !narrowed);
       // A capped whole-repo response points at an artifact already on disk.
       // From 2025-06-18 the protocol has a content type that says exactly
       // that, so the client can fetch the bytes instead of re-asking.

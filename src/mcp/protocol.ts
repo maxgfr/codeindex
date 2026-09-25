@@ -2,7 +2,7 @@
 // response-size guard. Everything here is a pure function of its inputs — no
 // scan, no filesystem beyond checking whether a persisted artifact exists — so
 // it is unit-testable without standing up a server.
-import { existsSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { INDEX_DIR } from "../preload.js";
@@ -146,24 +146,73 @@ export function negotiateProtocol(requested: unknown): string {
 // narrower, and a client validating against the tool's outputSchema skips it.
 export const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 
-// What to steer a caller toward when their whole-repo request is too large.
+// What to steer a caller toward when their request is too large, in the
+// arguments THAT tool takes: a generic "pass a `limit`" sent find_symbol
+// callers after an argument that does not exist (it takes `maxResults`).
+// tests/mcp.test.ts checks every backticked name here against the tool's own
+// inputSchema, so a hint cannot drift from the schema it points into.
 const NARROWER: Record<string, string> = {
-  graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",
-  symbols: "pass `name` to look up one symbol, or use find_symbol / symbols_overview",
-  callers: "pass `name` to look up one symbol's call sites",
-  dead_code: "pass `scope` to a subdirectory",
-  find_references: "the symbol is referenced very widely — narrow with `scope` on a graph query",
+  graph: "pass `scope` to a subdirectory (or `include`/`exclude` globs), or use repo_map / mermaid for an overview",
+  symbols: "pass `name` to look up one symbol, or `concise` for locations only; find_symbol / symbols_overview answer narrower questions",
+  callers: "pass `name` to look up one symbol's call sites, or `concise` for locations only",
+  dead_code: "pass a `limit`, or `scope` to a subdirectory",
+  duplicated_literals: "pass a `limit`, raise `minFiles`/`minCount`, or pass `scope` to a subdirectory",
+  find_references: "the symbol is referenced very widely — pass `concise`, or ask callers for the call sites alone",
+  find_symbol: "lower `maxResults`, or drop `includeBody`/pass `concise`",
+  symbols_overview: "the file declares a great many symbols — pass `concise`",
+  grep: "lower `maxHits`, or restrict with `globs` or `scope`",
+  search: "lower `limit`, or pass `scope` to a subdirectory",
+  explain_search: "lower `limit`, or pass `scope` to a subdirectory",
+  complexity: "lower `top`, or pass one `file`",
+  call_graph: "lower `depth`, or follow one `direction`",
+  type_hierarchy: "pass `name` to look up one type",
+  mermaid: "lower `maxEdges`, or focus on one `module`",
+  repo_map: "lower `budgetTokens`",
+  onboard: "lower `budgetTokens`",
+  hotspots: "pass `since` to count recent history only",
+  churn: "pass `since` to count recent history only",
+  coupling: "pass `since` to mine recent history only",
   check_rules: "narrow the rule set, or pass `scope` to a subdirectory",
 };
 
-// The persisted artifact backing a tool, when a `codeindex index` already wrote
-// one — far more useful to hand back than a truncated blob.
+// The persisted artifact that can BE a tool's answer, when `codeindex index`
+// wrote one — far more useful to hand back than a truncated blob.
 const ARTIFACT_FOR: Record<string, string> = { graph: "graph.json", symbols: "symbols.json" };
 
-export function capResponse(text: string, tool: string, repo: string, maxBytes: number): string {
+// Whether the artifact on disk holds exactly the withheld payload.
+//
+// It was offered whenever the file EXISTED: after an edit since the last
+// `codeindex index` the notice said "the full result is already on disk"
+// about a symbols.json that lacked the new symbol. Only byte equality proves
+// the claim (the persisted rendering may end in one extra newline). The size
+// check keeps a stale artifact to one stat; the read happens only on a size
+// match, and only for a response already too large to send.
+function artifactState(path: string, text: string, bytes: number): "identical" | "stale" | "absent" {
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return "absent";
+  }
+  if (size !== bytes && size !== bytes + 1) return "stale";
+  try {
+    const disk = readFileSync(path, "utf8");
+    return disk === text || disk === text + "\n" ? "identical" : "stale";
+  } catch {
+    return "absent";
+  }
+}
+
+// `wholeRepo` is false for a request the artifact cannot answer however
+// fresh it is — a `scope`d graph, one symbol's entry, a concise projection —
+// and then no artifact is mentioned at all.
+export function capResponse(text: string, tool: string, repo: string, maxBytes: number, wholeRepo = true): string {
   const bytes = Buffer.byteLength(text, "utf8");
   if (bytes <= maxBytes) return text;
-  const artifact = ARTIFACT_FOR[tool] ? join(repo, INDEX_DIR, ARTIFACT_FOR[tool]!) : undefined;
+  const artifactName = wholeRepo && Object.hasOwn(ARTIFACT_FOR, tool) ? ARTIFACT_FOR[tool] : undefined;
+  const artifact = artifactName ? join(repo, INDEX_DIR, artifactName) : undefined;
+  const state = artifact ? artifactState(artifact, text, bytes) : undefined;
+  const refresh = `codeindex index --repo ${repo} --out ${join(repo, INDEX_DIR)}`;
   return (
     JSON.stringify(
       {
@@ -173,12 +222,16 @@ export function capResponse(text: string, tool: string, repo: string, maxBytes: 
         maxBytes,
         reason:
           "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
-        narrower: NARROWER[tool] ?? "narrow the request with `scope`, `include`/`exclude`, or a `limit`",
-        ...(artifact && existsSync(artifact)
-          ? { artifact, artifactNote: "The full result is already on disk here — read it directly if you need all of it." }
-          : artifact
-            ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join(repo, INDEX_DIR)}\` to get this as a file.` }
-            : {}),
+        narrower: Object.hasOwn(NARROWER, tool)
+          ? NARROWER[tool]
+          : "narrow the request with the arguments this tool's inputSchema offers",
+        ...(state === "identical"
+          ? { artifact, artifactNote: "The full result is on disk here, byte-for-byte what this call would have returned — read it directly if you need all of it." }
+          : state === "stale"
+            ? { artifactNote: `The artifact at ${artifact} does not match this answer (the repository changed since it was written, or it was indexed with other options). Run \`${refresh}\` to refresh it, then read it.` }
+            : state === "absent"
+              ? { artifactNote: `Run \`${refresh}\` to get this as a file.` }
+              : {}),
       },
       null,
       2,
