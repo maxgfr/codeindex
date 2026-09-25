@@ -111,7 +111,9 @@ Commands:
               exits 1 on any error-severity violation (a CI gate), 2 on an
               invalid config (unknown key, tier or edge kind); a forbidden
               rule matching no file is an \`unmatched\` warning
-  repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
+  repomap     Token-budgeted map of the most central production files (PageRank
+              without the edges tests add; tests left out) with their public
+              types, functions and methods first (--budget-tokens)
   hotspots    Churn × size ranking of the files where work concentrates: only
               files changed in the window, tests labelled (JSON; --since, --limit)
   coupling    Change coupling: indexed files that change together, ranked by

@@ -157,7 +157,7 @@ export const TOOLS = [
   {
     name: "repo_map",
     description:
-      "Token-budgeted map of the repository: the highest-PageRank files with their key exported signatures, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
+      "Token-budgeted map of the repository: the most central production files (PageRank over the edges production code creates; tests left out) with their public types, functions and methods first, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
     inputSchema: {
       type: "object",
       properties: { ...repoProp, budgetTokens: { type: "number", minimum: 1, description: "Approximate token budget (default 1024)" } },

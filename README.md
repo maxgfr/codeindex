@@ -864,6 +864,12 @@ claude mcp add codeindex -- codeindex mcp
 and persists it as the `onboarding` memory, so the second session reads instead
 of rebuilding.
 
+`repo_map` (and the brief's key-files section) ranks files by PageRank over the
+edges production code creates, so a test harness that thousands of tests
+import does not outrank the code it tests, and it leaves test files out. In each
+file it shows the public types and functions first, then their methods, then
+values, and counts what did not fit (`… 43 more`).
+
 ### Smaller read responses
 
 MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`
