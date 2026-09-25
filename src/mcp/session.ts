@@ -153,16 +153,32 @@ export function sessionClear(): void {
 }
 
 // Invalidate only the watched repository while retaining its incremental
-// records and every other repo in the LRU. Removing one known path defeats the
-// same-size/same-mtime fastpath for that file; an unknown filename keeps the
-// entry but drops all record fastpaths. The next request still walks/stats and
-// proves the complete repository state before returning anything.
+// records and every other repo in the LRU. The next request still walks/stats
+// and proves the complete repository state before returning anything.
+//
+// A changed path's cache entry is POISONED, never removed. scanRepo proves a
+// scan unchanged when every kept file reused its entry AND the kept count
+// equals the cache's size; deleting the entry of a file that was itself
+// deleted dropped both sides of that equality by one, so the stale scan was
+// proven fresh and served with the vanished file until some other file
+// changed. A poisoned entry keeps the count honest and only loses its
+// (size, mtimeMs) fastpath: a surviving file is re-read and hash-compared, and
+// its record is reused when the bytes are the same. An unknown filename
+// poisons every entry, which costs reads but, unlike emptying the map, no
+// re-extraction.
 export function sessionInvalidate(repo: string, rel?: string): void {
   const prefix = repo + "\0";
+  const poison = (cacheMap: SessionCacheMap, key: string, entry: SessionCacheEntry): void => {
+    cacheMap.set(key, { hash: entry.hash, record: entry.record });
+  };
   for (const entry of sessionCaches) {
     if (!entry.key.startsWith(prefix)) continue;
-    if (rel) entry.cacheMap.delete(rel);
-    else entry.cacheMap.clear();
+    if (rel === undefined) {
+      for (const [key, cached] of entry.cacheMap) poison(entry.cacheMap, key, cached);
+    } else {
+      const cached = entry.cacheMap.get(rel);
+      if (cached) poison(entry.cacheMap, rel, cached);
+    }
   }
 }
 

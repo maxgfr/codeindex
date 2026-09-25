@@ -1486,6 +1486,63 @@ describe("getScan — bounded LRU, not a single entry", () => {
     expect(getScan(two, {})).toBe(other);
   });
 
+  it("drops a deleted file after the watcher invalidates it", () => {
+    // The watcher reports the deleted path itself. Removing its cache entry
+    // used to shrink the cache and the walk by the same one file, so the
+    // stale scan was proven unchanged and kept answering with the file.
+    const repo = tmpFixtureCopy("ci-scan-invalidate-deleted-");
+    const before = getScan(repo, {});
+    expect(before.files.some((f) => f.rel === "src/util.ts")).toBe(true);
+    rmSync(join(repo, "src", "util.ts"));
+    sessionInvalidate(repo, "src/util.ts");
+    const after = getScan(repo, {});
+    expect(after).not.toBe(before);
+    expect(after.files.map((f) => f.rel)).toEqual(before.files.map((f) => f.rel).filter((rel) => rel !== "src/util.ts"));
+
+    // A removed directory is reported file by file or by its own name; either
+    // way the vanished records must leave the scan.
+    rmSync(join(repo, "gopkg"), { recursive: true });
+    sessionInvalidate(repo, "gopkg/sub/sub.go");
+    sessionInvalidate(repo, "gopkg");
+    expect(getScan(repo, {}).files.some((f) => f.rel.startsWith("gopkg/"))).toBe(false);
+  });
+
+  it("re-reads an invalidated file without re-extracting identical bytes", () => {
+    const repo = tmpFixtureCopy("ci-scan-invalidate-same-");
+    const before = getScan(repo, {});
+    const record = before.files.find((f) => f.rel === "src/client.ts");
+    // Same bytes, same size, same mtime: only the event says it was touched.
+    // The poisoned entry forces a read, the hash matches, and the scan (and
+    // the record object inside it) is proven unchanged.
+    sessionInvalidate(repo, "src/client.ts");
+    expect(getScan(repo, {})).toBe(before);
+    // An unknown filename poisons every entry the same way.
+    sessionInvalidate(repo);
+    const again = getScan(repo, {});
+    expect(again).toBe(before);
+    expect(again.files.find((f) => f.rel === "src/client.ts")).toBe(record);
+  });
+
+  it("sees a same-size, same-mtime rewrite once the watcher reports it", () => {
+    const repo = tmpFixtureCopy("ci-scan-invalidate-samestat-");
+    const file = join(repo, "src", "util.ts");
+    const original = readFileSync(file, "utf8");
+    // A whole-second mtime, so restoring it below is exact.
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    getScan(repo, {});
+    // Rename one identifier to another of the same length, then restore the
+    // mtime: the (size, mtimeMs) fastpath alone cannot see this edit.
+    const edited = original.replaceAll("function backoff(", "function backofx(");
+    expect(edited).not.toBe(original);
+    writeFileSync(file, edited);
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    expect(getScan(repo, {}).files.find((f) => f.rel === "src/util.ts")!.symbols.map((s) => s.name)).toContain("backoff");
+    sessionInvalidate(repo, "src/util.ts");
+    const names = getScan(repo, {}).files.find((f) => f.rel === "src/util.ts")!.symbols.map((s) => s.name);
+    expect(names).toContain("backofx");
+    expect(names).not.toContain("backoff");
+  });
+
   it("keeps memoized artifacts when an ignored background path changes", () => {
     const repo = tmpFixtureCopy("ci-scan-invalidate-ignored-");
     const artifacts = getArtifacts(repo, {});
