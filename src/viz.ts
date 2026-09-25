@@ -12,6 +12,15 @@ export interface MermaidOptions {
 }
 
 const sanitizeId = (slug: string): string => slug.replace(/[^\w]/g, "_");
+// Every node id carries a prefix, whatever the id scheme under it: a bare
+// module named `end`, `style`, `class`, `click`, `graph`, `subgraph`, `call`,
+// `href`… is a flowchart keyword, and mermaid rejects the whole diagram
+// ("Parse error … got 'end'"). A prefixed id can never be one, and prefixing
+// keeps an injective scheme injective.
+const nodeId = (slug: string): string => `m_${sanitizeId(slug)}`;
+// The label is the directory as written: a slug is lossy (`données` →
+// `donn-es`). Mermaid ends a quoted label at `"`, so it is swapped for `'`.
+const nodeLabel = (m: ModuleNode): string => `${m.path.replace(/"/g, "'")}${m.tier === 0 ? " (core)" : ""}`;
 
 export function renderMermaid(graph: Graph, opts: MermaidOptions = {}): string {
   const maxEdges = opts.maxEdges ?? 80;
@@ -33,11 +42,11 @@ export function renderMermaid(graph: Graph, opts: MermaidOptions = {}): string {
   const lines: string[] = ["graph LR"];
   for (const m of [...graph.modules].sort((a, b) => byStr(a.slug, b.slug))) {
     if (!shown.has(m.slug)) continue;
-    lines.push(`  ${sanitizeId(m.slug)}["${m.slug}${m.tier === 0 ? " (core)" : ""}"]`);
+    lines.push(`  ${nodeId(m.slug)}["${nodeLabel(m)}"]`);
   }
   for (const e of edges) {
     const label = e.kind === "import" ? "" : `|${e.kind}|`;
-    lines.push(`  ${sanitizeId(e.from)} -->${label} ${sanitizeId(e.to)}`);
+    lines.push(`  ${nodeId(e.from)} -->${label} ${nodeId(e.to)}`);
   }
   if (dropped) lines.push(`  %% ${dropped} lighter edges omitted (maxEdges=${maxEdges})`);
   return lines.join("\n") + "\n";

@@ -537,4 +537,33 @@ describe("dead code, complexity, mermaid", () => {
     expect(mmd).toContain("-->");
     expect(renderMermaid(graph)).toBe(mmd);
   });
+
+  it("renderMermaid never emits a flowchart keyword as a node id, and labels nodes by their directory", () => {
+    // mermaid@11 rejects the whole diagram on a bare `end`, `style`, `click`,
+    // `class`, `graph`, `subgraph`, `call` or `href` id.
+    const KEYWORDS = ["end", "style", "click", "class", "graph", "subgraph", "call", "href", "flowchart", "linkStyle", "classDef"];
+    const root = mkdtempSync(join(tmpdir(), "ci-mmd-kw-"));
+    for (const dir of [...KEYWORDS, "données"]) {
+      mkdirSync(join(root, dir));
+      writeFileSync(join(root, dir, "m.ts"), `import { hub } from "../hub/hub";\nexport const v = hub;\n`);
+    }
+    mkdirSync(join(root, "hub"));
+    writeFileSync(join(root, "hub", "hub.ts"), "export const hub = 1;\n");
+    const { graph } = buildIndexArtifacts(root);
+    const mmd = renderMermaid(graph);
+    const body = mmd.split("\n").slice(1).filter((l) => l.trim() && !l.trim().startsWith("%%"));
+    const ids = body.flatMap((l) => {
+      const node = /^ {2}(\S+)\["/.exec(l);
+      if (node) return [node[1]!];
+      const edge = /^ {2}(\S+) -->(?:\|[^|]*\|)? (\S+)$/.exec(l);
+      return edge ? [edge[1]!, edge[2]!] : ["UNPARSED: " + l];
+    });
+    expect(ids.length).toBeGreaterThan(KEYWORDS.length * 2);
+    for (const id of ids) {
+      expect(id).toMatch(/^m_\w+$/);
+      expect(KEYWORDS).not.toContain(id);
+    }
+    expect(mmd).toContain('["données"]');
+    expect(mmd).toContain('m_end["end"]');
+  });
 });
