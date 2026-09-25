@@ -361,7 +361,7 @@ export const TOOLS = [
         rank: {
           type: "string",
           description:
-            'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus — see SearchOptions.rank.',
+            'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph relative to an average file (a leaf ×0.95, a hub well above ×1; Go files unchanged); "lexical" (default) scores on text alone. Measured a wash — it helps some queries and hurts as many — see SearchOptions.rank.',
         },
         exact: {
           type: "boolean",

@@ -108,6 +108,9 @@ const FIXTURE_DIR = /(^|\/)(testdata|test-data|test_data|fixtures?|__fixtures__|
 
 export type RankMode = "graph" | "lexical";
 
+// How far "graph" mode's PageRank prior can move a score; see SearchOptions.rank.
+const GRAPH_PRIOR_WEIGHT = 0.1;
+
 export interface SearchOptions {
   // Maximum results returned (default 20).
   limit?: number;
@@ -124,16 +127,18 @@ export interface SearchOptions {
   // literally" switch.
   exact?: boolean;
   // "graph" multiplies the lexical score by a structural prior — the file's
-  // PageRank over the resolved import graph — so that among comparably worded
-  // files the one the repo actually depends on ranks first.
+  // PageRank over the resolved import graph, relative to an average file — so
+  // that among comparably worded files the one the repo actually depends on
+  // ranks first. An average file keeps its score; a leaf is ×0.95, a file with
+  // ten times the average PageRank ×1.16, a hundred times ×1.37. Go files are
+  // left as they are (see runSearch).
   //
-  // The DEFAULT is "lexical", deliberately. On the judged corpus the prior
-  // changes nothing (MRR/nDCG/recall identical either way), because that corpus
-  // is small and flat, while enabling it costs a full import-resolution pass on
-  // every query. An unmeasured multiplier with a real cost is not a good
-  // default for an engine whose claim is measured quality — so it is offered,
-  // documented as unproven, and left off until someone measures it on a corpus
-  // where centrality can actually discriminate.
+  // The DEFAULT is "lexical", deliberately, because measured the prior is a
+  // wash. On flask it helps (MRR 0.807 → 0.824, P@1 17 → 18 of 24); on a
+  // second flask set it hurts by as much (0.851 → 0.816, P@1 11 → 10 of 14);
+  // the judged corpus, gin and microsoft/TypeScript do not move. A multiplier
+  // that does not win, and costs an import-resolution pass, is offered for
+  // callers who want centrality, not imposed on everyone.
   rank?: RankMode;
 }
 
@@ -696,7 +701,18 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
 
   // Structural prior: a file's PageRank over the resolved import graph. Looked up
   // ONLY in "graph" mode, so "lexical" never pays the import-resolution pass.
+  //
+  // PageRank sums to 1 over the tree, so it is scaled by the file count — 1 is
+  // an average file at any size — and the multiplier is centred there: an
+  // average file keeps its score, a hub gains, a leaf loses a little. Unscaled
+  // (1 + 0.35·log1p(PageRank)) it moved a score by at most 1.3% on flask and by
+  // nothing on a large tree. log1p keeps a hub from swamping a well-worded
+  // match. Go files keep their score: a Go import names a package, which
+  // resolves to the package's alphabetically first file, so a Go file's
+  // in-degree measures its name, not its importance.
   const prior = opts.rank === "graph" ? importPagerankFor(scan) : undefined;
+  const priorOf = (pagerank: number): number =>
+    (1 + GRAPH_PRIOR_WEIGHT * Math.log1p(pagerank * n)) / (1 + GRAPH_PRIOR_WEIGHT * Math.LN2);
 
   const scored: Scored[] = [];
   for (let i = 0; i < n; i++) {
@@ -753,11 +769,7 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
       if (d.isFixture) score *= FIXTURE_DEMOTION;
       else if (d.isTest) score *= TEST_DEMOTION;
     }
-    if (prior) {
-      // log1p keeps a hub from swamping a well-worded match: the prior reorders
-      // comparable results, it does not decide them.
-      score *= 1 + 0.35 * Math.log1p(prior.get(d.file) ?? 0);
-    }
+    if (prior && !d.file.endsWith(".go")) score *= priorOf(prior.get(d.file) ?? 0);
     scored.push({ d, score: Number(score.toFixed(4)), matched, matchedFields, symbolTerms, fuzzyHit });
   }
 

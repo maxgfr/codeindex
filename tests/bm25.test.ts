@@ -649,6 +649,34 @@ describe("searchIndex: rank modes", () => {
   });
 });
 
+describe("searchIndex: the graph prior", () => {
+  // PageRank sums to 1, so the old multiplier 1 + 0.35·log1p(PageRank) shrank
+  // with the tree: it moved flask scores by ≤1.3% and reordered none of 94
+  // judged queries. Scaled by the file count it means the same at any size.
+  it("lifts a file the repo depends on over a slightly better-worded one, at any tree size", () => {
+    const files: Record<string, string> = {
+      "lib/hub.ts": "export function widget(): void {}\n",
+      "lib/alt.ts": "// widget\nexport type Widget = number;\nexport function widget(): void {}\n",
+      "gopkg/widget.go": "package gopkg\n\n// widget\nfunc Widget() {}\n",
+    };
+    for (let i = 0; i < 30; i++) {
+      files[`use/u${i}.ts`] = `import { widget } from "../lib/hub.js";\nexport function u${i}(): void {\n  widget();\n}\n`;
+    }
+    // Filler, so PageRank per file is small — where the unscaled prior vanished.
+    for (let i = 0; i < 300; i++) files[`fill/f${i}.ts`] = `export const f${i} = 1;\n`;
+    const scan = scanRepo(repoWith(files));
+    const score = (rs: { file: string; score: number }[], f: string): number => rs.find((r) => r.file === f)!.score;
+
+    const lexical = searchIndex(scan, "widget");
+    expect(score(lexical, "lib/alt.ts")).toBeGreaterThan(score(lexical, "lib/hub.ts"));
+    const graph = searchIndex(scan, "widget", { rank: "graph" });
+    expect(graph[0]!.file).toBe("lib/hub.ts"); // 30 importers
+    expect(score(graph, "lib/hub.ts")).toBeGreaterThan(score(lexical, "lib/hub.ts") * 1.1);
+    // A Go file's in-degree is an artefact of package resolution: left as is.
+    expect(score(graph, "gopkg/widget.go")).toBe(score(lexical, "gopkg/widget.go"));
+  });
+});
+
 describe("stemOf", () => {
   it("maps inflections of one word onto a single stem", () => {
     expect(stemOf("caching")).toBe(stemOf("cache"));

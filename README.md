@@ -543,6 +543,14 @@ default; disable with `--no-fuzzy` (CLI) or `fuzzy: false` (library/MCP
 `SearchOptions.fuzzy`); results carry an additive `fuzzyTerms` field when the
 fallback contributed.
 
+`--rank graph` (MCP `rank: "graph"`) multiplies each score by the file's
+PageRank over the resolved import graph, relative to an average file: a leaf is
+×0.95, a file with ten times the average PageRank ×1.16. Go files are left
+alone, because a Go import resolves to the package's alphabetically first file.
+It is opt-in because it does not win: on flask it lifts MRR from 0.807 to 0.824,
+on a second flask query set it drops it from 0.851 to 0.816, and gin,
+microsoft/TypeScript and the judged corpus do not move.
+
 ### When the query matched nothing
 
 A search that finds nothing useful and a search that finds nothing *at all* look

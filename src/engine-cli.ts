@@ -202,6 +202,9 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       (the ones the stem/trigram bridge produced)
   --explain           \`search\`: emit { results, explain } — which terms matched,
                       which bridged, and whether the query really found anything
+  --rank <mode>       \`search\`: lexical (default) or graph — scale each score by
+                      the file's import-graph PageRank relative to an average
+                      file (Go files unchanged). Measured a wash, hence opt-in
   --semantic          \`search\`: RRF-fuse an embedding tier with lexical — the
                       HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
                       local static model (lexical-only when neither is available)
