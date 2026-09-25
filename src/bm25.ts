@@ -268,11 +268,44 @@ export function buildDocs(scan: RepoScan): Doc[] {
     for (const h of f.headings) addTerms(doc, "heading", h);
     if (f.summary) addTerms(doc, "summary", f.summary);
     // Already subtokenized at extraction time; adding them through the same
-    // splitter is idempotent and keeps one tokenisation path.
-    for (const t of f.terms ?? []) addTerms(doc, "body", t);
+    // splitter is idempotent and keeps one tokenisation path. A plain
+    // lowercase alphanumeric word is its own and only subtoken, so it goes in
+    // directly: that is nearly every body term, and running the full splitter
+    // on each was the largest cost of the first search on a big tree.
+    const body = doc.fields.body;
+    for (const t of f.terms ?? []) {
+      if (!PLAIN_TERM.test(t)) {
+        addTerms(doc, "body", t);
+        continue;
+      }
+      body.tf.set(t, (body.tf.get(t) ?? 0) + 1);
+      body.len++;
+      doc.all.add(t);
+    }
     docs.push(doc);
   }
   return docs;
+}
+
+// The strings `subtokens` maps to exactly [themselves]: no case boundary to
+// split, nothing to fold or strip, at least the 2 characters it keeps.
+const PLAIN_TERM = /^[a-z0-9]{2,}$/;
+
+// Per-field average length, the BM25F normaliser. A property of the documents
+// alone, so it is summed once per (memoised) docs array instead of once per
+// query — the same additions in the same order, so the same doubles.
+const AVG_LEN = new WeakMap<Doc[], Record<Field, number>>();
+function avgLenOf(docs: Doc[]): Record<Field, number> {
+  let avg = AVG_LEN.get(docs);
+  if (avg) return avg;
+  avg = {} as Record<Field, number>;
+  for (const f of FIELDS) {
+    let total = 0;
+    for (const d of docs) total += d.fields[f].len;
+    avg[f] = total / docs.length || 1;
+  }
+  AVG_LEN.set(docs, avg);
+  return avg;
 }
 
 // Character trigrams of a token, padded with two boundary sentinels on each
@@ -315,18 +348,67 @@ export function buildStemIndex(docs: Doc[]): Map<string, string[]> {
   return index;
 }
 
-// Trigram index of the corpus vocabulary: every distinct doc token mapped to
-// its trigram set. Built LAZILY by searchIndex — only when >=1 query term has
-// df==0 — so a fully-matched query never pays this cost. Exported for
-// src/derived.ts (bm25TrigramsFor) — not in the public barrel.
-export function buildTrigramIndex(docs: Doc[]): Map<string, Set<string>> {
-  const index = new Map<string, Set<string>>();
+// Trigram index of the corpus vocabulary, inverted: gram → the ids of the
+// vocab terms that contain it. Built LAZILY by searchIndex — only when >=1
+// query term has df==0 — so a fully-matched query never pays this cost.
+// Exported for src/derived.ts (bm25TrigramsFor) — not in the public barrel.
+//
+// Inverted rather than term → gram set, because a fuzzy lookup only needs the
+// terms that share a gram with the query term (Dice is 0 for the rest), and
+// counting shared grams along the postings reaches exactly those instead of
+// intersecting every vocab term's set. It is also a fraction of the memory: a
+// Set per term was hundreds of megabytes on a 66k-file tree.
+export interface TrigramIndex {
+  terms: string[]; // the vocabulary, first-seen order; a term's id is its index
+  sizes: Uint32Array; // distinct-gram count per term id — Dice's denominator
+  postings: Map<string, Uint32Array>; // gram → term ids, ascending
+}
+
+export function buildTrigramIndex(docs: Doc[]): TrigramIndex {
+  const terms: string[] = [];
+  const seen = new Set<string>();
   for (const d of docs) {
     for (const term of d.all) {
-      if (!index.has(term)) index.set(term, charTrigrams(term));
+      if (seen.has(term)) continue;
+      seen.add(term);
+      terms.push(term);
     }
   }
-  return index;
+  const sizes = new Uint32Array(terms.length);
+  const lists = new Map<string, number[]>();
+  for (let id = 0; id < terms.length; id++) {
+    const grams = charTrigrams(terms[id]!);
+    sizes[id] = grams.size;
+    for (const g of grams) {
+      let list = lists.get(g);
+      if (!list) lists.set(g, (list = []));
+      list.push(id);
+    }
+  }
+  const postings = new Map<string, Uint32Array>();
+  for (const [g, list] of lists) postings.set(g, Uint32Array.from(list));
+  return { terms, sizes, postings };
+}
+
+// Vocab terms whose trigram Dice similarity to `term` reaches the threshold —
+// the same 2|A∩B| / (|A|+|B|) diceCoefficient computes, with |A∩B| counted
+// along the postings of `term`'s own grams.
+function trigramNeighbours(index: TrigramIndex, term: string): { term: string; dice: number }[] {
+  const grams = charTrigrams(term);
+  const shared = new Uint32Array(index.terms.length);
+  const touched: number[] = [];
+  for (const g of grams) {
+    for (const id of index.postings.get(g) ?? []) {
+      if (!shared[id]) touched.push(id);
+      shared[id]!++;
+    }
+  }
+  const out: { term: string; dice: number }[] = [];
+  for (const id of touched) {
+    const dice = (2 * shared[id]!) / (grams.size + index.sizes[id]!);
+    if (dice >= FUZZY_DICE_THRESHOLD) out.push({ term: index.terms[id]!, dice });
+  }
+  return out;
 }
 
 /**
@@ -399,21 +481,24 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
   const n = docs.length;
   if (!n) return emptyExplanation(query, "none", "This index contains no files.");
 
-  // Per-field average length, the BM25F normaliser.
-  const avgLen = {} as Record<Field, number>;
-  for (const f of FIELDS) {
-    let total = 0;
-    for (const d of docs) total += d.fields[f].len;
-    avgLen[f] = total / n || 1;
-  }
+  const avgLen = avgLenOf(docs);
 
-  // Document frequency per query term, over the union of fields.
-  const df = new Map<string, number>();
-  for (const t of terms) {
+  // Document frequency per term, over the union of fields — and, in the same
+  // pass, which documents hold ANY term the query can score on. Only those can
+  // earn a point, so only those are scored: a query matching 8k files of a 66k
+  // tree used to run the field weighting over all 66k.
+  const candidate = new Uint8Array(n);
+  const countDf = (t: string): number => {
     let count = 0;
-    for (const d of docs) if (d.all.has(t)) count++;
-    df.set(t, count);
-  }
+    for (let i = 0; i < n; i++) {
+      if (!docs[i]!.all.has(t)) continue;
+      count++;
+      candidate[i] = 1;
+    }
+    return count;
+  };
+  const df = new Map<string, number>();
+  for (const t of terms) df.set(t, countDf(t));
 
   // Fuzzy fallback: STRICT df==0 gate — a term that matches anywhere, even
   // once, is never expanded. The trigram index of the corpus vocabulary is
@@ -441,12 +526,7 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
       if (stillUnmatched.length) {
         const trigramIndex = bm25TrigramsFor(scan);
         for (const t of stillUnmatched) {
-          const grams = charTrigrams(t);
-          const candidates: { term: string; dice: number }[] = [];
-          for (const [vocabTerm, vocabGrams] of trigramIndex) {
-            const dice = diceCoefficient(grams, vocabGrams);
-            if (dice >= FUZZY_DICE_THRESHOLD) candidates.push({ term: vocabTerm, dice });
-          }
+          const candidates = trigramNeighbours(trigramIndex, t);
           // Deterministic: similarity desc, then vocab term asc.
           candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
           fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
@@ -454,16 +534,16 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
       }
     }
   }
-  // df cache for expanded vocab terms (distinct from query-term df above).
+  // df of every expanded vocab term (distinct from query-term df above). Each
+  // is a corpus term, so it occurs somewhere: counting it also marks the files
+  // the bridge can reach as candidates.
   const vocabDf = new Map<string, number>();
-  const dfOfVocabTerm = (term: string): number => {
-    const known = df.get(term) ?? vocabDf.get(term);
-    if (known !== undefined) return known;
-    let count = 0;
-    for (const d of docs) if (d.all.has(term)) count++;
-    vocabDf.set(term, count);
-    return count;
-  };
+  for (const cands of fuzzyCandidates.values()) {
+    for (const { term } of cands) {
+      if (!df.has(term) && !vocabDf.has(term)) vocabDf.set(term, countDf(term));
+    }
+  }
+  const dfOfVocabTerm = (term: string): number => df.get(term) ?? vocabDf.get(term)!;
 
   const idfOf = (docFreq: number): number => Math.log(1 + (n - docFreq + 0.5) / (docFreq + 0.5));
 
@@ -471,8 +551,10 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
   // ONLY in "graph" mode, so "lexical" never pays the import-resolution pass.
   const prior = opts.rank === "graph" ? importPagerankFor(scan) : undefined;
 
-  const results: SearchResult[] = [];
-  for (const d of docs) {
+  const scored: Scored[] = [];
+  for (let i = 0; i < n; i++) {
+    if (!candidate[i]) continue;
+    const d = docs[i]!;
     // BM25F: sum each field's length-normalised tf into ONE weighted frequency
     // per term, then saturate once. This is what makes a term in a short, highly
     // weighted field (a symbol name) outrank the same term buried in prose.
@@ -526,44 +608,63 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
       // comparable results, it does not decide them.
       score *= 1 + 0.35 * Math.log1p(prior.get(d.file) ?? 0);
     }
-
-    // Symbols ranked by how many query tokens (exact or fuzzy-expanded) their
-    // name carries, then by name.
-    const scored = d.decls
-      .map((decl) => {
-        const toks = new Set(subtokens(decl.name));
-        let hits = 0;
-        for (const t of symbolTerms) if (toks.has(t)) hits++;
-        return { decl, hits };
-      })
-      .filter((s) => s.hits > 0)
-      .sort((a, b) => b.hits - a.hits || byStr(a.decl.name, b.decl.name));
-
-    const hits = scored.slice(0, TOP_SYMBOLS).map((s) => s.decl);
-    const result: SearchResult = {
-      file: d.file,
-      score: Number(score.toFixed(4)),
-      matchedTerms: matched.sort(byStr),
-      topSymbols: hits.map((h) => h.name),
-    };
-    if (matchedFields.size) result.matchedFields = FIELDS.filter((f) => matchedFields.has(f));
-    if (hits.length) {
-      result.symbolHits = hits;
-      result.line = Math.min(...hits.map((h) => h.line));
-    }
-    if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
-    // Nothing verbatim matched here: every point of this score came through the
-    // stem/trigram bridge. Set only when true, so an ordinary hit serialises to
-    // exactly the bytes it did before this field existed.
-    if (!matched.length) result.bridgedOnly = true;
-    results.push(result);
+    scored.push({ d, score: Number(score.toFixed(4)), matched, matchedFields, symbolTerms, fuzzyHit });
   }
 
-  // Rounded score first (so 4-dp ties resolve stably), then path.
-  results.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
-  const kept = (opts.exact ? results.filter((r) => !r.bridgedOnly) : results).slice(0, opts.limit ?? DEFAULT_LIMIT);
+  // Rounded score first (so 4-dp ties resolve stably), then path. A row with
+  // no verbatim match is bridged-only, which is what --exact drops.
+  scored.sort((a, b) => b.score - a.score || byStr(a.d.file, b.d.file));
+  const kept = (opts.exact ? scored.filter((s) => s.matched.length) : scored)
+    .slice(0, opts.limit ?? DEFAULT_LIMIT)
+    .map(resultOf);
 
   return { results: kept, explain: explainOf(query, terms, df, fuzzyCandidates, kept) };
+}
+
+/** A scored document, before it is dressed as a result. */
+interface Scored {
+  d: Doc;
+  score: number; // already fixed to 4 dp
+  matched: string[];
+  matchedFields: Set<Field>;
+  symbolTerms: Set<string>; // matched ∪ fuzzy-expanded, for topSymbols ranking
+  fuzzyHit: Set<string>; // original query terms resolved via fuzzy fallback
+}
+
+// Built only for the rows that survive the limit: ranking the declarations
+// subtokenises every one of them, and doing that for all 8k files a common
+// word matches — to return 20 — was most of a warm query's time.
+function resultOf({ d, score, matched, matchedFields, symbolTerms, fuzzyHit }: Scored): SearchResult {
+  // Symbols ranked by how many query tokens (exact or fuzzy-expanded) their
+  // name carries, then by name.
+  const ranked = d.decls
+    .map((decl) => {
+      const toks = new Set(subtokens(decl.name));
+      let hits = 0;
+      for (const t of symbolTerms) if (toks.has(t)) hits++;
+      return { decl, hits };
+    })
+    .filter((s) => s.hits > 0)
+    .sort((a, b) => b.hits - a.hits || byStr(a.decl.name, b.decl.name));
+
+  const hits = ranked.slice(0, TOP_SYMBOLS).map((s) => s.decl);
+  const result: SearchResult = {
+    file: d.file,
+    score,
+    matchedTerms: matched.sort(byStr),
+    topSymbols: hits.map((h) => h.name),
+  };
+  if (matchedFields.size) result.matchedFields = FIELDS.filter((f) => matchedFields.has(f));
+  if (hits.length) {
+    result.symbolHits = hits;
+    result.line = Math.min(...hits.map((h) => h.line));
+  }
+  if (fuzzyHit.size) result.fuzzyTerms = [...fuzzyHit].sort(byStr);
+  // Nothing verbatim matched here: every point of this score came through the
+  // stem/trigram bridge. Set only when true, so an ordinary hit serialises to
+  // exactly the bytes it did before this field existed.
+  if (!matched.length) result.bridgedOnly = true;
+  return result;
 }
 
 /**

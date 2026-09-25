@@ -109,10 +109,17 @@ const STOPWORDS = new Set([
   "happen","happens","default","value","values","please","explain","tell","me","my","our",
 ]);
 
+// eslint-disable-next-line no-control-regex
+const NON_ASCII = /[^\x00-\x7F]/;
+
 // Fold diacritics to their base letters (NFKD decomposition, then drop the
 // combining marks in the U+0300–U+036F block) so "café" and "cafe" tokenize
 // alike. Query and haystack must both pass through this so the two sides agree.
 export function foldText(s: string): string {
+  // ASCII is fixed under NFKD and holds no combining mark, so it folds to
+  // itself — and it is nearly every identifier and comment word. Skipping ICU
+  // for it is a measurable share of building the search index.
+  if (!NON_ASCII.test(s)) return s;
   return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
 

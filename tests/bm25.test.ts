@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens } from "../src/bm25.js";
+import { buildDocs, charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens } from "../src/bm25.js";
 import { stemOf } from "../src/util.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
@@ -219,6 +219,46 @@ describe("searchIndex fuzzy trigram fallback (df==0 query terms)", () => {
     expect(json).not.toContain("bridgedOnly");
     expect(withDefault[0]!.file).toBe("src/http/client.ts");
     expect(withDefault[0]!.matchedTerms).toEqual(["client", "http", "retry"]);
+  });
+
+  it("the inverted trigram index finds exactly the neighbours a brute-force Dice scan does", () => {
+    // The index counts shared grams along postings instead of intersecting every
+    // vocab term's gram set. Same numbers by construction — asserted here
+    // against the literal definition, over every term in a real vocabulary.
+    const scan = scanRepo(REPO);
+    const vocab = new Set<string>();
+    for (const d of buildDocs(scan)) for (const t of d.all) vocab.add(t);
+    let compared = 0;
+    for (const typo of ["clent", "retr", "helpr", "backof", "reqeust"]) {
+      const grams = charTrigrams(typo);
+      const brute = [...vocab]
+        .map((term) => ({ term, dice: diceCoefficient(grams, charTrigrams(term)) }))
+        .filter((c) => c.dice >= 0.6)
+        .sort((a, b) => b.dice - a.dice || (a.term < b.term ? -1 : 1))
+        .slice(0, 3);
+      const row = explainQuery(scan, typo).explain.terms[0]!;
+      if (row.bridge?.via === "stem") continue; // morphology answered first — not this path
+      expect(row.bridge?.to ?? [], typo).toEqual(brute.map((c) => c.term));
+      if (brute.length) expect(row.bridge!.dice).toBe(brute[0]!.dice);
+      if (brute.length) compared++;
+    }
+    expect(compared).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("searchIndex: a row does not depend on how many rows were asked for", () => {
+  // Results are dressed (topSymbols, symbolHits, line) only after the limit is
+  // applied; a row must read the same whether it is one of 1 or one of 50.
+  it("returns the same leading rows, byte for byte, at every limit", () => {
+    const scan = scanRepo(REPO);
+    for (const q of ["http client retry", "clientt", "config", "request"]) {
+      for (const exact of [false, true]) {
+        const all = searchIndex(scan, q, { limit: 50, exact });
+        for (const k of [1, 2, 3]) {
+          expect(JSON.stringify(searchIndex(scan, q, { limit: k, exact })), `${q} @${k}`).toBe(JSON.stringify(all.slice(0, k)));
+        }
+      }
+    }
   });
 });
 
