@@ -441,6 +441,50 @@ describe("searchIndex: BM25F fields", () => {
   });
 });
 
+describe("searchIndex: stopwords that are names", () => {
+  // gin's two most-used APIs are `Default` and `Use`; both are English
+  // stopwords, and both queries used to search for nothing at all.
+  const repo = (): string =>
+    repoWith({
+      "gin.go": "package gin\n\nfunc Default() *Engine { return nil }\n\nfunc (e *Engine) Use(m ...HandlerFunc) {}\n",
+      "chain.go": "package gin\n\n// middleware chain runner\nfunc next() {}\n",
+    });
+
+  it("searches a declared, capitalised stopword instead of dropping it", () => {
+    const scan = scanRepo(repo());
+    const { results, explain } = explainQuery(scan, "Default");
+    expect(results[0]!.file).toBe("gin.go");
+    expect(results[0]!.topSymbols).toEqual(["Default"]);
+    expect(explain.droppedStopwords).toEqual([]);
+    expect(explain.verdict).toBe("match");
+
+    const use = explainQuery(scan, "Use middleware");
+    expect(use.explain.terms.map((t) => t.term)).toEqual(["use", "middleware"]);
+    expect(use.explain.droppedStopwords).toEqual([]);
+    expect(use.results[0]!.file).toBe("gin.go");
+  });
+
+  it("searches a lone stopword: it is the only thing the query can mean", () => {
+    const { results, explain } = explainQuery(scanRepo(repo()), "default");
+    expect(results.map((r) => r.file)).toEqual(["gin.go"]);
+    expect(explain.droppedStopwords).toEqual([]);
+  });
+
+  it("still drops a lowercase stopword in a sentence, and an undeclared capitalised one", () => {
+    const scan = scanRepo(repo());
+    const lower = explainQuery(scan, "use middleware").explain;
+    expect(lower.terms.map((t) => t.term)).toEqual(["middleware"]);
+    expect(lower.droppedStopwords).toEqual(["use"]);
+    // Capitalised at the start of a sentence, but nothing is named "How".
+    const sentence = explainQuery(scan, "How middleware runs").explain;
+    expect(sentence.droppedStopwords).toEqual(["How"]);
+    // And an all-stopword sentence still says nothing was searched for.
+    const none = explainQuery(scan, "how does the default value work");
+    expect(none.results).toEqual([]);
+    expect(none.explain.note).toMatch(/stopword/);
+  });
+});
+
 describe("searchIndex: stem fallback", () => {
   it('rescues an inflected query term: "caching" finds a doc comment saying "cache"', () => {
     const repo = repoWith({

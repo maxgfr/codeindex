@@ -518,7 +518,11 @@ taste.
 Results carry `matchedFields` (was it the path or a doc comment?), a `line`
 anchor and `symbolHits` (name, kind, line), so a hit is a place to open rather
 than a file to re-read. A whole-identifier match outranks a subtoken match, and a
-test file ranks below the code it tests unless the query asks for tests. A query term that
+test file ranks below the code it tests unless the query asks for tests. English
+stopwords are dropped from a sentence, but not from a name: a query that is only
+a stopword (`default`), or a capitalised stopword the repo declares as a symbol
+(`Use middleware`, `Context.Set` — gin's `Use` and `Set`), is searched as the
+name it is. A query term that
 matches nothing in the corpus (zero document frequency) gets two deterministic
 fallbacks, morphology first: a **stem match** ("caching" finds "cache",
 "retries" finds "retry") because an unmatched term is far more often an
@@ -560,7 +564,7 @@ diagnostics come from `explainQuery` (library), `--explain` (CLI) or the
 | `verdict` | `match` · `weak` (results rest on a near match, or the identifier has df 0) · `none` |
 | `wholeIdentifier` | the identifier you typed, with its document frequency — df 0 is the finding |
 | `unresolvedTerms` | terms that exist nowhere and bridged to nothing |
-| `droppedStopwords` | why an all-stopword query returned an empty array |
+| `droppedStopwords` | why an all-stopword query returned an empty array (a stopword searched as a name is not listed) |
 | `terms[].bridge` | what a zero-df term fell back to, and whether by stem or trigram |
 
 Individual results carry `bridgedOnly: true` when nothing matched verbatim —

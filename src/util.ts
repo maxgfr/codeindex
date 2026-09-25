@@ -123,7 +123,10 @@ export function foldText(s: string): string {
   return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
 
-export function keywords(question: string): string[] {
+// `keep` lets a caller that knows better reclaim a token the stopword list
+// would drop — search does, for a stopword the code base declares as a name
+// (gin's `Default`, `Use`). 1-char noise is never reclaimed.
+export function keywords(question: string, keep?: (raw: string) => boolean): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
@@ -132,7 +135,7 @@ export function keywords(question: string): string[] {
     // Keep identifiers as-is (camelCase/snake_case often carry the real signal),
     // but filter generic English stopwords and 1-char noise.
     if (raw.length < 2) continue;
-    if (STOPWORDS.has(lower)) continue;
+    if (STOPWORDS.has(lower) && !keep?.(raw)) continue;
     if (seen.has(lower)) continue;
     seen.add(lower);
     out.push(raw);
@@ -149,11 +152,11 @@ export function keywords(question: string): string[] {
  * results for a reason no caller can see from the empty array alone. Kept here
  * rather than in the search module so STOPWORDS stays defined exactly once.
  */
-export function droppedKeywords(question: string): string[] {
+export function droppedKeywords(question: string, keep?: (raw: string) => boolean): string[] {
   const out: string[] = [];
   for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
     if (!raw) continue;
-    if (raw.length < 2 || STOPWORDS.has(raw.toLowerCase())) out.push(raw);
+    if (raw.length < 2 || (STOPWORDS.has(raw.toLowerCase()) && !keep?.(raw))) out.push(raw);
   }
   return out;
 }

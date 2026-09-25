@@ -182,7 +182,11 @@ export interface QueryExplanation {
   query: string;
   /** Post keywords() + subtokens(), in query order. */
   terms: TermDiagnostic[];
-  /** Raw tokens keywords() discarded as stopwords or 1-char noise, in order. */
+  /**
+   * Raw tokens keywords() discarded as stopwords or 1-char noise, in order. A
+   * stopword the query searched for after all — the query's only word, or a
+   * capitalised name the corpus declares — is not listed.
+   */
   droppedStopwords: string[];
   /** df==0 AND no stem/trigram bridge — present in the repo nowhere, sorted. */
   unresolvedTerms: string[];
@@ -435,13 +439,13 @@ export function explainQuery(scan: RepoScan, query: string, opts: SearchOptions 
 }
 
 /** An empty result set, plus the reason it is empty. */
-function emptyExplanation(query: string, verdict: QueryVerdict, note: string): ExplainedSearch {
+function emptyExplanation(query: string, verdict: QueryVerdict, note: string, keep?: (raw: string) => boolean): ExplainedSearch {
   return {
     results: [],
     explain: {
       query,
       terms: [],
-      droppedStopwords: droppedKeywords(query),
+      droppedStopwords: droppedKeywords(query, keep),
       unresolvedTerms: [],
       verdict,
       note,
@@ -451,12 +455,45 @@ function emptyExplanation(query: string, verdict: QueryVerdict, note: string): E
   };
 }
 
+/**
+ * The stopwords this query should search for after all.
+ *
+ * A stopword is noise in a sentence and a name in code: gin's two most-used
+ * APIs are `Default` and `Use`, and `search Default` searched for nothing. A
+ * dropped token is taken back when
+ *
+ *   - it is the query's only word: there is nothing else it can mean, and
+ *     "nothing was searched for" is the one answer certain to be wrong;
+ *   - it is capitalised and the corpus declares a symbol by exactly that name
+ *     ("Use middleware", "Context.Set").
+ *
+ * A lowercase stopword inside a sentence stays dropped, so "how does the
+ * default value work" still says nothing was searched for.
+ */
+function stopwordRescue(scan: RepoScan, query: string): ((raw: string) => boolean) | undefined {
+  const dropped = droppedKeywords(query).filter((t) => t.length >= 2);
+  if (!dropped.length) return undefined;
+  const distinct = new Set(dropped.map((t) => t.toLowerCase()));
+  if (distinct.size === 1 && !keywords(query).length) return (raw) => distinct.has(raw.toLowerCase());
+  const named = dropped.filter((t) => /[A-Z]/.test(t));
+  if (!named.length) return undefined;
+  const docs = bm25DocsFor(scan);
+  const declared = new Set(
+    named.filter((t) => {
+      const lower = t.toLowerCase();
+      return docs.some((d) => d.exactNames.has(lower) && d.symbols.includes(t));
+    }),
+  );
+  return declared.size ? (raw) => declared.has(raw) : undefined;
+}
+
 function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): ExplainedSearch {
   // Query tokens: util keywords (stopwords dropped, identifiers kept) expanded
   // through the SAME subtoken splitter the documents use.
+  const keep = stopwordRescue(scan, query);
   const terms: string[] = [];
   const seen = new Set<string>();
-  for (const kw of keywords(query)) {
+  for (const kw of keywords(query, keep)) {
     for (const t of subtokens(kw)) {
       if (seen.has(t)) continue;
       seen.add(t);
@@ -467,13 +504,14 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
     // Every token was a stopword or a 1-char fragment. The empty array alone
     // reads as "nothing in this repo matches", which is a different and much
     // more misleading statement than "the query carried no searchable term".
-    const dropped = droppedKeywords(query);
+    const dropped = droppedKeywords(query, keep);
     return emptyExplanation(
       query,
       "none",
       dropped.length
         ? `Nothing was searched for: every token in this query (${dropped.join(", ")}) is a stopword or too short to index. Search with the identifiers or domain words you are actually looking for.`
         : "Nothing was searched for: the query carried no indexable token.",
+      keep,
     );
   }
   const queryWantsTests = terms.some((t) => TEST_INTENT.test(t));
@@ -482,7 +520,7 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
   // read-only from here on.
   const docs = bm25DocsFor(scan);
   const n = docs.length;
-  if (!n) return emptyExplanation(query, "none", "This index contains no files.");
+  if (!n) return emptyExplanation(query, "none", "This index contains no files.", keep);
 
   const avgLen = avgLenOf(docs);
 
@@ -630,7 +668,7 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
     .slice(0, opts.limit ?? DEFAULT_LIMIT)
     .map(resultOf);
 
-  return { results: kept, explain: explainOf(query, terms, df, fuzzyCandidates, kept) };
+  return { results: kept, explain: explainOf(query, terms, df, fuzzyCandidates, kept, keep) };
 }
 
 /** A scored document, before it is dressed as a result. */
@@ -691,6 +729,7 @@ function explainOf(
   df: Map<string, number>,
   fuzzyCandidates: Map<string, { term: string; dice: number }[]>,
   kept: SearchResult[],
+  keep: ((raw: string) => boolean) | undefined,
 ): QueryExplanation {
   const diagnostics: TermDiagnostic[] = terms.map((term) => {
     const frequency = df.get(term) ?? 0;
@@ -722,7 +761,7 @@ function explainOf(
   const explain: QueryExplanation = {
     query,
     terms: diagnostics,
-    droppedStopwords: droppedKeywords(query),
+    droppedStopwords: droppedKeywords(query, keep),
     unresolvedTerms,
     ...(wholeIdentifier ? { wholeIdentifier } : {}),
     verdict,
