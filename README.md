@@ -420,6 +420,13 @@ be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
 file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
 `{ total, shown, truncated, candidates }` like MCP `dead_code`.
 
+`complexity` counts branch keywords and operators in code only. Comments,
+docstrings and string literals are blanked first, per language, so a docstring
+full of "if" and "for" adds nothing. Python, Ruby and Lua `and`/`or` count like
+`&&`/`||`. Classes and other containers are not ranked beside functions, and
+a nested function counts toward its own score, not its parent's. `risk` uses
+the same code-only count per file.
+
 `deadcode` lists exported symbols no call site binds to, in two tiers:
 `unreferenced` when no other file of the same language names the symbol, and
 `uncalled` when one does (an import, a type position, a base-class list, a

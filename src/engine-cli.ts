@@ -137,8 +137,12 @@ Commands:
               {total, shown, truncated, candidates}
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
               positional for one file; omit for the repo-wide top (--limit,
-              default 50)
-  risk        Complexity × git-churn ranking (JSON; --since <ref> to bound)
+              default 50). Counts code only (comments, docstrings and strings
+              aside; Python/Ruby/Lua and/or count like && and ||); classes and
+              other containers are not ranked, and a nested function scores on
+              its own, not inside its parent
+  risk        Complexity × git-churn ranking (JSON; --since <ref> to bound),
+              with the same code-only branch counts per file
   delta       Review panel for the git diff: changed files -> enclosing symbols ->
               blast radius -> risk score with explained reasons
               (--base <ref> | --staged, --depth <n>, --json)

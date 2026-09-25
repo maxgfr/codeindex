@@ -290,7 +290,7 @@ export const TOOLS = [
   {
     name: "complexity",
     description:
-      "Cyclomatic-complexity estimates (branch-token counting over AST line spans), most-complex first. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
+      "Cyclomatic-complexity estimates (branch-token counting over AST line spans, comments and string literals aside), most-complex first; functions and methods only — containers are not ranked, and nested functions score on their own. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
     inputSchema: {
       type: "object",
       properties: {
