@@ -101,7 +101,7 @@ export interface CodeSymbol {
   kind: string; // function | class | method | const | type | interface | enum | struct | trait | def
   file: string; // relative to repo root
   line: number; // 1-based
-  endLine?: number; // 1-based end of the declaration node (AST extractor only)
+  endLine?: number; // 1-based end of the declaration (AST tier; regex tier: brace languages, when safe)
   parent?: string; // enclosing symbol name for a nested member (AST extractor only)
   // Full ancestor path ("Scheduler/dispatch") for a symbol nested two or more
   // levels deep — a closure inside a method. Absent when it would only repeat
@@ -114,7 +114,7 @@ export interface CodeSymbol {
   signature?: string;
   // The declaration's own doc comment, reduced to one sentence: JSDoc, `///`
   // rustdoc, godoc, javadoc, C# XML docs, or a Python docstring. Absent when
-  // the declaration is undocumented. AST extractor only.
+  // the declaration is undocumented. The regex tier reads comments above only.
   doc?: string;
   exported: boolean;
   lang: string;
@@ -219,6 +219,12 @@ export interface FileRecord {
   // A per-file extraction cap truncated this record's symbols. Same doctrine as
   // the walk's `capped`: a bounded result says so instead of looking complete.
   truncated?: true;
+  // Build output detected from the content, whatever the file is named:
+  // "minified" JavaScript or a "bundle" (esbuild, webpack). The record keeps its
+  // summary and imports, but no symbols, calls or vocabulary — one-letter noise
+  // for the first, copies of the sources' definitions for the second. Set so an
+  // empty record is never mistaken for an empty file.
+  generated?: "minified" | "bundle";
   // Inheritance stated by declarations in this file (cap 256, deduped, sorted).
   // Resolved into `extends`/`implements` edges by the graph builder.
   relations?: RawRelation[];
@@ -253,6 +259,8 @@ export interface FileNode {
   pagerank?: number;
   // Present (true) only when the path classifies as a test file (tests-map.ts).
   testFile?: true;
+  // Present only for build output indexed without symbols (FileRecord.generated).
+  generated?: "minified" | "bundle";
 }
 
 export interface ModuleNode {
@@ -336,7 +344,7 @@ export interface SurpriseEdge {
 // reference it (populated by the use/mention pass). Deterministically ordered.
 export interface SymbolIndex {
   schemaVersion: number;
-  // `endLine` mirrors CodeSymbol.endLine (AST extractor only).
+  // `endLine` mirrors CodeSymbol.endLine.
   defs: Record<
     string,
     { file: string; line: number; endLine?: number; kind: string; exported: boolean; lang: string; parent?: string }[]

@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Python. A name not prefixed with "_" is treated as part of the public
 // surface (the usual convention). Indented `def` → method; column-0 `def` →
@@ -16,6 +16,10 @@ const RULES: Rule[] = [
 export const python = {
   lang: "python",
   exts: [".py", ".pyi"],
+  lexis: {
+    comment: /^\s*#(?!!)/,
+    decoration: /^\s*@/,
+  } satisfies Lexis,
   extract(rel: string, content: string): CodeSymbol[] {
     return scan(rel, content, "python", RULES);
   },

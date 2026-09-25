@@ -43,9 +43,7 @@ describe("AST extraction (tree-sitter)", () => {
 
   it("captures TS import specifiers", () => {
     const refs = extractAst("a.ts", ".ts", "import { x } from './y';\nimport z from 'pkg';\n")!.refs;
-    const specs = refs.map((r) => r.spec);
-    expect(specs).toContain("./y");
-    expect(specs).toContain("pkg");
+    expect(refs.map((r) => r.spec)).toEqual(["./y", "pkg"]);
   });
 
   it("extracts Python with public/private convention and nested methods", () => {
@@ -66,7 +64,7 @@ describe("AST extraction (tree-sitter)", () => {
     expect(syms.find((s) => s.name === "Exported")!.exported).toBe(true);
     expect(syms.find((s) => s.name === "unexported")!.exported).toBe(false);
     expect(syms.find((s) => s.name === "Widget")!.kind).toBe("type");
-    expect(res.refs.map((r) => r.spec)).toContain("fmt");
+    expect(res.refs.map((r) => r.spec)).toEqual(["fmt"]);
   });
 
   it("extracts Ruby methods and classes (all exported)", () => {

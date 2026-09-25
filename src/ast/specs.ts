@@ -76,7 +76,10 @@ export interface LangSpec {
    * located in the tree, `prefix` is the whole header.
    */
   exported: (header: string, name: string, prefix: string) => boolean;
-  imports?: Record<string, "string" | "path">; // node type → how to read the specifier
+  // Import-statement node types. Specifiers are NOT read from the tree (both
+  // tiers use extract/imports.ts); the table marks the node types for grammar
+  // coverage and gates the JS/TS imported-names pass (`import_statement`).
+  imports?: Record<string, "string" | "path">;
   // Call-expression node type → how to read the callee name. "function": read the
   // callee/function field, descending to the rightmost segment of a member/
   // attribute/selector/scoped callee. "member": a dedicated member-call node —

@@ -117,7 +117,7 @@ Commands:
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
   search      Keyless BM25 lexical search over symbol names, path segments,
-              markdown headings and summaries: cli.mjs search "<query>" --repo <dir>.
+              markdown/reST headings and summaries: cli.mjs search "<query>" --repo <dir>.
               --semantic fuses in an embedding tier (RRF) — the HTTP endpoint
               (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model;
               degrades to lexical (exit 0) when neither is available/reachable

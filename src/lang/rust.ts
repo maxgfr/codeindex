@@ -1,5 +1,6 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { maskBraced } from "../extract/imports.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Rust. `pub` marks the public surface. Covers fn / struct / enum / trait /
 // type declarations.
@@ -16,7 +17,13 @@ const RULES: Rule[] = [
 export const rust = {
   lang: "rust",
   exts: [".rs"],
-  extract(rel: string, content: string): CodeSymbol[] {
-    return scan(rel, content, "rust", RULES);
+  lexis: {
+    mask: (src: string) => maskBraced(src, { nested: true, squote: "char", multiline: true, raw: "r" }),
+    comment: /^\s*\/\/(?!!)/,
+    block: true,
+    decoration: /^\s*#\[/,
+  } satisfies Lexis,
+  extract(rel: string, content: string, masked?: string): CodeSymbol[] {
+    return scan(rel, content, "rust", RULES, masked);
   },
 };

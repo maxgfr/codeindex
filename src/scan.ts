@@ -8,6 +8,7 @@ import { extToLang } from "./lang/registry.js";
 import { compileDirExcludes, compileDirGlobs, compileGlobs } from "./glob.js";
 import { byKey } from "./sort.js";
 import { extractMarkdown } from "./extract/markdown.js";
+import { extractRst } from "./extract/rst.js";
 import { extractCode } from "./extract/code.js";
 import { extractConfigLiterals } from "./extract/config.js";
 
@@ -158,6 +159,7 @@ export function buildCodeRecord(
     record.calls = code.calls;
     record.importedNames = code.importedNames;
     record.truncated = code.truncated;
+    record.generated = code.generated;
     record.relations = code.relations;
     record.terms = code.terms;
     record.literals = code.literals;
@@ -554,14 +556,14 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
         };
 
     if (kind !== "code") {
-      if (content && kind === "doc" && MARKDOWN_EXT.has(f.ext)) {
-        const md = extractMarkdown(content);
+      if (content && kind === "doc" && (MARKDOWN_EXT.has(f.ext) || f.ext === ".rst")) {
+        const md = f.ext === ".rst" ? extractRst(f.rel, content) : extractMarkdown(content);
         record.title = md.title ?? basename(f.rel);
         record.summary = md.summary;
         record.headings = md.headings;
         record.refs = md.refs;
       } else if (content && kind === "doc") {
-        // Non-markdown prose (.rst/.txt): title from basename, no link graph.
+        // Other prose (.txt, .adoc): title from basename, no link graph.
         record.title = basename(f.rel);
       } else if (content && kind === "config") {
         // Config files carry no symbols, but they DO carry values — and a value

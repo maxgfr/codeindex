@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Elixir. Modules and def/defp/defmacro/defguard. The `p` forms are private
 // (not exported). A guarded head (`def f(x) when …`) needs no rule of its own:
@@ -17,6 +17,11 @@ const RULES: Rule[] = [
 export const elixir = {
   lang: "elixir",
   exts: [".ex", ".exs"],
+  lexis: {
+    comment: /^\s*#/,
+    decoration: /^\s*@(?!(?:doc|moduledoc|typedoc)\b)\w+/,
+    docAttr: true,
+  } satisfies Lexis,
   extract(rel: string, content: string): CodeSymbol[] {
     return scan(rel, content, "elixir", RULES);
   },

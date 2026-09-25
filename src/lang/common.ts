@@ -1,4 +1,11 @@
 import type { CodeSymbol } from "../types.js";
+import { stripCommentMarkers, summarizeDocLines } from "../extract/doc-text.js";
+
+// An identifier as the languages with Unicode names spell it (JS/TS, Go,
+// Kotlin, Swift): `café`, `Ünïcode` and `日本語` are all legal names, and a
+// `\w` rule cut the first at "caf" and skipped the others. Rules that use it
+// need the `u` flag.
+export const ID = String.raw`[\p{L}\p{Nl}_$][\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$\u200c\u200d]*`;
 
 // A line-level extraction rule. `re` must capture the symbol name in a named
 // group `name` (or capture group 1). One symbol is emitted per matching line
@@ -7,30 +14,71 @@ export interface Rule {
   re: RegExp;
   kind: string;
   exported?: boolean | ((m: RegExpExecArray, line: string) => boolean);
+  // "member": the line must sit at the top level or directly in the body of a
+  // type this scan already found (`class`, `struct`, …), never in a function
+  // body. How a property (`let name: String`) is told from a local that reads
+  // exactly the same. Needs the masked text: brace depth is read from it.
+  scope?: "member";
 }
+
+// What the regex tier knows about a language beyond its rules: how to mask it,
+// and how its doc comments look. Read by `annotate` below.
+export interface Lexis {
+  // Blank comments and string bodies, offsets and lines kept (the brace
+  // languages). The rules then match code only, and a declaration's body is
+  // found by matching its braces.
+  mask?: (src: string) => string;
+  // A line that is wholly a comment, which a doc comment is made of.
+  comment: RegExp;
+  // `/* … */` blocks document declarations too.
+  block?: boolean;
+  // Lines allowed between a doc comment and its declaration: annotations,
+  // attributes, decorators.
+  decoration?: RegExp;
+  // Elixir documents a function with the `@doc` attribute above it.
+  docAttr?: boolean;
+}
+
+// The kinds whose body holds members, for `scope: "member"` rules.
+const TYPE_KINDS = new Set([
+  "class", "struct", "enum", "interface", "protocol", "actor", "extension", "object", "trait", "mixin",
+]);
 
 // Run a list of rules line-by-line over file content. Deterministic and
 // zero-dep — no parser, no AST, no LLM. Good enough to locate declarations and
 // rank them; ripgrep covers everything inside bodies.
-export function scan(rel: string, content: string, lang: string, rules: Rule[]): CodeSymbol[] {
+//
+// With `masked` (see Lexis.mask) the rules read the masked line, so prose and
+// strings that merely look like a declaration are not one; the signature still
+// quotes the real line.
+export function scan(rel: string, content: string, lang: string, rules: Rule[], masked?: string): CodeSymbol[] {
   const out: CodeSymbol[] = [];
   const lines = content.split(/\r?\n/);
+  const code = masked === undefined ? lines : masked.split(/\r?\n/);
+  const owners = masked !== undefined && rules.some((r) => r.scope === "member") ? braceOwners(masked) : undefined;
+  // Line (0-based) → kind of the symbol declared there, for member scoping.
+  const kinds = new Map<number, string>();
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
+    const line = code[i]!;
     if (!line.trim()) continue;
     for (const rule of rules) {
+      if (rule.scope === "member") {
+        const owner = owners?.[i];
+        if (owner === undefined || (owner !== -1 && !ownedByType(kinds, code, owner))) continue;
+      }
       const m = rule.re.exec(line);
       if (!m) continue;
       const name = m.groups?.name ?? m[1];
       if (!name) continue;
       const exported =
         typeof rule.exported === "function" ? rule.exported(m, line) : rule.exported ?? false;
+      kinds.set(i, rule.kind);
       out.push({
         name,
         kind: rule.kind,
         file: rel,
         line: i + 1,
-        signature: line.trim().slice(0, 200),
+        signature: lines[i]!.trim().slice(0, 200),
         exported,
         lang,
       });
@@ -38,6 +86,191 @@ export function scan(rel: string, content: string, lang: string, rules: Rule[]):
     }
   }
   return out;
+}
+
+// Is the brace opened on line `owner` a type's body? The type is declared on
+// that line, or on the line above when the brace sits alone on its own line.
+function ownedByType(kinds: Map<number, string>, code: string[], owner: number): boolean {
+  const kind = kinds.get(owner) ?? (code[owner]!.trim() === "{" ? kinds.get(owner - 1) : undefined);
+  return kind !== undefined && TYPE_KINDS.has(kind);
+}
+
+// For each line, the line of the innermost `{` still open where it starts, or
+// -1 at the top level.
+function braceOwners(masked: string): Int32Array {
+  const owners = new Int32Array(countLines(masked)).fill(-1);
+  const open: number[] = [];
+  let line = 0;
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked.charCodeAt(i);
+    if (c === 123) open.push(line);
+    else if (c === 125) open.pop();
+    else if (c === 10) owners[++line] = open.length ? open[open.length - 1]! : -1;
+  }
+  return owners;
+}
+
+function countLines(text: string): number {
+  let n = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+  return n;
+}
+
+// Give regex-tier symbols the two fields the AST tier reads from the tree: the
+// doc comment above each declaration, and, in a brace language, the line its
+// body closes on. Without them a Swift or Dart index (no grammar) had no docs
+// at all, and every consumer of a span (a symbol's body, complexity, the
+// enclosing function of a call, replace_symbol_body) saw one line per symbol.
+export function annotate(symbols: CodeSymbol[], content: string, lexis: Lexis, masked?: string): CodeSymbol[] {
+  if (!symbols.length) return symbols;
+  const lines = content.split(/\r?\n/);
+  const spans = masked === undefined ? undefined : new BraceSpans(masked);
+  return symbols.map((s) => {
+    const doc = s.doc ?? docAbove(lines, s.line - 1, lexis);
+    const endLine = s.endLine ?? spans?.endOf(s.line - 1, lines);
+    if (doc === undefined && endLine === undefined) return s;
+    return { ...s, ...(endLine !== undefined ? { endLine } : {}), ...(doc !== undefined ? { doc } : {}) };
+  });
+}
+
+// The doc comment right above line `at` (0-based): a contiguous run of comment
+// lines and `/* … */` blocks, with annotations skipped between it and the
+// declaration. A blank line ends the run, as in the AST tier: a comment
+// separated from what follows documents neither.
+function docAbove(lines: string[], at: number, lexis: Lexis): string | undefined {
+  let k = at - 1;
+  while (k >= 0 && lexis.decoration?.test(lines[k]!)) k--;
+  if (lexis.docAttr) {
+    const attr = elixirDoc(lines, k);
+    if (attr) return summarizeDocLines(attr);
+  }
+  const run: string[] = [];
+  while (k >= 0) {
+    const line = lines[k]!;
+    if (lexis.comment.test(line)) {
+      run.push(line);
+      k--;
+      continue;
+    }
+    if (!lexis.block || !/\*\/\s*$/.test(line)) break;
+    // The block's opening line must start with `/*`: `f(); /* x */` is a
+    // trailing comment on code, not a doc.
+    let j = k;
+    while (j >= 0 && !lines[j]!.includes("/*")) j--;
+    if (j < 0 || !/^\s*\/\*(?!!)/.test(lines[j]!)) break;
+    for (let t = k; t >= j; t--) run.push(lines[t]!);
+    k = j - 1;
+  }
+  if (!run.length) return undefined;
+  return summarizeDocLines(run.reverse().map(stripCommentMarkers));
+}
+
+// Elixir's `@doc "…"` or `@doc """ … """` ending on line `k`.
+function elixirDoc(lines: string[], k: number): string[] | undefined {
+  if (k < 0) return undefined;
+  const one = /^\s*@doc\s+(?:~[sS])?"(.*)"\s*$/.exec(lines[k]!);
+  if (one) return [one[1]!];
+  if (!/^\s*"""\s*$/.test(lines[k]!)) return undefined;
+  for (let j = k - 1; j >= 0 && k - j < 400; j--) {
+    if (/^\s*@doc\s+(?:~[sS])?"""\s*$/.test(lines[j]!)) return lines.slice(j + 1, k);
+    if (/"""/.test(lines[j]!)) return undefined;
+  }
+  return undefined;
+}
+
+// Brace matching over masked text: where each `{` closes.
+class BraceSpans {
+  private readonly closeOf = new Map<number, number>();
+  private readonly lineStarts: number[] = [0];
+
+  constructor(private readonly masked: string) {
+    const open: number[] = [];
+    for (let i = 0; i < masked.length; i++) {
+      const c = masked.charCodeAt(i);
+      if (c === 10) this.lineStarts.push(i + 1);
+      else if (c === 123) open.push(i);
+      else if (c === 125 && open.length) this.closeOf.set(open.pop()!, i);
+    }
+  }
+
+  private lineOf(offset: number): number {
+    let lo = 0;
+    let hi = this.lineStarts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.lineStarts[mid]! <= offset) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo - 1;
+  }
+
+  // The 1-based line where the body of the declaration on line `at` (0-based)
+  // closes, or undefined when it has no body or the guess is not safe.
+  //
+  // The body is the first `{` outside parentheses and brackets (a default
+  // argument's closure `f(cb = {})`, a generic list `Box[T]`), found before a
+  // `;` (an abstract or one-line declaration) and before the next line that
+  // starts a new statement at the declaration's indentation (a property with
+  // no body). A wrapped signature's continuation lines, and an Allman `{` on
+  // its own line, do not end the search.
+  //
+  // The span is trusted only when it closes on the line it opened, or on a line
+  // that starts with `}` at the declaration's own indentation, which every
+  // formatter produces. A brace the mask misread (a quote nested in an
+  // interpolation) rarely lands there, and then the symbol keeps no endLine
+  // rather than a wrong one: replace_symbol_body splices by it.
+  endOf(at: number, lines: string[]): number | undefined {
+    const masked = this.masked;
+    const indent = /^\s*/.exec(lines[at]!)![0];
+    let depth = 0;
+    let line = at;
+    for (let i = this.lineStarts[at]!; i < masked.length; i++) {
+      const c = masked.charCodeAt(i);
+      if (c === 10) {
+        line++;
+        if (line - at > 60 || line >= this.lineStarts.length) return undefined;
+        const next = masked.slice(this.lineStarts[line]!, this.lineStarts[line + 1] ?? masked.length);
+        const lead = /^\s*/.exec(next)![0];
+        const first = next.charAt(lead.length);
+        if (depth === 0 && first && !"{)]".includes(first) && lead.length <= indent.length) return undefined;
+        continue;
+      }
+      if (c === 40 || c === 91) depth++;
+      else if (c === 41 || c === 93) {
+        if (--depth < 0) return undefined;
+      } else if (depth === 0 && c === 59) return undefined;
+      else if (depth === 0 && c === 123) {
+        const close = this.closeOf.get(i);
+        if (close === undefined) return undefined;
+        const end = this.lineOf(close);
+        const rest = masked.slice(close + 1, this.lineStarts[end + 1] ?? masked.length);
+        if (end === this.lineOf(i)) {
+          // A one-line body ends the declaration's own line. Anything after it
+          // means the pair was part of the header (`<-chan struct{} {`, a
+          // generic default `<T = {}>`), and the body is still ahead; so was a
+          // pair on a later line (`| { valueOf(): T }` in a wrapped alias).
+          if (end === at && /^[\s;,)\]}]*$/.test(rest)) return this.continued(end) ? undefined : end + 1;
+          i = close;
+          continue;
+        }
+        // `} | {`: an alias of a union of object types goes on past this brace.
+        if (rest.includes("{")) return undefined;
+        return lines[end]!.startsWith(indent + "}") && !this.continued(end) ? end + 1 : undefined;
+      }
+    }
+    return undefined;
+  }
+
+  // Does the next code line after `line` continue its expression? A wrapped
+  // conditional type (`… ? {}` then `: Other;`) or union reads as a one-line
+  // body until its next line is seen.
+  private continued(line: number): boolean {
+    for (let k = line + 1; k < this.lineStarts.length; k++) {
+      const text = this.masked.slice(this.lineStarts[k]!, this.lineStarts[k + 1] ?? this.masked.length).trim();
+      if (text) return /^(?:[?:|&.]|=>)/.test(text);
+    }
+    return false;
+  }
 }
 
 // Broad extension → language label table, used for the index's language

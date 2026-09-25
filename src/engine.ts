@@ -65,6 +65,7 @@ export { extractSymbols, languageOf, extToLang } from "./lang/registry.js";
 export { extractCode } from "./extract/code.js";
 export type { CodeInfo } from "./extract/code.js";
 export { extractMarkdown } from "./extract/markdown.js";
+export { extractRst } from "./extract/rst.js";
 export type { MarkdownInfo } from "./extract/markdown.js";
 
 // AST tier (optional — a no-op without the grammar wasm sidecar).

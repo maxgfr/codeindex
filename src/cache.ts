@@ -31,7 +31,8 @@ function symbol(v: unknown, rel: string): boolean {
 }
 
 function ref(v: unknown): boolean {
-  return object(v) && (v.kind === "import" || v.kind === "doc-link") && string(v.spec);
+  return object(v) && (v.kind === "import" || v.kind === "doc-link") && string(v.spec) &&
+    (v.soft === undefined || v.soft === true);
 }
 
 function call(v: unknown): boolean {
@@ -59,7 +60,7 @@ function record(v: unknown, rel: string): v is FileRecord {
     strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel)) &&
     Array.isArray(v.refs) && v.refs.every(ref) &&
     optionalArray(v.calls, call) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) &&
-    (v.truncated === undefined || v.truncated === true);
+    (v.truncated === undefined || v.truncated === true) && (v.generated === undefined || v.generated === "minified" || v.generated === "bundle");
 }
 
 function entry(v: unknown, rel: string): v is PersistedCacheEntry {

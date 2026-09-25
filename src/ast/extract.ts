@@ -2,11 +2,12 @@ import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector, unquote } from "../extract/literals.js";
 import { byStr } from "../sort.js";
 import { grammarKeyFor, grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
-import { COMMENT_NODE, IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
+import { COMMENT_NODE, IDENT_LEAF, nameOf, readName, readReceiver, type TSNode } from "./node.js";
 import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, luaMember, type LangSpec } from "./specs.js";
 import { declHeader } from "./signature.js";
 import { docCommentFor, docstringFor } from "./doc.js";
 import { stripCommentMarkers } from "../extract/doc-text.js";
+import { extractImports, extractPackage } from "../extract/imports.js";
 import { subtokens } from "../util.js";
 
 export interface AstResult {
@@ -83,12 +84,9 @@ const REF_IDENT_TEXT = /^[A-Za-z_]\w{4,}$/;
 // on (name, line) then sorts — so folding them into a single pre-order walk in
 // the original per-node order produces byte-identical results.
 //
-// `refs`/`pkg` are computed only when `wantImports` is set: the production path
-// (extractCode) recomputes both with regex and discards the AST's versions, so
-// paying for them by default was pure waste. The public `extractAst` still asks
-// for them, keeping its contract intact.
+// Import specifiers are NOT read here: extract/imports.ts computes them for
+// both tiers (see extractAst).
 interface Collected {
-  refs: RawRef[];
   idents: string[];
   calls: { name: string; line: number; receiver?: string }[];
   importedNames: string[];
@@ -183,7 +181,6 @@ function collectAll(
   spec: LangSpec,
   defNames: Set<string>,
   maxCalls: number,
-  wantImports: boolean,
 ): Collected {
   const identsFound = new Set<string>();
 
@@ -220,17 +217,6 @@ function collectAll(
 
   const wantNames = spec.imports?.import_statement !== undefined;
   const namesFound = new Set<string>();
-
-  const wantRefs = wantImports && spec.imports !== undefined;
-  const refs: RawRef[] = [];
-  const refSeen = new Set<string>();
-  const addRef = (s: string): void => {
-    const v = s.trim();
-    if (v && !refSeen.has(v)) {
-      refSeen.add(v);
-      refs.push({ kind: "import", spec: v });
-    }
-  };
 
   const visit = (node: TSNode): void => {
     const type = node.type;
@@ -329,20 +315,6 @@ function collectAll(
       }
     }
 
-    // --- raw import specifiers. "string" pulls the first string literal's inner
-    // text; "path" takes the dotted/namespaced module text verbatim (resolution
-    // happens later).
-    if (wantRefs) {
-      const how = spec.imports![type];
-      if (how === "string") {
-        const str = findFirst(node, (n) => /string/.test(n.type));
-        if (str) addRef(str.text.replace(/^['"]|['"]$/g, ""));
-      } else if (how === "path") {
-        const name = node.childForFieldName("name") ?? node.childForFieldName("module_name");
-        addRef((name ?? node).text.replace(/^(import|from)\s+/, "").split(/\s+/)[0]!);
-      }
-    }
-
     for (const c of kids) visit(c);
   };
   visit(root);
@@ -350,7 +322,6 @@ function collectAll(
   // Every capped list below is truncated in SOURCE order (Set insertion order)
   // and only then sorted — see MAX_TERMS and capCallSites.
   return {
-    refs,
     idents: [...identsFound].slice(0, MAX_REF_IDENTS).sort(),
     calls: capCallSites(calls, maxCalls),
     importedNames: [...namesFound].slice(0, MAX_IMPORTED_NAMES).sort(byStr),
@@ -442,8 +413,9 @@ interface WalkCtx {
 // regex extractor). Walks top-level declarations, type members, and declarations
 // nested up to MAX_FUNC_DEPTH function bodies deep.
 // `opts.maxCalls` overrides the per-file call-site cap (default MAX_CALLS).
-// `opts.imports` (default true) computes `refs`/`pkg`; extractCode passes false
-// because it recomputes both with regex and discards these — see collectAll.
+// `opts.imports` (default true) fills `refs`/`pkg` from extract/imports.ts — the
+// very scan the index runs, so this API and the graph agree on every file;
+// extractCode passes false because it runs that scan itself.
 export function extractAst(
   rel: string,
   ext: string,
@@ -959,19 +931,15 @@ export function extractAst(
       symbols.length = kept;
     }
 
-    const wantImports = opts.imports !== false;
-    const { refs, idents, calls, importedNames, terms, literals } = collectAll(
+    const { idents, calls, importedNames, terms, literals } = collectAll(
       root,
       spec,
       new Set(symbols.map((s) => s.name)),
       opts.maxCalls ?? MAX_CALLS,
-      wantImports,
     );
-    let pkg: string | undefined;
-    if (wantImports && spec.lang === "java") {
-      const p = findFirst(root, (n) => n.type === "package_declaration");
-      if (p) pkg = p.text.replace(/^package\s+/, "").replace(/;.*$/, "").trim();
-    }
+    const wantImports = opts.imports !== false;
+    const refs = wantImports ? extractImports(ext, content) : [];
+    const pkg = wantImports ? extractPackage(ext, content) : undefined;
     relations.sort((a, b) => byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to));
     return {
       symbols,

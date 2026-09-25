@@ -20,9 +20,10 @@
 //
 // WHAT THE OUTPUT IS. `astMissing` is a list of CANDIDATES TO ADJUDICATE, never
 // a list of confirmed bugs. The regex tier is a line scanner with no notion of
-// comments or strings (lang/common.ts `scan`), so it also invents declarations:
-// `function f() {}` sitting inside a block comment is a symbol to it, and the
-// honest resolution of that entry is "regex-tier false positive, no AST hole".
+// scope (lang/common.ts `scan`; it does skip comments and strings), so it also
+// invents declarations: a `const x = 1` in column 0 of a function body is a
+// module constant to it, and the honest resolution of that entry is "regex-tier
+// false positive, no AST hole".
 // Somebody has to look at each one — which is why the languages with the most
 // candidates are reported FIRST. Worth reading rather than dismissing: on this
 // repo the split came out roughly 11 real gaps to 1 phantom (see tierDiffRepo).

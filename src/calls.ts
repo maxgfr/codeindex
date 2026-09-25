@@ -11,10 +11,14 @@ const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
 // Collapse TypeScript/JavaScript to one family so a call in a `.ts` file can bind
 // to a def in a `.js` file (and vice versa) but never crosses into an unrelated
-// language. Every other language is its own family. Exported for callers.ts,
-// which mirrors this binding logic at call-site granularity.
+// language. Single-file components (vue/svelte/astro) keep their own language
+// label, but their script IS JS/TS (extract/sfc.ts), so they join the family.
+// Every other language is its own family. Exported for callers.ts, which
+// mirrors this binding logic at call-site granularity.
+const JS_FAMILY = new Set(["typescript", "javascript", "vue", "svelte", "astro"]);
+
 export function familyOf(lang: string): string {
-  if (lang === "typescript" || lang === "javascript") return "js";
+  if (JS_FAMILY.has(lang)) return "js";
   // C and C++ interoperate through headers (.h files classify as "c" while
   // their consumers are often .cpp) — one family, like the JS/TS pair.
   if (lang === "c" || lang === "cpp") return "c";

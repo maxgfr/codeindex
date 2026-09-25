@@ -32,7 +32,23 @@ compares](#how-it-compares).
   imports, headings, hashes — with an incremental cache fastpath. Extraction
   runs across worker threads by default (`--workers`, `CODEINDEX_WORKERS`);
   artifacts are byte-identical either way, and anything that would make a
-  worker's result differ falls back to the single-threaded path.
+  worker's result differ falls back to the single-threaded path. JS/TS and
+  Python imports are read from code only: comments, docstrings and
+  string/template-literal text are masked first, so example code quoted in a
+  JSDoc block, a docstring or a code generator's template never becomes an
+  edge (JSDoc `import("./x")` types and `@import` tags, which are real type
+  dependencies, are kept). The same scan runs with or without a grammar, so
+  `extractAst` and the index report the same imports. Python
+  `from pkg import name` also links `pkg/name.py` when `name` is a submodule
+  (and nothing when it is a function or class); PHP group (`use A\{B, C}`) and
+  comma `use` lists and `__DIR__`-anchored includes are followed, and a trait
+  `use` inside a class is not an import. Build output committed under an
+  ordinary name is recognised by its content: minified JavaScript (not only a
+  `.min.js` name) and bundles (esbuild's `// src/x.ts` module banners, webpack's
+  and ncc's module loader). It stays in the index with its summary and
+  imports, flagged `generated: "minified"` or `"bundle"` on its `FileRecord`
+  and graph node, but its symbols and call sites are not extracted: one-letter
+  noise for the first, copies of the sources' definitions for the second.
 - **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
   `grammars pull`) or per-language regex rules (16 languages, always available).
   Each symbol carries its **complete signature** (parameters and return type,
@@ -60,7 +76,31 @@ compares](#how-it-compares).
   `reexport` symbols. An out-of-line C++ definition (`void Widget::draw()`)
   belongs to its class, and a Lua `function M.go()` to its table; a `.h`
   header is parsed as C++ when its content is (a namespace, class or
-  template), as C otherwise.
+  template), as C otherwise. Vue, Svelte and Astro
+  single-file components are extracted from their `<script>` blocks (and
+  Astro's frontmatter) as the JS/TS their `lang` names, at their real lines:
+  symbols, imports, and calls from both the script and the template, bound in
+  the JS/TS call family. A Svelte prop (`export let`) and an Astro frontmatter
+  export are not module exports, so they are never reported as dead code.
+  The regex tier (the only one for Swift and Dart, and for the extended
+  languages until a pull) reads code only: comments and strings are masked,
+  so an example in a doc comment or a code generator's template is not a
+  declaration. It takes each declaration's doc comment from the lines above
+  it and, in brace languages, its line span, but only where the body's
+  braces close as a formatter puts them; otherwise the span is left out
+  rather than guessed. Its signature is the declaration's first line, and it
+  reports no `parent`.
+  Each file's **summary** is the first leading comment that describes
+  something: license and copyright text (MIT, BSD, Apache, GPL, MPL, the Go
+  "governed by" line), linter and editor magic comments (`frozen_string_literal`,
+  `-*- coding -*-`, `go:build`), Xcode's file stamp and bundler region markers
+  are skipped, and `#` reads as a comment only in languages where it is one —
+  never a C `#include` or a Rust `#[attribute]`.
+  Docs get a title, section headings, a summary and `doc-link` refs: markdown
+  (ATX and setext headings, inline and reference links) and reStructuredText
+  (Sphinx section titles; `toctree` entries, `:doc:` roles and
+  `include`/`literalinclude` targets as links). Other prose (`.txt`, `.adoc`)
+  is indexed under its file name.
 - **Resolve imports** across languages: tsconfig `paths` (tsc's precedence:
   exact alias, then longest prefix) and `baseUrl`, `extends` chains into
   workspace packages and `${configDir}`, package `exports` and `imports`
@@ -665,7 +705,8 @@ tested architecture and runtime checks.
 ## Search
 
 `codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six
-weighted fields: symbol names, path segments, markdown headings, the file
+weighted fields: symbol names, path segments, doc headings (markdown and
+reStructuredText), the file
 summary, per-symbol **doc comments**, and the **prose body** (words from comments
 and short string literals, a template's fixed text included, captured at
 extraction time so they ride the incremental cache).
