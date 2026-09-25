@@ -107,7 +107,7 @@ export interface ExtractionProfile {
 // grammar key, whether this run extracted at the AST tier — grammarReady when
 // the scan has already run, since extractAst gates on exactly that.
 export function extractionProfile(
-  files: readonly FileRecord[],
+  files: readonly Pick<FileRecord, "kind" | "ext">[],
   maxCallsPerFile: number | undefined,
   ast: (key: string) => boolean,
 ): ExtractionProfile {
@@ -142,16 +142,26 @@ export function compatibleEntries(
   stored: ExtractionProfile | undefined,
   current: { maxCallsPerFile?: number; ast: (key: string) => boolean },
 ): PersistedCacheMap {
-  const astBefore = new Set(stored?.grammars);
-  const callsMatch = stored !== undefined && stored.maxCallsPerFile === current.maxCallsPerFile;
+  const alike = extractedAlike(stored, current);
   const kept: PersistedCacheMap = new Map();
   for (const [rel, entry] of cache) {
-    if (entry.record.kind === "code") {
-      if (!callsMatch) continue;
-      const key = grammarKeyForExt(entry.record.ext);
-      if (key !== undefined && astBefore.has(key) !== current.ast(key)) continue;
-    }
-    kept.set(rel, entry);
+    if (alike(entry.record.kind, entry.record.ext)) kept.set(rel, entry);
   }
   return kept;
+}
+
+// The per-file test behind compatibleEntries, on a file's (kind, ext) alone —
+// what freshness.json keeps of a record (see freshness.ts).
+export function extractedAlike(
+  stored: ExtractionProfile | undefined,
+  current: { maxCallsPerFile?: number; ast: (key: string) => boolean },
+): (kind: string, ext: string) => boolean {
+  const astBefore = new Set(stored?.grammars);
+  const callsMatch = stored !== undefined && stored.maxCallsPerFile === current.maxCallsPerFile;
+  return (kind, ext) => {
+    if (kind !== "code") return true;
+    if (!callsMatch) return false;
+    const key = grammarKeyForExt(ext);
+    return key === undefined || astBefore.has(key) === current.ast(key);
+  };
 }

@@ -7,19 +7,19 @@
 // runs and strace, and a CI job had no way to ask whether a committed index was
 // current.
 //
-// Cheap by construction: read cache.json, walk, stat. A file whose (size,
-// mtime) matches its entry is unchanged — the scan's own fastpath heuristic;
-// only a mismatch is read and hashed, and nothing is ever extracted. The
-// verdict is the one the read commands and `index` reach: artifactsFresh means
-// both would reuse graph.json and symbols.json as they are.
+// Cheap by construction: read the index's stamps (freshness.json, else
+// cache.json), walk, stat. A file whose (size, mtime) matches its entry is
+// unchanged — the scan's own fastpath heuristic; only a mismatch is read and
+// hashed, and nothing is ever extracted. The verdict is the one the read
+// commands and `index` reach: artifactsFresh means both would reuse graph.json
+// and symbols.json as they are.
 import { ENGINE_VERSION } from "./types.js";
-import { compatibleEntries } from "./cache.js";
-import { grammarReady, resolvableGrammarKeys } from "./ast/loader.js";
-import { inspectPersistedIndex, indexDirPath, verifiedBytes, INDEX_DIR, type UnusableIndex } from "./preload.js";
+import { extractedAlike } from "./cache.js";
+import { classify } from "./classify.js";
+import { inspectPersistedIndex, indexDirPath, verifiedBytes, INDEX_DIR, type PersistedMeta, type UnusableIndex } from "./preload.js";
 import { keptWalkedFiles, type ScanOptions } from "./scan.js";
-import { readText } from "./walk.js";
 import { headCommit } from "./git.js";
-import { sha1 } from "./hash.js";
+import { predictedAst, readFreshness, treeDrift, type FileStamp, type TreeDrift } from "./freshness.js";
 
 export type IndexStaleness =
   | UnusableIndex
@@ -40,15 +40,7 @@ export interface IndexStatus {
   // the next `index`). An index committed to the repo never matches the commit
   // that contains it, so counting it would fail every CI check.
   commit: { index: string | null; head: string | null };
-  files: {
-    indexed: number; // entries in cache.json
-    unchanged: number; // same (size, mtime)
-    touched: number; // stat changed, same content: reused, only re-hashed
-    modified: number;
-    added: number;
-    deleted: number;
-    reextract: number; // extracted at another tier or --max-calls (see compatibleEntries)
-  } | null;
+  files: TreeDrift | null;
   artifactsFresh: boolean;
   stale: IndexStaleness[]; // why !artifactsFresh, in a fixed order; [] when fresh
 }
@@ -63,7 +55,10 @@ export function indexStatus(repo: string, opts: IndexStatusOptions = {}, indexDi
   const { ast, ...scanOpts } = opts;
   const dir = indexDirPath(repo, indexDir);
   const head = headCommit(repo) ?? null;
-  const read = inspectPersistedIndex(repo, indexDir);
+  // freshness.json holds the same stamps without the records; written with the
+  // cache.json that is there now, it answers without parsing it.
+  const fresh = readFreshness(repo, indexDir);
+  const read = fresh ?? inspectPersistedIndex(repo, indexDir);
   if ("unusable" in read) {
     return {
       indexDir: dir,
@@ -77,27 +72,13 @@ export function indexStatus(repo: string, opts: IndexStatusOptions = {}, indexDi
       stale: [read.unusable],
     };
   }
-  const { cacheMap, meta } = read;
+  const meta: PersistedMeta = read.meta;
+  const stamps: ReadonlyMap<string, FileStamp> = "files" in read ? read.files : read.cacheMap;
   // The tier a read command would extract at, predicted as preloadSessionLazy
   // predicts it: nothing is loaded here, and nothing needs to be.
-  const resolvable = ast === false ? new Set<string>() : resolvableGrammarKeys();
-  const compatible = compatibleEntries(cacheMap, meta.extraction, {
-    maxCallsPerFile: scanOpts.maxCallsPerFile,
-    ast: (key) => ast !== false && (grammarReady(key) || resolvable.has(key)),
-  });
+  const alike = extractedAlike(meta.extraction, { maxCallsPerFile: scanOpts.maxCallsPerFile, ast: predictedAst(ast) });
   const walked = keptWalkedFiles(repo, scanOpts).files;
-  const files = { indexed: cacheMap.size, unchanged: 0, touched: 0, modified: 0, added: 0, deleted: 0, reextract: 0 };
-  for (const f of walked) {
-    const entry = cacheMap.get(f.rel);
-    if (!entry) files.added++;
-    else if (!compatible.has(f.rel)) files.reextract++;
-    else if (!scanOpts.fullHash && entry.size === f.size && entry.mtimeMs === f.mtimeMs) files.unchanged++;
-    // The scan's own staleness oracle: sha1 of the decoded text.
-    else if (sha1(readText(f.abs)) === entry.hash) files.touched++;
-    else files.modified++;
-  }
-  // Every walked file with an entry matched one key; the rest of the keys are gone.
-  files.deleted = cacheMap.size - (walked.length - files.added);
+  const files = treeDrift(walked, stamps, (f) => alike(classify(f.rel, f.ext), f.ext), scanOpts.fullHash);
   const stale: IndexStaleness[] = [];
   if (meta.engineVersion !== ENGINE_VERSION) stale.push("engine-version");
   if (files.reextract) stale.push("extraction");

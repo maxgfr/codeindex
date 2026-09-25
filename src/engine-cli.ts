@@ -30,10 +30,13 @@ import {
   INDEX_DIR,
   type ArtifactName,
   type PersistedMeta,
+  type PersistedArtifacts,
   type PreloadedSession,
   type UnusableIndex,
 } from "./preload.js";
 import { indexStatus } from "./status.js";
+import { freshArtifacts, proveFresh, renderFreshness, FRESHNESS_FILE, type FreshnessScanOptions } from "./freshness.js";
+import { classify } from "./classify.js";
 import { compatibleEntries, extractionProfile, sameExtractionProfile } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
@@ -71,8 +74,9 @@ const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexin
 Usage: codeindex <command> [flags]
 
 Commands:
-  index       Build graph.json + symbols.json (+ incremental cache.json) into
-              --out <dir> in ONE pass — the fast path for repeated runs. Each
+  index       Build graph.json + symbols.json (+ incremental cache.json, and
+              freshness.json: its stamps without the records) into --out
+              <dir> in ONE pass — the fast path for repeated runs. Each
               artifact is replaced atomically (temp file + rename). An --out
               inside the repo is excluded from the scan; at the repo root only
               the artifacts are
@@ -88,10 +92,11 @@ Commands:
               why not: absent/unreadable/corrupt/schema/extractor), the indexed
               vs HEAD commit, per-file drift (unchanged/touched/modified/added/
               deleted/reextract), artifactsFresh and the reasons it is not.
-              Reads cache.json, walks and stats; hashes only stat-changed files,
-              never extracts. --check exits 1 when the artifacts are not fresh
-              (a CI gate for a committed index). A moved HEAD alone is not
-              stale: read commands restamp graph.json's commit
+              Reads freshness.json (else cache.json), walks and stats; hashes
+              only stat-changed files, never extracts. --check exits 1 when
+              the artifacts are not fresh (a CI gate for a committed index).
+              A moved HEAD alone is not stale: read commands restamp
+              graph.json's commit
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
   scip        SCIP code-intelligence index (protobuf bytes) into --out
@@ -509,6 +514,39 @@ const UNUSABLE_INDEX: Record<UnusableIndex, string> = {
   extractor: "written by another extractor version",
 };
 
+// `index` over an index with nothing to write: every kept file at its recorded
+// (size, mtime), each code file extracted at the tier this run uses, the same
+// extraction profile and commit, and artifacts (embeddings included) that are
+// the recorded bytes. That is the fastpath with a clean cache — no cache.json
+// rewrite, no artifact written — proven from freshness.json alone, so the
+// 142MB cache.json of typescript-go is never parsed for it. Returns the proven
+// tree's size, or undefined to take the full path.
+function unchangedIndex(
+  repo: string,
+  opts: FreshnessScanOptions,
+  maxCalls: number | undefined,
+  outDir: string,
+  embedFresh: (embed: PersistedMeta["embed"]) => boolean,
+): { files: number; capped: boolean } | undefined {
+  // Grammars are warmed by now: the tier is known, not predicted.
+  const proof = proveFresh(repo, opts, grammarReady, outDir);
+  if (!proof) return undefined;
+  const { fresh, walked, drift } = proof;
+  const kinds = walked.map((f) => ({ kind: classify(f.rel, f.ext), ext: f.ext }));
+  if (
+    drift.unchanged !== walked.length ||
+    drift.indexed !== walked.length ||
+    fresh.meta.commit !== proof.commit ||
+    !sameExtractionProfile(fresh.meta.extraction, extractionProfile(kinds, maxCalls, grammarReady)) ||
+    !embedFresh(fresh.meta.embed)
+  ) {
+    return undefined;
+  }
+  const onDisk = persistedArtifacts(repo, { contentUnchanged: true, commit: proof.commit }, fresh.meta, outDir);
+  if (!onDisk?.bytes("symbols") || !onDisk.bytes("graph")) return undefined;
+  return { files: walked.length, capped: proof.capped };
+}
+
 // Flags for `codeindex mcp`. Kept separate from parseFlags on purpose (see the
 // dispatch site). `--repo` is resolved to an absolute path and must exist: a
 // server pinned to a typo'd directory would otherwise answer every tool call
@@ -756,11 +794,33 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (p) return (p.arts ??= p.loadArtifacts?.() ?? buildArtifactsFromScan(p.scan, scanOptions(flags, precomputedWalk)));
     return (readArtifactsPromise ??= readScan().then((scan) => buildArtifactsFromScan(scan, scanOptions(flags, precomputedWalk))));
   };
+  // The artifacts of an index that freshness.json alone proves fresh — no
+  // cache.json parse, no records (see freshness.ts). Tried first, at most once,
+  // by the commands that need nothing but artifacts; undefined sends them to
+  // the preload, which reaches the same verdict the slower way.
+  let freshTried = false;
+  let fresh: PersistedArtifacts | undefined;
+  const freshIndex = (): PersistedArtifacts | undefined => {
+    if (!freshTried) {
+      freshTried = true;
+      const proven = flags.noIndexCache
+        ? undefined
+        : freshArtifacts(flags.repo, { ...scanOptions(flags, precomputedWalk), ast: !flags.noAst }, indexDir);
+      if (proven?.fileCount === 0 && !warnedEmpty) {
+        warnedEmpty = true;
+        warnEmptyScan(flags);
+      }
+      fresh = proven?.artifacts;
+    }
+    return fresh;
+  };
   // A command that needs ONE artifact reads only that file of a fresh index:
   // readArtifacts loads both, so `rules` or `impact` parsed an 80MB
   // symbols.json they never looked at. Anything the persisted index cannot
   // vouch for falls back to readArtifacts, unchanged.
   const readGraph = async (): Promise<Graph> => {
+    const graph = freshIndex()?.graph();
+    if (graph) return graph;
     const p = await tryPreload();
     return p?.arts?.graph ?? p?.artifacts?.graph() ?? (await readArtifacts()).graph;
   };
@@ -769,7 +829,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   // out as they are instead of being parsed and re-rendered: about a second
   // each on typescript-go's 80MB symbols.json, plus the GC, for the same bytes.
   const readArtifactBytes = async (name: ArtifactName): Promise<Buffer | undefined> =>
-    (await tryPreload())?.artifacts?.bytes(name);
+    freshIndex()?.bytes(name) ?? (await tryPreload())?.artifacts?.bytes(name);
 
   if (cmd === "index") {
     if (!flags.out) throw new Error("index needs --out <dir>");
@@ -785,13 +845,52 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // per-file records are still reused). cache.json embeds mtimes, so it was
     // never cross-machine byte-reproducible — no determinism surface changes.
     type CacheMeta = Pick<PersistedMeta, "engineVersion" | "commit" | "graphSha1" | "symbolsSha1" | "embed">;
+    await warmPresentGrammars();
+    const modelDir = resolveEmbedModelDir(flags.repo);
+    const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+    const graphPath = join(outDir, "graph.json");
+    const symbolsPath = join(outDir, "symbols.json");
+    const embedPath = join(outDir, "embeddings.bin");
+    // sha of an on-disk artifact, or undefined when it is missing/unreadable —
+    // never equal to a defined meta sha, so a deleted artifact fails the guard.
+    const artifactSha = (path: string): string | undefined => {
+      try {
+        return sha1(readFileSync(path));
+      } catch {
+        return undefined;
+      }
+    };
+    // Whether embeddings.bin is what this run would write: no model, or the
+    // recorded sidecar of this model on disk.
+    const embedFresh = (embed: CacheMeta["embed"]): boolean =>
+      !model ||
+      (embed !== undefined &&
+        embed.embedVersion === EMBED_VERSION &&
+        embed.modelId === model.modelId &&
+        embed.sha1 !== undefined &&
+        artifactSha(embedPath) === embed.sha1);
+
+    // NOTHING TO WRITE, decided from freshness.json before cache.json is even
+    // parsed: 2.3s plus a second of GC on typescript-go, for a run that then
+    // wrote nothing. The fastpath below with a clean cache, exactly — see
+    // unchangedIndex — so anything short of it takes the full path.
+    const unchanged = flags.noIndexCache || flags.fullHash
+      ? undefined
+      : unchangedIndex(flags.repo, { ...scanOptions(flags, precomputedWalk), out: outDir }, flags.maxCalls, outDir, embedFresh);
+    if (unchanged) {
+      if (unchanged.files === 0) warnEmptyScan(flags);
+      process.stderr.write(
+        `codeindex: ${unchanged.files} files → ${outDir}/graph.json + symbols.json${unchanged.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
+      );
+      return;
+    }
+
     // --no-index-cache is the documented "always build from scratch": it used
     // to be read only by the query commands, so `index` kept trusting a
     // cache.json whose (size, mtime) keys hid a same-size edit made under a
     // restored mtime, with no escape hatch short of deleting the file by hand.
     const persisted = flags.noIndexCache ? undefined : readPersistedIndex(flags.repo, outDir);
     const meta: CacheMeta = persisted?.meta ?? {};
-    await warmPresentGrammars();
     // Grammars are loaded (or deliberately not, under --no-ast), so the tier
     // this run extracts each language at is known exactly: keep only records
     // extracted the same way — see compatibleEntries.
@@ -807,20 +906,25 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     });
     const extraction = extractionProfile(scan.files, flags.maxCalls, grammarReady);
     if (scan.files.length === 0) warnEmptyScan(flags);
-    const modelDir = resolveEmbedModelDir(flags.repo);
-    const model = modelDir ? loadEmbedModel(modelDir) : undefined;
-
-    const graphPath = join(outDir, "graph.json");
-    const symbolsPath = join(outDir, "symbols.json");
-    const embedPath = join(outDir, "embeddings.bin");
-    // sha of an on-disk artifact, or undefined when it is missing/unreadable —
-    // never equal to a defined meta sha, so a deleted artifact fails the guard.
-    const artifactSha = (path: string): string | undefined => {
+    const freshnessPath = join(outDir, FRESHNESS_FILE);
+    // freshness.json (see freshness.ts) for the cache.json now on disk: always
+    // written after it, and only when its bytes change — so a fastpath run on an
+    // index that predates it adds it, and an unchanged index rewrites nothing.
+    const writeFreshness = (out: Pick<CacheMeta, "graphSha1" | "symbolsSha1" | "embed">): void => {
+      let cacheStat: { size: number; mtimeMs: number };
       try {
-        return sha1(readFileSync(path));
+        cacheStat = statSync(cachePath);
       } catch {
-        return undefined;
+        return;
       }
+      const text = renderFreshness(scan, out, extraction, { size: cacheStat.size, mtimeMs: cacheStat.mtimeMs });
+      let current: string | undefined;
+      try {
+        current = readFileSync(freshnessPath, "utf8");
+      } catch {
+        current = undefined;
+      }
+      if (current !== text) writeArtifact(freshnessPath, text);
     };
     const writeCache = (out: Pick<CacheMeta, "graphSha1" | "symbolsSha1" | "embed">): void => {
       const files: Record<string, CacheEntry> = {};
@@ -846,6 +950,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           files,
         }) + "\n",
       );
+      writeFreshness(out);
     };
 
     // FASTPATH GUARD — skip the whole downstream pipeline only when this scan
@@ -861,13 +966,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // typescript-go, after every commit of already-indexed edits). ANY other
     // failure — deleted or tampered artifacts included — falls through to the
     // full build, which rewrites everything (self-healing).
-    const embedUnchanged =
-      !model ||
-      (meta.embed !== undefined &&
-        meta.embed.embedVersion === EMBED_VERSION &&
-        meta.embed.modelId === model.modelId &&
-        meta.embed.sha1 !== undefined &&
-        artifactSha(embedPath) === meta.embed.sha1);
+    const embedUnchanged = embedFresh(meta.embed);
     const onDisk = embedUnchanged ? persistedArtifacts(flags.repo, scan, meta, outDir) : undefined;
     const symbolsReused = onDisk?.bytes("symbols") !== undefined;
     const fastpath = symbolsReused && onDisk!.bytes("graph") !== undefined;
@@ -881,6 +980,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // on a tree with no code to re-extract); the meta is carried forward
       // verbatim since the guard just proved it describes the disk.
       if (scan.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction)) writeCache(meta);
+      else writeFreshness(meta);
       process.stderr.write(
         `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
       );

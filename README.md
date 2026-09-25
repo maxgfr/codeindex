@@ -408,9 +408,20 @@ and `--no-index-cache` ignores the cache altogether (for `index` too).
 Artifacts are replaced atomically (a temp file renamed over the old one), so a
 concurrent reader never sees a torn file.
 
+Next to `cache.json`, `index` writes `freshness.json`: each file's `(hash,
+size, mtime)`, the artifact shas and versions, without the per-file records
+that make up nearly all of `cache.json` (10MB against 142MB on a 66k-file
+repo). It is enough to prove the artifacts fresh, so `graph`, `symbols`, the
+commands that need only the graph, `status`, and an `index` with nothing to
+write never parse `cache.json` (on that repo: `graph` 4.4s → 1.5s, `status`
+4.0s → 1.6s, an unchanged `index` 5.6s → 1.8s). It records `cache.json`'s own
+`(size, mtime)`, so one rewritten without it is ignored; a missing, stale or
+malformed `freshness.json` only sends the command the slower way, to the same
+answer.
+
 `codeindex status` says whether that index still describes the tree, without
-rebuilding anything: it reads `cache.json`, walks and stats, and hashes only
-the files whose `(size, mtime)` changed. It reports whether `cache.json` is
+rebuilding anything: it reads `freshness.json` (else `cache.json`), walks and
+stats, and hashes only the files whose `(size, mtime)` changed. It reports whether `cache.json` is
 usable (or why not: `absent`, `unreadable`, `corrupt`, or written for another
 `schema` or `extractor` version), the indexed and HEAD commits, per-file drift
 (`unchanged`, `touched`, `modified`, `added`, `deleted`, and `reextract` for

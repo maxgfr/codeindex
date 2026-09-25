@@ -369,7 +369,7 @@ interface WalkTotals {
 
 // The files `codeindex index` writes into its --out dir, plus the
 // `<name>.tmp-<pid>` sibling each is staged under before its atomic rename.
-const INDEX_ARTIFACTS = ["graph.json", "symbols.json", "cache.json", "embeddings.bin"];
+const INDEX_ARTIFACTS = ["graph.json", "symbols.json", "cache.json", "freshness.json", "embeddings.bin"];
 const isIndexArtifact = (name: string): boolean =>
   INDEX_ARTIFACTS.some((a) => name === a || name.startsWith(`${a}.tmp-`));
 

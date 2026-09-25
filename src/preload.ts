@@ -241,10 +241,11 @@ function restamped(graph: Graph, commit: string | undefined): Graph {
 // — a schemaVersion assert is the only reconstruction needed. undefined when
 // the guard fails; a missing/corrupt/partial artifact, or an unexpected
 // schemaVersion, makes that artifact's reads undefined. NEVER throws (a
-// corrupt artifact must degrade, not crash the caller).
+// corrupt artifact must degrade, not crash the caller). Only the scan's
+// verdict is read, so a proof reached without a scan (freshness.ts) serves too.
 export function persistedArtifacts(
   repo: string,
-  scan: RepoScan,
+  scan: Pick<RepoScan, "contentUnchanged" | "commit">,
   meta: PersistedMeta,
   indexDir: string = INDEX_DIR,
 ): PersistedArtifacts | undefined {
