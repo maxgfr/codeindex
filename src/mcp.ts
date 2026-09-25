@@ -1,6 +1,6 @@
 // MCP (Model Context Protocol) server over stdio — hand-rolled JSON-RPC 2.0 so
-// the engine stays zero-dependency. Newline-delimited JSON messages, protocol
-// 2024-11-05 (compatible with later revisions' initialize handshake). Exposes
+// the engine stays zero-dependency. Newline-delimited JSON messages; the
+// protocol revision is negotiated at initialize (see mcp/protocol.ts). Exposes
 // the engine's indexing capabilities as MCP tools; every tool takes a `repo`
 // path and returns text content — JSON, except repo_map, mermaid and
 // read_memory, which return their own formats.
