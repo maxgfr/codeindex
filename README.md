@@ -411,9 +411,12 @@ any binding, with its receiver and enclosing symbol. `callgraph` walks at most 5
 hops and says `depthClamped` when asked for more. `neighbors` reports every edge
 kind linking each neighbour — an incoming import and an outgoing inferred call to
 the same file are two links, strongest evidence first — and rejects an unknown
-`--kind`. File arguments (`complexity`, `impact`, `neighbors`) may be written
-`./path`, absolute or with backslashes; `complexity` exits 2 on a file the index
-does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
+`--kind`. `impact` walks imports, uses and calls backwards; a Go import reaches
+every non-test file of the package it names, and a call inferred from a name
+alone is counted (`inferredDependents`) rather than followed unless
+`--include-inferred`. File arguments (`complexity`, `impact`, `neighbors`) may
+be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
+file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
 `{ total, shown, truncated, candidates }` like MCP `dead_code`.
 
 ### How a call binds

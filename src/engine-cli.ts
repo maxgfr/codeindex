@@ -138,7 +138,10 @@ Commands:
               blast radius -> risk score with explained reasons
               (--base <ref> | --staged, --depth <n>, --json)
   impact      Reverse dependency closure of a file or module: everything that
-              transitively imports/uses/calls it (--depth <n>; JSON)
+              transitively imports/uses/calls it; a Go import reaches every
+              file of its package. Calls inferred from a name alone are
+              counted (inferredDependents), not followed, unless
+              --include-inferred (--depth <n>; JSON)
   neighbors   Graph neighbours of a file or module, both directions: every
               edge kind linking each neighbour, strongest evidence first
               (--depth <n>, --kind import,call,use,extends,implements,
@@ -230,6 +233,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --min-count <n>     \`literals\`: total occurrences required (default 3)
   --include-tests     \`literals\`: count test files too. Off by default — a test
                       restating a value is usually asserting it deliberately
+  --include-inferred  \`impact\`: also follow call edges inferred from a name
+                      alone (graph.json confidence "inferred")
 `;
 
 interface CliFlags {
@@ -256,6 +261,7 @@ interface CliFlags {
   minFiles?: number; // literals: distinct-file floor for a duplication
   minCount?: number; // literals: total-occurrence floor for a duplication
   includeTests?: boolean; // literals: count test files too (off by default)
+  includeInferred?: boolean; // impact: follow name-inferred call edges too (off by default)
   fuzzy: boolean; // search: trigram fuzzy fallback for df==0 terms (default true)
   exact?: boolean; // search: drop results carrying no verbatim term match
   explain?: boolean; // search: emit { results, explain } instead of a bare array
@@ -310,6 +316,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--min-files") flags.minFiles = num();
     else if (a === "--min-count") flags.minCount = num();
     else if (a === "--include-tests") flags.includeTests = true;
+    else if (a === "--include-inferred") flags.includeInferred = true;
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--index") flags.indexDir = next();
     else if (a === "--no-index-cache") flags.noIndexCache = true;
@@ -1174,7 +1181,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const { graph } = await readArtifacts();
     let res: ReturnType<typeof impactOf>;
     for (const target of fileArgReadings(flags.repo, flags.positional)) {
-      res = impactOf(graph, target, flags.depth ?? Infinity);
+      res = impactOf(graph, target, flags.depth ?? Infinity, { includeInferred: flags.includeInferred });
       if (res) break;
     }
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);

@@ -88,6 +88,48 @@ describe("impactOf", () => {
   });
 });
 
+// gin: `impact gin.go` listed binding/ and render/ files (which cannot import
+// gin) through calls inferred from a name, and `impact render/render.go` was
+// empty because every import of package render lands on render/bson.go.
+describe("impactOf on inferred calls and Go packages", () => {
+  const files = ["gin.go", "render/bson.go", "render/render.go", "render/render_test.go", "binding/form.go", "ctx.go", "a.py", "b.py"];
+  const graphOf = (edges: Edge[]): Graph =>
+    ({
+      schemaVersion: 5,
+      version: "test",
+      fileCount: files.length,
+      languages: {},
+      files: files.map((rel) => ({ id: rel, kind: "file", rel, fileKind: "code", lang: "go", module: rel.includes("/") ? rel.split("/")[0] : "root", title: rel, symbols: 1, lines: 1, degIn: 0, degOut: 0 })),
+      modules: [],
+      fileEdges: edges,
+      moduleEdges: [],
+    }) as unknown as Graph;
+  const inferred = (from: string, to: string): Edge => ({ from, to, kind: "call", weight: 1, confidence: "inferred" });
+  const graph = graphOf([
+    edge("gin.go", "render/bson.go", "import"), // `import ".../render"` resolves to its first file
+    edge("ctx.go", "gin.go", "call"),
+    inferred("binding/form.go", "gin.go"), // `errors.New` read as gin's New
+    inferred("b.py", "a.py"),
+  ]);
+
+  it("counts name-inferred dependents instead of walking them, unless asked", () => {
+    const res = impactOf(graph, "gin.go")!;
+    expect(res.files.map((f) => f.rel)).toEqual(["ctx.go"]);
+    expect(res.inferredDependents).toBe(1);
+    const all = impactOf(graph, "gin.go", Infinity, { includeInferred: true })!;
+    expect(all.files.map((f) => f.rel)).toEqual(["binding/form.go", "ctx.go"]);
+    expect(all.inferredDependents).toBeUndefined();
+    expect(impactOf(graph, "a.py")!).toMatchObject({ files: [], inferredDependents: 1 });
+  });
+
+  it("reads a Go import as an import of every non-test file of the package", () => {
+    expect(impactOf(graph, "render/render.go")!.files.map((f) => `${f.rel}:${f.depth}`)).toEqual(["gin.go:1", "ctx.go:2"]);
+    expect(impactOf(graph, "render/render_test.go")!.files).toEqual([]);
+    // The plain closure keeps its file-level reading.
+    expect(reverseClosure(graph.fileEdges, ["render/render.go"]).size).toBe(0);
+  });
+});
+
 describe("neighborsOf", () => {
   const graph = build();
 

@@ -131,7 +131,27 @@ export interface ImpactResult {
   seeds: string[]; // the files whose dependents we traced
   files: ImpactedFile[]; // transitive dependents, nearest first
   modules: string[]; // distinct modules touched
+  // How many more dependents a call edge inferred from a name alone would add
+  // (impactOf's `includeInferred`); present only when they are left out and
+  // there are some.
+  inferredDependents?: number;
 }
+
+export interface ClosureOptions {
+  /** Leave out `call` edges inferred from a name alone (Edge.confidence "inferred"). */
+  skipInferred?: boolean;
+  /**
+   * Read a Go import as an import of the whole package. Go imports a
+   * directory, and the resolver lands it on ONE representative file of it, so
+   * without this the other files of a package have no importers at all: gin's
+   * render/render.go (the Render interface) showed no dependents while
+   * `render` had 61.
+   */
+  goPackages?: boolean;
+}
+
+const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+const isGoSource = (rel: string): boolean => rel.endsWith(".go") && !rel.endsWith("_test.go");
 
 // Reverse dependency closure: every file that transitively IMPORTS, USES, or
 // CALLS one of `seeds`, out to `depth` hops (default: the full closure).
@@ -142,13 +162,19 @@ export interface ImpactResult {
 // a cached map still matches its edge list costs about as much as rebuilding
 // it. adjacencyOf below is the opposite trade — two maps, two sorts and a
 // degree distribution per call — and does earn its cache.
-export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity): Map<string, number> {
+export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity, opts: ClosureOptions = {}): Map<string, number> {
   const dependents = new Map<string, Edge[]>(); // target file → incoming depends-on edges
+  const packageImports = new Map<string, Edge[]>(); // Go package dir → imports of it (goPackages)
+  const push = (m: Map<string, Edge[]>, key: string, e: Edge): void => {
+    const arr = m.get(key);
+    if (arr) arr.push(e);
+    else m.set(key, [e]);
+  };
   for (const e of edges) {
     if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
-    let arr = dependents.get(e.to);
-    if (!arr) dependents.set(e.to, (arr = []));
-    arr.push(e);
+    if (opts.skipInferred && e.confidence === "inferred") continue;
+    push(dependents, e.to, e);
+    if (opts.goPackages && e.kind === "import" && e.to.endsWith(".go")) push(packageImports, dirOf(e.to), e);
   }
   const depthOf = new Map<string, number>();
   const seen = new Set<string>(seeds);
@@ -156,7 +182,10 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity)
   for (let d = 1; d <= depth && frontier.length; d++) {
     const next: string[] = [];
     for (const node of frontier) {
-      for (const e of (dependents.get(node) ?? []).slice().sort((a, b) => byStr(a.from, b.from))) {
+      let incoming = dependents.get(node) ?? [];
+      // A package's importers depend on each of its non-test files.
+      if (opts.goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf(node)) ?? []);
+      for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);
         depthOf.set(e.from, d);
@@ -168,21 +197,37 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity)
   return depthOf;
 }
 
-// "What breaks if I change this." Accepts a module slug or a file rel.
-export function impactOf(graph: Graph, target: string, depth = Infinity): ImpactResult | undefined {
+export interface ImpactOptions {
+  /** Also follow `call` edges inferred from a name alone (default false: they are counted, not walked). */
+  includeInferred?: boolean;
+}
+
+// "What breaks if I change this." Accepts a module slug or a file rel. A call
+// edge inferred from a name alone is a guess, not a dependency, so by default
+// it is only counted (inferredDependents); a Go import reaches every file of
+// the package it names.
+export function impactOf(graph: Graph, target: string, depth = Infinity, opts: ImpactOptions = {}): ImpactResult | undefined {
   const moduleOf = new Map(graph.files.map((f) => [f.rel, f.module]));
   const mod = graph.modules.find((m) => m.slug === target);
   const file = mod ? undefined : graph.files.find((f) => f.rel === target);
   if (!mod && !file) return undefined;
 
   const seeds = mod ? mod.members : [file!.rel];
-  const depthOf = reverseClosure(graph.fileEdges, seeds, depth);
+  const includeInferred = opts.includeInferred === true;
+  const depthOf = reverseClosure(graph.fileEdges, seeds, depth, { skipInferred: !includeInferred, goPackages: true });
   const files: ImpactedFile[] = [...depthOf.entries()]
     .map(([rel, d]) => ({ rel, module: moduleOf.get(rel) ?? "root", depth: d }))
     .sort((a, b) => a.depth - b.depth || byStr(a.rel, b.rel));
   const modules = [...new Set(files.map((f) => f.module).filter((m) => m !== target))].sort(byStr);
 
-  return { target, scope: mod ? "module" : "file", seeds, files, modules };
+  const result: ImpactResult = { target, scope: mod ? "module" : "file", seeds, files, modules };
+  if (!includeInferred) {
+    // With more edges the closure only grows, so the difference is exactly
+    // the files inference alone would add.
+    const extra = reverseClosure(graph.fileEdges, seeds, depth, { goPackages: true }).size - depthOf.size;
+    if (extra > 0) result.inferredDependents = extra;
+  }
+  return result;
 }
 
 export interface NeighborLink {

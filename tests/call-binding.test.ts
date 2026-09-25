@@ -9,6 +9,7 @@ import { buildSymbolGraph } from "../src/symbolgraph.js";
 import { buildTypeHierarchy, implementationsOf } from "../src/relations.js";
 import { importPairsFor } from "../src/derived.js";
 import { extractCode } from "../src/extract/code.js";
+import { buildArtifactsFromScan } from "../src/pipeline.js";
 
 // The shared call-site binder (src/bind.ts) on a real extraction: every case
 // here bound to the WRONG declaration, or to none, when binding looked at the
@@ -37,7 +38,7 @@ const FILES: Record<string, string> = {
     "",
   ].join("\n"),
   "debug.go": 'package app\n\nimport "fmt"\n\nfunc debugPrint(format string) { fmt.Println(format) }\n',
-  "context.go": 'package app\n\ntype Context struct{}\n\nfunc (c *Context) ClientIP() string { return "" }\n',
+  "context.go": 'package app\n\ntype Context struct{}\n\nfunc (c *Context) ClientIP() string { return "" }\n\ntype ResponseWriter interface{ Header() }\n',
   "logger.go": [
     "package app",
     "",
@@ -80,15 +81,21 @@ const FILES: Record<string, string> = {
     "\treturn e.Run()",
     "}",
     "",
+    "var _ app.ResponseWriter",
+    "",
   ].join("\n"),
+  // Names gin's unique `ResponseWriter` — as net/http's, since it imports no
+  // package of the repo.
   "sub/sub.go": [
     "package sub",
     "",
-    'import "errors"',
+    'import (\n\t"errors"\n\t"net/http"\n)',
     "",
     'func Make() error { return errors.New("x") }',
     "",
     "func Call(e interface{ Run() error }) error { return e.Run() }",
+    "",
+    "func Write(w http.ResponseWriter) {}",
     "",
   ].join("\n"),
 
@@ -335,6 +342,14 @@ describe("the call-site binder", () => {
     expect(calls).toContain("logger.go#logWith -> context.go#Context/ClientIP");
     expect(calls).toContain("ts/aliased.ts#useAlias -> ts/lib/greet.ts#defaultGreet");
     expect(calls.some((c) => c.startsWith("ts/store.ts#Store/get -> ts/store.ts#Store/get"))).toBe(false);
+  });
+});
+
+describe("Go use edges", () => {
+  it("never link a Go file to a package it does not import", () => {
+    const uses = buildArtifactsFromScan(scan).graph.fileEdges.filter((e) => e.kind === "use").map((e) => `${e.from}->${e.to}`);
+    expect(uses).toContain("use/use.go->context.go");
+    expect(uses.filter((u) => u.startsWith("sub/"))).toEqual([]);
   });
 });
 
