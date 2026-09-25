@@ -48,7 +48,7 @@ import {
   fetchEmbedModel,
 } from "./embed/model.js";
 import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
-import { searchSemantic } from "./embed/search.js";
+import { explainSemantic } from "./embed/search.js";
 import {
   resolveEmbedEndpoint,
   buildEndpointIndex,
@@ -215,7 +215,10 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       file (Go files unchanged). Measured a wash, hence opt-in
   --semantic          \`search\`: RRF-fuse an embedding tier with lexical — the
                       HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
-                      local static model (lexical-only when neither is available)
+                      local static model (lexical-only when neither is available).
+                      --exact, --rank and --explain apply to its lexical side;
+                      rows only the embedding side found have empty matchedTerms
+                      and a semanticSymbol + line
   --run               \`embed serve\`: run the docker command instead of printing it
   --probe             \`lsp status\`: start each server and read the capabilities
                       it really advertises (default: no spawn)
@@ -877,35 +880,36 @@ export async function runCli(rawArgv: string[]): Promise<void> {
 
     // stdout stays pure JSON — a caller pipes it into jq. The verdict goes to
     // stderr, the channel this command already uses to say a tier degraded.
-    // Emitted for the semantic tier too: whether an identifier exists in the
-    // indexed tree is a fact about the corpus, not about the ranking model.
-    const warnIfWeak = (): void => {
-      const { explain } = explainQuery(scan, flags.positional!, searchOpts);
+    // --explain is opt-in precisely so the default stdout stays a bare array,
+    // byte-identical to every release before it. Emitted for the semantic tier
+    // too, from the SAME scoring pass that ranked the rows: whether an
+    // identifier exists in the indexed tree is a fact about the corpus, and the
+    // fused explanation restates the rest for the rows actually printed.
+    const answer = ({ results, explain }: { results: unknown[]; explain: { note?: string } }): void => {
+      emit(JSON.stringify(flags.explain ? { results, explain } : results, null, 2) + "\n", flags.out);
       if (explain.note) process.stderr.write(`codeindex: ${explain.note}\n`);
     };
+    const lexical = (): void => answer(explainQuery(scan, flags.positional!, searchOpts));
 
     if (flags.semantic) {
       const endpoint = resolveEmbedEndpoint();
-      const lexical = (): void => {
-        const results = searchIndex(scan, flags.positional!, searchOpts);
-        emit(JSON.stringify(results, null, 2) + "\n", flags.out);
-      };
       if (endpoint) {
         // Rich tier. The endpoint takes PRECEDENCE over a local static model:
         // configuring CODEINDEX_EMBED_ENDPOINT is an explicit user intent. An
         // unreachable/timed-out/malformed endpoint degrades straight to lexical
         // (a stderr note, exit 0) — NOT to the static model.
+        let fused: ReturnType<typeof explainSemantic> | undefined;
         try {
           const index = await buildEndpointIndex(scan);
           const queryVec = await encodeQueryViaEndpoint(flags.positional);
-          const results = searchSemantic(scan, flags.positional, index, { queryVec, limit: flags.limit, fuzzy: flags.fuzzy });
-          emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+          fused = explainSemantic(scan, flags.positional, index, { ...searchOpts, queryVec });
         } catch (e) {
           process.stderr.write(
             `codeindex: embedding endpoint ${endpoint} unavailable (${e instanceof Error ? e.message : e}) — returning lexical results\n`,
           );
-          lexical();
         }
+        if (fused) answer(fused);
+        else lexical();
       } else {
         const { model, error: modelError } = tryLoadEmbedModel(resolveEmbedModelDir(flags.repo));
         if (!model) {
@@ -920,17 +924,11 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           lexical();
         } else {
           const index = buildEmbeddingIndex(scan, model);
-          const results = searchSemantic(scan, flags.positional, index, { model, limit: flags.limit, fuzzy: flags.fuzzy });
-          emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+          answer(explainSemantic(scan, flags.positional, index, { ...searchOpts, model }));
         }
       }
-      warnIfWeak();
     } else {
-      const { results, explain } = explainQuery(scan, flags.positional, searchOpts);
-      // --explain is opt-in precisely so the default stdout stays a bare array,
-      // byte-identical to every release before this one.
-      emit(JSON.stringify(flags.explain ? { results, explain } : results, null, 2) + "\n", flags.out);
-      if (explain.note) process.stderr.write(`codeindex: ${explain.note}\n`);
+      lexical();
     }
   } else if (cmd === "embed") {
     const sub = flags.positional;

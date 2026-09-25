@@ -172,8 +172,8 @@ export type { StaticEmbedModel, EmbedPullTarget } from "./embed/model.js";
 export { encode, quantize, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
 export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits } from "./embed/index.js";
 export type { EmbeddingIndex, EmbeddingRecord, EmbeddingUnit } from "./embed/index.js";
-export { searchSemantic } from "./embed/search.js";
-export type { SemanticSearchOptions, SemanticSearchResult } from "./embed/search.js";
+export { searchSemantic, explainSemantic } from "./embed/search.js";
+export type { SemanticSearchOptions, SemanticSearchResult, SemanticQueryExplanation, ExplainedSemanticSearch } from "./embed/search.js";
 // HTTP endpoint tier (v2.11.0 — the "rich" tier). The engine is a fetch consumer
 // of a containerized embedding server (CODEINDEX_EMBED_ENDPOINT): float vectors
 // run through the SAME L2+int8 quantize pipeline, then the same integer ranking.

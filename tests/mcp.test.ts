@@ -443,6 +443,39 @@ describe("MCP server", () => {
     expect(sem.results.length).toBeGreaterThan(0);
   }, 20_000);
 
+  it("semantic:true honours exact and explain, degraded or fused, like plain search", async () => {
+    const call = (id: number, args: Record<string, unknown>) => ({
+      id,
+      method: "tools/call",
+      params: { name: "search", arguments: { repo: REPO, query: "htpclient", ...args } },
+    });
+    const init = [
+      { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+      { method: "notifications/initialized" },
+    ];
+    const text = (r: Map<number, RpcMsg>, id: number) => JSON.parse(r.get(id)!.result!.content![0]!.text) as Record<string, unknown>;
+    // Degraded: no model, no endpoint.
+    const none = await mcpSession(
+      [...init, call(2, { exact: true }), call(3, { semantic: true, exact: true }), call(4, { semantic: true }), call(5, { semantic: true, explain: true }), call(6, { explain: true })],
+      { CODEINDEX_EMBED_DIR: undefined, CODEINDEX_EMBED_ENDPOINT: undefined },
+    );
+    expect(text(none, 2)).toEqual([]);
+    expect(text(none, 3)).toMatchObject({ results: [], tier: "lexical" });
+    expect((text(none, 4).results as { bridgedOnly?: true }[]).every((r) => r.bridgedOnly)).toBe(true);
+    const explained = text(none, 5);
+    expect(explained.tier).toBe("lexical");
+    expect(explained.explain).toEqual(text(none, 6).explain);
+    // Fused: the static fixture model.
+    const fused = await mcpSession([...init, call(2, { semantic: true, exact: true, explain: true })], {
+      CODEINDEX_EMBED_DIR: MODEL_DIR,
+      CODEINDEX_EMBED_ENDPOINT: undefined,
+    });
+    const body = text(fused, 2) as { tier: string; results: { bridgedOnly?: true }[]; explain: { resultCount: number; semanticOnlyResults: number } };
+    expect(body.tier).toBe("static");
+    expect(body.results.some((r) => r.bridgedOnly)).toBe(false);
+    expect(body.explain).toMatchObject({ resultCount: body.results.length, semanticOnlyResults: body.results.length });
+  }, 20_000);
+
   it("a broken model.json degrades search to lexical with a reason, and embed_status reports the error", async () => {
     const badDir = mkdtempSync(join(tmpdir(), "ci-mcp-badmodel-"));
     writeFileSync(join(badDir, "model.json"), '{"modelId":"x"}');

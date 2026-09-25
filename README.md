@@ -658,7 +658,15 @@ symbol-less files so every file with content is represented.
 **Fusion is by RANK, never a score blend**: BM25 scores and integer dot products
 live on incomparable scales, so `searchSemantic` uses the shared `rrf` helper
 (k=60) and adds `semanticSymbol` — the corpus symbol whose embedding was closest
-for that file — additively to the lexical result.
+for that file — additively to the lexical result. A file the lexical side
+ranked keeps every lexical field (`matchedFields`, `line`, `symbolHits`,
+`fuzzyTerms`, `bridgedOnly`); a file only the embedding side found has an empty
+`matchedTerms` and the `line` of its closest symbol. `--exact` and `--rank`
+apply to the lexical side, so `--exact` keeps bridged-only rows out of the fused
+list too. `--explain` (MCP: `explain: true`) reports the verdict for the rows
+actually returned, from the same scoring pass: an answer carried by embedding
+neighbours alone is `weak`, never "No file matches", and
+`semanticOnlyResults` counts those rows.
 
 To implement your own server, `CODEINDEX_EMBED_ENDPOINT` is the **base URL** and
 the client derives two routes:

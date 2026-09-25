@@ -376,7 +376,7 @@ export const TOOLS = [
         semantic: {
           type: "boolean",
           description:
-            'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently — see embed_status.',
+            'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently — see embed_status. `exact` and `rank` apply to the lexical side; `explain: true` adds an `explain` key to that object, restated for the fused rows (with `semanticOnlyResults`).',
         },
       },
       required: ["repo", "query"],

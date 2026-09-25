@@ -33,11 +33,11 @@ import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } 
 import { onboardBrief } from "./onboard.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
-import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
+import { explainQuery, type RankMode } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
 import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
-import { searchSemantic } from "./embed/search.js";
+import { explainSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
 import { IGNORE_DIRS, walk, type WalkResult } from "./walk.js";
 import { toolsFor, OUTPUT_SCHEMAS, profileNames } from "./mcp/tools.js";
@@ -409,12 +409,24 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const scan = readScan();
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     const exactOpt = args.exact === true ? { exact: true as const } : {};
+    const lexOpts = { limit, fuzzy, ...exactOpt, ...rankOpt };
     if (args.semantic === true) {
       // semantic:true changes the response SHAPE (wraps the ranked list with a
       // `tier`/`degradedReason?`) so a caller can tell "fusion happened" apart
       // from "degraded to lexical" — see the `search` tool description. This
       // branch is the ONLY place that shape appears; plain lexical search below
-      // stays the bare array, byte-compat for existing consumers.
+      // stays the bare array, byte-compat for existing consumers. `exact`,
+      // `rank` and `explain` mean what they mean without it, fused or degraded.
+      const answer = (
+        { results, explain }: { results: unknown[]; explain: unknown },
+        tier: "endpoint" | "static" | "lexical",
+        degradedReason?: string,
+      ): string =>
+        JSON.stringify(
+          { results, tier, ...(degradedReason ? { degradedReason } : {}), ...(args.explain === true ? { explain } : {}) },
+          null,
+          2,
+        );
       const endpoint = resolveEmbedEndpoint();
       if (endpoint) {
         // Rich tier — endpoint takes PRECEDENCE over a local static model. An
@@ -424,15 +436,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
         try {
           const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, () => buildEndpointIndex(scan));
           const queryVec = await encodeQueryViaEndpoint(query);
-          const results = searchSemantic(scan, query, index, { queryVec, limit, fuzzy });
-          return JSON.stringify({ results, tier: "endpoint" }, null, 2);
+          return answer(explainSemantic(scan, query, index, { ...lexOpts, queryVec }), "endpoint");
         } catch (e) {
-          const results = searchIndex(scan, query, { limit, fuzzy, ...rankOpt });
-          return JSON.stringify(
-            { results, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
-            null,
-            2,
-          );
+          return answer(explainQuery(scan, query, lexOpts), "lexical", `embedding endpoint failed: ${errMessage(e)}`);
         }
       }
       const modelDir = resolveEmbedModelDir(repo);
@@ -442,23 +448,15 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
           { mode: "static", identity: `${modelDir}#${model.modelId}`, scan },
           () => buildEmbeddingIndex(scan, model),
         );
-        const results = searchSemantic(scan, query, index, { model, limit, fuzzy });
-        return JSON.stringify({ results, tier: "static" }, null, 2);
+        return answer(explainSemantic(scan, query, index, { ...lexOpts, model }), "static");
       }
       // Opt-in tier not activated (no endpoint, no usable model asset) —
       // degrade to lexical with a reason instead of failing the call. A broken
       // model.json is named, since "configure one" would be the wrong advice.
-      const results = searchIndex(scan, query, { limit, fuzzy, ...rankOpt });
-      return JSON.stringify(
-        {
-          results,
-          tier: "lexical",
-          degradedReason: modelError
-            ? `static model unusable: ${modelError}`
-            : "no embedding endpoint or static model configured — see embed_status",
-        },
-        null,
-        2,
+      return answer(
+        explainQuery(scan, query, lexOpts),
+        "lexical",
+        modelError ? `static model unusable: ${modelError}` : "no embedding endpoint or static model configured — see embed_status",
       );
     }
     // Plain lexical. `explain:true` wraps the array so a caller can see the
@@ -466,7 +464,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // byte-compatible for every existing consumer. The `bridgedOnly` flag rides
     // INSIDE that array either way, which is the only diagnostic that reaches a
     // client that never adopts the wrapper or the explain_search tool.
-    const { results, explain } = explainQuery(scan, query, { limit, fuzzy, ...exactOpt, ...rankOpt });
+    const { results, explain } = explainQuery(scan, query, lexOpts);
     return JSON.stringify(args.explain === true ? { results, explain } : results, null, 2);
   }
   if (name === "explain_search") {

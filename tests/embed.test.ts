@@ -22,7 +22,8 @@ import {
 import type { EmbedPullTarget } from "../src/engine.js";
 import { basicTokenize, encode, intDot, roundHalfToEven, tokenize, wordpiece } from "../src/embed/encode.js";
 import { buildEmbeddingIndex, deserializeEmbeddings, serializeEmbeddings } from "../src/embed/index.js";
-import { searchSemantic } from "../src/embed/search.js";
+import { explainSemantic, searchSemantic } from "../src/embed/search.js";
+import { explainQuery, searchIndex } from "../src/bm25.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
 
@@ -329,6 +330,85 @@ describe("searchSemantic — RRF fusion + degradation", () => {
   });
 });
 
+// The fused list used to drop every lexical option but `fuzzy`, and every
+// lexical field but matchedTerms/topSymbols/fuzzyTerms, and the CLI printed the
+// LEXICAL verdict ("No file matches") above rows the embedding side had found.
+describe("explainSemantic — lexical options, fields and an honest verdict", () => {
+  const withLines = (rel: string, decls: [string, number][]): FileRecord => ({
+    ...file(rel),
+    symbols: decls.map(([name, line]) => ({ ...sym(name, rel), line })),
+  });
+  const scan = scanOf([
+    withLines("src/auth/service.ts", [["AuthService", 3], ["verifyAuthToken", 9]]),
+    withLines("src/http/client.ts", [["HttpClient", 4], ["retryRequest", 12]]),
+    withLines("src/billing/invoice.ts", [["InvoiceBuilder", 7]]),
+  ]);
+  const m = model();
+  const idx = buildEmbeddingIndex(scan, m);
+
+  it("a row the lexical side ranked keeps all its lexical fields", () => {
+    const [lex] = searchIndex(scan, "retry request");
+    const [fused] = searchSemantic(scan, "retry request", idx, { model: m });
+    expect(fused).toEqual({ ...lex, score: fused!.score, semanticSymbol: "retryRequest" });
+    expect(fused!.line).toBe(12);
+    expect(fused!.symbolHits).toEqual([{ name: "retryRequest", kind: "function", line: 12 }]);
+    expect(fused!.matchedFields).toEqual(["name"]);
+  });
+
+  it("a row only the embedding side found points at its closest symbol's line", () => {
+    // "password" shares the auth dimension in the fixture model, and no word.
+    expect(searchIndex(scan, "password")).toEqual([]);
+    const results = searchSemantic(scan, "password", idx, { model: m });
+    expect(results).toEqual([
+      { file: "src/auth/service.ts", score: results[0]!.score, matchedTerms: [], topSymbols: [], line: 3, semanticSymbol: "AuthService" },
+    ]);
+  });
+
+  it("`exact` drops the lexical side's bridged-only rows, as it does without --semantic", () => {
+    const loose = searchSemantic(scan, "authh", idx, { model: m });
+    expect(loose.map((r) => [r.file, r.bridgedOnly])).toEqual([["src/auth/service.ts", true]]);
+    expect(searchIndex(scan, "authh", { exact: true })).toEqual([]);
+    // "authh" is out of the model's vocabulary, so the embedding side has
+    // nothing either: the bridged row is gone rather than relabelled.
+    expect(searchSemantic(scan, "authh", idx, { model: m, exact: true })).toEqual([]);
+    const both = searchSemantic(scan, "authh password", idx, { model: m, exact: true });
+    expect(both.map((r) => r.file)).toEqual(["src/auth/service.ts"]);
+    expect(both[0]!.bridgedOnly).toBeUndefined();
+    expect(both[0]!.fuzzyTerms).toBeUndefined();
+    expect(both[0]!.matchedTerms).toEqual([]);
+  });
+
+  it("the verdict describes the fused rows: embedding-only answers are weak, never 'No file matches'", () => {
+    const { results, explain } = explainSemantic(scan, "password", idx, { model: m });
+    expect(results.length).toBe(1);
+    expect(explain).toMatchObject({ verdict: "weak", resultCount: 1, bridgedOnlyResults: 0, semanticOnlyResults: 1 });
+    expect(explain.note).toBe(
+      'No file in this index defines or mentions "password". The 1 result below: 1 embedding neighbour with no lexical match (see semanticSymbol).',
+    );
+    const mixed = explainSemantic(scan, "authh client", idx, { model: m }).explain;
+    expect(mixed.verdict).toBe("match");
+    expect(mixed.note).toBeUndefined();
+    const bridged = explainSemantic(scan, "authh zzqx", idx, { model: m }).explain;
+    expect(bridged.verdict).toBe("weak");
+    expect(bridged.note).toBe(
+      'Nothing matched the query verbatim (the term zzqx appears nowhere in this index). The 1 result below: 1 near match ("authh" → auth).',
+    );
+  });
+
+  it("with nothing on either side, the lexical sentence stands", () => {
+    const { results, explain } = explainSemantic(scan, "zzqx", idx, { model: m });
+    expect(results).toEqual([]);
+    expect(explain.verdict).toBe("none");
+    expect(explain.note).toBe(explainQuery(scan, "zzqx").explain.note);
+  });
+
+  it("degraded (no model) it IS explainQuery, options included", () => {
+    for (const opts of [{}, { exact: true }, { rank: "graph" as const, limit: 1 }, { fuzzy: false }]) {
+      expect(explainSemantic(scan, "authh client", idx, opts)).toEqual(explainQuery(scan, "authh client", opts));
+    }
+  });
+});
+
 describe("CLI embed + search --semantic", () => {
   const tmpDirs: string[] = [];
   afterAll(() => {
@@ -392,6 +472,31 @@ describe("CLI embed + search --semantic", () => {
     expect(parsed[0]!.file).toBe("src/client.ts");
     // the embedding tier attributed a symbol to the top file
     expect(parsed.some((r) => r.semanticSymbol !== undefined)).toBe(true);
+  });
+
+  it("`search --semantic --explain` wraps the fused rows with their verdict; the stderr note agrees with stdout", () => {
+    // "password" shares the auth dimension in the fixture model, and no word
+    // with this repo.
+    const repo = mkdtempSync(join(tmpdir(), "ci-embed-explain-"));
+    tmpDirs.push(repo);
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "auth.ts"), "export class AuthService {}\n");
+    writeFileSync(join(repo, "src", "http.ts"), "export function httpClient() {}\n");
+    const env: NodeJS.ProcessEnv = { ...process.env, CODEINDEX_EMBED_DIR: MODEL_DIR };
+    delete env.CODEINDEX_EMBED_ENDPOINT;
+    const r = spawnSync(process.execPath, [CLI, "search", "password", "--repo", repo, "--semantic", "--explain"], { encoding: "utf8", env });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout) as {
+      results: { file: string; line?: number; semanticSymbol?: string }[];
+      explain: { verdict: string; semanticOnlyResults: number; resultCount: number; note?: string };
+    };
+    expect(out.results).toEqual([expect.objectContaining({ file: "src/auth.ts", line: 1, semanticSymbol: "AuthService", matchedTerms: [] })]);
+    expect(out.explain).toMatchObject({ verdict: "weak", resultCount: out.results.length, semanticOnlyResults: out.results.length });
+    expect(r.stderr).toBe(`codeindex: ${out.explain.note}\n`);
+    expect(r.stderr).not.toMatch(/No file matches/);
+    // Without --explain the same rows come back as the bare array.
+    const bare = spawnSync(process.execPath, [CLI, "search", "password", "--repo", repo, "--semantic"], { encoding: "utf8", env });
+    expect(JSON.parse(bare.stdout)).toEqual(out.results);
   });
 
   it("DEGRADATION: `search --semantic` WITHOUT a model → lexical results, exit 0", () => {
