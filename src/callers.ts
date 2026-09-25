@@ -143,10 +143,10 @@ function indexCallers(scan: RepoScan, pairs: Set<string>, recall: boolean, only?
   return index;
 }
 
-// The innermost symbol whose declaration encloses (file, line). With AST
-// records `endLine` bounds the answer exactly; regex records have no endLine,
-// so the nearest preceding declaration is returned — a documented
-// approximation. Returns undefined outside any known symbol.
+// The innermost symbol whose declaration encloses (file, line). A record's
+// `endLine` bounds the answer exactly; one without it (the regex tier outside
+// formatted brace languages) yields the nearest preceding declaration — a
+// documented approximation. Returns undefined outside any known symbol.
 export function enclosingSymbol(scan: RepoScan, file: string, line: number): CodeSymbol | undefined {
   const f = scan.files.find((x) => x.rel === file);
   if (!f?.symbols.length) return undefined;

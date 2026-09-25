@@ -177,8 +177,8 @@ export interface SymbolComplexity {
 }
 
 // Per-symbol complexity for one file (or the whole repo when rel is omitted),
-// sorted most-complex first. Symbols without an endLine (regex tier) fall back
-// to a single-line estimate and naturally rank low — labeled by the absent
+// sorted most-complex first. Symbols without an endLine (the regex tier, where
+// it cannot prove a span) fall back to a single-line estimate and naturally rank low — labeled by the absent
 // endLine rather than silently guessed. Containers are not ranked, and a
 // function's score leaves out the declarations nested in it (an inner
 // function or class scores on its own).

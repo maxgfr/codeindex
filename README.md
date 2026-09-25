@@ -588,8 +588,9 @@ Like every read command they reuse a fresh persisted index (`--index`).
 grep hit, a stack frame or a diagnostic into a symbol: the innermost
 declaration holding the line, with its id, which pastes into `callers`,
 `callgraph` and `callpath`, and the declarations around it, outermost first.
-`symbol` is `null` outside every declaration. Regex-tier files record no end
-lines, so there the answer is the nearest declaration above, marked
+`symbol` is `null` outside every declaration. The regex tier records an end
+line only where it can prove one (a brace body closed as a formatter puts it),
+so elsewhere the answer is the nearest declaration above, marked
 `"approximate": true`.
 
 `callpath <from> <to>` (MCP `call_path`) answers how one symbol reaches

@@ -125,8 +125,8 @@ interface NamedDef {
 }
 
 // Every symbol whose range encloses a changed hunk, innermost first. When no def
-// encloses the hunk and the file's defs carry no endLine (regex-extracted
-// languages), the nearest def at or above the hunk is taken and flagged
+// encloses the hunk and the file's defs carry no endLine (regex-tier spans it
+// could not prove), the nearest def at or above the hunk is taken and flagged
 // `approx` — never silently presented as exact.
 export function symbolsInHunks(defs: NamedDef[], hunks: Hunk[]): ChangedSymbol[] {
   const out: ChangedSymbol[] = [];

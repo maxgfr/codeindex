@@ -164,9 +164,9 @@ function onlyUncentralizable(sites: LiteralSite[]): boolean {
 function holderFor(candidates: CodeSymbol[], line: number): CodeSymbol | undefined {
   // A literal sitting inside a constant's declaration span IS that constant's
   // value. This span join needs no new extraction: both tiers already report a
-  // symbol's line, and the AST tier reports endLine. It is also why the feature
-  // works without grammars — a regex-tier symbol with no endLine still matches
-  // its own declaration line.
+  // symbol's line, and the AST tier (and the regex tier, where it can prove a
+  // span) reports endLine. It is also why the feature works without grammars —
+  // a symbol with no endLine still matches its own declaration line.
   //
   // NOT limited to exported constants. A module-private constant that other
   // files rewrite by hand is the sharpest form of this defect, not a lesser

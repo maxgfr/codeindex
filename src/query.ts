@@ -36,8 +36,8 @@ export interface SymbolAt {
   symbol: (CodeSymbol & { id: string }) | null;
   // The declarations around it, outermost first (ids).
   enclosing: string[];
-  // A regex-tier record has no end line, so `symbol` is only the nearest
-  // declaration above the line: it may have ended before it.
+  // A record with no end line (regex tier, span not provable), so `symbol` is
+  // only the nearest declaration above the line: it may have ended before it.
   approximate?: true;
 }
 
@@ -50,7 +50,7 @@ export function symbolAt(scan: RepoScan, rel: string, line: number): SymbolAt | 
   const inner = enclosingAmong(f.symbols, line);
   if (!inner) return { file: rel, line, symbol: null, enclosing: [] };
   // Every other declaration whose span holds both the line and the innermost
-  // one. Only AST records bound a span, so a regex-tier answer has no chain.
+  // one. Only records with an end line bound a span; one without has no chain.
   const reach = Math.max(line, inner.endLine ?? line);
   const enclosing = f.symbols
     .filter((s) => s !== inner && !REFERENCE_KINDS.has(s.kind) && s.endLine !== undefined && s.line <= inner.line && s.endLine >= reach)

@@ -157,7 +157,7 @@ export const TOOLS = [
   {
     name: "symbol_at",
     description:
-      "Which symbol is at file:line? The innermost declaration holding the line (full metadata plus its symbol `id`, the form callers/call_graph/call_path read) and the declarations around it, outermost first. Turns a grep hit, a stack frame or a diagnostic into something the navigation tools accept. `symbol` is null outside every declaration; `approximate: true` means the file has no AST spans, so it is only the nearest declaration above.",
+      "Which symbol is at file:line? The innermost declaration holding the line (full metadata plus its symbol `id`, the form callers/call_graph/call_path read) and the declarations around it, outermost first. Turns a grep hit, a stack frame or a diagnostic into something the navigation tools accept. `symbol` is null outside every declaration; `approximate: true` means the declaration has no recorded end line (regex tier), so it is only the nearest declaration above.",
     inputSchema: {
       type: "object",
       properties: {

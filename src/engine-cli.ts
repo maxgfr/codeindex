@@ -158,7 +158,7 @@ Commands:
               innermost declaration holding the line, its symbol id (what
               callers/callgraph/callpath read) and the declarations around
               it, outermost first; symbol null outside all of them;
-              "approximate": true when the file has no AST spans (MCP
+              "approximate": true when it has no recorded end line (MCP
               symbol_at)
               A <symbol> above is any of: name, name@file, file#name,
               file#Parent/name (a callgraph id), Parent/name
