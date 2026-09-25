@@ -769,7 +769,9 @@ export function toolsInProfiles(spec: string): Set<string> {
   const out = new Set<string>();
   for (const name of names) {
     if (name === "all") return new Set(TOOLS.map((t) => t.name));
-    const profile = TOOL_PROFILES[name];
+    // Own keys only — `--tools constructor` must be an unknown profile, not
+    // Object.prototype.constructor failing to iterate.
+    const profile = Object.hasOwn(TOOL_PROFILES, name) ? TOOL_PROFILES[name] : undefined;
     if (!profile) throw new Error(`unknown tool profile "${name}" — one of: ${profileNames().join(", ")}`);
     for (const tool of profile) out.add(tool);
   }

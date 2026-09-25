@@ -1646,6 +1646,9 @@ describe("tool profiles and onboarding", () => {
 
   it("rejects an unknown profile at startup rather than advertising everything", () => {
     expect(() => parseMcpFlags(["--tools", "nonsense"])).toThrow(/unknown tool profile/);
+    // Own keys only: an Object.prototype member is not a profile.
+    expect(() => parseMcpFlags(["--tools", "constructor"])).toThrow(/unknown tool profile/);
+    expect(() => parseMcpFlags(["--tools", "toString"])).toThrow(/unknown tool profile/);
     // "all" is the default and must stay expressible.
     expect(parseMcpFlags(["--tools", "all"]).profile).toBeUndefined();
     expect(parseMcpFlags(["--tools", "find,impact"]).profile).toBe("find,impact");

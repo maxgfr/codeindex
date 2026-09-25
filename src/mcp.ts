@@ -204,8 +204,12 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const { symbols } = readArtifacts();
     const lookup = str(args.name);
     if (lookup) {
-      const defs = symbols.defs[lookup] ?? [];
-      return JSON.stringify({ name: lookup, defs: args.concise === true ? defs.map((s) => symbolLocation(s, lookup)) : defs, refs: symbols.refs[lookup] ?? [] }, null, 2);
+      // Own keys only: the index is a plain object, so `toString`,
+      // `constructor` or `__proto__` read straight off Object.prototype
+      // (a function, or `{}`) instead of the empty answer.
+      const defs = Object.hasOwn(symbols.defs, lookup) ? symbols.defs[lookup]! : [];
+      const refs = Object.hasOwn(symbols.refs, lookup) ? symbols.refs[lookup]! : [];
+      return JSON.stringify({ name: lookup, defs: args.concise === true ? defs.map((s) => symbolLocation(s, lookup)) : defs, refs }, null, 2);
     }
     return JSON.stringify(args.concise === true ? conciseSymbolIndex(symbols) : symbols, null, 2);
   }

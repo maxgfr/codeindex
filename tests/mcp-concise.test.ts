@@ -87,4 +87,14 @@ describe("concise MCP read answers", () => {
     const full = await call("find_references", { name: "greet", lsp: true });
     expect(await call("find_references", { name: "greet", lsp: true, concise: true })).toEqual({ ...full, defs: full.defs.map(location) });
   });
+  it("answers Object.prototype names as absent symbols, not prototype members", async () => {
+    // The index is a plain object: `defs.toString` used to be the inherited
+    // function (serialized away, or `defs.map is not a function` under
+    // concise) and `__proto__` answered `{}` where arrays belong.
+    for (const name of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      for (const concise of [false, true]) {
+        expect(await call("symbols", { name, concise }), `${name} concise=${concise}`).toEqual({ name, defs: [], refs: [] });
+      }
+    }
+  });
 });
