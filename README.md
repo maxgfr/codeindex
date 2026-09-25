@@ -518,7 +518,10 @@ taste.
 Results carry `matchedFields` (was it the path or a doc comment?), a `line`
 anchor and `symbolHits` (name, kind, line), so a hit is a place to open rather
 than a file to re-read. A whole-identifier match outranks a subtoken match, and a
-test file ranks below the code it tests unless the query asks for tests. English
+test file ranks below the code it tests unless the query asks for tests. A
+barrel's re-exports (`export { x } from`, Python's `from .x import y as y`) are
+indexed as prose rather than as names, so the module that defines a name ranks
+above the `__init__.py` or `index.ts` that re-exports it. English
 stopwords are dropped from a sentence, but not from a name: a query that is only
 a stopword (`default`), or a capitalised stopword the repo declares as a symbol
 (`Use middleware`, `Context.Set` — gin's `Use` and `Set`), is searched as the

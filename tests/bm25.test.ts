@@ -441,6 +441,45 @@ describe("searchIndex: BM25F fields", () => {
   });
 });
 
+describe("searchIndex: re-exports", () => {
+  // A barrel's re-export names a declaration made elsewhere. Indexed as a
+  // name, flask/__init__.py (39 re-exports) outranked the modules that define
+  // them — #1 for "before request hooks", above scaffold.py.
+  it("ranks the defining module above a barrel that re-exports the name", () => {
+    const repo = repoWith({
+      "pkg/__init__.py": "from .scaffold import before_request as before_request\n",
+      "pkg/scaffold.py": [
+        "def before_request(f):",
+        "    return f",
+        "",
+        "def after_request(f):",
+        "    return f",
+        "",
+        "def teardown_request(f):",
+        "    return f",
+        "",
+      ].join("\n"),
+      "web/index.ts": 'export { parseConfig } from "./config";\n',
+      "web/config.ts": "export function parseConfig(): void {}\nexport function loadConfig(): void {}\nexport function saveConfig(): void {}\n",
+    });
+    const scan = scanRepo(repo);
+    // Sanity: the extractor really did record these as re-exports.
+    const kinds = scan.files.flatMap((f) => f.symbols.map((s) => `${f.rel}:${s.name}:${s.kind}`));
+    expect(kinds).toContain("pkg/__init__.py:before_request:reexport");
+    expect(kinds).toContain("web/index.ts:parseConfig:reexport");
+
+    const py = searchIndex(scan, "before_request");
+    expect(py[0]!.file).toBe("pkg/scaffold.py");
+    expect(py[0]!.symbolHits![0]).toEqual({ name: "before_request", kind: "function", line: 1 });
+    // The barrel is still findable — as prose, with no declaration to point at.
+    const barrel = py.find((r) => r.file === "pkg/__init__.py")!;
+    expect(barrel.matchedFields).not.toContain("name");
+    expect(barrel.symbolHits).toBeUndefined();
+
+    expect(searchIndex(scan, "parseConfig")[0]!.file).toBe("web/config.ts");
+  });
+});
+
 describe("searchIndex: stopwords that are names", () => {
   // gin's two most-used APIs are `Default` and `Use`; both are English
   // stopwords, and both queries used to search for nothing at all.

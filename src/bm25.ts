@@ -83,6 +83,11 @@ const FIELD_B: Record<Field, number> = { name: 0.75, path: 0.75, heading: 0.75, 
 // near-ties without overriding the field model.
 const EXACT_NAME_BOOST = 1.35;
 
+// Symbol kinds that name a declaration made in another module — the barrel
+// entries of `export { x } from "./x"`, `export * from "./x"` and Python's
+// `from .x import y as y`.
+const REEXPORT_KINDS = new Set(["reexport", "reexport-all"]);
+
 // Tests are indexed and findable, but a query about a topic wants the code, not
 // its test — unless the query says otherwise. Applied only when the query itself
 // carries no test-ish term.
@@ -259,8 +264,18 @@ export function buildDocs(scan: RepoScan): Doc[] {
     };
     const seenSym = new Set<string>();
     for (const s of f.symbols) {
-      addTerms(doc, "name", s.name);
       if (s.doc) addTerms(doc, "doc", s.doc);
+      if (REEXPORT_KINDS.has(s.kind)) {
+        // A re-export names a declaration that lives elsewhere. As a NAME it
+        // outranked that declaration: flask/__init__.py re-exports 39 names
+        // and ranked #1 for "before request hooks", above the scaffold.py
+        // that defines before_request. It is still words the file carries,
+        // so it stays findable as body text — without the name weight, the
+        // exact-name boost, or a symbolHit that points at an import line.
+        addTerms(doc, "body", s.name);
+        continue;
+      }
+      addTerms(doc, "name", s.name);
       doc.exactNames.add(foldText(s.name).toLowerCase());
       if (!seenSym.has(s.name)) {
         seenSym.add(s.name);
