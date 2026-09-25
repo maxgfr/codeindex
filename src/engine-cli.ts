@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import {
@@ -25,7 +26,8 @@ import { implementationsOf, typeEntry } from "./relations.js";
 import { neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex, buildRawCallerIndex, callerIndexForNames, lookupCallerEntry, rawCallerSitesFor, refNames } from "./callers.js";
 import { hierarchyFor, symbolGraphFor } from "./derived.js";
-import { explainNoCallers, rawCallersOf, resolveSymbolRef } from "./query.js";
+import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymbolRef, symbolsOverview } from "./query.js";
+import { conciseReferences, symbolLocation } from "./mcp/concise.js";
 import { formatSymbolRef } from "./symref.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
@@ -50,7 +52,7 @@ import {
   probeEndpoint,
 } from "./embed/endpoint.js";
 import { have, sh } from "./util.js";
-import { lspStatus, callersWithLsp } from "./lsp/index.js";
+import { lspStatus, callersWithLsp, referencesWithLsp } from "./lsp/index.js";
 import { profileNames, toolsInProfiles } from "./mcp/tools.js";
 
 const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexing
@@ -79,6 +81,17 @@ Commands:
               supertype method it replaces; --direction out through a method
               reaches its overrides, --direction in to an override reaches
               the base method's callers
+  find        Declarations by name or Parent/name, each with its complete
+              signature, doc, parent and line span (MCP find_symbol): exact
+              names first; --substring, --include-body, --concise, --limit
+              (default 50). No match answers []
+  refs        Who references a symbol (MCP find_references): defs, bound
+              callSites, and referencingFiles (file-level mentions, may
+              include homonyms); --lsp appends a language server's answer,
+              --concise. An unknown name still answers (defs: [])
+  outline     Every symbol declared in one file, in declaration order, with
+              kind, span, signature, doc and parent (MCP symbols_overview):
+              cli.mjs outline <file>; --concise. Unknown file: exit 2
               A <symbol> above is any of: name, name@file, file#name,
               file#Parent/name (a callgraph id), Parent/name
   workspaces  Monorepo packages + dependency graph (JSON)
@@ -161,8 +174,8 @@ Commands:
               edge kind linking each neighbour, strongest evidence first
               (--depth <n>, --kind import,call,use,extends,implements,
               doc-link,mention; JSON)
-              File arguments (complexity, impact, neighbors) may be written
-              ./path, repo-absolute or with backslashes
+              File arguments (complexity, outline, impact, neighbors) may be
+              written ./path, repo-absolute or with backslashes
   mermaid     Mermaid diagram of the module graph; pass a module positional to
               focus on one neighborhood
   rewrite     Map an expensive tree-wide search onto its indexed equivalent:
@@ -220,7 +233,7 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --no-index-cache    Never reuse a persisted index; always build from scratch
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results: \`search\` (default 20), \`complexity\` (50),
-                      \`risk\` (20), \`deadcode\` (default all)
+                      \`risk\` (20), \`deadcode\` (default all), \`find\` (50)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
   --exact             \`search\`: drop results that carry no verbatim term match
@@ -234,7 +247,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --probe             \`lsp status\`: start each server and read the capabilities
                       it really advertises (default: no spawn)
   --lsp               \`callers <name>\`: append incoming calls from a configured
-                      language server; requires a symbol target
+                      language server; requires a symbol target. \`refs\`: append
+                      the server's references and an agreement matrix
   --recall            \`callers\`: recall-oriented binding (issue #7) — adds the
                       name-only matches the default rejects (a unique JS/TS name
                       with no import, a same-file homonym whatever the receiver,
@@ -255,6 +269,11 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       and constants too — reported only when unreferenced)
   --include-tail      \`deadcode\`: also report examples, docs, fixtures and
                       scripts (test files are always roots)
+  --substring         \`find\`: match the last name segment by inclusion,
+                      case-insensitive
+  --include-body      \`find\`: attach each declaration's source lines
+  --concise           \`find\`, \`refs\`, \`outline\`: declarations as
+                      name/kind/file/line only
 `;
 
 interface CliFlags {
@@ -302,10 +321,15 @@ interface CliFlags {
   rank?: "graph" | "lexical"; // search: structural prior (default lexical)
   json?: boolean; // delta: emit JSON instead of the human panel
   positional?: string; // e.g. the grep pattern or search query
+  positionals: string[]; // every positional; only `callpath` takes two
+  substring?: boolean; // find: match the name by inclusion
+  includeBody?: boolean; // find: attach each declaration's source
+  concise?: boolean; // find/refs/outline: name/kind/file/line only
+  files?: boolean; // callpath: walk the file graph instead of the symbol graph
 }
 
 function parseFlags(args: string[]): CliFlags {
-  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false };
+  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false, positionals: [] };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const next = (): string => {
@@ -390,8 +414,16 @@ function parseFlags(args: string[]): CliFlags {
       flags.direction = v;
     }
     else if (a === "--json") flags.json = true;
-    else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
-    else throw new Error(`unknown flag: ${a}`);
+    else if (a === "--substring") flags.substring = true;
+    else if (a === "--include-body") flags.includeBody = true;
+    else if (a === "--concise") flags.concise = true;
+    else if (a === "--files") flags.files = true;
+    // A second positional is kept, not rejected here: `callpath <A> <B>`
+    // takes two. runCli refuses it for every other command.
+    else if (!a.startsWith("--") && flags.positionals.length < 2) {
+      flags.positionals.push(a);
+      flags.positional ??= a;
+    } else throw new Error(`unknown flag: ${a}`);
   }
   return flags;
 }
@@ -399,18 +431,6 @@ function parseFlags(args: string[]): CliFlags {
 function emit(content: string, out?: string): void {
   if (out) writeFileSync(out, content);
   else process.stdout.write(content);
-}
-
-// A file argument as the user wrote it — `./src/a.ts`, an absolute path, a
-// Windows `src\a.ts` — spelled the way the index keys files: repo-relative,
-// forward slashes. The literal comes first (a module slug, or a rel that
-// really contains a backslash); a differing normalized spelling second.
-// `complexity ./src/a.ts` used to answer [] and `impact ./src/a.ts` "no such
-// file" for a file the relative spelling found.
-function fileArgReadings(repo: string, arg: string): string[] {
-  let rel = (isAbsolute(arg) ? relative(repo, arg) : arg).replace(/\\/g, "/");
-  while (rel.startsWith("./")) rel = rel.slice(2);
-  return rel !== arg && rel !== "" && rel !== ".." && !rel.startsWith("../") ? [arg, rel] : [arg];
 }
 
 function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexOptions {
@@ -588,6 +608,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   }
 
   const flags = parseFlags(rest);
+  if (flags.positionals.length > 1 && cmd !== "callpath") throw new Error(`unknown flag: ${flags.positionals[1]}`);
   if (!existsSync(flags.repo)) throw new Error(`--repo path does not exist: ${flags.repo}`);
   if (!statSync(flags.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags.repo}`);
 
@@ -919,6 +940,41 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       ...(flags.direction ? { direction: flags.direction } : {}),
     });
     if (!result.root.length) throw new Error(`no symbol named ${flags.positional}`);
+    emit(JSON.stringify(result, null, 2) + "\n", flags.out);
+  } else if (cmd === "find" || cmd === "refs" || cmd === "outline") {
+    // The MCP find_symbol / find_references / symbols_overview answers, same
+    // bytes: signatures, docs, parents and spans were reachable from an MCP
+    // client only, while `symbols` prints name → {file, line, kind}.
+    if (!flags.positional) {
+      const usage = { find: "find <name|Parent/name>", refs: "refs <symbol>", outline: "outline <file>" }[cmd];
+      throw new Error(`${cmd} needs an argument: cli.mjs ${usage} --repo <dir>`);
+    }
+    if (flags.lsp && cmd !== "refs") throw new Error("--lsp applies to `callers <name>` and `refs <symbol>` only");
+    const scan = await readScan();
+    let result: unknown;
+    if (cmd === "find") {
+      result = findSymbol(scan, flags.positional, {
+        substring: flags.substring,
+        includeBody: flags.includeBody,
+        concise: flags.concise,
+        maxResults: flags.limit,
+      });
+    } else if (cmd === "refs") {
+      // An unknown name still answers (defs: []): referencingFiles may name an
+      // out-of-repo symbol (`useState`), which is exactly what one asks here.
+      const statik = findReferences(scan, flags.positional);
+      const leaf = resolveSymbolRef(scan, flags.positional)?.reading.name ?? flags.positional;
+      const refs = flags.lsp ? await referencesWithLsp(scan, flags.repo, leaf, statik) : statik;
+      result = flags.concise ? conciseReferences(refs) : refs;
+    } else {
+      // A file with no symbols answers []; one the index does not hold is an
+      // error, as it is for `complexity`.
+      const known = new Set(scan.files.map((f) => f.rel));
+      const rel = resolveFileArg(flags.repo, flags.positional, (r) => known.has(r));
+      if (rel === undefined) throw new Error(`no such file in the index: ${flags.positional}`);
+      const overview = symbolsOverview(scan, rel);
+      result = flags.concise ? overview.map((s) => symbolLocation(s, s.name)) : overview;
+    }
     emit(JSON.stringify(result, null, 2) + "\n", flags.out);
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');

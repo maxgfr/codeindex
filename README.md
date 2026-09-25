@@ -380,6 +380,9 @@ codeindex callers --repo .                    # per-symbol caller index
 codeindex hierarchy       --repo .            # type hierarchy (both directions)
 codeindex implementations Runnable --repo .   # who implements it, transitively
 codeindex callgraph buildGraph --repo . --depth 2
+codeindex find    Client/send --repo .        # declarations: signature, doc, parent, span
+codeindex refs    backoff --repo .            # defs, bound call sites, referencing files
+codeindex outline src/client.ts --repo .      # one file's symbols, in declaration order
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
 ```
@@ -412,6 +415,15 @@ site binds to is still an answer, and says why it is empty:
 }
 ```
 
+`find`, `refs` and `outline` print the same answers as MCP `find_symbol`,
+`find_references` and `symbols_overview`: each declaration's complete
+signature, doc comment, parent and line span, which `symbols` leaves out.
+`find` takes a name or `Parent/name` (`--substring`, `--include-body`,
+`--concise`, `--limit`, default 50) and answers `[]` when nothing matches;
+`refs` takes any symbol form above and, like MCP, still answers for a name the
+repo does not declare; `outline` exits 2 on a file the index does not hold.
+Like every read command they reuse a fresh persisted index (`--index`).
+
 `callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
 any binding, with its receiver and enclosing symbol. `callgraph` walks at most 5
 hops and says `depthClamped` when asked for more. It also follows dispatch. An
@@ -425,7 +437,7 @@ the same file are two links, strongest evidence first — and rejects an unknown
 `--kind`. `impact` walks imports, uses and calls backwards; a Go import reaches
 every non-test file of the package it names, and a call inferred from a name
 alone is counted (`inferredDependents`) rather than followed unless
-`--include-inferred`. File arguments (`complexity`, `impact`, `neighbors`) may
+`--include-inferred`. File arguments (`complexity`, `outline`, `impact`, `neighbors`) may
 be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
 file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
 `{ total, shown, truncated, candidates }` like MCP `dead_code`.
