@@ -141,7 +141,13 @@ export class LspSessionPool {
     return this.entries.size;
   }
 
-  async use<T>(server: LspServerConfig, root: string, stamp: string, fn: (lease: LspLease) => Promise<T>): Promise<LeaseResult<T>> {
+  async use<T>(
+    server: LspServerConfig,
+    root: string,
+    stamp: string,
+    fn: (lease: LspLease) => Promise<T>,
+    retried = false,
+  ): Promise<LeaseResult<T>> {
     const key = JSON.stringify([root, server.id]);
     // The whole config, not only the id: an edited lsp.json (new args, new
     // initializationOptions) must not be answered by the server it replaced.
@@ -158,6 +164,7 @@ export class LspSessionPool {
       this.retire(key, entry);
       entry = undefined;
     }
+    const reused = entry !== undefined;
     if (!entry) {
       this.hook();
       const opening = this.open(server, root).then((result) => {
@@ -184,9 +191,9 @@ export class LspSessionPool {
     current.busy++;
     if (current.idle) clearTimeout(current.idle);
     current.idle = undefined;
+    let value: T;
     try {
-      const value = await fn({ session: opened.session, get warm() { return current.warm; }, markWarm: () => { current.warm = true; } });
-      return { ok: true, value };
+      value = await fn({ session: opened.session, get warm() { return current.warm; }, markWarm: () => { current.warm = true; } });
     } finally {
       current.busy--;
       if (current.busy === 0) {
@@ -198,6 +205,15 @@ export class LspSessionPool {
         }
       }
     }
+    // The check above sees a death only once the child's exit event has been
+    // delivered. A server killed moments before (its exit still queued) passes
+    // it, and the query then fails on a server that was already gone. A reused
+    // session that is dead after the query is replaced and asked once more.
+    if (reused && !retried && !opened.session.alive()) {
+      this.retire(key, current);
+      return this.use(server, root, stamp, fn, true);
+    }
+    return { ok: true, value };
   }
 
   /** Shut every session down. The host calls this when it stops. */
