@@ -328,7 +328,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   }
   if (name === "dead_code") {
     // Additive: without `limit` the payload is exactly what it always was.
-    return JSON.stringify(capDeadCode(findDeadCode(readScan()), num(args.limit)), null, 2);
+    const dead = findDeadCode(readScan(), { kinds: args.kinds === "all" ? "all" : "callable", includeTail: args.includeTail === true });
+    return JSON.stringify(capDeadCode(dead, num(args.limit)), null, 2);
   }
   if (name === "duplicated_literals") {
     const report = findLiteralDuplications(readScan(), {

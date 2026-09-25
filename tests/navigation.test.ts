@@ -269,6 +269,15 @@ describe("CLI navigation surface", () => {
     expect(cli("deadcode", "--limit", "1").json()).toEqual({ total: all.length, shown: 1, truncated: true, candidates: all.slice(0, 1) });
   });
 
+  it("deadcode --kinds all widens the candidates, and an unknown --kinds is an error", () => {
+    const callables = cli("deadcode").json();
+    const every = cli("deadcode", "--kinds", "all").json();
+    expect(every.length).toBeGreaterThanOrEqual(callables.length);
+    const bad = cli("deadcode", "--kinds", "types");
+    expect(bad.status).toBe(2);
+    expect(bad.err).toMatch(/--kinds expects callable\|all, got "types"/);
+  });
+
   it("accepts ./path, absolute and backslashed file arguments, and rejects an unknown file", () => {
     const want = cli("complexity", "src/lib/greet.ts").json();
     expect(want.length).toBeGreaterThan(0);

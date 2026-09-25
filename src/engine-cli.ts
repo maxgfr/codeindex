@@ -127,9 +127,14 @@ Commands:
               are the ones crossing a language boundary no compiler checks.
               (--min-files, --min-count, --include-tests)
   deadcode    Dead-code candidates in two labeled tiers: 'unreferenced' (no
-              call site binds AND nothing references the name) and 'uncalled'
-              (referenced — re-export, type position — but never called);
-              --limit <n> caps the list as {total, shown, truncated, candidates}
+              call site binds AND no other file names it) and 'uncalled'
+              (named elsewhere — import, type position, base-class list,
+              same-name call site — but no call binds). Callables only unless
+              --kinds all; test and tail files (--include-tail), the package's
+              public API (manifest entry points and what they re-export) and
+              language protocol names (__dunder__, Go init/main, constructor)
+              are never candidates. --limit <n> caps the list as
+              {total, shown, truncated, candidates}
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
               positional for one file; omit for the repo-wide top (--limit,
               default 50)
@@ -235,6 +240,11 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       restating a value is usually asserting it deliberately
   --include-inferred  \`impact\`: also follow call edges inferred from a name
                       alone (graph.json confidence "inferred")
+  --kinds <k>         \`deadcode\`: callable (default: functions, methods,
+                      classes, function-valued consts) | all (types, properties
+                      and constants too — reported only when unreferenced)
+  --include-tail      \`deadcode\`: also report examples, docs, fixtures and
+                      scripts (test files are always roots)
 `;
 
 interface CliFlags {
@@ -262,6 +272,8 @@ interface CliFlags {
   minCount?: number; // literals: total-occurrence floor for a duplication
   includeTests?: boolean; // literals: count test files too (off by default)
   includeInferred?: boolean; // impact: follow name-inferred call edges too (off by default)
+  includeTail?: boolean; // deadcode: report tail files (examples, docs, fixtures, scripts) too
+  kinds?: "callable" | "all"; // deadcode: candidate kinds (default callable)
   fuzzy: boolean; // search: trigram fuzzy fallback for df==0 terms (default true)
   exact?: boolean; // search: drop results carrying no verbatim term match
   explain?: boolean; // search: emit { results, explain } instead of a bare array
@@ -317,6 +329,12 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--min-count") flags.minCount = num();
     else if (a === "--include-tests") flags.includeTests = true;
     else if (a === "--include-inferred") flags.includeInferred = true;
+    else if (a === "--include-tail") flags.includeTail = true;
+    else if (a === "--kinds") {
+      const v = next();
+      if (v !== "callable" && v !== "all") throw new Error(`--kinds expects callable|all, got "${v}"`);
+      flags.kinds = v;
+    }
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--index") flags.indexDir = next();
     else if (a === "--no-index-cache") flags.noIndexCache = true;
@@ -1143,7 +1161,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const { ok, couplings } = changeCoupling(flags.repo, { since: flags.since });
     emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
   } else if (cmd === "deadcode") {
-    emit(JSON.stringify(capDeadCode(findDeadCode(await readScan()), flags.limit), null, 2) + "\n", flags.out);
+    const dead = findDeadCode(await readScan(), { kinds: flags.kinds, includeTail: flags.includeTail });
+    emit(JSON.stringify(capDeadCode(dead, flags.limit), null, 2) + "\n", flags.out);
   } else if (cmd === "literals") {
     const report = findLiteralDuplications(await readScan(), {
       minFiles: flags.minFiles,

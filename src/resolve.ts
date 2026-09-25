@@ -125,7 +125,7 @@ const BUILD_DIRS = new Set(["dist", "build", "lib", "out", "output", "esm", "cjs
 // "./dist/esm/index.js" → ["src/esm/index.js", "esm/index.js", "src/index.js",
 // "index.js"] — peel leading build dirs one at a time, trying both a `src/`
 // substitute and a plain drop at each step.
-function distToSrcCandidates(target: string): string[] {
+export function distToSrcCandidates(target: string): string[] {
   const segs = norm(target).split("/").filter((s) => s !== ".");
   const out: string[] = [];
   let i = 0;
@@ -155,7 +155,7 @@ function byLen(a: string, b: string): number {
   return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
 }
 
-function tolerantJsonParse(text: string): unknown {
+export function tolerantJsonParse(text: string): unknown {
   // tsconfig.json is JSONC: strip // and /* */ comments and trailing commas. This
   // MUST be string-aware — tsconfig glob values like "**/*.ts" or
   // "./src/styled-system/*" contain `/*`, `*/` and `//` that a naive regex

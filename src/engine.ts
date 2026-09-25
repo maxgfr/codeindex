@@ -229,7 +229,7 @@ export { changeCoupling, rankHotspots } from "./coupling.js";
 export type { ChangeCoupling, CouplingOptions, Hotspot } from "./coupling.js";
 export { renderRepoMap } from "./repomap.js";
 export { findDeadCode } from "./deadcode.js";
-export type { DeadSymbol } from "./deadcode.js";
+export type { DeadSymbol, DeadCodeOptions } from "./deadcode.js";
 export { findLiteralDuplications } from "./literals.js";
 export type {
   LiteralDuplication,

@@ -420,6 +420,32 @@ be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
 file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
 `{ total, shown, truncated, candidates }` like MCP `dead_code`.
 
+`deadcode` lists exported symbols no call site binds to, in two tiers:
+`unreferenced` when no other file of the same language names the symbol, and
+`uncalled` when one does (an import, a type position, a base-class list, a
+call of the same name that no binding could settle). It also checks the
+declaring file outside the declaration. The evidence comes from the AST's
+identifiers, call sites, imports and inheritance. When that evidence cannot
+see a name (the AST keeps only 5+ character identifiers, and a regex-tier file
+keeps none), deadcode reads the other files' text before it claims
+`unreferenced`. Only callables are candidates by default: functions, methods,
+classes and function-valued consts. `--kinds all` (MCP `kinds: "all"`) adds
+types, properties and constants, which are reported only when unreferenced,
+since they are never "called". Some symbols are roots and are never
+candidates:
+
+- test files, and tail files (examples, docs, fixtures, scripts, Go
+  `testdata`) unless `--include-tail` is passed;
+- names the language calls itself (Python `__dunder__`, Go `init`/`main`, JS
+  `constructor`);
+- the package's public API. That means what a manifest entry point declares or
+  re-exports: package.json `main`/`module`/`exports`/`bin`/`types`, with a
+  build path like `dist/index.js` or `scripts/cli.mjs` mapped back to its
+  `src/` file, pyproject `[project.scripts]`, a crate's `lib.rs`/`main.rs`, and
+  every Python package `__init__.py`. The members and base classes of the
+  public classes count too. When no manifest names an entry,
+  `index`/`main`/`cli`/`mod`/`lib`/`__main__` basenames stand in.
+
 ### How a call binds
 
 `callers`, `callgraph`, graph.json's `call` edges and SCIP references share one

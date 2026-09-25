@@ -257,13 +257,15 @@ export const TOOLS = [
   {
     name: "dead_code",
     description:
-      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere — re-export, type position — but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
+      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND no other file names it) and 'uncalled' (named elsewhere — import, type position, base-class list, a same-name call site — but no call binds). Exported callables only unless `kinds: \"all\"`; test and tail files (examples, docs, fixtures, scripts — `includeTail` to include them), the package's public API (manifest entry points and what they re-export) and language protocol names are never candidates. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
     inputSchema: {
       type: "object",
       properties: {
         ...repoProp,
         ...scopeProps,
         limit: { type: "number", minimum: 0, description: "Cap entries (default: all)" },
+        kinds: { type: "string", enum: ["callable", "all"], description: "Candidate kinds (default callable; all adds types, properties and constants, unreferenced only)" },
+        includeTail: { type: "boolean", description: "Also report examples, docs, fixtures and scripts" },
       },
       required: ["repo"],
     },
