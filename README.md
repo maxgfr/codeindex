@@ -769,7 +769,8 @@ not an empty answer.
 ### Smaller read responses
 
 MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`
-accept `concise: true`. Declarations are reduced to `name/kind/file/line` while
+accept `concise: true`. Declarations are reduced to `name/kind/file/line`, plus
+`parent` for a member so its `Parent/name` path stays formable, while
 result membership, order, reference groups, call-site locations, confidence
 labels and LSP metadata stay intact. Defaults retain their full existing shape.
 `symbols` keeps its name-keyed groups and references for full-index requests.

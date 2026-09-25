@@ -362,6 +362,11 @@ describe("symbol query API", () => {
     const withBody = findSymbol(scan, "makeWidget", { concise: true, includeBody: true })[0]!;
     expect(withBody.body).toContain("return new Widget()");
     expect(withBody.signature).toBeUndefined();
+
+    // A member keeps its parent: `Widget/size` is how it is addressed.
+    const member = findSymbol(scan, "size", { concise: true });
+    expect(member.map((m) => Object.keys(m).sort())).toEqual([["file", "kind", "line", "name", "parent"]]);
+    expect(member[0]!.parent).toBe("Widget");
   });
 
   it("findReferences merges precise call sites with file-level references", () => {

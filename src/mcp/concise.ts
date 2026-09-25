@@ -4,10 +4,14 @@ import type { CodeSymbol, SymbolIndex } from "../types.js";
 import type { CallerEntry } from "../callers.js";
 import type { SymbolReferences } from "../query.js";
 
-export type SymbolLocation = Pick<CodeSymbol, "name" | "kind" | "file" | "line">;
+// `parent` rides along when there is one: it is what makes a member
+// addressable. Without it `ResponseWriter/Flush` and `responseWriter/Flush`
+// both read as `Flush`, and the Parent/name path the edit tools and
+// find_symbol take could not be formed without a second, full call.
+export type SymbolLocation = Pick<CodeSymbol, "name" | "kind" | "file" | "line" | "parent">;
 
-export function symbolLocation(symbol: Pick<CodeSymbol, "kind" | "file" | "line">, name: string): SymbolLocation {
-  return { name, kind: symbol.kind, file: symbol.file, line: symbol.line };
+export function symbolLocation(symbol: Pick<CodeSymbol, "kind" | "file" | "line" | "parent">, name: string): SymbolLocation {
+  return { name, kind: symbol.kind, file: symbol.file, line: symbol.line, ...(symbol.parent ? { parent: symbol.parent } : {}) };
 }
 
 export function conciseCaller<T extends CallerEntry>(entry: T): Omit<T, "def"> & { def: SymbolLocation } {

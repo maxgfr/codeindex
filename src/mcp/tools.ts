@@ -7,7 +7,7 @@
 import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protocol.js";
 
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
-const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
+const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line, plus parent for a member) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
   include: { type: "array", items: { type: "string" }, description: "Include globs" },
@@ -85,7 +85,7 @@ export const TOOLS = [
   {
     name: "find_symbol",
     description:
-      "Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Each match carries its COMPLETE SIGNATURE (parameters and return type) by default, because \"what shape is it\" is the question that follows \"where is it\" almost every time and one round trip beats two. Options: substring matching, includeBody for the declaration's source, concise to drop everything but name/kind/file/line when you genuinely only want a location. Exact-name matches rank first.",
+      "Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Each match carries its COMPLETE SIGNATURE (parameters and return type) by default, because \"what shape is it\" is the question that follows \"where is it\" almost every time and one round trip beats two. Options: substring matching, includeBody for the declaration's source, concise to drop everything but name/kind/file/line (and a member's parent) when you genuinely only want a location. Exact-name matches rank first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -96,7 +96,7 @@ export const TOOLS = [
         concise: {
           type: "boolean",
           description:
-            "Return only name/kind/file/line — drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false).",
+            "Return only name/kind/file/line (plus parent for a member) — drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false).",
         },
         maxResults: { type: "number", minimum: 1, description: "Cap matches (default 50)" },
       },

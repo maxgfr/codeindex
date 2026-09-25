@@ -107,13 +107,15 @@ export function findSymbol(scan: RepoScan, namePath: string, opts: FindSymbolOpt
   }
   // Applied LAST so it composes predictably: `concise` with `includeBody` keeps
   // the body, because a caller that asked for both wants the source without the
-  // metadata around it.
+  // metadata around it. `parent` stays: a member's Parent/name path is how it
+  // is addressed, and two same-named methods are otherwise indistinguishable.
   if (opts.concise) {
     return capped.map((m) => ({
       name: m.name,
       kind: m.kind,
       file: m.file,
       line: m.line,
+      ...(m.parent ? { parent: m.parent } : {}),
       ...(m.body !== undefined ? { body: m.body } : {}),
     })) as SymbolMatch[];
   }
