@@ -33,7 +33,7 @@ import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
-import { symbolComplexity, riskHotspots } from "./complexity.js";
+import { indexedFile, symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { impactOf, neighborsOf } from "./traverse.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
@@ -133,14 +133,16 @@ Commands:
               call site binds AND nothing references the name) and 'uncalled'
               (referenced — re-export, type position — but never called)
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
-              positional for one file; omit for the repo-wide top
+              positional for one file (./ and absolute paths accepted; a file
+              the index does not hold is an error); omit for the repo-wide top
   risk        Complexity × git-churn ranking (JSON; --since to bound, --limit)
   delta       Review panel for the git diff: changed files -> enclosing symbols ->
               blast radius -> risk score with explained reasons; a deleted or
               renamed file that is still imported is listed under \`broken\`
               with its importers (--base <ref> | --staged, --depth <n>, --json,
               --fail-on HIGH|MEDIUM|LOW to exit 1 as a CI gate). Paths under
-              the --index directory are not part of the review
+              the --index directory are not part of the review; before the
+              first commit every file is reviewed against the empty tree
   impact      Reverse dependency closure of a file or module: everything that
               transitively imports/uses/calls it (--depth <n>; JSON)
   neighbors   Graph neighbours of a file or module, both directions
@@ -1136,7 +1138,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(JSON.stringify(report, null, 2) + "\n", flags.out);
   } else if (cmd === "complexity") {
     const scan = await readScan();
-    emit(JSON.stringify(symbolComplexity(scan, flags.positional), null, 2) + "\n", flags.out);
+    const file = flags.positional === undefined ? undefined : indexedFile(scan, flags.positional);
+    emit(JSON.stringify(symbolComplexity(scan, file), null, 2) + "\n", flags.out);
   } else if (cmd === "risk") {
     const scan = await readScan();
     const res = gitChurn(flags.repo, { since: flags.since });

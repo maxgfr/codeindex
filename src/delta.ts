@@ -9,7 +9,7 @@ import { isAbsolute, posix, relative, resolve, sep } from "node:path";
 import type { Graph, ModuleNode, SymbolIndex } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import type { DiffFile, DiffSpec, Hunk } from "./git.js";
-import { isGitWorktree, resolveBaseRef, diffFiles, diffHunks, untrackedFiles } from "./git.js";
+import { NO_COMMITS_REF, emptyTreeId, isGitWorktree, resolveBaseRef, diffFiles, diffHunks, untrackedFiles } from "./git.js";
 import { buildResolveContext, resolveDocLink, resolveImport } from "./resolve.js";
 import { byStr } from "./sort.js";
 import { IGNORE_DIRS } from "./walk.js";
@@ -548,9 +548,16 @@ export function readDeltaDiff(repo: string, opts: DeltaOptions = {}): DeltaDiff 
   const notes: string[] = [];
   let base: DeltaResult["base"];
   if (opts.staged) {
-    const head = sh("git", ["-C", repo, "rev-parse", "HEAD"]);
-    if (!head.ok) return { error: "cannot resolve HEAD — empty repository?" };
-    base = { ref: "HEAD", mergeBase: head.stdout.trim(), staged: true };
+    // `git diff --cached` compares the index with HEAD, or with the empty tree
+    // while there is no HEAD yet — the first commit, staged.
+    const head = sh("git", ["-C", repo, "rev-parse", "--verify", "--quiet", "HEAD"]);
+    if (head.ok) base = { ref: "HEAD", mergeBase: head.stdout.trim(), staged: true };
+    else {
+      const empty = emptyTreeId(repo);
+      if (!empty) return { error: "cannot resolve HEAD, nor the empty tree" };
+      base = { ref: NO_COMMITS_REF, mergeBase: empty, staged: true };
+      notes.push("no commits yet — every staged file is reviewed as added");
+    }
   } else {
     const r = resolveBaseRef(repo, opts.base);
     if ("error" in r) return { error: r.error };
@@ -614,14 +621,20 @@ export function deltaFor(
 // The human panel. Stdout-only by design: delta output is ephemeral per-worktree
 // state — machine consumers take the JSON.
 export function formatDeltaPanel(res: DeltaResult): string {
-  const mb = res.base.mergeBase.slice(0, 7);
-  const vs = `${res.base.staged ? "staged vs " : ""}${res.base.ref}`;
+  const { ref, mergeBase, staged } = res.base;
+  // "vs origin/main (merge-base 1a2b3c4)", "vs HEAD (1a2b3c4)" for the staged
+  // changes, "vs the empty tree" before the first commit.
+  const vs =
+    ref === NO_COMMITS_REF
+      ? "vs the empty tree (no commits yet)"
+      : `vs ${ref} (${staged ? "" : "merge-base "}${mergeBase.slice(0, 7)})`;
+  const what = staged ? "staged changes" : "changes";
   if (!res.changes.length && !res.unindexed.length) {
-    return `codeindex: no changes vs ${vs} (merge-base ${mb})\n`;
+    return `codeindex: no ${what} ${vs}\n`;
   }
   const changedCount = res.changes.length + res.unindexed.length;
   const lines = [
-    `codeindex: delta vs ${vs} (merge-base ${mb}) — ${changedCount} changed file(s), ` +
+    `codeindex: delta ${staged ? "of staged changes " : ""}${vs} — ${changedCount} changed file(s), ` +
       `${res.modules.length} module(s)${res.indexCommit ? `, index @ ${res.indexCommit}` : ""}`,
   ];
   for (const n of res.notes) lines.push(`  note: ${n}`);

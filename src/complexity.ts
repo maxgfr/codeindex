@@ -3,7 +3,7 @@
 // ternaries), and the risk ranking nobody else in the space ships: complexity
 // × git churn — files that are BOTH hard to reason about AND constantly
 // changed are where defects concentrate.
-import { join } from "node:path";
+import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import type { RepoScan } from "./scan.js";
 import { fileComplexityFor } from "./derived.js";
 import { readText } from "./walk.js";
@@ -14,6 +14,17 @@ const BRANCH_RE =
 
 export function complexityOfSource(source: string): number {
   return 1 + (source.match(BRANCH_RE) ?? []).length;
+}
+
+// A file argument as the index keys it — `./gin.go`, `gin.go` and the
+// absolute path all name gin.go — or an error saying it is not indexed. An
+// unknown file used to answer [] with exit 0, which reads exactly like a file
+// with no symbols.
+export function indexedFile(scan: RepoScan, target: string): string {
+  const path = isAbsolute(target) ? relative(resolve(scan.root), target) : target;
+  const rel = posix.normalize(path.replace(/\\/g, "/")).replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  if (!scan.files.some((f) => f.rel === rel)) throw new Error(`no such file in the index: ${target}`);
+  return rel;
 }
 
 export interface SymbolComplexity {

@@ -64,6 +64,19 @@ export interface DiffSpec {
 const gitArgs = (dir: string): string[] => ["-C", dir, ...GIT_CONFIG];
 const rangeArgs = (spec: DiffSpec): string[] => (spec.staged ? ["--cached"] : [spec.mergeBase!]);
 
+// The review base of a repository with no commit yet. Everything in it is new,
+// so the diff is taken against the empty tree rather than refused: the first
+// commit is exactly the change most worth reviewing.
+export const NO_COMMITS_REF = "(no commits)";
+
+// The empty tree's id in this repository's object format (sha1 or sha256).
+// git knows it without the object being stored; hashed from stdin rather than
+// /dev/null, which is not a path everywhere.
+export function emptyTreeId(dir: string): string | undefined {
+  const res = sh("git", [...gitArgs(dir), "hash-object", "-t", "tree", "--stdin"], { input: "" });
+  return res.ok ? res.stdout.trim() : undefined;
+}
+
 export function isGitWorktree(dir: string): boolean {
   return sh("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"]).ok;
 }
@@ -72,7 +85,8 @@ export function isGitWorktree(dir: string): boolean {
 // origin/HEAD → origin/main → origin/master → main → master that resolves is
 // taken, and the comparison point is its MERGE-BASE with HEAD (PR semantics —
 // commits landed on the base branch never count as yours). With no candidate
-// (fresh repo, detached CI clone) the base falls back to HEAD with a note.
+// (fresh repo, detached CI clone) the base falls back to HEAD with a note, and
+// with no HEAD at all (no commit yet) to the empty tree.
 export function resolveBaseRef(
   dir: string,
   base?: string,
@@ -104,13 +118,17 @@ export function resolveBaseRef(
     const mb = mergeBase(c);
     if (mb) return { ref: c, mergeBase: mb };
   }
-  const head = sh("git", [...gitArgs(dir), "rev-parse", "HEAD"]);
-  if (!head.ok) return { error: "cannot resolve HEAD — empty repository?" };
-  return {
-    ref: "HEAD",
-    mergeBase: head.stdout.trim(),
-    note: "base: HEAD (no default branch found — reviewing uncommitted work)",
-  };
+  const head = sh("git", [...gitArgs(dir), "rev-parse", "--verify", "--quiet", "HEAD"]);
+  if (head.ok) {
+    return {
+      ref: "HEAD",
+      mergeBase: head.stdout.trim(),
+      note: "base: HEAD (no default branch found — reviewing uncommitted work)",
+    };
+  }
+  const empty = emptyTreeId(dir);
+  if (!empty) return { error: "cannot resolve HEAD, nor the empty tree" };
+  return { ref: NO_COMMITS_REF, mergeBase: empty, note: "no commits yet — every file is reviewed as added" };
 }
 
 // Changed files with statuses (rename-aware) plus per-file churn/binary info

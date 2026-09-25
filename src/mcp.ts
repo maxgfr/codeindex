@@ -25,7 +25,7 @@ import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
-import { symbolComplexity, riskHotspots } from "./complexity.js";
+import { indexedFile, symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
@@ -340,7 +340,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       const risks = riskHotspots(scan, res.churn, positiveNum(args.top));
       return JSON.stringify({ churnOk: res.ok, ...historyStatus(res), risks }, null, 2);
     }
-    return JSON.stringify(symbolComplexity(scan, str(args.file), positiveNum(args.top)), null, 2);
+    const file = str(args.file);
+    return JSON.stringify(symbolComplexity(scan, file === undefined ? undefined : indexedFile(scan, file), positiveNum(args.top)), null, 2);
   }
   if (name === "mermaid") {
     const { graph } = readArtifacts();

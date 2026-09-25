@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ import { atomicWriteText, replaceSymbolBody, insertAfterSymbol, insertBeforeSymb
 import { writeMemory, readMemory, deleteMemory, listMemories } from "../src/memory.js";
 import { readText as engineRead } from "../src/walk.js";
 import { findDeadCode } from "../src/deadcode.js";
-import { symbolComplexity, riskHotspots } from "../src/complexity.js";
+import { indexedFile, symbolComplexity, riskHotspots } from "../src/complexity.js";
 import { renderMermaid } from "../src/viz.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { grepRepo } from "../src/grep.js";
@@ -24,6 +24,7 @@ import { extractCode } from "../src/extract/code.js";
 import { extractAst } from "../src/ast/extract.js";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures", import.meta.url));
+const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 
 function git(dir: string, ...args: string[]): void {
   execFileSync("git", ["-C", dir, ...args], {
@@ -565,5 +566,24 @@ describe("dead code, complexity, mermaid", () => {
     }
     expect(mmd).toContain('["données"]');
     expect(mmd).toContain('m_end["end"]');
+  });
+});
+
+describe("complexity targets", () => {
+  it("normalises ./ and absolute paths, and refuses a file the index does not hold", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-cx-target-"));
+    writeFileSync(join(root, "gin.go"), "package gin\n\nfunc F(a int) int {\n\tif a > 1 {\n\t\treturn a\n\t}\n\treturn 0\n}\n");
+    const scan = scanRepo(root);
+    expect(indexedFile(scan, "./gin.go")).toBe("gin.go");
+    expect(indexedFile(scan, join(root, "gin.go"))).toBe("gin.go");
+    expect(() => indexedFile(scan, "nosuch.go")).toThrow("no such file in the index: nosuch.go");
+    const cli = (target: string) => spawnSync(process.execPath, [CLI, "complexity", target, "--repo", root], { encoding: "utf8" });
+    const ok = cli("./gin.go");
+    expect(ok.status).toBe(0);
+    expect(JSON.parse(ok.stdout)).toEqual(symbolComplexity(scan, "gin.go"));
+    expect(JSON.parse(ok.stdout)).not.toEqual([]);
+    const missing = cli("nosuch.go");
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toContain("no such file in the index: nosuch.go");
   });
 });

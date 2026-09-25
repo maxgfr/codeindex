@@ -527,6 +527,8 @@ keeps the highest-scoring modules (and says it truncated), and
   are untracked files in directories the walker never indexes (`node_modules/`,
   `dist/`, …). A tracked change in such a directory stays listed as
   `unindexed`.
+- **Before the first commit** there is no merge-base: every file (staged,
+  with `--staged`) is reviewed as added, against the empty tree.
 - **The diff is read before the index.** A clean worktree answers
   `no changes` without loading or walking anything (0.4 s instead of 15 s on a
   66k-file repository), and symbol attribution reads only the changed files'

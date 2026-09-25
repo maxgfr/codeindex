@@ -295,3 +295,43 @@ describe("delta over MCP", () => {
     }
   }, 60_000);
 });
+
+describe("delta: before the first commit, and the staged panel", () => {
+  it("reviews an unborn repository against the empty tree, staged or not", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-delta-unborn-"));
+    try {
+      git(root, ["init", "-q", "-b", "main"]);
+      write(root, { "a.ts": "export const a = 1;\n", "b.ts": 'import { a } from "./a";\nexport const b = a;\n' });
+      git(root, ["add", "a.ts"]);
+      const all = delta(root);
+      expect(all.base.ref).toBe("(no commits)");
+      expect(all.changes.map((c) => [c.path, c.status])).toEqual([
+        ["a.ts", "added"],
+        ["b.ts", "added"],
+      ]);
+      expect(all.changes[0]!.symbols.map((s) => s.name)).toEqual(["a"]);
+      expect(formatDeltaPanel(all)).toMatch(/^codeindex: delta vs the empty tree \(no commits yet\) — 2 changed file\(s\)/);
+      const staged = delta(root, { staged: true });
+      expect(staged.changes.map((c) => c.path)).toEqual(["a.ts"]);
+      expect(staged.notes).toContain("no commits yet — every staged file is reviewed as added");
+      expect(formatDeltaPanel(staged)).toMatch(/^codeindex: delta of staged changes vs the empty tree \(no commits yet\)/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says 'staged changes vs HEAD', not 'staged vs HEAD (merge-base …)'", () => {
+    const root = repo(HUB_REPO);
+    try {
+      const head = git(root, ["rev-parse", "HEAD"]).trim();
+      expect(formatDeltaPanel(delta(root, { staged: true }))).toBe(`codeindex: no staged changes vs HEAD (${head.slice(0, 7)})\n`);
+      write(root, { "lib/other.ts": "export const other = 3;\n" });
+      git(root, ["add", "lib/other.ts"]);
+      expect(formatDeltaPanel(delta(root, { staged: true }))).toMatch(
+        new RegExp(`^codeindex: delta of staged changes vs HEAD \\(${head.slice(0, 7)}\\) — 1 changed file\\(s\\)`),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
