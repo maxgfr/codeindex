@@ -387,8 +387,17 @@ function resolveWindow(dir: string, since: string | undefined): { exclude: strin
     // Resolved to the timestamp git itself would use, so the memo key moves
     // with a relative date ("6 months ago" is a different window tomorrow).
     const date = sh("git", [...gitArgs(dir), "rev-parse", `--since=${since}`]);
-    const m = /^--max-age=(\d+)$/m.exec(date.stdout);
-    if (date.ok && m) return { exclude: [], args: [`--max-age=${m[1]}`] };
+    const m = /^--max-age=(-?\d+)$/m.exec(date.stdout);
+    if (date.ok && m) {
+      // A date before the epoch ("100 years ago") comes back negative or, on
+      // older git, wrapped to a huge unsigned value — and newer git reads that
+      // value back as a far-future cutoff that matches nothing. Either way the
+      // window starts before any commit could have been made: the whole
+      // history, stated as no filter at all.
+      const age = BigInt(m[1]!);
+      if (age < 0n || age >= 2n ** 63n) return { exclude: [], args: [] };
+      return { exclude: [], args: [`--max-age=${m[1]}`] };
+    }
   }
   throw new Error(`since "${since}" is neither a commit (tag, branch, sha) nor a date (2024-01-01, "6 months ago")`);
 }

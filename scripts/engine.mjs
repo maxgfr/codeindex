@@ -1065,8 +1065,12 @@ function resolveWindow(dir, since) {
   if (ref2.ok) return { exclude: [`^${ref2.stdout.trim()}`], args: [] };
   if (SINCE_DATE.test(since.trim())) {
     const date = sh("git", [...gitArgs(dir), "rev-parse", `--since=${since}`]);
-    const m = /^--max-age=(\d+)$/m.exec(date.stdout);
-    if (date.ok && m) return { exclude: [], args: [`--max-age=${m[1]}`] };
+    const m = /^--max-age=(-?\d+)$/m.exec(date.stdout);
+    if (date.ok && m) {
+      const age = BigInt(m[1]);
+      if (age < 0n || age >= 2n ** 63n) return { exclude: [], args: [] };
+      return { exclude: [], args: [`--max-age=${m[1]}`] };
+    }
   }
   throw new Error(`since "${since}" is neither a commit (tag, branch, sha) nor a date (2024-01-01, "6 months ago")`);
 }
@@ -3682,7 +3686,7 @@ var init_literals = __esm({
   }
 });
 
-// ../../../../../../home/user/codeindex/node_modules/.pnpm/web-tree-sitter@0.27.0/node_modules/web-tree-sitter/web-tree-sitter.js
+// node_modules/.pnpm/web-tree-sitter@0.27.0/node_modules/web-tree-sitter/web-tree-sitter.js
 function assertInternal(x) {
   if (x !== INTERNAL) throw new Error("Illegal constructor");
 }
@@ -5620,7 +5624,7 @@ function parsePattern(index, stepType, stepValueId, captureNames, stringValues, 
 }
 var __defProp2, __name, Edit, SIZE_OF_SHORT, SIZE_OF_INT, SIZE_OF_CURSOR, SIZE_OF_NODE, SIZE_OF_POINT, SIZE_OF_RANGE, ZERO_POINT, INTERNAL, C, finalizer, LookaheadIterator, finalizer2, Tree, finalizer3, TreeCursor, Node, LANGUAGE_FUNCTION_REGEX, Language, web_tree_sitter_default, Module3, TRANSFER_BUFFER, LANGUAGE_VERSION, MIN_COMPATIBLE_VERSION, finalizer4, Parser, PREDICATE_STEP_TYPE_CAPTURE, PREDICATE_STEP_TYPE_STRING, QUERY_WORD_REGEX, CaptureQuantifier, isCaptureStep, isStringStep, QueryErrorKind, QueryError, finalizer5, Query;
 var init_web_tree_sitter = __esm({
-  "../../../../../../home/user/codeindex/node_modules/.pnpm/web-tree-sitter@0.27.0/node_modules/web-tree-sitter/web-tree-sitter.js"() {
+  "node_modules/.pnpm/web-tree-sitter@0.27.0/node_modules/web-tree-sitter/web-tree-sitter.js"() {
     "use strict";
     __defProp2 = Object.defineProperty;
     __name = (target, value) => __defProp2(target, "name", { value, configurable: true });

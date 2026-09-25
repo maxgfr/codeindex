@@ -214,8 +214,9 @@ describe("grep JS engine time budget", () => {
     const root = repo({ "a.txt": "aa\n" });
     const r = grepRepoEx(root, "(a)\\1");
     expect(r.hits).toHaveLength(1);
-    if (grepRepoEx(root, "a").notes.length === 0) {
-      // ripgrep present (no note on a plain pattern): the fallback is named.
+    if (spawnSync("rg", ["--version"]).status === 0) {
+      // Only a ripgrep run has a faster engine to fall back FROM; without
+      // ripgrep the JavaScript engine is simply the engine, and no note is due.
       expect(r.notes.join("\n")).toMatch(/JavaScript-only syntax.*slower JavaScript engine/);
     }
   });
