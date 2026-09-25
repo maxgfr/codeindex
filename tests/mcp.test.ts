@@ -471,12 +471,26 @@ describe("MCP server", () => {
     expect(hits).toHaveLength(1);
   });
 
-  it("honours zero-valued limits instead of replacing them with defaults", async () => {
+  it("refuses a search limit that is not a whole number of results, instead of bending it", async () => {
+    // limit 0 used to return [] in silence (the CLI rejects --limit 0), and 2.5
+    // acted as 2. Neither is replaced by the default: both are refused.
     const res = await mcpSession([
       { id: 1, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: 0 } } },
+      { id: 2, method: "tools/call", params: { name: "explain_search", arguments: { repo: REPO, query: "client", limit: 0 } } },
+      { id: 3, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: 2.5 } } },
+      { id: 4, method: "tools/call", params: { name: "explain_search", arguments: { repo: REPO, query: "client", limit: "2.5" } } },
+      { id: 5, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: 2 } } },
     ]);
-    const hits = JSON.parse(res.get(1)!.result!.content![0]!.text) as unknown[];
-    expect(hits).toEqual([]);
+    for (const id of [1, 2]) {
+      expect(res.get(id)!.result!.isError).toBe(true);
+      expect(res.get(id)!.result!.content![0]!.text).toContain("`limit` must be at least 1");
+    }
+    for (const id of [3, 4]) {
+      expect(res.get(id)!.result!.isError).toBe(true);
+      expect(res.get(id)!.result!.content![0]!.text).toContain("`limit` must be a whole number");
+    }
+    expect(res.get(5)!.result!.isError).toBeUndefined();
+    expect(JSON.parse(res.get(5)!.result!.content![0]!.text)).toHaveLength(2);
   });
 
   it("handshakes, lists tools, and executes tool calls", async () => {
@@ -568,6 +582,66 @@ describe("MCP server", () => {
     expect(sem.tier).toBe("static");
     expect(sem.degradedReason).toBeUndefined();
     expect(sem.results.length).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("semantic:true honours exact and explain, degraded or fused, like plain search", async () => {
+    const call = (id: number, args: Record<string, unknown>) => ({
+      id,
+      method: "tools/call",
+      params: { name: "search", arguments: { repo: REPO, query: "htpclient", ...args } },
+    });
+    const init = [
+      { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+      { method: "notifications/initialized" },
+    ];
+    const text = (r: Map<number, RpcMsg>, id: number) => JSON.parse(r.get(id)!.result!.content![0]!.text) as Record<string, unknown>;
+    // Degraded: no model, no endpoint.
+    const none = await mcpSession(
+      [...init, call(2, { exact: true }), call(3, { semantic: true, exact: true }), call(4, { semantic: true }), call(5, { semantic: true, explain: true }), call(6, { explain: true })],
+      { CODEINDEX_EMBED_DIR: undefined, CODEINDEX_EMBED_ENDPOINT: undefined },
+    );
+    expect(text(none, 2)).toEqual([]);
+    expect(text(none, 3)).toMatchObject({ results: [], tier: "lexical" });
+    expect((text(none, 4).results as { bridgedOnly?: true }[]).every((r) => r.bridgedOnly)).toBe(true);
+    const explained = text(none, 5);
+    expect(explained.tier).toBe("lexical");
+    expect(explained.explain).toEqual(text(none, 6).explain);
+    // Fused: the static fixture model.
+    const fused = await mcpSession([...init, call(2, { semantic: true, exact: true, explain: true })], {
+      CODEINDEX_EMBED_DIR: MODEL_DIR,
+      CODEINDEX_EMBED_ENDPOINT: undefined,
+    });
+    const body = text(fused, 2) as { tier: string; results: { bridgedOnly?: true }[]; explain: { resultCount: number; semanticOnlyResults: number } };
+    expect(body.tier).toBe("static");
+    expect(body.results.some((r) => r.bridgedOnly)).toBe(false);
+    expect(body.explain).toMatchObject({ resultCount: body.results.length, semanticOnlyResults: body.results.length });
+  }, 20_000);
+
+  it("a broken model.json degrades search to lexical with a reason, and embed_status reports the error", async () => {
+    const badDir = mkdtempSync(join(tmpdir(), "ci-mcp-badmodel-"));
+    writeFileSync(join(badDir, "model.json"), '{"modelId":"x"}');
+    try {
+      const res = await mcpSession(
+        [
+          { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+          { method: "notifications/initialized" },
+          { id: 2, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "http client retry", semantic: true } } },
+          { id: 3, method: "tools/call", params: { name: "embed_status", arguments: { repo: REPO } } },
+        ],
+        { CODEINDEX_EMBED_DIR: badDir, CODEINDEX_EMBED_ENDPOINT: undefined },
+      );
+      expect(res.get(2)!.result!.isError).toBeUndefined();
+      const sem = JSON.parse(res.get(2)!.result!.content![0]!.text) as { results: { file: string }[]; tier: string; degradedReason?: string };
+      expect(sem.tier).toBe("lexical");
+      expect(sem.degradedReason).toMatch(/^static model unusable: embed model: bad dim undefined in .*model\.json$/);
+      expect(sem.results[0]!.file).toBe("src/client.ts");
+      expect(res.get(3)!.result!.isError).toBeUndefined();
+      const status = JSON.parse(res.get(3)!.result!.content![0]!.text) as { mode: string; model: { present: boolean; error?: string } };
+      expect(status.mode).toBe("none");
+      expect(status.model).toMatchObject({ present: true, error: expect.stringMatching(/bad dim undefined/) });
+    } finally {
+      rmSync(badDir, { recursive: true, force: true });
+    }
   }, 20_000);
 
   it("search semantic:true with a configured but unreachable endpoint reports tier: lexical with the failure reason", async () => {
@@ -743,6 +817,7 @@ describe("memoizedEmbedModel (single-entry static-model cache)", () => {
 interface EmbedMock {
   url: string;
   calls: number; // count of POST /embed requests received
+  texts: string[][]; // the texts of each POST, in arrival order
   close: () => Promise<void>;
 }
 
@@ -751,7 +826,7 @@ interface EmbedMock {
 // memoizes the corpus index (one POST for the whole corpus, however many
 // searches follow) instead of re-embedding it on every `search` call.
 async function startEmbedMock(): Promise<EmbedMock> {
-  const mock: EmbedMock = { url: "", calls: 0, close: async () => {} };
+  const mock: EmbedMock = { url: "", calls: 0, texts: [], close: async () => {} };
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -764,6 +839,7 @@ async function startEmbedMock(): Promise<EmbedMock> {
       req.on("end", () => {
         mock.calls++;
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { texts: string[] };
+        mock.texts.push(body.texts);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ vectors: body.texts.map(() => [1, 0]) }));
       });
@@ -869,28 +945,36 @@ describe("MCP search — embedding index memoization (endpoint tier)", () => {
     }
   }, 20_000);
 
-  it("editing a file between searches invalidates the cache and rebuilds the corpus index", async () => {
+  it("editing a file between searches rebuilds the corpus index, re-sending only the units whose text changed", async () => {
     const tmpRepo = join(mkdtempSync(join(tmpdir(), "ci-mcp-memo-")), "mini-repo");
     cpSync(REPO, tmpRepo, { recursive: true });
     mock = await startEmbedMock();
     const session = mcpStagedSession({ CODEINDEX_EMBED_ENDPOINT: mock.url, CODEINDEX_EMBED_DIR: undefined });
     try {
-      const first = await session.call(1, "search", { repo: tmpRepo, query: "http client retry", semantic: true });
-      expect((JSON.parse(first.result!.content![0]!.text) as { tier: string }).tier).toBe("endpoint");
-      const callsAfterFirst = mock.calls;
+      const search = async (id: number) => {
+        const before = mock!.texts.length;
+        const res = await session.call(id, "search", { repo: tmpRepo, query: "http client retry", semantic: true });
+        expect((JSON.parse(res.result!.content![0]!.text) as { tier: string }).tier).toBe("endpoint");
+        return mock!.texts.slice(before);
+      };
+      const first = await search(1);
+      // One corpus POST with every unit, then the query.
+      expect(first.length).toBe(2);
+      expect(first[1]).toEqual(["http client retry"]);
 
-      // Mutate a source file → its content hash (and so the scan fingerprint)
-      // changes; a plain comment append doesn't touch extracted symbols/summary,
-      // isolating "the corpus rebuilt" from "the corpus text happened to differ".
+      // A comment append changes the file's hash (so the scan fingerprint, so
+      // the memo misses) but no unit text: nothing but the query is sent.
       const clientFile = join(tmpRepo, "src", "client.ts");
       writeFileSync(clientFile, readFileSync(clientFile, "utf8") + "\n// touched\n");
+      expect(await search(2)).toEqual([["http client retry"]]);
 
-      const second = await session.call(2, "search", { repo: tmpRepo, query: "http client retry", semantic: true });
-      expect((JSON.parse(second.result!.content![0]!.text) as { tier: string }).tier).toBe("endpoint");
-
-      // A rebuild happened: a fresh corpus-build POST AND a fresh query POST,
-      // not just the one query POST a cache hit would cost.
-      expect(mock.calls).toBe(callsAfterFirst + 2);
+      // A new declaration is one new unit: exactly its text goes out.
+      writeFileSync(clientFile, readFileSync(clientFile, "utf8") + "export function reconnectSocket(): void {}\n");
+      const third = await search(3);
+      expect(third.length).toBe(2);
+      expect(third[0]!.length).toBe(1);
+      expect(third[0]![0]).toMatch(/^reconnectSocket\n/);
+      expect(third[1]).toEqual(["http client retry"]);
     } finally {
       session.close();
     }

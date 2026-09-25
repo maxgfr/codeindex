@@ -48,7 +48,7 @@ import { conciseReferences, symbolLocation } from "./mcp/concise.js";
 import { formatSymbolRef } from "./symref.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
 import { gitChurn } from "./git.js";
-import { grepRepo } from "./grep.js";
+import { grepRepoEx } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { capDeadCode, findDeadCode } from "./deadcode.js";
@@ -61,13 +61,24 @@ import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js
 import { deltaFor, formatDeltaPanel } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, parseEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
-import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
-import { searchSemantic } from "./embed/search.js";
+import {
+  EMBED_VERSION,
+  resolveEmbedModelDir,
+  loadEmbedModel,
+  tryLoadEmbedModel,
+  parseEmbedModel,
+  resolveEmbedPullUrl,
+  fetchEmbedModel,
+} from "./embed/model.js";
+import { buildEmbeddingIndex, sameEmbeddings, serializeEmbeddings } from "./embed/index.js";
+import { readEmbeddingsFile, writeEmbeddingsFileAtomic } from "./embed/persist.js";
+import { explainSemantic } from "./embed/search.js";
 import {
   resolveEmbedEndpoint,
   buildEndpointIndex,
+  embedEndpointUrl,
   encodeQueryViaEndpoint,
+  endpointModelId,
   probeEndpoint,
 } from "./embed/endpoint.js";
 import { have, sh } from "./util.js";
@@ -156,7 +167,12 @@ Commands:
               sibling dependencies with the imports it really makes
               (undeclared / unusedDeclared) and exits 1 on an undeclared one
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
-  grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
+  grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits sorted by
+              file, line: {file, line, col, text}; a line over 300 chars is
+              cut to a window around the match). JavaScript regex dialect on
+              both backends (ripgrep when on PATH, a JS scan otherwise).
+              --scope is ANDed with --include/--exclude and may name a file;
+              globs are rooted: '*.ts' is root-level, '**/*.ts' any depth
   search      Keyless BM25 lexical search over symbol names, path segments,
               markdown/reST headings and summaries: cli.mjs search "<query>" --repo <dir>.
               --semantic fuses in an embedding tier (RRF) — the HTTP endpoint
@@ -254,8 +270,10 @@ Commands:
   rewrite     Map an expensive tree-wide search onto its indexed equivalent:
               cli.mjs rewrite '<command line>'. Prints the replacement command
               and exits 0, or exits 1 when it has no opinion (run the original).
-              Deliberately conservative — any shell metacharacter or unknown
-              flag refuses the rewrite
+              Understands recursive grep/egrep, rg and git grep (BRE/ERE/Rust
+              patterns restated as JS; -F -w -i -S -l -t -g --include).
+              Deliberately conservative — shell syntax outside single quotes,
+              an unknown flag or an untranslatable pattern refuses the rewrite
   mcp         Run as an MCP server over stdio (39 tools: scan_summary,
               index_status, graph, symbols, callers, workspaces, churn,
               symbols_overview, find_symbol, find_references, symbol_at,
@@ -345,9 +363,17 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       (the ones the stem/trigram bridge produced)
   --explain           \`search\`: emit { results, explain } — which terms matched,
                       which bridged, and whether the query really found anything
+  --rank <mode>       \`search\`: lexical (default) or graph — scale each score by
+                      the file's import-graph PageRank relative to an average
+                      file (Go files unchanged). Measured a wash, hence opt-in
   --semantic          \`search\`: RRF-fuse an embedding tier with lexical — the
                       HTTP endpoint if CODEINDEX_EMBED_ENDPOINT is set, else a
-                      local static model (lexical-only when neither is available)
+                      local static model (lexical-only when neither is available).
+                      Reuses <index>/embeddings.bin (static) or caches endpoint
+                      vectors under <index>/embed-cache/ when an index exists
+                      --exact, --rank and --explain apply to its lexical side;
+                      rows only the embedding side found have empty matchedTerms
+                      and a semanticSymbol + line
   --run               \`embed serve\`: run the docker command instead of printing it
   --probe             \`lsp status\`: start each server and read the capabilities
                       it really advertises (default: no spawn)
@@ -362,7 +388,16 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --raw               \`callers\`: every call site by callee name, with no binding
                       at all (receiver and enclosing symbol per site)
   --ignore-case       \`grep\`: case-insensitive matching
-  --max-hits <n>      \`grep\`: cap returned hits (default 200)
+  --max-hits <n>      \`grep\`: cap returned hits (default 200). A capped result
+                      says so on stderr, with the count of matching files
+  --files-with-matches  \`grep\`: one hit per matching file (its first match), so
+                      --max-hits caps files — \`grep -l\` with evidence
+  --timeout-ms <n>    \`grep\`: wall-clock budget for the JavaScript regex engine
+                      (default 10000). ripgrep is linear-time; the JS fallback
+                      backtracks, so a pathological pattern is stopped at the
+                      budget and the partial result is flagged on stderr
+  --                  End of options: the next argument is the positional even
+                      when it starts with '-' (\`grep -- --out\`)
   --min-files <n>     \`literals\`: distinct files a value must span (default 2)
   --min-count <n>     \`literals\`: total occurrences required (default 3)
   --include-tests     \`literals\`: count test files too. Off by default — a test
@@ -407,6 +442,8 @@ interface CliFlags {
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
+  timeoutMs?: number; // grep: JS regex engine wall-clock budget
+  filesWithMatches?: boolean; // grep: one hit (the first) per matching file
   budgetTokens?: number;
   config?: string; // rules config path
   limit?: number; // search result cap
@@ -458,6 +495,13 @@ function parseFlags(args: string[]): CliFlags {
       if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
       return n;
     };
+    // A count of results: 2.5 used to be accepted and silently act as 2.
+    const count = (): number => {
+      const raw = next();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0) throw new Error(`${a} expects a positive whole number, got "${raw}"`);
+      return n;
+    };
     if (a === "--repo") flags.repo = resolve(next());
     else if (a === "--out") {
       const v = next();
@@ -474,7 +518,9 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--max-bytes") flags.maxBytes = num();
     else if (a === "--max-calls") flags.maxCalls = num();
     else if (a === "--ignore-case") flags.ignoreCase = true;
-    else if (a === "--max-hits") flags.maxHits = num();
+    else if (a === "--max-hits") flags.maxHits = count();
+    else if (a === "--timeout-ms") flags.timeoutMs = num();
+    else if (a === "--files-with-matches") flags.filesWithMatches = true;
     else if (a === "--budget-tokens") flags.budgetTokens = num();
     else if (a === "--min-files") flags.minFiles = num();
     else if (a === "--min-count") flags.minCount = num();
@@ -502,7 +548,7 @@ function parseFlags(args: string[]): CliFlags {
     }
     else if (a === "--since") flags.since = next();
     else if (a === "--config") flags.config = resolve(next());
-    else if (a === "--limit") flags.limit = num();
+    else if (a === "--limit") flags.limit = count();
     else if (a === "--no-fuzzy") flags.fuzzy = false;
     else if (a === "--exact") flags.exact = true;
     else if (a === "--explain") flags.explain = true;
@@ -543,7 +589,16 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--with-caller") flags.withCaller = true;
     // A second positional is kept, not rejected here: `callpath <A> <B>`
     // takes two. runCli refuses it for every other command.
-    else if (!a.startsWith("--") && flags.positionals.length < 2) {
+    else if (a === "--") {
+      // End of options: the NEXT token is the positional however it is
+      // spelled, so `grep -- --out` searches for "--out" instead of
+      // redirecting output to a file named after the next token. Flags may
+      // still follow it — a host that appends them keeps working.
+      if (flags.positional !== undefined) throw new Error(`unexpected "--": the positional is already "${flags.positional}"`);
+      const v = next();
+      flags.positionals.push(v);
+      flags.positional = v;
+    } else if (!a.startsWith("--") && flags.positionals.length < 2) {
       flags.positionals.push(a);
       flags.positional ??= a;
     } else throw new Error(`unknown flag: ${a}`);
@@ -753,6 +808,7 @@ const VALUE_FLAGS = new Set([
   "--max-bytes",
   "--max-calls",
   "--max-hits",
+  "--timeout-ms",
   "--budget-tokens",
   "--min-files",
   "--min-count",
@@ -994,7 +1050,11 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     type CacheMeta = Pick<PersistedMeta, "engineVersion" | "commit" | "graphSha1" | "symbolsSha1" | "embed">;
     await warmPresentGrammars();
     const modelDir = resolveEmbedModelDir(flags.repo);
-    const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+    // A broken model.json must not fail the whole index: graph.json and
+    // symbols.json do not depend on it. Skip the sidecar and say why.
+    const { model, error: modelError } = tryLoadEmbedModel(modelDir);
+    if (modelError) process.stderr.write(`codeindex: ${modelError} — embeddings.bin skipped; re-run \`codeindex embed pull\`\n`);
+
     const graphPath = join(outDir, "graph.json");
     const symbolsPath = join(outDir, "symbols.json");
     const embedPath = join(outDir, "embeddings.bin");
@@ -1150,7 +1210,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       let embedNote = "";
       let embedMeta: CacheMeta["embed"];
       if (model) {
-        const index = buildEmbeddingIndex(scan, model);
+        // The previous embeddings.bin donates every vector whose unit text is
+        // unchanged: an incremental index re-encodes only what changed, and
+        // the bytes are the same as a from-scratch build's.
+        const index = buildEmbeddingIndex(scan, model, { previous: readEmbeddingsFile(embedPath) });
         const bytes = serializeEmbeddings(index);
         writeArtifact(embedPath, bytes);
         embedMeta = { embedVersion: EMBED_VERSION, modelId: model.modelId, sha1: sha1(bytes) };
@@ -1369,64 +1432,80 @@ export async function runCli(rawArgv: string[]): Promise<void> {
 
     // stdout stays pure JSON — a caller pipes it into jq. The verdict goes to
     // stderr, the channel this command already uses to say a tier degraded.
-    // Emitted for the semantic tier too: whether an identifier exists in the
-    // indexed tree is a fact about the corpus, not about the ranking model.
-    const warnIfWeak = (): void => {
-      const { explain } = explainQuery(scan, flags.positional!, searchOpts);
+    // --explain is opt-in precisely so the default stdout stays a bare array,
+    // byte-identical to every release before it. Emitted for the semantic tier
+    // too, from the SAME scoring pass that ranked the rows: whether an
+    // identifier exists in the indexed tree is a fact about the corpus, and the
+    // fused explanation restates the rest for the rows actually printed.
+    const answer = ({ results, explain }: { results: unknown[]; explain: { note?: string } }): void => {
+      emit(JSON.stringify(flags.explain ? { results, explain } : results, null, 2) + "\n", flags.out);
       if (explain.note) process.stderr.write(`codeindex: ${explain.note}\n`);
     };
+    const lexical = (): void => answer(explainQuery(scan, flags.positional!, searchOpts));
 
     if (flags.semantic) {
       const endpoint = resolveEmbedEndpoint();
-      const lexical = (): void => {
-        const results = searchIndex(scan, flags.positional!, searchOpts);
-        emit(JSON.stringify(results, null, 2) + "\n", flags.out);
-      };
       if (endpoint) {
         // Rich tier. The endpoint takes PRECEDENCE over a local static model:
         // configuring CODEINDEX_EMBED_ENDPOINT is an explicit user intent. An
         // unreachable/timed-out/malformed endpoint degrades straight to lexical
         // (a stderr note, exit 0) — NOT to the static model.
+        let fused: ReturnType<typeof explainSemantic> | undefined;
         try {
-          const index = await buildEndpointIndex(scan);
+          // Endpoint vectors are not byte-deterministic, so they never go
+          // into embeddings.bin. They are still worth keeping between runs —
+          // otherwise every search re-POSTs the whole corpus — so, when this
+          // repo has an index (`index` wrote cache.json), they are cached
+          // beside it under the endpoint's URL and model fingerprint, and a
+          // search sends only the units whose text is new.
+          const cacheFile = existsSync(join(flags.repo, indexDir, "cache.json"))
+            ? join(flags.repo, indexDir, "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`)
+            : undefined;
+          const modelId = cacheFile ? await endpointModelId() : undefined;
+          const previous = cacheFile ? readEmbeddingsFile(cacheFile) : undefined;
+          const index = await buildEndpointIndex(scan, { previous, modelId });
+          if (cacheFile && !sameEmbeddings(previous, index)) writeEmbeddingsFileAtomic(cacheFile, serializeEmbeddings(index));
           const queryVec = await encodeQueryViaEndpoint(flags.positional);
-          const results = searchSemantic(scan, flags.positional, index, { queryVec, limit: flags.limit, fuzzy: flags.fuzzy });
-          emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+          fused = explainSemantic(scan, flags.positional, index, { ...searchOpts, queryVec });
         } catch (e) {
           process.stderr.write(
             `codeindex: embedding endpoint ${endpoint} unavailable (${e instanceof Error ? e.message : e}) — returning lexical results\n`,
           );
-          lexical();
         }
+        if (fused) answer(fused);
+        else lexical();
       } else {
-        const modelDir = resolveEmbedModelDir(flags.repo);
-        const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+        const { model, error: modelError } = tryLoadEmbedModel(resolveEmbedModelDir(flags.repo));
         if (!model) {
-          // Degradation: --semantic without a model or endpoint → lexical results
-          // + a stderr note, exit 0. The results shape is a superset of lexical.
+          // Degradation: --semantic without a usable model or endpoint → lexical
+          // results + a stderr note, exit 0. A model.json that is present but
+          // broken is the same case, named as such so the fix is obvious.
           process.stderr.write(
-            "codeindex: semantic search unavailable (no embedding model or endpoint) — returning lexical results; run `codeindex embed pull` or set CODEINDEX_EMBED_ENDPOINT to enable it\n",
+            modelError
+              ? `codeindex: semantic search unavailable (${modelError}) — returning lexical results; re-run \`codeindex embed pull\` to replace the model\n`
+              : "codeindex: semantic search unavailable (no embedding model or endpoint) — returning lexical results; run `codeindex embed pull` or set CODEINDEX_EMBED_ENDPOINT to enable it\n",
           );
           lexical();
         } else {
-          const index = buildEmbeddingIndex(scan, model);
-          const results = searchSemantic(scan, flags.positional, index, { model, limit: flags.limit, fuzzy: flags.fuzzy });
-          emit(JSON.stringify(results, null, 2) + "\n", flags.out);
+          // Reuse the embeddings.bin `index` wrote: a vector is reused only
+          // for the same unit text under the same model and EMBED_VERSION, so
+          // after an edit only the changed units are encoded, and a stale or
+          // foreign file costs a re-encode, never a wrong ranking.
+          const previous = readEmbeddingsFile(join(flags.repo, indexDir, "embeddings.bin"));
+          const index = buildEmbeddingIndex(scan, model, { previous });
+          answer(explainSemantic(scan, flags.positional, index, { ...searchOpts, model }));
         }
       }
-      warnIfWeak();
     } else {
-      const { results, explain } = explainQuery(scan, flags.positional, searchOpts);
-      // --explain is opt-in precisely so the default stdout stays a bare array,
-      // byte-identical to every release before this one.
-      emit(JSON.stringify(flags.explain ? { results, explain } : results, null, 2) + "\n", flags.out);
-      if (explain.note) process.stderr.write(`codeindex: ${explain.note}\n`);
+      lexical();
     }
   } else if (cmd === "embed") {
     const sub = flags.positional;
     const modelDir = resolveEmbedModelDir(flags.repo);
     if (sub === "status") {
-      const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+      // status is the command you run to find out what is wrong, so a broken
+      // model.json is reported (present, with its error) rather than thrown.
+      const { model, error: modelError } = tryLoadEmbedModel(modelDir);
       const endpoint = resolveEmbedEndpoint();
       // Effective mode with precedence: endpoint > static model > none.
       const mode: "none" | "static" | "endpoint" = endpoint ? "endpoint" : model ? "static" : "none";
@@ -1435,7 +1514,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         mode,
         model: model
           ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
-          : { present: false },
+          : modelError
+            ? { present: true, dir: modelDir, error: modelError }
+            : { present: false },
         endpoint: endpoint ?? null,
       };
       // When an endpoint is configured, actually probe its reachability.
@@ -1485,7 +1566,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       const model = loadEmbedModel(modelDir)!;
       mkdirSync(flags.out, { recursive: true });
       const scan = await readScan();
-      const index = buildEmbeddingIndex(scan, model);
+      const index = buildEmbeddingIndex(scan, model, { previous: readEmbeddingsFile(join(flags.out, "embeddings.bin")) });
       writeArtifact(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
     } else if (sub === "pull") {
@@ -1669,18 +1750,25 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(renderMermaid(await readGraph(), { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
-    // `--scope <dir>` is documented as global sugar for `--include '<dir>/**'`;
-    // every other command gets it via scanOptions, but grep bypasses the scan
-    // and builds its own glob list — so it has to fold the sugar in itself, or
-    // the flag would be silently ignored here alone.
-    const scopeGlobs = flags.scope ? [`${flags.scope.replace(/\/+$/, "")}/**`] : [];
-    const globs = [...scopeGlobs, ...flags.include, ...flags.exclude.map((g) => `!${g}`)];
-    const hits = grepRepo(flags.repo, flags.positional, {
-      globs: globs.length ? globs : undefined,
+    // grep bypasses the scan, so the global walk and path flags are threaded
+    // through by hand: --scope is ANDed with --include/--exclude (a file or a
+    // directory), and --ignore-dir/--no-gitignore/--max-bytes change which
+    // files exist exactly as they do for every scanning command.
+    const res = grepRepoEx(flags.repo, flags.positional, {
+      globs: flags.include.length || flags.exclude.length ? [...flags.include, ...flags.exclude.map((g) => `!${g}`)] : undefined,
+      scope: flags.scope,
       ignoreCase: flags.ignoreCase,
       maxHits: flags.maxHits,
+      filesWithMatches: flags.filesWithMatches,
+      gitignore: flags.gitignore,
+      ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
+      maxFileBytes: flags.maxBytes,
+      timeoutMs: flags.timeoutMs,
     });
-    emit(JSON.stringify(hits, null, 2) + "\n", flags.out);
+    emit(JSON.stringify(res.hits, null, 2) + "\n", flags.out);
+    // stdout stays the bare hit array; a partial answer (capped, or cut by the
+    // JS engine's time budget) is flagged on stderr so it is never silent.
+    for (const note of res.notes) process.stderr.write(`codeindex grep: ${note}\n`);
   } else {
     process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
     process.exitCode = 2;

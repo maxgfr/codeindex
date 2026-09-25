@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens } from "../src/bm25.js";
+import { buildDocs, charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens, wordBreak } from "../src/bm25.js";
 import { stemOf } from "../src/util.js";
+import { isTestPath } from "../src/tests-map.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
 
@@ -220,6 +221,46 @@ describe("searchIndex fuzzy trigram fallback (df==0 query terms)", () => {
     expect(withDefault[0]!.file).toBe("src/http/client.ts");
     expect(withDefault[0]!.matchedTerms).toEqual(["client", "http", "retry"]);
   });
+
+  it("the inverted trigram index finds exactly the neighbours a brute-force Dice scan does", () => {
+    // The index counts shared grams along postings instead of intersecting every
+    // vocab term's gram set. Same numbers by construction — asserted here
+    // against the literal definition, over every term in a real vocabulary.
+    const scan = scanRepo(REPO);
+    const vocab = new Set<string>();
+    for (const d of buildDocs(scan)) for (const t of d.all) vocab.add(t);
+    let compared = 0;
+    for (const typo of ["clent", "retr", "helpr", "backof", "reqeust"]) {
+      const grams = charTrigrams(typo);
+      const brute = [...vocab]
+        .map((term) => ({ term, dice: diceCoefficient(grams, charTrigrams(term)) }))
+        .filter((c) => c.dice >= 0.6)
+        .sort((a, b) => b.dice - a.dice || (a.term < b.term ? -1 : 1))
+        .slice(0, 3);
+      const row = explainQuery(scan, typo).explain.terms[0]!;
+      if (row.bridge?.via === "stem") continue; // morphology answered first — not this path
+      expect(row.bridge?.to ?? [], typo).toEqual(brute.map((c) => c.term));
+      if (brute.length) expect(row.bridge!.dice).toBe(brute[0]!.dice);
+      if (brute.length) compared++;
+    }
+    expect(compared).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("searchIndex: a row does not depend on how many rows were asked for", () => {
+  // Results are dressed (topSymbols, symbolHits, line) only after the limit is
+  // applied; a row must read the same whether it is one of 1 or one of 50.
+  it("returns the same leading rows, byte for byte, at every limit", () => {
+    const scan = scanRepo(REPO);
+    for (const q of ["http client retry", "clientt", "config", "request"]) {
+      for (const exact of [false, true]) {
+        const all = searchIndex(scan, q, { limit: 50, exact });
+        for (const k of [1, 2, 3]) {
+          expect(JSON.stringify(searchIndex(scan, q, { limit: k, exact })), `${q} @${k}`).toBe(JSON.stringify(all.slice(0, k)));
+        }
+      }
+    }
+  });
 });
 
 // The failure this whole diagnostic exists for, reproduced from the case that
@@ -288,7 +329,9 @@ describe("query diagnostics", () => {
     expect(results).toEqual([]);
     expect(explain.verdict).toBe("none");
     expect(explain.unresolvedTerms).toEqual(["zzzzqqqqwwww"]);
-    expect(explain.note).toContain("zzzzqqqqwwww");
+    expect(explain.note).toContain("The term zzzzqqqqwwww appears nowhere");
+    const two = explainQuery(scanRepo(PHANTOM), "zzzzqqqqwwww xxxxvvvvyyyy", { fuzzy: false }).explain;
+    expect(two.note).toContain("The terms xxxxvvvvyyyy, zzzzqqqqwwww appear nowhere");
   });
 
   it("--exact drops the bridge-only rows and keeps the literal ones", () => {
@@ -392,12 +435,147 @@ describe("searchIndex: BM25F fields", () => {
     expect(searchIndex(scan, "parser test")[0]!.file).toBe("tests/parser.test.ts");
   });
 
+  it("demotes fixture and snapshot trees harder than tests, unless the query asks for them", () => {
+    // Generated inputs (microsoft/TypeScript's testdata/ baselines) mention a
+    // topic by volume: here the fixture says "resolver" three times, and it
+    // used to rank above the test (its score was 1.5x the test's).
+    const repo = repoWith({
+      "internal/module/resolver.go": "package module\n\n// resolver for module specifiers\nfunc Resolve() {}\n",
+      "testdata/baselines/resolver.js": "// resolver resolver resolver module output\nexport const x = 1;\n",
+      "tests/resolver.test.ts": "// resolver module\nexport const y = 1;\n",
+    });
+    const scan = scanRepo(repo);
+    const ranked = searchIndex(scan, "resolver module").map((r) => r.file);
+    expect(ranked).toEqual(["internal/module/resolver.go", "tests/resolver.test.ts", "testdata/baselines/resolver.js"]);
+    // Asking for the fixtures lifts the demotion.
+    expect(searchIndex(scan, "resolver testdata")[0]!.file).toBe("testdata/baselines/resolver.js");
+    // Ranking only: tests-map still does not call a fixture a test (coverage).
+    expect(isTestPath("testdata/baselines/resolver.js")).toBe(false);
+  });
+
   it("prefers a whole-identifier match over a subtoken match", () => {
     const repo = repoWith({
       "whole.ts": "export function payload(): void {}\n",
       "part.ts": "export function payloadEncoderRegistryFactory(): void {}\n",
     });
     expect(searchIndex(scanRepo(repo), "payload")[0]!.file).toBe("whole.ts");
+  });
+});
+
+describe("searchIndex: compound file names", () => {
+  // tsconfigparsing.go, knownsymlinks.go, commandlineparser.go: no case or
+  // punctuation boundary, so the name was one path token no query could hit.
+  it("finds a file by the words its all-lowercase name is made of", () => {
+    const repo = repoWith({
+      "tsoptions/tsconfigparsing.go": "package tsoptions\n\nfunc ParseJsonConfigFile() {}\n",
+      "tsoptions/tsconfig.go": "package tsoptions\n\ntype Tsconfig struct{}\n",
+      "parser/parsing.go": "package parser\n\ntype ParsingContext struct{}\n",
+      "tests/tsconfigparsing_test.go": "package tests\n\nfunc TestIt() {}\n",
+    });
+    const scan = scanRepo(repo);
+    const hit = searchIndex(scan, "tsconfig parsing").find((r) => r.file === "tsoptions/tsconfigparsing.go")!;
+    expect(hit.matchedTerms).toEqual(["parsing", "tsconfig"]);
+    expect(hit.matchedFields).toEqual(["path"]);
+    // The whole token stays: the literal name still matches too.
+    expect(searchIndex(scan, "tsconfigparsing")[0]!.file).toBe("tsoptions/tsconfigparsing.go");
+    // Test paths are not split — they are demoted anyway, and on a large tree
+    // they are most of the (generated, long) names.
+    const test = explainQuery(scan, "tsconfig parsing").results.find((r) => r.file === "tests/tsconfigparsing_test.go");
+    expect(test).toBeUndefined();
+  });
+
+  it("splits into the fewest corpus words, ties broken by the smallest list", () => {
+    const vocab = new Set(["command", "line", "commandline", "parser", "known", "symlinks", "sym", "links"]);
+    expect(wordBreak("commandlineparser", vocab)).toEqual(["commandline", "parser"]);
+    expect(wordBreak("knownsymlinks", vocab)).toEqual(["known", "symlinks"]);
+    // Two 2-piece splits of one word: the lexicographically smaller wins.
+    expect(wordBreak("abcdefgh", new Set(["abcde", "fgh", "abc", "defgh"]))).toEqual(["abc", "defgh"]);
+    // Already a word, or not spellable from the vocabulary: no split.
+    expect(wordBreak("commandline", vocab)).toBeUndefined();
+    expect(wordBreak("parserzzz", vocab)).toBeUndefined();
+  });
+});
+
+describe("searchIndex: re-exports", () => {
+  // A barrel's re-export names a declaration made elsewhere. Indexed as a
+  // name, flask/__init__.py (39 re-exports) outranked the modules that define
+  // them — #1 for "before request hooks", above scaffold.py.
+  it("ranks the defining module above a barrel that re-exports the name", () => {
+    const repo = repoWith({
+      "pkg/__init__.py": "from .scaffold import before_request as before_request\n",
+      "pkg/scaffold.py": [
+        "def before_request(f):",
+        "    return f",
+        "",
+        "def after_request(f):",
+        "    return f",
+        "",
+        "def teardown_request(f):",
+        "    return f",
+        "",
+      ].join("\n"),
+      "web/index.ts": 'export { parseConfig } from "./config";\n',
+      "web/config.ts": "export function parseConfig(): void {}\nexport function loadConfig(): void {}\nexport function saveConfig(): void {}\n",
+    });
+    const scan = scanRepo(repo);
+    // Sanity: the extractor really did record these as re-exports.
+    const kinds = scan.files.flatMap((f) => f.symbols.map((s) => `${f.rel}:${s.name}:${s.kind}`));
+    expect(kinds).toContain("pkg/__init__.py:before_request:reexport");
+    expect(kinds).toContain("web/index.ts:parseConfig:reexport");
+
+    const py = searchIndex(scan, "before_request");
+    expect(py[0]!.file).toBe("pkg/scaffold.py");
+    expect(py[0]!.symbolHits![0]).toEqual({ name: "before_request", kind: "function", line: 1 });
+    // The barrel is still findable — as prose, with no declaration to point at.
+    const barrel = py.find((r) => r.file === "pkg/__init__.py")!;
+    expect(barrel.matchedFields).not.toContain("name");
+    expect(barrel.symbolHits).toBeUndefined();
+
+    expect(searchIndex(scan, "parseConfig")[0]!.file).toBe("web/config.ts");
+  });
+});
+
+describe("searchIndex: stopwords that are names", () => {
+  // gin's two most-used APIs are `Default` and `Use`; both are English
+  // stopwords, and both queries used to search for nothing at all.
+  const repo = (): string =>
+    repoWith({
+      "gin.go": "package gin\n\nfunc Default() *Engine { return nil }\n\nfunc (e *Engine) Use(m ...HandlerFunc) {}\n",
+      "chain.go": "package gin\n\n// middleware chain runner\nfunc next() {}\n",
+    });
+
+  it("searches a declared, capitalised stopword instead of dropping it", () => {
+    const scan = scanRepo(repo());
+    const { results, explain } = explainQuery(scan, "Default");
+    expect(results[0]!.file).toBe("gin.go");
+    expect(results[0]!.topSymbols).toEqual(["Default"]);
+    expect(explain.droppedStopwords).toEqual([]);
+    expect(explain.verdict).toBe("match");
+
+    const use = explainQuery(scan, "Use middleware");
+    expect(use.explain.terms.map((t) => t.term)).toEqual(["use", "middleware"]);
+    expect(use.explain.droppedStopwords).toEqual([]);
+    expect(use.results[0]!.file).toBe("gin.go");
+  });
+
+  it("searches a lone stopword: it is the only thing the query can mean", () => {
+    const { results, explain } = explainQuery(scanRepo(repo()), "default");
+    expect(results.map((r) => r.file)).toEqual(["gin.go"]);
+    expect(explain.droppedStopwords).toEqual([]);
+  });
+
+  it("still drops a lowercase stopword in a sentence, and an undeclared capitalised one", () => {
+    const scan = scanRepo(repo());
+    const lower = explainQuery(scan, "use middleware").explain;
+    expect(lower.terms.map((t) => t.term)).toEqual(["middleware"]);
+    expect(lower.droppedStopwords).toEqual(["use"]);
+    // Capitalised at the start of a sentence, but nothing is named "How".
+    const sentence = explainQuery(scan, "How middleware runs").explain;
+    expect(sentence.droppedStopwords).toEqual(["How"]);
+    // And an all-stopword sentence still says nothing was searched for.
+    const none = explainQuery(scan, "how does the default value work");
+    expect(none.results).toEqual([]);
+    expect(none.explain.note).toMatch(/stopword/);
   });
 });
 
@@ -410,6 +588,29 @@ describe("searchIndex: stem fallback", () => {
     const hits = searchIndex(scanRepo(repo), "caching");
     expect(hits[0]!.file).toBe("store.ts");
     expect(hits[0]!.fuzzyTerms).toEqual(["caching"]);
+  });
+
+  it("bridges to a word that is its own stem: \"retries\" and \"retrying\" find retry()", () => {
+    // "retry", "query", "body" do not change under stemming, so the stem index
+    // never filed them — and their plurals, the commonest inflection there is,
+    // bridged to nothing at all.
+    const repo = repoWith({
+      "src/retry.ts": "export function retry(): void {}\n",
+      "src/query.ts": "export function query(): void {}\n",
+      "src/other.ts": "export function unrelated(): void {}\n",
+    });
+    const scan = scanRepo(repo);
+    for (const [q, file, to] of [
+      ["retries", "src/retry.ts", "retry"],
+      ["retrying", "src/retry.ts", "retry"],
+      ["queries", "src/query.ts", "query"],
+    ] as const) {
+      const { results, explain } = explainQuery(scan, q);
+      expect(results.map((r) => r.file), q).toEqual([file]);
+      expect(results[0]!.topSymbols).toEqual([to]);
+      expect(explain.terms[0]!.bridge).toEqual({ via: "stem", to: [to], dice: 0.9 });
+      expect(explain.unresolvedTerms).toEqual([]);
+    }
   });
 
   it("prefers the literal term over the stemmed one", () => {
@@ -447,6 +648,34 @@ describe("searchIndex: rank modes", () => {
     const graph = searchIndex(scan, "hub", { rank: "graph" });
     expect(graph[0]!.file).toBe("hub.ts");
     expect(JSON.stringify(graph)).toBe(JSON.stringify(searchIndex(scan, "hub", { rank: "graph" })));
+  });
+});
+
+describe("searchIndex: the graph prior", () => {
+  // PageRank sums to 1, so the old multiplier 1 + 0.35·log1p(PageRank) shrank
+  // with the tree: it moved flask scores by ≤1.3% and reordered none of 94
+  // judged queries. Scaled by the file count it means the same at any size.
+  it("lifts a file the repo depends on over a slightly better-worded one, at any tree size", () => {
+    const files: Record<string, string> = {
+      "lib/hub.ts": "export function widget(): void {}\n",
+      "lib/alt.ts": "// widget\nexport type Widget = number;\nexport function widget(): void {}\n",
+      "gopkg/widget.go": "package gopkg\n\n// widget\nfunc Widget() {}\n",
+    };
+    for (let i = 0; i < 30; i++) {
+      files[`use/u${i}.ts`] = `import { widget } from "../lib/hub.js";\nexport function u${i}(): void {\n  widget();\n}\n`;
+    }
+    // Filler, so PageRank per file is small — where the unscaled prior vanished.
+    for (let i = 0; i < 300; i++) files[`fill/f${i}.ts`] = `export const f${i} = 1;\n`;
+    const scan = scanRepo(repoWith(files));
+    const score = (rs: { file: string; score: number }[], f: string): number => rs.find((r) => r.file === f)!.score;
+
+    const lexical = searchIndex(scan, "widget");
+    expect(score(lexical, "lib/alt.ts")).toBeGreaterThan(score(lexical, "lib/hub.ts"));
+    const graph = searchIndex(scan, "widget", { rank: "graph" });
+    expect(graph[0]!.file).toBe("lib/hub.ts"); // 30 importers
+    expect(score(graph, "lib/hub.ts")).toBeGreaterThan(score(lexical, "lib/hub.ts") * 1.1);
+    // A Go file's in-degree is an artefact of package resolution: left as is.
+    expect(score(graph, "gopkg/widget.go")).toBe(score(lexical, "gopkg/widget.go"));
   });
 });
 

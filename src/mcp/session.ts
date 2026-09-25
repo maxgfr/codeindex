@@ -41,21 +41,28 @@ export interface EmbeddingIndexCacheKey {
 }
 
 // A SINGLE entry — never an unbounded map — holding the most recent build.
-let embeddingIndexCache: { key: string; index: EmbeddingIndex } | undefined;
+let embeddingIndexCache: { key: string; tier: string; index: EmbeddingIndex } | undefined;
 
 // Reuse the cached index when (mode, identity, scanFingerprint) matches the
 // last build; otherwise call `build` and cache its result. A failed build is
 // NEVER cached (matches today's per-call error behavior: the next request
 // retries from scratch, and a still-valid previous entry — under a different
 // key — is left untouched).
+//
+// On a miss where only the SCAN changed (same mode and identity), `build` gets
+// the stale index as `previous`: an edit to one file then re-encodes, or
+// re-POSTs, that file's units instead of the whole corpus. The builders reuse
+// a vector only for an identical unit text under the same model, so this can
+// only save work, never change an answer.
 export async function memoizedEmbeddingIndex(
   key: EmbeddingIndexCacheKey,
-  build: () => Promise<EmbeddingIndex> | EmbeddingIndex,
+  build: (previous: EmbeddingIndex | undefined) => Promise<EmbeddingIndex> | EmbeddingIndex,
 ): Promise<EmbeddingIndex> {
-  const cacheKey = `${key.mode}:${key.identity}:${scanFingerprint(key.scan)}`;
+  const tier = `${key.mode}:${key.identity}`;
+  const cacheKey = `${tier}:${scanFingerprint(key.scan)}`;
   if (embeddingIndexCache && embeddingIndexCache.key === cacheKey) return embeddingIndexCache.index;
-  const index = await build();
-  embeddingIndexCache = { key: cacheKey, index };
+  const index = await build(embeddingIndexCache?.tier === tier ? embeddingIndexCache.index : undefined);
+  embeddingIndexCache = { key: cacheKey, tier, index };
   return index;
 }
 

@@ -155,8 +155,10 @@ export {
 export type { DiffFile, DiffSpec, Hunk } from "./git.js";
 
 // Repo text search (ripgrep when available, pure-JS fallback otherwise).
-export { grepRepo } from "./grep.js";
-export type { SearchHit, GrepOptions } from "./grep.js";
+// grepRepoEx adds what the bare hit list cannot say: truncated, the matching
+// file count, a time-budget stop, and the notes a caller should surface.
+export { grepRepo, grepRepoEx } from "./grep.js";
+export type { SearchHit, GrepOptions, GrepResult } from "./grep.js";
 
 // Keyless BM25 lexical search over symbols/paths/headings/summaries (issue #4).
 export { searchIndex, explainQuery, subtokens } from "./bm25.js";
@@ -175,10 +177,10 @@ export {
 } from "./embed/model.js";
 export type { StaticEmbedModel, EmbedPullTarget } from "./embed/model.js";
 export { encode, quantize, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
-export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits } from "./embed/index.js";
+export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits, unitHash } from "./embed/index.js";
 export type { EmbeddingIndex, EmbeddingRecord, EmbeddingUnit } from "./embed/index.js";
-export { searchSemantic } from "./embed/search.js";
-export type { SemanticSearchOptions, SemanticSearchResult } from "./embed/search.js";
+export { searchSemantic, explainSemantic } from "./embed/search.js";
+export type { SemanticSearchOptions, SemanticSearchResult, SemanticQueryExplanation, ExplainedSemanticSearch } from "./embed/search.js";
 // HTTP endpoint tier (v2.11.0 — the "rich" tier). The engine is a fetch consumer
 // of a containerized embedding server (CODEINDEX_EMBED_ENDPOINT): float vectors
 // run through the SAME L2+int8 quantize pipeline, then the same integer ranking.
@@ -191,6 +193,7 @@ export {
   healthzUrl,
   probeEndpoint,
   encodeQueryViaEndpoint,
+  endpointModelId,
   buildEndpointIndex,
 } from "./embed/endpoint.js";
 export type { EmbedEndpointOptions } from "./embed/endpoint.js";

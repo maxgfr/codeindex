@@ -277,7 +277,8 @@ describe("search flags", () => {
   it("refuses an unknown flag rather than searching for it", () => {
     // "--smantic" returning nothing is indistinguishable from a real miss.
     expect(() => runCommand(commands, session, "search", "--smantic client")).toThrow(/Unknown flag/);
-    expect(() => runCommand(commands, session, "search", "--limit abc client")).toThrow(/positive number/);
+    expect(() => runCommand(commands, session, "search", "--limit abc client")).toThrow(/positive whole number/);
+    expect(() => runCommand(commands, session, "search", "--limit 2.5 client")).toThrow(/positive whole number/);
   });
 
   it("surfaces the verdict and the note for a phantom identifier", () => {

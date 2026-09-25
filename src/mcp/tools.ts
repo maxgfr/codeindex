@@ -348,16 +348,33 @@ export const TOOLS = [
   {
     name: "grep",
     description:
-      "Search file contents (ripgrep when available, deterministic JS fallback otherwise). Returns sorted (file, line, text) hits.",
+      "Search file contents with a JavaScript regular expression (ripgrep when available, a deterministic JS scan otherwise — same results either way). Returns hits sorted by (file, line): {file, line, col, text}, `col` being the 1-based UTF-16 column of the first match and `text` the line, cut to a window around the match when longer than 300 chars. Capped at maxHits (default 200): set `withMeta: true` to get `{ hits, truncated, filesMatched, notes? }` and know whether the list is complete. A pattern too slow for the JS engine is stopped at `timeoutMs` (default 10000) and the response is then always that envelope, with `timedOut: true`.",
     inputSchema: {
       type: "object",
       properties: {
         ...repoProp,
-        pattern: { type: "string", description: "Regular expression to search for" },
-        scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
-        globs: { type: "array", items: { type: "string" }, description: "Restrict to matching paths" },
+        pattern: { type: "string", description: "JavaScript regular expression to search for" },
+        scope: {
+          type: "string",
+          description: "Restrict to one directory or file (repo-relative). ANDed with `globs`",
+        },
+        globs: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Restrict to matching paths. Rooted at the repo: '*.ts' matches root-level files only, '**/*.ts' any depth; a '!' prefix excludes (exclusion wins)",
+        },
         ignoreCase: { type: "boolean" },
         maxHits: { type: "number", minimum: 1 },
+        filesWithMatches: {
+          type: "boolean",
+          description: "One hit per matching file (its first match); maxHits then caps files",
+        },
+        withMeta: {
+          type: "boolean",
+          description: "Return { hits, truncated, filesMatched, notes? } instead of the bare hit array",
+        },
+        timeoutMs: { type: "number", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" },
       },
       required: ["repo", "pattern"],
     },
@@ -372,7 +389,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", minimum: 0, description: "Max results (default 20)" },
+        limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
         fuzzy: {
           type: "boolean",
           description:
@@ -382,7 +399,7 @@ export const TOOLS = [
           type: "string",
           enum: ["lexical", "graph"],
           description:
-            'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus — see SearchOptions.rank.',
+            'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph relative to an average file (a leaf ×0.95, a hub well above ×1; Go files unchanged); "lexical" (default) scores on text alone. Measured a wash — it helps some queries and hurts as many — see SearchOptions.rank.',
         },
         exact: {
           type: "boolean",
@@ -397,7 +414,7 @@ export const TOOLS = [
         semantic: {
           type: "boolean",
           description:
-            'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently — see embed_status.',
+            'RRF-fuse an embedding tier with lexical (default false). Precedence: the HTTP endpoint (CODEINDEX_EMBED_ENDPOINT) if set, else a local static model. The response reports the effective tier as a top-level `tier` field ("endpoint"/"static" on success, "lexical" plus `degradedReason` when neither is available/reachable) instead of degrading silently — see embed_status. `exact` and `rank` apply to the lexical side; `explain: true` adds an `explain` key to that object, restated for the fused rows (with `semanticOnlyResults`).',
         },
       },
       required: ["repo", "query"],
@@ -413,7 +430,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", minimum: 0, description: "Max results (default 20)" },
+        limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
         fuzzy: { type: "boolean", description: "Stem/trigram fallback for zero-document-frequency terms (default true)" },
         exact: { type: "boolean", description: "Drop results carrying no verbatim term match (default false)" },
       },
@@ -423,7 +440,7 @@ export const TOOLS = [
   {
     name: "embed_status",
     description:
-      "Report the embedding tier: the effective mode (none/static/endpoint; endpoint > static model), the resolved model (opt-in, never shipped in the package) with its modelId/dim, EMBED_VERSION, and the configured HTTP endpoint with its reachability. Use to check whether `search` with semantic:true will fuse embeddings or degrade to lexical.",
+      "Report the embedding tier: the effective mode (none/static/endpoint; endpoint > static model), the resolved model (opt-in, never shipped in the package) with its modelId/dim, EMBED_VERSION, and the configured HTTP endpoint with its reachability. A model.json that is present but fails to load is reported as `model: { present: true, error }` with mode none. Use to check whether `search` with semantic:true will fuse embeddings or degrade to lexical.",
     inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
   },
   {

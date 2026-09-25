@@ -22,7 +22,7 @@ import { implementationsOf, typeEntry } from "./relations.js";
 import { callPath, neighborhood, type Direction } from "./symbolgraph.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
 import { gitChurn } from "./git.js";
-import { grepRepo } from "./grep.js";
+import { grepRepoEx } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { capDeadCode, findDeadCode } from "./deadcode.js";
@@ -40,11 +40,13 @@ import { onboardBrief } from "./onboard.js";
 import { indexStatus } from "./status.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
-import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
+import { explainQuery, type RankMode } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
+import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
-import { searchSemantic } from "./embed/search.js";
+import { readEmbeddingsFile } from "./embed/persist.js";
+import { INDEX_DIR } from "./preload.js";
+import { explainSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
 import { walk, type WalkResult } from "./walk.js";
 import { watchRepo, type RepoWatch } from "./mcp/watch.js";
@@ -136,6 +138,13 @@ function strArray(v: unknown): string[] | undefined {
 function num(v: unknown): number | undefined {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
   return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+// A result count: a whole number, or absent. `limit: 2.5` used to be accepted
+// and act as 2 in silence.
+function wholeNum(v: unknown, key: string): number | undefined {
+  const n = num(v);
+  if (n !== undefined && !Number.isInteger(n)) throw new Error(`\`${key}\` must be a whole number, got ${n}`);
+  return n;
 }
 function positiveNum(v: unknown): number | undefined {
   const n = num(v);
@@ -495,30 +504,51 @@ async function callTool(
   if (name === "grep") {
     const pattern = str(args.pattern);
     if (!pattern) throw new Error("`pattern` is required");
-    // `scope` was CLI-only: the a205c34 fix folded it into the CLI's glob list
-    // but this handler ignored scanOpts entirely.
-    const scope = str(args.scope);
-    const globs = strArray(args.globs);
-    const hits = grepRepo(repo, pattern, {
-      globs: scope ? [...(globs ?? []), `${scope.replace(/\/+$/, "")}/**`] : globs,
+    // `scope` is its own predicate, ANDed with `globs` (it used to be OR-ed in
+    // as one more glob, so scope+globs widened the search instead of
+    // narrowing it), and may name a file as well as a directory.
+    const res = grepRepoEx(repo, pattern, {
+      globs: strArray(args.globs),
+      scope: str(args.scope),
       ignoreCase: args.ignoreCase === true,
       maxHits: positiveNum(args.maxHits),
+      filesWithMatches: args.filesWithMatches === true,
+      timeoutMs: positiveNum(args.timeoutMs),
     });
-    return JSON.stringify(hits, null, 2);
+    // The bare array stays the default shape. `withMeta` opts into the
+    // envelope; a result the time budget cut short always gets it, since a
+    // partial answer shaped like a complete one would be a silent lie.
+    if (args.withMeta === true || res.timedOut) {
+      const { hits, truncated, filesMatched, timedOut, notes } = res;
+      return JSON.stringify({ hits, truncated, filesMatched, ...(timedOut ? { timedOut } : {}), ...(notes.length ? { notes } : {}) }, null, 2);
+    }
+    return JSON.stringify(res.hits, null, 2);
   }
   if (name === "search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
+    const limit = wholeNum(args.limit, "limit");
     const scan = readScan();
-    const limit = num(args.limit);
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     const exactOpt = args.exact === true ? { exact: true as const } : {};
+    const lexOpts = { limit, fuzzy, ...exactOpt, ...rankOpt };
     if (args.semantic === true) {
       // semantic:true changes the response SHAPE (wraps the ranked list with a
       // `tier`/`degradedReason?`) so a caller can tell "fusion happened" apart
       // from "degraded to lexical" — see the `search` tool description. This
       // branch is the ONLY place that shape appears; plain lexical search below
-      // stays the bare array, byte-compat for existing consumers.
+      // stays the bare array, byte-compat for existing consumers. `exact`,
+      // `rank` and `explain` mean what they mean without it, fused or degraded.
+      const answer = (
+        { results, explain }: { results: unknown[]; explain: unknown },
+        tier: "endpoint" | "static" | "lexical",
+        degradedReason?: string,
+      ): string =>
+        JSON.stringify(
+          { results, tier, ...(degradedReason ? { degradedReason } : {}), ...(args.explain === true ? { explain } : {}) },
+          null,
+          2,
+        );
       const endpoint = resolveEmbedEndpoint();
       if (endpoint) {
         // Rich tier — endpoint takes PRECEDENCE over a local static model. An
@@ -526,36 +556,32 @@ async function callTool(
         // The corpus index is memoized per (endpoint, scan state) — the query
         // itself is always re-encoded fresh (it differs per call).
         try {
-          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, () => buildEndpointIndex(scan));
-          const queryVec = await encodeQueryViaEndpoint(query);
-          const results = searchSemantic(scan, query, index, { queryVec, limit, fuzzy });
-          return JSON.stringify({ results, tier: "endpoint" }, null, 2);
-        } catch (e) {
-          const results = searchIndex(scan, query, { limit, fuzzy, ...rankOpt });
-          return JSON.stringify(
-            { results, tier: "lexical", degradedReason: `embedding endpoint failed: ${errMessage(e)}` },
-            null,
-            2,
+          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, (previous) =>
+            buildEndpointIndex(scan, { previous }),
           );
+          const queryVec = await encodeQueryViaEndpoint(query);
+          return answer(explainSemantic(scan, query, index, { ...lexOpts, queryVec }), "endpoint");
+        } catch (e) {
+          return answer(explainQuery(scan, query, lexOpts), "lexical", `embedding endpoint failed: ${errMessage(e)}`);
         }
       }
       const modelDir = resolveEmbedModelDir(repo);
-      const model = modelDir ? memoizedEmbedModel(modelDir) : undefined;
+      const { model, error: modelError } = tryLoadEmbedModel(modelDir, memoizedEmbedModel);
       if (model) {
-        const index = await memoizedEmbeddingIndex(
-          { mode: "static", identity: `${modelDir}#${model.modelId}`, scan },
-          () => buildEmbeddingIndex(scan, model),
+        // First build in this process: the embeddings.bin `index` wrote, if
+        // any, donates every vector whose unit text is unchanged.
+        const index = await memoizedEmbeddingIndex({ mode: "static", identity: `${modelDir}#${model.modelId}`, scan }, (previous) =>
+          buildEmbeddingIndex(scan, model, { previous: previous ?? readEmbeddingsFile(join(repo, INDEX_DIR, "embeddings.bin")) }),
         );
-        const results = searchSemantic(scan, query, index, { model, limit, fuzzy });
-        return JSON.stringify({ results, tier: "static" }, null, 2);
+        return answer(explainSemantic(scan, query, index, { ...lexOpts, model }), "static");
       }
-      // Opt-in tier not activated (no endpoint, no model asset) — degrade to
-      // lexical with a reason instead of failing silently.
-      const results = searchIndex(scan, query, { limit, fuzzy, ...rankOpt });
-      return JSON.stringify(
-        { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured — see embed_status" },
-        null,
-        2,
+      // Opt-in tier not activated (no endpoint, no usable model asset) —
+      // degrade to lexical with a reason instead of failing the call. A broken
+      // model.json is named, since "configure one" would be the wrong advice.
+      return answer(
+        explainQuery(scan, query, lexOpts),
+        "lexical",
+        modelError ? `static model unusable: ${modelError}` : "no embedding endpoint or static model configured — see embed_status",
       );
     }
     // Plain lexical. `explain:true` wraps the array so a caller can see the
@@ -563,14 +589,14 @@ async function callTool(
     // byte-compatible for every existing consumer. The `bridgedOnly` flag rides
     // INSIDE that array either way, which is the only diagnostic that reaches a
     // client that never adopts the wrapper or the explain_search tool.
-    const { results, explain } = explainQuery(scan, query, { limit, fuzzy, ...exactOpt, ...rankOpt });
+    const { results, explain } = explainQuery(scan, query, lexOpts);
     return JSON.stringify(args.explain === true ? { results, explain } : results, null, 2);
   }
   if (name === "explain_search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
+    const limit = wholeNum(args.limit, "limit");
     const scan = readScan();
-    const limit = num(args.limit);
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     // Always an object, which is exactly why this is a tool of its own rather
     // than another shape `search` can return: a stable shape is what lets it
@@ -585,7 +611,7 @@ async function callTool(
   }
   if (name === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
-    const model = modelDir ? memoizedEmbedModel(modelDir) : undefined;
+    const { model, error: modelError } = tryLoadEmbedModel(modelDir, memoizedEmbedModel);
     const endpoint = resolveEmbedEndpoint();
     const mode: "none" | "static" | "endpoint" = endpoint ? "endpoint" : model ? "static" : "none";
     const status: Record<string, unknown> = {
@@ -593,7 +619,9 @@ async function callTool(
       mode,
       model: model
         ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
-        : { present: false },
+        : modelError
+          ? { present: true, dir: modelDir, error: modelError }
+          : { present: false },
       endpoint: endpoint ?? null,
     };
     if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);

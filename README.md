@@ -859,6 +859,39 @@ node scripts/test-docker.mjs codeindex:qa codeindex-embed:qa
 The [engine validation report](docs/engine-validation-2026-09-07.md) records the
 tested architecture and runtime checks.
 
+## Text search (`grep`)
+
+`codeindex grep '<regex>' --repo .` returns JSON hits sorted by file then line:
+`{file, line, col, text}`. It uses ripgrep when it is on `PATH` and a pure-JS
+scan otherwise, and both give the same answer:
+
+- **One dialect.** The pattern is a JavaScript regular expression on both
+  backends. Before it reaches ripgrep it is translated so that `\w`, `\b` and
+  `\d` stay ASCII and `.` still stops at `\r`, as they do in JavaScript.
+  Anything that cannot be translated exactly (lookaround, backreferences) runs
+  on the JS engine instead, and a note on stderr says so. Syntax that
+  JavaScript would read as a literal but you probably meant as an operator
+  (`\A`, `\z`, `[[:alpha:]]`, `\x{41}`) is rejected with an explanation.
+- **One file universe.** grep searches the files every other command indexes.
+  `--ignore-dir`, `--no-gitignore` and `--max-bytes` apply to it too. `--scope`
+  (a directory or a single file) is ANDed with `--include`/`--exclude`. Globs
+  are rooted at the repo: `*.ts` matches root-level files only, `**/*.ts`
+  matches at any depth.
+- **Bounded output.** Results stop at `--max-hits` (default 200). When the cap
+  cuts the list, stderr says so and gives the number of matching files. A line
+  longer than 300 characters comes back as a window around the match, and
+  `col` gives the match's position in the full line.
+- **Bounded time.** ripgrep's regex engine runs in linear time. JavaScript's
+  can backtrack exponentially (`(a+)+b`), so the JS scan runs in a worker thread
+  with a time limit (`--timeout-ms`, default 10000). When the limit is reached,
+  the hits from the files already scanned are returned, together with a note
+  naming the file where the scan stopped.
+
+The MCP `grep` tool returns the bare hit array by default. With
+`withMeta: true` it returns `{ hits, truncated, filesMatched, notes? }`. A
+result cut short by the time limit always comes back in that form, with
+`timedOut: true`.
+
 ## Search
 
 `codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six
@@ -866,7 +899,10 @@ weighted fields: symbol names, path segments, doc headings (markdown and
 reStructuredText), the file
 summary, per-symbol **doc comments**, and the **prose body** (words from comments
 and short string literals, a template's fixed text included, captured at
-extraction time so they ride the incremental cache).
+extraction time so they ride the incremental cache). An all-lowercase compound
+file name (`tsconfigparsing.go`, `knownsymlinks.go`) is also indexed as the
+words it is made of, when the repo uses those words as names, so "parse
+tsconfig json" reaches it.
 
 The last two are the point. An index built only from names — what a tags file or
 a symbol-only search ships — is a perfectly scored index of the wrong text: the
@@ -879,7 +915,16 @@ taste.
 Results carry `matchedFields` (was it the path or a doc comment?), a `line`
 anchor and `symbolHits` (name, kind, line), so a hit is a place to open rather
 than a file to re-read. A whole-identifier match outranks a subtoken match, and a
-test file ranks below the code it tests unless the query asks for tests. A query term that
+test file ranks below the code it tests unless the query asks for tests; fixture
+and snapshot trees (`testdata/`, `fixtures/`, `__snapshots__/`) rank lower
+still, unless the query says `fixture` or `testdata`. A
+barrel's re-exports (`export { x } from`, Python's `from .x import y as y`) are
+indexed as prose rather than as names, so the module that defines a name ranks
+above the `__init__.py` or `index.ts` that re-exports it. English
+stopwords are dropped from a sentence, but not from a name: a query that is only
+a stopword (`default`), or a capitalised stopword the repo declares as a symbol
+(`Use middleware`, `Context.Set` — gin's `Use` and `Set`), is searched as the
+name it is. A query term that
 matches nothing in the corpus (zero document frequency) gets two deterministic
 fallbacks, morphology first: a **stem match** ("caching" finds "cache",
 "retries" finds "retry") because an unmatched term is far more often an
@@ -892,6 +937,14 @@ are never touched, so an existing query stays byte-identical. Enabled by
 default; disable with `--no-fuzzy` (CLI) or `fuzzy: false` (library/MCP
 `SearchOptions.fuzzy`); results carry an additive `fuzzyTerms` field when the
 fallback contributed.
+
+`--rank graph` (MCP `rank: "graph"`) multiplies each score by the file's
+PageRank over the resolved import graph, relative to an average file: a leaf is
+×0.95, a file with ten times the average PageRank ×1.16. Go files are left
+alone, because a Go import resolves to the package's alphabetically first file.
+It is opt-in because it does not win: on flask it lifts MRR from 0.807 to 0.824,
+on a second flask query set it drops it from 0.851 to 0.816, and gin,
+microsoft/TypeScript and the judged corpus do not move.
 
 ### When the query matched nothing
 
@@ -921,7 +974,7 @@ diagnostics come from `explainQuery` (library), `--explain` (CLI) or the
 | `verdict` | `match` · `weak` (results rest on a near match, or the identifier has df 0) · `none` |
 | `wholeIdentifier` | the identifier you typed, with its document frequency — df 0 is the finding |
 | `unresolvedTerms` | terms that exist nowhere and bridged to nothing |
-| `droppedStopwords` | why an all-stopword query returned an empty array |
+| `droppedStopwords` | why an all-stopword query returned an empty array (a stopword searched as a name is not listed) |
 | `terms[].bridge` | what a zero-df term fell back to, and whether by stem or trigram |
 
 Individual results carry `bridgedOnly: true` when nothing matched verbatim —
@@ -954,8 +1007,14 @@ codeindex search "http client retry" --repo . --semantic
 ```
 
 `codeindex index` also writes `embeddings.bin` next to `graph.json` when a model
-is present. Fusion reuses the engine's `rrf` helper (k=60); `SCHEMA_VERSION` is
-untouched (a dedicated `EMBED_VERSION` keys the sidecar).
+is present, and `search --semantic` reads it back instead of re-encoding the
+corpus: a stored vector is reused only for the same unit text under the same
+model and `EMBED_VERSION`, so after an edit only the changed units are encoded,
+and a stale, foreign or corrupt file costs a re-encode, never a wrong ranking
+(microsoft/TypeScript, 244k units: 12.1 s to encode, 2.3 s to read and reuse).
+`index` and `embed build` reuse the previous file the same way and write the
+bytes a fresh build would. Fusion reuses the engine's `rrf` helper (k=60);
+`SCHEMA_VERSION` is untouched (a dedicated `EMBED_VERSION` keys the sidecar).
 
 #### Three embedding modes (precedence: endpoint > static > none)
 
@@ -987,20 +1046,35 @@ CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
 ```
 offset 0            "CIE1"      4-byte ASCII magic (a foreign file fails loudly)
 offset 4            uint32 LE   header length
-offset 8            UTF-8 JSON  { embedVersion, modelId, dim, count, records:[{file,symbol,line}] }
+offset 8            UTF-8 JSON  { embedVersion, modelId, dim, count, records:[{file,symbol,line,hash}] }
 offset 8+headerLen  int8 body   count × dim signed bytes, row-major
 ```
 
 No absolute path and no timestamp; records follow scan order, so two builds of
-an unchanged repo are byte-identical. `EMBED_VERSION` + `modelId` + `dim`
-invalidate a stale or foreign artifact. Granularity is per-symbol (name +
-signature + file summary + path segments), with a per-file fallback for
-symbol-less files so every file with content is represented.
+an unchanged repo are byte-identical. `hash` is 64 bits of the sha1 of the text
+the record encodes — what makes a vector reusable. `EMBED_VERSION` + `modelId` +
+`dim` invalidate a stale or foreign artifact. Granularity is per-symbol (name +
+signature + doc comment + file summary + path segments), with a per-file
+fallback for symbol-less files so every file with content is represented.
+Re-exports get no unit of their own: the defining file already has one, and a
+barrel of nothing but re-exports falls back to its file-level unit. With the
+doc comment in the unit, the fused ranking beats plain BM25 on every set we
+measured with the official model (MRR: flask 0.8307 vs 0.8232, gin 0.7862 vs
+0.7642, the judged corpus 0.9583 vs 0.9375).
 
 **Fusion is by RANK, never a score blend**: BM25 scores and integer dot products
 live on incomparable scales, so `searchSemantic` uses the shared `rrf` helper
 (k=60) and adds `semanticSymbol` — the corpus symbol whose embedding was closest
-for that file — additively to the lexical result.
+for that file, when that similarity is positive — additively to the lexical
+result. A file the lexical side
+ranked keeps every lexical field (`matchedFields`, `line`, `symbolHits`,
+`fuzzyTerms`, `bridgedOnly`); a file only the embedding side found has an empty
+`matchedTerms` and the `line` of its closest symbol. `--exact` and `--rank`
+apply to the lexical side, so `--exact` keeps bridged-only rows out of the fused
+list too. `--explain` (MCP: `explain: true`) reports the verdict for the rows
+actually returned, from the same scoring pass: an answer carried by embedding
+neighbours alone is `weak`, never "No file matches", and
+`semanticOnlyResults` counts those rows.
 
 To implement your own server, `CODEINDEX_EMBED_ENDPOINT` is the **base URL** and
 the client derives two routes:
@@ -1013,9 +1087,16 @@ the client derives two routes:
 Any dimension is accepted and vectors need not be pre-normalized — the engine
 L2-normalizes and int8-quantizes whatever it receives, through the *same* tail
 as the static tier, so ranking stays a pure integer dot product. Requests time
-out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000). Endpoint corpus vectors
-are built at search time and **never serialized**: that tier is deterministic
-per image digest, not byte-golden, so pin the digest. The reference server is
+out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000); a corpus goes out in
+batches of 64, four in flight. Endpoint corpus vectors are **never written to
+`embeddings.bin`**: that tier is deterministic per image digest, not
+byte-golden, so pin the digest. When the repo has an index (`index` wrote
+`.codeindex/cache.json`), `search --semantic` keeps them in
+`.codeindex/embed-cache/endpoint-<url hash>.bin`, keyed by the unit text and by
+a fingerprint of the model (the vector of one fixed text, fetched each run), so
+the next search sends only new texts and a different model behind the same URL
+starts over. Without an index, nothing is written into the repo. The MCP server
+does the same in memory: after an edit it re-sends only the changed units. The reference server is
 `docker/embed/` (transformers.js + all-MiniLM-L6-v2, baked in at build, offline
 at run, non-root, `:8756`).
 
@@ -1028,6 +1109,7 @@ at run, non-root, `:8756`).
 | + model asset | RRF-fused deterministic static semantic search |
 | + `CODEINDEX_EMBED_ENDPOINT` | rich tier — **wins over a static model** |
 | `--semantic`, nothing available | lexical + stderr note |
+| `model.json` present but broken (bad JSON or shape) | lexical + a stderr note naming the file; `embed status` reports `model: { present: true, error }`, `index` skips only `embeddings.bin` |
 | endpoint set but unreachable | lexical + stderr note — **never** falls back to the static model |
 
 </details>
@@ -1291,15 +1373,35 @@ its indexed equivalent, for agent harnesses that intercept shell commands
 
 ```sh
 $ codeindex rewrite 'grep -rn TODO src'
-codeindex grep TODO --scope src
+codeindex grep TODO --scope src --ignore-dir .codeindex
+$ codeindex rewrite "rg -tpy -w 'def main'"
+codeindex grep '\bdef main\b' --include '**/*.py' --include '**/*.pyi' --ignore-dir .codeindex
 ```
 
-It prints the replacement and exits `0`, or exits `1` with empty stdout when it
-has no opinion — run the original. The parser is deliberately conservative: any
-shell metacharacter (pipe, redirect, substitution, chaining), any unrecognized
-flag, a non-recursive `grep`, or more than one search path all refuse the
-rewrite. A refusal costs nothing; a wrong rewrite silently changes what the
-agent asked for.
+It prints the replacement and exits `0`. When it has no opinion, it exits `1`
+with empty stdout, and the host should run the original command. It
+understands recursive `grep`/`egrep`, `rg` and `git grep`:
+
+- **The pattern.** POSIX BRE and ERE and Rust regex syntax, plus `-F`, `-w`
+  and `-i`/`-S`, are restated as the JavaScript regex `codeindex grep` runs.
+  In a BRE, `x+y` stays a literal `+`.
+- **The files.** A path becomes `--scope` (`./` stripped, a file allowed). An
+  `--include`/`-g` base-name glob becomes `**/<glob>`, and `-t` becomes the
+  globs of that ripgrep type. `--ignore-dir .codeindex` turns off the default
+  vendor/build/out/tmp skips, which none of these tools make. Gitignored files,
+  lockfiles and binaries are still left out, on purpose.
+- **The flags.** `-l` becomes `--files-with-matches`, and a pattern that starts
+  with `-` goes behind `--`.
+
+The parser is deliberately conservative. The rewrite is refused when the line
+contains shell syntax outside single quotes (pipe, redirect, substitution,
+chaining, braces, an unquoted glob in a path), an unrecognized or
+output-changing flag (`rg -r` is `--replace`), a non-recursive `grep`, a path
+outside the tree, more than one path, include/exclude rules whose order
+matters, or regex syntax that cannot be translated exactly. A refusal costs
+nothing, while a wrong rewrite would silently change what the agent asked for.
+The test suite runs each supported form through the real tool and through its
+rewrite, and checks that both find the same lines.
 
 ## Versioning
 

@@ -233,7 +233,7 @@ describe("grepRepo backend parity", () => {
     const hits = grepRepo(root, "alphaToken", { globs: ["sub/**"], noRipgrep: true });
     expect(hits.every((h) => h.file.startsWith("sub/"))).toBe(true);
     const capped = grepRepo(root, "alphaToken", { maxHits: 1, noRipgrep: true });
-    expect(capped).toEqual([{ file: "a.ts", line: 1, text: "export const alphaToken = 1;" }]);
+    expect(capped).toEqual([{ file: "a.ts", line: 1, col: 14, text: "export const alphaToken = 1;" }]);
   });
 });
 
