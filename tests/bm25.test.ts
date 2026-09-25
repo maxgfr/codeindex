@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildDocs, charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens } from "../src/bm25.js";
 import { stemOf } from "../src/util.js";
+import { isTestPath } from "../src/tests-map.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
 
@@ -430,6 +431,24 @@ describe("searchIndex: BM25F fields", () => {
     expect(searchIndex(scan, "parser")[0]!.file).toBe("src/parser.ts");
     // The demotion is intent-aware: asking for the test must still find it.
     expect(searchIndex(scan, "parser test")[0]!.file).toBe("tests/parser.test.ts");
+  });
+
+  it("demotes fixture and snapshot trees harder than tests, unless the query asks for them", () => {
+    // Generated inputs (microsoft/TypeScript's testdata/ baselines) mention a
+    // topic by volume: here the fixture says "resolver" three times, and it
+    // used to rank above the test (its score was 1.5x the test's).
+    const repo = repoWith({
+      "internal/module/resolver.go": "package module\n\n// resolver for module specifiers\nfunc Resolve() {}\n",
+      "testdata/baselines/resolver.js": "// resolver resolver resolver module output\nexport const x = 1;\n",
+      "tests/resolver.test.ts": "// resolver module\nexport const y = 1;\n",
+    });
+    const scan = scanRepo(repo);
+    const ranked = searchIndex(scan, "resolver module").map((r) => r.file);
+    expect(ranked).toEqual(["internal/module/resolver.go", "tests/resolver.test.ts", "testdata/baselines/resolver.js"]);
+    // Asking for the fixtures lifts the demotion.
+    expect(searchIndex(scan, "resolver testdata")[0]!.file).toBe("testdata/baselines/resolver.js");
+    // Ranking only: tests-map still does not call a fixture a test (coverage).
+    expect(isTestPath("testdata/baselines/resolver.js")).toBe(false);
   });
 
   it("prefers a whole-identifier match over a subtoken match", () => {

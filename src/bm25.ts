@@ -92,7 +92,19 @@ const REEXPORT_KINDS = new Set(["reexport", "reexport-all"]);
 // its test — unless the query says otherwise. Applied only when the query itself
 // carries no test-ish term.
 const TEST_DEMOTION = 0.65;
-const TEST_INTENT = /^(test|tests|spec|specs|fixture|fixtures|mock|mocks|stub|stubs)$/;
+const TEST_INTENT = /^(test|tests|spec|specs|fixture|fixtures|testdata|mock|mocks|stub|stubs)$/;
+
+// Fixture and snapshot trees are demoted too, and harder. tests-map's
+// isTestPath leaves them out on purpose — they are not tests, and must not
+// count as coverage — but a query about a topic wants them even less than it
+// wants a test: a test at least exercises the API by name, while a fixture is
+// input data (generated baselines, sample projects, snapshots) that mentions
+// every topic by sheer volume. microsoft/TypeScript keeps 60,922 of its 66,437
+// files under testdata/, and they filled 86 of the top-10 slots of 13 queries
+// (42 at the test demotion, 21 at this one; MRR 0.32 → 0.37 → 0.44). The
+// judged corpus, flask and gin do not move either way.
+const FIXTURE_DEMOTION = 0.5;
+const FIXTURE_DIR = /(^|\/)(testdata|test-data|test_data|fixtures?|__fixtures__|__snapshots__)(\/|$)/i;
 
 export type RankMode = "graph" | "lexical";
 
@@ -232,6 +244,8 @@ export interface Doc {
   /** Lowercased whole symbol names, for the exact-match boost. */
   exactNames: Set<string>;
   isTest: boolean;
+  /** Under a fixture/snapshot dir — demoted harder than a test. */
+  isFixture: boolean;
 }
 
 function addTerms(doc: Doc, field: Field, text: string): void {
@@ -261,6 +275,7 @@ export function buildDocs(scan: RepoScan): Doc[] {
       decls: [],
       exactNames: new Set(),
       isTest: isTestPath(f.rel),
+      isFixture: FIXTURE_DIR.test(f.rel),
     };
     const seenSym = new Set<string>();
     for (const s of f.symbols) {
@@ -667,7 +682,10 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
     if (!matched.length && !fuzzyHit.size) continue;
 
     if (exactNameHit) score *= EXACT_NAME_BOOST;
-    if (d.isTest && !queryWantsTests) score *= TEST_DEMOTION;
+    if (!queryWantsTests) {
+      if (d.isFixture) score *= FIXTURE_DEMOTION;
+      else if (d.isTest) score *= TEST_DEMOTION;
+    }
     if (prior) {
       // log1p keeps a hub from swamping a well-worded match: the prior reorders
       // comparable results, it does not decide them.

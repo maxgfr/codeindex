@@ -518,7 +518,9 @@ taste.
 Results carry `matchedFields` (was it the path or a doc comment?), a `line`
 anchor and `symbolHits` (name, kind, line), so a hit is a place to open rather
 than a file to re-read. A whole-identifier match outranks a subtoken match, and a
-test file ranks below the code it tests unless the query asks for tests. A
+test file ranks below the code it tests unless the query asks for tests; fixture
+and snapshot trees (`testdata/`, `fixtures/`, `__snapshots__/`) rank lower
+still, unless the query says `fixture` or `testdata`. A
 barrel's re-exports (`export { x } from`, Python's `from .x import y as y`) are
 indexed as prose rather than as names, so the module that defines a name ranks
 above the `__init__.py` or `index.ts` that re-exports it. English
