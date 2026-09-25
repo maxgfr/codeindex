@@ -1,14 +1,18 @@
 // Multi-ecosystem workspace/monorepo detection (merged from ultradoc's manifest
 // probing and reconstruct's superset): npm/yarn workspaces, pnpm, lerna, nx,
-// cargo workspaces, go.work, maven modules, uv workspaces (pyproject), Composer
-// path repositories, and Gradle settings includes. Returns the package list
-// with a workspace-level dependency graph (name edges + path edges), one cycle
-// when present, a topological order, malformed-manifest warnings, and a
-// longest-prefix packageOf() matcher. Deterministic: packages sorted by dir,
+// cargo workspaces, go.work (or, without one, every nested go.mod), nested
+// maven modules, uv workspaces (pyproject), Composer path repositories, and
+// Gradle settings includes. Returns the package list with a workspace-level
+// dependency graph (name edges + path edges), one cycle when present, a
+// topological order, malformed-manifest warnings, and a longest-prefix
+// packageOf() matcher; checkWorkspaceDeps() then compares those declared edges
+// with the link-graph's real imports. Deterministic: packages sorted by dir,
 // edges and warnings sorted, no wall-clock.
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import type { Graph } from "./types.js";
 import { readText } from "./walk.js";
+import { tolerantJsonParse } from "./resolve.js";
 import { byStr } from "./sort.js";
 import { escapeRegExp } from "./util.js";
 
@@ -50,21 +54,29 @@ export interface WorkspaceInfo {
 const WS_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", "coverage"]);
 const MAX_RECURSE_DEPTH = 4;
 
+// Manifests are read with the resolver's JSONC tolerance (comments, trailing
+// commas): the same package.json must not be valid for import resolution yet
+// "malformed" here. Strict JSON.parse runs first only so a genuinely broken
+// file is reported with the parser's own reason.
 function readJson(path: string, label?: string, warnings?: string[]): Record<string, unknown> | undefined {
   const raw = readText(path);
   if (!raw) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
-    if (label && warnings) warnings.push(`malformed ${label}: not a JSON object`);
-    return undefined;
+    parsed = JSON.parse(raw);
   } catch (e) {
-    if (label && warnings) {
-      const reason = String(e instanceof Error ? e.message : e).split("\n")[0];
-      warnings.push(`malformed ${label}: ${reason}`);
+    parsed = tolerantJsonParse(raw);
+    if (parsed === undefined) {
+      if (label && warnings) {
+        const reason = String(e instanceof Error ? e.message : e).split("\n")[0];
+        warnings.push(`malformed ${label}: ${reason}`);
+      }
+      return undefined;
     }
-    return undefined;
   }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  if (label && warnings) warnings.push(`malformed ${label}: not a JSON object`);
+  return undefined;
 }
 
 function tomlSectionBody(toml: string, section: string): string | null {
@@ -379,18 +391,59 @@ function npmFamilyPatterns(root: string, warnings: string[]): { positives: WsPat
   } else if (ws && typeof ws === "object" && Array.isArray((ws as { packages?: unknown }).packages)) {
     for (const x of (ws as { packages: unknown[] }).packages) if (typeof x === "string") push(x, "npm");
   }
-  const pnpm = readText(join(root, "pnpm-workspace.yaml"));
-  let inPackages = false;
-  for (const line of pnpm.split(/\r?\n/)) {
-    if (/^\S/.test(line)) {
-      inPackages = /^packages\s*:/.test(line);
+  for (const pattern of pnpmPackagePatterns(readText(join(root, "pnpm-workspace.yaml")))) push(pattern, "pnpm");
+  return { positives, negations };
+}
+
+// A YAML comment starts at a `#` that opens the line or follows whitespace,
+// outside quotes.
+function stripYamlComment(line: string): string {
+  let quote = "";
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === "#" && (i === 0 || /\s/.test(line[i - 1]!))) {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+const unquoteYaml = (s: string): string => s.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+
+// pnpm-workspace.yaml `packages:` in either YAML sequence style: the block form
+// (`- 'packages/*'` lines, indented or at the key's own column) or the flow
+// form (`packages: ["packages/*", 'tools/*']`, which may span lines). Reading
+// only the block form made a valid flow-style workspace look empty.
+function pnpmPackagePatterns(yaml: string): string[] {
+  const out: string[] = [];
+  const lines = yaml.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const head = lines[i]!.match(/^packages\s*:(.*)$/);
+    if (!head) continue;
+    let flow = stripYamlComment(head[1]!).trim();
+    if (flow.startsWith("[")) {
+      while (!flow.includes("]") && i + 1 < lines.length) flow += " " + stripYamlComment(lines[++i]!);
+      const close = flow.indexOf("]");
+      // Items split on commas outside quotes: a quoted glob may hold one.
+      for (const m of flow.slice(1, close === -1 ? undefined : close).matchAll(/\s*(?:"([^"]*)"|'([^']*)'|([^,]+))/g)) {
+        const v = (m[1] ?? m[2] ?? m[3]!).trim();
+        if (v) out.push(v);
+      }
       continue;
     }
-    if (!inPackages) continue;
-    const m = line.match(/^\s*-\s*['"]?([^'"#]+?)['"]?\s*(?:#.*)?$/);
-    if (m) push(m[1]!.trim(), "pnpm");
+    // Block form: every following line that is indented, blank, or a `- `
+    // entry at column 0 belongs to this key.
+    while (i + 1 < lines.length && /^(\s|-(\s|$)|$)/.test(lines[i + 1]!)) {
+      const m = stripYamlComment(lines[++i]!).match(/^\s*-\s*(.*)$/);
+      const v = m ? unquoteYaml(m[1]!) : "";
+      if (v) out.push(v);
+    }
   }
-  return { positives, negations };
+  return out;
 }
 
 function fallbackNpmPatterns(root: string, warnings: string[]): WsPattern[] {
@@ -426,9 +479,43 @@ function detectCargoMembers(root: string, found: Map<string, WorkspacePackage>, 
   }
 }
 
+// Directories the go tool itself never builds from — vendored copies, testdata
+// and `_`-prefixed dirs (dot-dirs are skipped everywhere already) — plus the
+// fixture dirs other ecosystems keep test repos in: a Go fixture module inside
+// a JS project's tests/fixtures is not a workspace member.
+const GO_SKIP_DIRS = new Set(["vendor", "testdata", "fixtures", "__fixtures__"]);
+
+// Every nested go.mod under `base`, bounded like the glob walker. One readdir
+// per directory answers both "is there a go.mod here" and "where next".
+function goModDirs(root: string, base: string, depth: number, out: string[]): void {
+  let entries;
+  try {
+    entries = readdirSync(base ? join(root, base) : root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  if (base && entries.some((e) => e.name === "go.mod" && !e.isDirectory())) out.push(base);
+  if (depth > MAX_RECURSE_DEPTH) return;
+  const subs = entries
+    .filter((e) => e.isDirectory() && !/^[._]/.test(e.name) && !WS_SKIP_DIRS.has(e.name) && !GO_SKIP_DIRS.has(e.name))
+    .map((e) => e.name)
+    .sort(byStr);
+  for (const name of subs) goModDirs(root, base ? `${base}/${name}` : name, depth + 1, out);
+}
+
+// go.work lists the workspace modules explicitly. Without one, a repo can still
+// hold several modules side by side (a service beside a CLI beside a shared
+// lib) — the import resolver already links across every in-repo go.mod, so the
+// workspace view lists each nested module too instead of reporting none.
 function detectGoWork(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
   const gowork = readText(join(root, "go.work"));
-  if (!gowork) return;
+  if (!gowork) {
+    if (existsSync(join(root, "go.work"))) return; // an empty go.work still declares the workspace
+    const dirs: string[] = [];
+    goModDirs(root, "", 0, dirs);
+    for (const dir of dirs) addPackage(root, dir, found, "go", warnings);
+    return;
+  }
   const dirs: string[] = [];
   for (const block of gowork.matchAll(/^use\s*\(([\s\S]*?)\)/gm)) {
     for (const line of block[1]!.split(/\r?\n/)) {
@@ -443,14 +530,29 @@ function detectGoWork(root: string, found: Map<string, WorkspacePackage>, warnin
   }
 }
 
+// Maven reactor modules. A module that is itself an aggregator lists its own
+// <modules>, relative to ITS pom — nested reactors are the norm in large Maven
+// builds, and reading only the root pom dropped every leaf module along with
+// the dependency edges pointing at them. Every <modules> block counts (profiles
+// add modules too); XML comments are stripped first, since a commented-out
+// <module> is a disabled one. A <module> may name a pom file instead of a dir.
 function detectMavenModules(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
-  const pom = readText(join(root, "pom.xml"));
-  if (!pom) return;
-  const modules = pom.match(/<modules>([\s\S]*?)<\/modules>/)?.[1];
-  if (!modules) return;
-  for (const m of modules.matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)) {
-    addPackage(root, m[1]!, found, "maven", warnings);
-  }
+  const seen = new Set<string>();
+  const visit = (dir: string, depth: number): void => {
+    if (depth > MAX_RECURSE_DEPTH || seen.has(dir)) return;
+    seen.add(dir);
+    const pom = readText(join(root, dir, "pom.xml")).replace(/<!--[\s\S]*?-->/g, "");
+    for (const block of pom.matchAll(/<modules>([\s\S]*?)<\/modules>/g)) {
+      for (const m of block[1]!.matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)) {
+        const spec = m[1]!.endsWith(".xml") ? posix.dirname(m[1]!) : m[1]!;
+        const child = posix.normalize(posix.join(dir || ".", spec)).replace(/\/+$/, "");
+        if (child === "." || child === ".." || child.startsWith("../")) continue; // never leave the repo root
+        addPackage(root, child, found, "maven", warnings);
+        visit(child, depth + 1);
+      }
+    }
+  };
+  visit("", 0);
 }
 
 // uv workspaces: [tool.uv.workspace] members/exclude in the root pyproject.
@@ -484,14 +586,19 @@ function detectComposerPathRepos(root: string, found: Map<string, WorkspacePacka
 }
 
 // Gradle multi-project builds: settings.gradle(.kts) `include ':a', ':b:c'` or
-// `include("x")` — a `:`-separated project path maps to a directory path.
+// `include("x")` — a `:`-separated project path maps to a directory path. Both
+// DSLs let the argument list span lines: inside parentheses (the usual Kotlin
+// layout, one project per line) or, in Groovy, continued after a trailing
+// comma. Reading line by line kept only the projects on the `include` line.
 function detectGradleIncludes(root: string, found: Map<string, WorkspacePackage>, warnings: string[]): void {
   for (const f of ["settings.gradle", "settings.gradle.kts"]) {
     const text = readText(join(root, f));
     if (!text) continue;
-    for (const line of text.split(/\r?\n/)) {
-      if (!/^\s*include[\s(]/.test(line)) continue;
-      for (const m of line.matchAll(/["']([^"']+)["']/g)) {
+    // Comments out first (a commented include is a disabled one); `://` is a
+    // URL inside a string, not a comment.
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    for (const call of code.matchAll(/^[ \t]*include\b[ \t]*(\([^)]*\)|(?:[^\n]*,[ \t]*\r?\n)*[^\n]*)/gm)) {
+      for (const m of call[1]!.matchAll(/["']([^"']+)["']/g)) {
         const dir = m[1]!.replace(/^:/, "").replace(/:/g, "/");
         if (dir) addPackage(root, dir, found, "gradle", warnings);
       }
@@ -616,16 +723,44 @@ function composerEdges(root: string, pkg: WorkspacePackage, byName: Set<string>,
   return [...edges];
 }
 
-function gradleEdges(root: string, pkg: WorkspacePackage, byName: Set<string>, byDir: Map<string, string>): string[] {
+// Gradle's type-safe project accessor for a project dir: `libs/my-core` is
+// `projects.libs.myCore` (each path segment camelCased on `-`/`_`).
+function gradleAccessor(dir: string): string {
+  return dir
+    .split("/")
+    .map((seg) => seg.replace(/[-_]+([A-Za-z0-9])/g, (_, c: string) => c.toUpperCase()))
+    .join(".");
+}
+
+function gradleEdges(
+  root: string,
+  pkg: WorkspacePackage,
+  byName: Set<string>,
+  byDir: Map<string, string>,
+  accessors: Map<string, string>,
+): string[] {
   for (const f of ["build.gradle", "build.gradle.kts"]) {
     const text = readText(join(root, pkg.dir, f));
     if (!text) continue;
     const edges = new Set<string>();
-    // implementation project(':libs:core') — a project path is a dir path.
-    for (const m of text.matchAll(/project\s*\(\s*["']:?([^"']+)["']\s*\)/g)) {
+    // implementation project(':libs:core') / project(path: ':libs:core', …) —
+    // a project path is a dir path.
+    for (const m of text.matchAll(/project\s*\(\s*(?:path\s*[:=]\s*)?["']:?([^"']+)["']/g)) {
       const path = m[1]!.replace(/:/g, "/");
       const target = byDir.get(path) ?? (byName.has(path) ? path : undefined);
       if (target && target !== pkg.name) edges.add(target);
+    }
+    // implementation(projects.libs.core) — Gradle 7+ type-safe accessors. The
+    // longest dotted prefix naming a project wins, so a trailing property
+    // (`projects.libs.core.dependencyProject`) does not hide the edge.
+    for (const m of text.matchAll(/\bprojects((?:\.[A-Za-z_]\w*)+)/g)) {
+      const segs = m[1]!.slice(1).split(".");
+      for (let n = segs.length; n > 0; n--) {
+        const target = accessors.get(segs.slice(0, n).join("."));
+        if (!target) continue;
+        if (target !== pkg.name) edges.add(target);
+        break;
+      }
     }
     return [...edges];
   }
@@ -637,6 +772,7 @@ function edgesFor(
   pkg: WorkspacePackage,
   byName: Set<string>,
   byDir: Map<string, string>,
+  accessors: Map<string, string>,
   warnings: string[],
 ): string[] {
   switch (pkg.kind) {
@@ -651,7 +787,7 @@ function edgesFor(
     case "composer":
       return composerEdges(root, pkg, byName, warnings);
     case "gradle":
-      return gradleEdges(root, pkg, byName, byDir);
+      return gradleEdges(root, pkg, byName, byDir, accessors);
     default:
       return npmEdges(root, pkg, byName, warnings);
   }
@@ -732,8 +868,9 @@ export function detectWorkspaces(root: string): WorkspaceInfo {
 
   const byName = new Set(packages.map((p) => p.name));
   const byDir = new Map(packages.map((p) => [p.dir, p.name]));
+  const accessors = new Map(packages.map((p) => [gradleAccessor(p.dir), p.name]));
   for (const pkg of packages) {
-    const edges = edgesFor(root, pkg, byName, byDir, warnings);
+    const edges = edgesFor(root, pkg, byName, byDir, accessors, warnings);
     if (edges.length) pkg.dependsOn = edges.sort(byStr);
   }
 
@@ -745,4 +882,141 @@ export function detectWorkspaces(root: string): WorkspaceInfo {
     warnings: [...new Set(warnings)].sort(byStr),
     packageOf: (rel: string) => byDepth.find((p) => rel === p.dir || rel.startsWith(p.dir + "/")),
   };
+}
+
+// --- package coordinates ------------------------------------------------------
+// What a manifest says a package IS — its registry name and version — rather
+// than where a workspace member lives. The SCIP export stamps them on every
+// symbol so two repositories' indexes never share one global namespace.
+
+export interface PackageCoordinates {
+  manager: string; // npm | gomod | cargo | python | maven | composer
+  name: string;
+  version?: string;
+}
+
+// A pom's own <version>: the same blocks as ownArtifactId are stripped, plus
+// the ones whose plugins carry versions of their own, so a module that inherits
+// its version from <parent> reports none instead of a plugin's.
+function ownPomVersion(pom: string): string | undefined {
+  const stripped = pom.replace(
+    /<(parent|dependencies|dependencyManagement|build|profiles|reporting)>[\s\S]*?<\/\1>/g,
+    "",
+  );
+  return stripped.match(/<version>\s*([^<]+?)\s*<\/version>/)?.[1];
+}
+
+/**
+ * The coordinates `dir/<manifest>` declares, or undefined when the file is
+ * absent or names no package — a nested `{"type": "module"}` package.json, a
+ * Cargo virtual-workspace root — so a caller walking up the tree keeps going.
+ */
+export function manifestCoordinates(root: string, dir: string, manifest: string): PackageCoordinates | undefined {
+  const path = join(root, dir, manifest);
+  const text = readText(path);
+  if (!text) return undefined;
+  const nonEmpty = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const coords = (manager: string, name: string | undefined, version: string | undefined) =>
+    name ? { manager, name, ...(version ? { version } : {}) } : undefined;
+  switch (manifest) {
+    case "package.json":
+    case "composer.json": {
+      const pkg = readJson(path);
+      return coords(manifest === "package.json" ? "npm" : "composer", nonEmpty(pkg?.name), nonEmpty(pkg?.version));
+    }
+    case "go.mod":
+      // Go versions live in VCS tags, never in go.mod.
+      return coords("gomod", text.match(/^module\s+"?([^\s"]+)/m)?.[1], undefined);
+    case "Cargo.toml": {
+      const body = tomlSectionBody(text, "package");
+      return coords("cargo", tomlString(body, "name"), tomlString(body, "version"));
+    }
+    case "pyproject.toml": {
+      const project = tomlSectionBody(text, "project");
+      const poetry = tomlSectionBody(text, "tool.poetry");
+      return coords(
+        "python",
+        tomlString(project, "name") ?? tomlString(poetry, "name"),
+        tomlString(project, "version") ?? tomlString(poetry, "version"),
+      );
+    }
+    case "pom.xml":
+      return coords("maven", ownArtifactId(text), ownPomVersion(text));
+    default:
+      return undefined;
+  }
+}
+
+// --- declared vs actual dependencies ----------------------------------------
+
+export interface UndeclaredDependency {
+  from: string; // importing package
+  to: string; // sibling package it imports without declaring it
+  files: number; // distinct importing files
+  example: string; // the first of them, sorted
+}
+
+export interface WorkspaceCheck {
+  ok: boolean; // no undeclared cross-package import
+  undeclared: UndeclaredDependency[];
+  // Declared sibling dependencies no resolved import uses. Informational: a
+  // package can be a real dependency without being imported (a CLI, a shared
+  // config, a compiled-only entry the resolver cannot map), so it never fails
+  // the check.
+  unusedDeclared: { from: string; to: string }[];
+}
+
+// Nx derives project dependencies from imports (tsconfig paths) instead of
+// declaring them, so an import with no manifest entry is how it is supposed to
+// work — its members are left out of the check entirely.
+const INFERRED_DEPS = new Set<WorkspaceKind>(["nx"]);
+// Kinds whose declared sibling dependencies exist to be imported by code. A
+// Maven/Gradle/uv/Composer declaration also carries runtime-only and plugin
+// wiring that an import graph cannot see, so "unused" would mostly be noise.
+const CODE_LEVEL_DEPS = new Set<WorkspaceKind>(["npm", "pnpm", "lerna", "cargo", "go"]);
+
+// Compare the manifests' declared workspace dependencies with the resolved
+// import edges of the link-graph. An import of a sibling package that the
+// importer's manifest does not declare works in a hoisted local checkout and
+// breaks the isolated install, the publish, or `go mod tidy` — nothing else in
+// the toolchain says so before that. Deterministic: sorted by (from, to).
+export function checkWorkspaceDeps(info: WorkspaceInfo, graph: Pick<Graph, "fileEdges">): WorkspaceCheck {
+  // "from\0to" package names → the pair and its importing files.
+  const imported = new Map<string, { from: WorkspacePackage; to: WorkspacePackage; files: Set<string> }>();
+  for (const e of graph.fileEdges) {
+    if (e.kind !== "import" || e.dangling) continue;
+    const from = info.packageOf(e.from);
+    const to = info.packageOf(e.to);
+    if (!from || !to || from === to) continue;
+    const key = `${from.name}\0${to.name}`;
+    let pair = imported.get(key);
+    if (!pair) imported.set(key, (pair = { from, to, files: new Set() }));
+    pair.files.add(e.from);
+  }
+  const undeclared: UndeclaredDependency[] = [];
+  for (const { from, to, files } of imported.values()) {
+    if (INFERRED_DEPS.has(from.kind) || from.dependsOn?.includes(to.name)) continue;
+    const sorted = [...files].sort(byStr);
+    undeclared.push({ from: from.name, to: to.name, files: sorted.length, example: sorted[0]! });
+  }
+  const unusedDeclared: { from: string; to: string }[] = [];
+  for (const pkg of info.packages) {
+    if (!CODE_LEVEL_DEPS.has(pkg.kind)) continue;
+    for (const dep of pkg.dependsOn ?? []) {
+      if (!imported.has(`${pkg.name}\0${dep}`)) unusedDeclared.push({ from: pkg.name, to: dep });
+    }
+  }
+  const byPair = (a: { from: string; to: string }, b: { from: string; to: string }): number =>
+    byStr(a.from, b.from) || byStr(a.to, b.to);
+  return { ok: undeclared.length === 0, undeclared: undeclared.sort(byPair), unusedDeclared: unusedDeclared.sort(byPair) };
+}
+
+// The JSON the `workspaces` CLI command and MCP tool print. `warnings` and
+// `check` appear only when there is something to say, so the output of a
+// clean, unchecked workspace stays byte-identical to earlier releases.
+export function workspaceReport(info: WorkspaceInfo, check?: WorkspaceCheck): Record<string, unknown> {
+  const out: Record<string, unknown> = { packages: info.packages, cycle: info.cycle ?? null, topoOrder: info.topoOrder };
+  if (info.warnings.length) out.warnings = info.warnings;
+  if (check) out.check = check;
+  return out;
 }

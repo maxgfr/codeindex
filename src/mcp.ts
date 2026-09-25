@@ -18,7 +18,7 @@ import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
 import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
 import { implementationsOf } from "./relations.js";
 import { neighborhood, type Direction } from "./symbolgraph.js";
-import { detectWorkspaces } from "./workspaces.js";
+import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
@@ -27,6 +27,7 @@ import { findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
+import { resolutionReport } from "./resolution.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
@@ -166,7 +167,10 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   // ONE walk feeds both the warm and the scan below — see warmGrammarsForWalk.
   let walked: WalkResult | undefined;
   let preparedScan: ReturnType<typeof getScan> | undefined;
-  if (!SCANLESS_TOOLS.has(name)) {
+  // `workspaces` with `check` compares manifests against the link-graph, so it
+  // needs the scan (and its grammars) like any graph tool.
+  const scanless = SCANLESS_TOOLS.has(name) && !(name === "workspaces" && args.check === true);
+  if (!scanless) {
     // fs.watch is an eager invalidation hint, never a freshness oracle: an
     // immediate request can beat event delivery. Always perform the normal
     // walk/stat proof before trusting a warm scan.
@@ -226,7 +230,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   }
   if (name === "workspaces") {
     const info = detectWorkspaces(repo);
-    return JSON.stringify({ packages: info.packages, cycle: info.cycle ?? null, topoOrder: info.topoOrder }, null, 2);
+    const check = args.check === true ? checkWorkspaceDeps(info, readArtifacts().graph) : undefined;
+    return JSON.stringify(workspaceReport(info, check), null, 2);
   }
   if (name === "churn") {
     const { churn, ok } = gitChurn(repo, { since: str(args.since) });
@@ -528,6 +533,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const rules = parseRules(payload); // throws a descriptive error on a malformed payload
     const { graph } = readArtifacts();
     return JSON.stringify(checkRules(graph, rules), null, 2);
+  }
+  if (name === "resolution_report") {
+    return JSON.stringify(resolutionReport(readScan(), { lang: str(args.lang), limit: positiveNum(args.limit) }), null, 2);
   }
   throw new Error(`unknown tool: ${name}`);
 }

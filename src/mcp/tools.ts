@@ -60,8 +60,18 @@ export const TOOLS = [
   {
     name: "workspaces",
     description:
-      "Detect monorepo packages (npm/pnpm/yarn/lerna/nx/cargo/go.work/maven) with the workspace dependency graph, one cycle if present, and a topological build order.",
-    inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
+      "Detect monorepo packages (npm/pnpm/yarn/lerna/nx/cargo/go modules/maven/gradle/uv/composer) with the workspace dependency graph, one cycle if present, a topological build order, and warnings for malformed manifests. `check: true` also compares each package's declared sibling dependencies with the imports it really makes: `undeclared` (imported, not declared — breaks isolated installs and publishing) and `unusedDeclared` (declared, never imported).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        check: {
+          type: "boolean",
+          description: "Compare declared workspace dependencies with resolved cross-package imports (builds the link-graph; default false)",
+        },
+      },
+      required: ["repo"],
+    },
   },
   {
     name: "churn",
@@ -442,6 +452,21 @@ export const TOOLS = [
       required: ["repo"],
     },
   },
+  {
+    name: "resolution_report",
+    description:
+      "Can the link-graph be trusted for a language? Per importer language: how many imports resolved to in-repo files, went external (third-party/stdlib), dangle (local target missing, by reason) or are unsupported (no resolver for that language), the top dangling specs with an example importer, the top external packages, and the config warnings (unparseable tsconfig/package.json, missing `extends`) that silently turn imports external. Check it before relying on impact, callers or dead_code for a language.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...scopeProps,
+        lang: { type: "string", description: "Only this language (as scan_summary names it)" },
+        limit: { type: "number", minimum: 1, description: "Entries per top list (default 10)" },
+      },
+      required: ["repo"],
+    },
+  },
 ] as const;
 
 
@@ -538,6 +563,16 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       packages: { type: "array", items: anyObj },
       cycle: { type: ["array", "null"], items: { type: "string" } },
       topoOrder: strArr,
+      warnings: strArr,
+      check: {
+        type: "object",
+        properties: {
+          ok: { type: "boolean" },
+          undeclared: { type: "array", items: anyObj },
+          unusedDeclared: { type: "array", items: anyObj },
+        },
+        required: ["ok", "undeclared", "unusedDeclared"],
+      },
     },
     required: ["packages", "topoOrder"],
   },
@@ -623,6 +658,15 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ["embedVersion", "mode"],
   },
+  resolution_report: {
+    type: "object",
+    properties: {
+      totals: anyObj,
+      languages: { type: "array", items: anyObj },
+      warnings: strArr,
+    },
+    required: ["totals", "languages", "warnings"],
+  },
   write_memory: {
     type: "object",
     properties: { written: { type: "string" } },
@@ -703,6 +747,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   implementations: { title: "Implementations" },
   call_graph: { title: "Call graph neighborhood" },
   check_rules: { title: "Check architecture rules" },
+  resolution_report: { title: "Import resolution report" },
 };
 
 export function annotationsFor(name: string): Record<string, boolean> | undefined {
@@ -740,7 +785,7 @@ export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Locate a thing.
   find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
   // Decide whether changing it is safe.
-  impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
+  impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status", "resolution_report"],
   // Change it.
   edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.

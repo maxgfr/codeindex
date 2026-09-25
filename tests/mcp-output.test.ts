@@ -110,7 +110,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   graph: {},
   symbols: {},
   callers: {},
-  workspaces: {},
+  workspaces: { check: true },
   churn: {},
   find_references: { name: "HttpClient" },
   explain_search: { query: "http client retry" },
@@ -121,6 +121,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   coupling: {},
   duplicated_literals: {},
   embed_status: {},
+  resolution_report: {},
   write_memory: { name: "schema-probe", content: "x" },
   delete_memory: { name: "schema-probe" },
   // The three symbolic edits share a schema and would mutate the fixture, so

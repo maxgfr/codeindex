@@ -25,7 +25,7 @@ import { buildTypeHierarchy, implementationsOf } from "./relations.js";
 import { computeImportPairs } from "./callers.js";
 import { buildSymbolGraph, neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
-import { detectWorkspaces } from "./workspaces.js";
+import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
@@ -34,6 +34,8 @@ import { findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
+import { resolutionReport } from "./resolution.js";
+import { resolveContextFor } from "./derived.js";
 import { impactOf, neighborsOf } from "./traverse.js";
 import { deltaFor, formatDeltaPanel } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
@@ -62,13 +64,18 @@ Commands:
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
   scip        SCIP code-intelligence index (protobuf bytes) into --out
-              (default index.scip; --out - writes to stdout)
+              (default index.scip; --out - writes to stdout). Symbols carry
+              the nearest manifest's package and their declaration chain;
+              subtypes and overrides carry implementation relationships
   callers     Per-symbol caller index (JSON); optional <name> or <name@file>
               selects one symbol; --lsp appends language-server incoming calls
   hierarchy   Type hierarchy: extends/implements, and what extends/implements it
   implementations  Everything implementing/extending a type (transitively)
   callgraph   Bounded symbol-to-symbol neighborhood (--depth, --direction)
-  workspaces  Monorepo packages + dependency graph (JSON)
+  workspaces  Monorepo packages + dependency graph (JSON), with warnings for
+              malformed manifests. --check compares each package's declared
+              sibling dependencies with the imports it really makes
+              (undeclared / unusedDeclared) and exits 1 on an undeclared one
   churn       Per-file git commit counts (JSON; --since <ref> to bound)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits)
   search      Keyless BM25 lexical search over symbol names, path segments,
@@ -132,21 +139,29 @@ Commands:
               transitively imports/uses/calls it (--depth <n>; JSON)
   neighbors   Graph neighbours of a file or module, both directions
               (--depth <n>, --kind import,call,use,doc-link,mention; JSON)
-  mermaid     Mermaid diagram of the module graph; pass a module positional to
-              focus on one neighborhood
+  resolution  How much of each language's imports resolved: resolved /
+              external / dangling (by reason) / unsupported counts, the top
+              dangling specs and external packages, and the config warnings
+              that silently turn imports external — whether the graph can be
+              trusted for a language (--lang <name>, --limit <n> per list,
+              default 10; JSON)
+  mermaid     Mermaid diagram of the module graph; pass a module slug, module
+              directory or file positional to focus on one neighborhood (an
+              unknown target is an error)
   rewrite     Map an expensive tree-wide search onto its indexed equivalent:
               cli.mjs rewrite '<command line>'. Prints the replacement command
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (33 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (34 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
               find_symbol, find_references, lsp_status, onboard, repo_map,
               hotspots, coupling, dead_code, complexity, mermaid, grep, search,
-              explain_search, embed_status, check_rules, the memory quartet and
-              the three symbolic-edit writes). Flags: --repo <dir> pins ONE
-              repository so the per-tool repo argument becomes optional (an
-              explicit per-call repo still wins); --server-name <name> overrides
+              explain_search, embed_status, check_rules, resolution_report, the
+              memory quartet and the three symbolic-edit writes). Flags:
+              --repo <dir> pins ONE repository so the per-tool repo argument
+              becomes optional (an explicit per-call repo still wins);
+              --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
               tool response (default 1e6; a response under the cap is
               byte-identical, one over it is replaced by an actionable notice
@@ -188,7 +203,10 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       entirely. Stale/absent/corrupt → a normal cold build
   --no-index-cache    Never reuse a persisted index; always build from scratch
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
-  --limit <n>         Max results for \`search\` (default 20)
+  --limit <n>         Max results for \`search\` (default 20); entries per top
+                      list for \`resolution\` (default 10)
+  --lang <name>       \`resolution\`: report one language (as \`scan\` names it)
+  --check             \`workspaces\`: check declared vs imported dependencies
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
   --exact             \`search\`: drop results that carry no verbatim term match
@@ -254,6 +272,8 @@ interface CliFlags {
   direction?: "out" | "in" | "both"; // callgraph: which way to walk
   rank?: "graph" | "lexical"; // search: structural prior (default lexical)
   json?: boolean; // delta: emit JSON instead of the human panel
+  check?: boolean; // workspaces: compare declared deps with real imports (exit 1 on undeclared)
+  lang?: string; // resolution: one language's row
   positional?: string; // e.g. the grep pattern or search query
 }
 
@@ -327,6 +347,8 @@ function parseFlags(args: string[]): CliFlags {
       flags.direction = v;
     }
     else if (a === "--json") flags.json = true;
+    else if (a === "--check") flags.check = true;
+    else if (a === "--lang") flags.lang = next();
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -444,6 +466,7 @@ const VALUE_FLAGS = new Set([
   "--kind",
   "--rank",
   "--direction",
+  "--lang",
 ]);
 
 // Accept global flags BEFORE the subcommand as well as after, so
@@ -523,7 +546,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   // extensions, then handed to the scan via precomputedWalk so the tree is
   // traversed a single time. --no-ast keeps the regex tier: no walk, no warm —
   // scanRepo walks itself, exactly as before.
-  const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags.positional !== "build");
+  // `workspaces --check` reads the link-graph, so it scans like any graph command.
+  const scans =
+    (!SCANLESS_COMMANDS.has(cmd) || (cmd === "workspaces" && flags.check === true)) &&
+    !(cmd === "embed" && flags.positional !== "build");
   let precomputedWalk: WalkResult | undefined;
   if (scans && !flags.noAst) {
     precomputedWalk = walk(flags.repo, {
@@ -743,6 +769,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // fail the guard on the next run (safe: it just rebuilds).
       writeCache({ graphSha1: sha1(graphJson), symbolsSha1: sha1(symbolsJson), embed: embedMeta });
       process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${embedNote}${scan.capped ? " (capped)" : ""}\n`);
+      // Config the resolver could not use (an unparseable tsconfig, a missing
+      // `extends` base…) turns resolvable imports into externals without a
+      // trace in the artifacts. The build just paid for the resolve context, so
+      // saying so costs nothing; `resolution` reports the same list on demand.
+      for (const w of [...new Set(resolveContextFor(scan).warnings)].sort()) {
+        process.stderr.write(`codeindex: warning: ${w}\n`);
+      }
     }
   } else if (cmd === "scan") {
     // Summary-only: a file count and a language histogram need the walk and the
@@ -1043,14 +1076,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (errors > 0) process.exitCode = 1; // the CI gate
   } else if (cmd === "workspaces") {
     const info = detectWorkspaces(flags.repo);
-    emit(
-      JSON.stringify(
-        { packages: info.packages, cycle: info.cycle ?? null, topoOrder: info.topoOrder },
-        null,
-        2,
-      ) + "\n",
-      flags.out,
-    );
+    const check = flags.check ? checkWorkspaceDeps(info, (await readArtifacts()).graph) : undefined;
+    emit(JSON.stringify(workspaceReport(info, check), null, 2) + "\n", flags.out);
+    if (check && !check.ok) process.exitCode = 1; // the CI gate, like `rules`
   } else if (cmd === "churn") {
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
     const sorted: Record<string, number> = {};
@@ -1104,6 +1132,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const res = neighborsOf(graph, flags.positional, flags.depth ?? 1, kinds);
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
+  } else if (cmd === "resolution") {
+    const report = resolutionReport(await readScan(), { lang: flags.lang, limit: flags.limit });
+    emit(JSON.stringify(report, null, 2) + "\n", flags.out);
   } else if (cmd === "mermaid") {
     const { graph } = await readArtifacts();
     emit(renderMermaid(graph, { module: flags.positional }), flags.out);

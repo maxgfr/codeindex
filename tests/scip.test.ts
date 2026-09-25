@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,6 +84,68 @@ const packedInts = (f: Field | undefined): number[] => {
   return nums;
 };
 
+function repoWith(files: Record<string, string>): string {
+  const root = mkdtempSync(join(tmpdir(), "scip-repo-"));
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = join(root, rel);
+    mkdirSync(join(abs, ".."), { recursive: true });
+    writeFileSync(abs, content);
+  }
+  return root;
+}
+
+interface DecodedInfo {
+  doc: string;
+  symbol: string;
+  kind?: number;
+  enclosing?: string;
+  relationships: { symbol: string; isReference: boolean; isImplementation: boolean }[];
+}
+interface DecodedOcc {
+  doc: string;
+  symbol: string;
+  range: number[];
+  definition: boolean;
+}
+// Every SymbolInformation and Occurrence of an index, flattened.
+function decodeIndex(buf: Uint8Array): { infos: DecodedInfo[]; occs: DecodedOcc[]; docs: string[] } {
+  const infos: DecodedInfo[] = [];
+  const occs: DecodedOcc[] = [];
+  const docs: string[] = [];
+  for (const docField of allOf(decode(buf), 2)) {
+    const doc = decode(docField.bytes!);
+    const rel = str(first(doc, 1));
+    docs.push(rel);
+    for (const siField of allOf(doc, 3)) {
+      const si = decode(siField.bytes!);
+      infos.push({
+        doc: rel,
+        symbol: str(first(si, 1)),
+        kind: first(si, 5)?.varint,
+        enclosing: first(si, 8) ? str(first(si, 8)) : undefined,
+        relationships: allOf(si, 4).map((r) => {
+          const rel4 = decode(r.bytes!);
+          return {
+            symbol: str(first(rel4, 1)),
+            isReference: first(rel4, 2)?.varint === 1,
+            isImplementation: first(rel4, 3)?.varint === 1,
+          };
+        }),
+      });
+    }
+    for (const occField of allOf(doc, 2)) {
+      const occ = decode(occField.bytes!);
+      occs.push({
+        doc: rel,
+        symbol: str(first(occ, 2)),
+        range: packedInts(first(occ, 1)),
+        definition: ((first(occ, 3)?.varint ?? 0) & 1) === 1,
+      });
+    }
+  }
+  return { infos, occs, docs };
+}
+
 describe("renderScip", () => {
   it("is deterministic: two scans + two renders are byte-identical", () => {
     const a = Buffer.from(renderGolden());
@@ -105,7 +167,8 @@ describe("renderScip", () => {
     expect(str(first(metadata, 3))).toBe(PROJECT_ROOT);
     expect(first(metadata, 4)?.varint).toBe(1); // TextEncoding.UTF8
 
-    // one Document per code file with ≥1 symbol
+    // one Document per code file with ≥1 symbol (a barrel whose re-exports all
+    // fail to resolve would have nothing to say and is dropped — none here)
     const documents = allOf(index, 2);
     const expectedDocs = scan.files.filter((f) => f.kind === "code" && f.symbols.length > 0);
     expect(documents.length).toBe(expectedDocs.length);
@@ -113,7 +176,10 @@ describe("renderScip", () => {
 
     let totalDefs = 0;
     let totalRefs = 0;
-    const symbolPattern = /^codeindex \. \. \. `[^`]+`\/.+$/;
+    // <scheme> <manager> <name> <version> (spaces doubled inside a field), then
+    // the file namespace and its descriptors.
+    const field = "(?:[^ ]|  )+";
+    const symbolPattern = new RegExp(`^codeindex ${field} ${field} ${field} \`[^\`]+\`\\/.+$`);
 
     for (const docField of documents) {
       const doc = decode(docField.bytes!);
@@ -243,7 +309,243 @@ describe("renderScip", () => {
     const stats = execFileSync(scipBin, ["stats", "--from", out], { encoding: "utf8" });
     const parsed = JSON.parse(stats) as { occurrences?: number; documents?: number };
     expect(parsed.occurrences ?? 0).toBeGreaterThan(0);
-    // lint must not fail fatally (non-zero exit throws).
+    // lint must not fail fatally (non-zero exit throws). The polyglot repos
+    // exercise every suffix, the method disambiguator and escaped package
+    // fields: lint re-formats each symbol and rejects any non-canonical one.
+    // (Neither holds a relationship across documents: lint checks those only
+    // against the documents it has already visited, in Go map order, so they
+    // fail it at random although the target is defined.)
     execFileSync(scipBin, ["lint", out], { encoding: "utf8", stdio: "pipe" });
+    for (const files of [SHAPES_REPO, PACKAGES_REPO]) {
+      writeFileSync(out, renderScip(scanRepo(repoWith(files)), { projectRoot: PROJECT_ROOT }));
+      execFileSync(scipBin, ["lint", out], { encoding: "utf8", stdio: "pipe" });
+    }
+  });
+});
+
+// One small polyglot repo exercising the symbol grammar: nesting through
+// functions and classes, qualifier-declared members (Rust `impl`, Go receivers
+// in the same file and in a sibling file of the package), the kind → suffix
+// table, overloads, and re-exports.
+const SHAPES_REPO: Record<string, string> = {
+  "py/app.py": [
+    "class Flask:",
+    "    def run(self):",
+    "        pass",
+    "",
+    "",
+    "def create_app():",
+    "    def index():",
+    '        return "hi"',
+    "",
+    "    class Task(Flask):",
+    "        def __call__(self):",
+    "            return 1",
+    "",
+    "    return index",
+    "",
+  ].join("\n"),
+  "py/__init__.py": "from .app import Flask as Flask\nfrom .app import create_app as create_app\n",
+  "pkg/context.go": "package pkg\n\ntype Context struct {\n\tName string\n}\n\nfunc (c *Context) Get() string { return c.Name }\n",
+  "pkg/deprecated.go": "package pkg\n\n// BindWith is deprecated.\nfunc (c *Context) BindWith() {}\n",
+  // A distinct package in the same directory, with its own `Context`.
+  "pkg/other_test.go": "package pkg_test\n\ntype Context struct{}\n\nfunc (c Context) Helper() {}\n",
+  "lib.rs": [
+    "macro_rules! square { ($x:expr) => { $x * $x }; }",
+    "pub struct Point { pub x: i32 }",
+    "impl Point { pub fn new() -> Point { Point { x: 0 } } }",
+    "",
+  ].join("\n"),
+  "shapes.ts": [
+    "export namespace Geo {",
+    "  export function area(): number { return 1; }",
+    "}",
+    "export enum Color { Red, Green }",
+    "export interface Callable {",
+    "  (x: number): string;",
+    "  new (x: number): Callable;",
+    "  [key: string]: unknown;",
+    "}",
+    "export class Box {",
+    "  size = 1;",
+    "  get width(): number { return this.size; }",
+    "}",
+    "export function over(a: string): void;",
+    "export function over(a: number): void;",
+    "export function over(a: unknown): void {}",
+    // Error recovery binds an EMPTY name here — it has no spelling in the grammar.
+    "var { 1: } = { 1: 2 };",
+    "",
+  ].join("\n"),
+  "index.ts": 'export { Box } from "./shapes";\nexport * from "./shapes";\n',
+};
+
+// One manifest per ecosystem, nested where the walk up the tree matters.
+const PACKAGES_REPO: Record<string, string> = {
+  "package.json": '{ "name": "@acme/web", "version": "1.2.3" }\n',
+  "src/a.ts": "export function a(): void {}\n",
+  "src/esm/package.json": '{ "type": "module" }\n',
+  "src/esm/b.ts": "export function b(): void {}\n",
+  "svc/go.mod": "module example.com/svc\n\ngo 1.21\n",
+  "svc/main.go": "package main\n\nfunc Main() {}\n",
+  "crates/core/Cargo.toml": '[package]\nname = "core-lib"\nversion = "0.4.0"\n',
+  "crates/core/src/lib.rs": "pub fn core() {}\n",
+  "py/pyproject.toml": '[project]\nname = "odd name"\nversion = "2.0"\n',
+  "py/m.py": "def hello():\n    pass\n",
+  "native/n.c": "int native_fn(void) { return 1; }\n",
+};
+
+const P = "codeindex . . . ";
+const shapes = (() => {
+  let cached: ReturnType<typeof decodeIndex> | undefined;
+  return () => (cached ??= decodeIndex(renderScip(scanRepo(repoWith(SHAPES_REPO)), { projectRoot: PROJECT_ROOT })));
+})();
+
+describe("renderScip symbol structure", () => {
+  it("builds a nested member from its parent's own symbol and suffix", () => {
+    const { infos } = shapes();
+    const defined = new Set(infos.map((i) => i.symbol));
+    for (const s of [
+      // A function's members hang off the FUNCTION symbol, not a phantom type.
+      "`py/app.py`/create_app().index().",
+      "`py/app.py`/create_app().Task#",
+      // Two levels deep: the whole ancestor chain, each link with its own suffix.
+      "`py/app.py`/create_app().Task#__call__().",
+      // A Rust impl block and a same-file Go receiver bind to the declared type.
+      "`lib.rs`/Point#new().",
+      "`pkg/context.go`/Context#Get().",
+      // The `_test` package's own Context, not pkg's.
+      "`pkg/other_test.go`/Context#Helper().",
+    ]) {
+      expect(defined).toContain(P + s);
+    }
+    // A Go method declared in a sibling file of the package belongs to the type
+    // declared there; its SymbolInformation stays in the file that declares it.
+    expect(infos.find((i) => i.symbol === P + "`pkg/context.go`/Context#BindWith().")?.doc).toBe("pkg/deprecated.go");
+    expect(defined).not.toContain(P + "`pkg/deprecated.go`/Context#BindWith().");
+
+    // Every owner in a descriptor chain is itself a defined symbol (the file
+    // namespace aside), and no global symbol carries enclosing_symbol — the proto
+    // reserves that field for local symbols.
+    const lastDescriptor = /(?:`(?:[^`]|``)+`|[A-Za-z0-9_+\-$]+)(?:\(\w*\)\.|[#./!])$/;
+    const fileNamespace = /^codeindex \. \. \. `(?:[^`]|``)+`\/$/;
+    for (const info of infos) {
+      expect(info.enclosing).toBeUndefined();
+      const owner = info.symbol.replace(lastDescriptor, "");
+      expect(owner).not.toBe(info.symbol);
+      if (!fileNamespace.test(owner)) expect(defined).toContain(owner);
+    }
+  });
+
+  it("gives every kind its SCIP Kind and the descriptor suffix that goes with it", () => {
+    const { infos } = shapes();
+    const kindOf = new Map(infos.map((i) => [i.symbol, i.kind]));
+    const expected: Record<string, number> = {
+      "`shapes.ts`/Geo/": 30, // Namespace
+      "`shapes.ts`/Geo/area().": 17, // Function
+      "`shapes.ts`/Color#": 11, // Enum
+      "`shapes.ts`/Color#Red.": 12, // EnumMember
+      "`shapes.ts`/Callable#": 21, // Interface
+      "`shapes.ts`/Callable#`(call)`().": 26, // Method
+      "`shapes.ts`/Callable#`(construct)`().": 9, // Constructor
+      "`shapes.ts`/Callable#`[key]`().": 47, // Subscript
+      "`shapes.ts`/Box#": 7, // Class
+      "`shapes.ts`/Box#size.": 41, // Property
+      "`pkg/context.go`/pkg/": 35, // Package
+      "`pkg/context.go`/Context#Name.": 15, // Field
+      "`lib.rs`/square!": 25, // Macro
+      "`lib.rs`/Point#": 49, // Struct
+    };
+    for (const [s, kind] of Object.entries(expected)) expect(kindOf.get(P + s), s).toBe(kind);
+    expect(infos.filter((i) => i.kind === undefined).map((i) => i.symbol)).toEqual([]);
+
+    // Overloads are told apart by the grammar's own method disambiguator, not a
+    // parameter descriptor tacked onto the method.
+    const overloads = infos.filter((i) => i.symbol.includes("/over(")).map((i) => i.symbol.slice(P.length));
+    expect(overloads.sort()).toEqual(["`shapes.ts`/over().", "`shapes.ts`/over(15).", "`shapes.ts`/over(16)."]);
+
+    // The empty-named binding is left out instead of written as `` `` ``.
+    expect(infos.filter((i) => i.symbol.includes("``"))).toEqual([]);
+  });
+
+  it("turns a re-export into a reference to what it forwards, not a definition", () => {
+    const { infos, occs } = shapes();
+    // Barrels define nothing: no `* (./shapes)`, no second `Box`.
+    expect(infos.filter((i) => i.doc === "index.ts" || i.doc === "py/__init__.py")).toEqual([]);
+    expect(infos.filter((i) => i.symbol.includes("* (./shapes)"))).toEqual([]);
+
+    const refsIn = (doc: string) =>
+      occs.filter((o) => o.doc === doc && !o.definition).map((o) => [o.symbol.slice(P.length), o.range]);
+    expect(refsIn("index.ts")).toEqual([["`shapes.ts`/Box#", [0, 9, 12]]]);
+    expect(refsIn("py/__init__.py")).toEqual([
+      ["`py/app.py`/Flask#", [0, 17, 22]],
+      ["`py/app.py`/create_app().", [1, 17, 27]],
+    ]);
+  });
+});
+
+describe("renderScip relationships and package identity", () => {
+  it("points a subtype and its overriding methods at what they implement", () => {
+    const root = repoWith({
+      "src/contract.ts": "export interface Runnable {\n  start(): void;\n}\n",
+      "src/base.ts": "export abstract class Base {\n  abstract start(): void;\n  stop(): void {}\n}\n",
+      "src/worker.ts": [
+        'import { Runnable } from "./contract";',
+        'import { Base } from "./base";',
+        "export class Worker extends Base implements Runnable {",
+        "  start(): void {}",
+        "  stop(): void {}",
+        "  other(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+      // A trait implemented outside the type's own declaration.
+      "shape.rs": "pub trait Shape { fn area(&self) -> f64; }\npub struct Sq;\nimpl Shape for Sq { fn area(&self) -> f64 { 1.0 } }\n",
+    });
+    const { infos } = decodeIndex(renderScip(scanRepo(root), { projectRoot: PROJECT_ROOT }));
+    const relsOf = (s: string) =>
+      infos
+        .find((i) => i.symbol === P + s)
+        ?.relationships.map((r) => [r.symbol.slice(P.length), r.isImplementation, r.isReference]);
+
+    // The type itself: an implementation of each supertype, never a reference
+    // (Find references on Base must not list Worker).
+    expect(relsOf("`src/worker.ts`/Worker#")).toEqual([
+      ["`src/base.ts`/Base#", true, false],
+      ["`src/contract.ts`/Runnable#", true, false],
+    ]);
+    // An overriding method: implementation AND reference of every same-named
+    // method up the hierarchy.
+    expect(relsOf("`src/worker.ts`/Worker#start().")).toEqual([
+      ["`src/base.ts`/Base#start().", true, true],
+      ["`src/contract.ts`/Runnable#start().", true, true],
+    ]);
+    expect(relsOf("`src/worker.ts`/Worker#stop().")).toEqual([["`src/base.ts`/Base#stop().", true, true]]);
+    expect(relsOf("`src/worker.ts`/Worker#other().")).toEqual([]);
+    expect(relsOf("`shape.rs`/Sq#")).toEqual([["`shape.rs`/Shape#", true, false]]);
+    expect(relsOf("`shape.rs`/Sq#area().")).toEqual([["`shape.rs`/Shape#area().", true, true]]);
+
+    // Every relationship names a symbol the index defines.
+    const defined = new Set(infos.map((i) => i.symbol));
+    for (const i of infos) for (const r of i.relationships) expect(defined).toContain(r.symbol);
+  });
+
+  it("names each symbol's package after the nearest manifest of its language", () => {
+    const root = repoWith(PACKAGES_REPO);
+    const { infos } = decodeIndex(renderScip(scanRepo(root), { projectRoot: PROJECT_ROOT }));
+    const packageOf = (doc: string) => {
+      const symbols = [...new Set(infos.filter((i) => i.doc === doc).map((i) => i.symbol.slice(0, i.symbol.indexOf(" `"))))];
+      expect(symbols).toHaveLength(1);
+      return symbols[0];
+    };
+    expect(packageOf("src/a.ts")).toBe("codeindex npm @acme/web 1.2.3");
+    // A nested package.json that names nothing does not start a new package.
+    expect(packageOf("src/esm/b.ts")).toBe("codeindex npm @acme/web 1.2.3");
+    expect(packageOf("svc/main.go")).toBe("codeindex gomod example.com/svc .");
+    expect(packageOf("crates/core/src/lib.rs")).toBe("codeindex cargo core-lib 0.4.0");
+    // Spaces inside a package field are doubled, as the grammar requires.
+    expect(packageOf("py/m.py")).toBe("codeindex python odd  name 2.0");
+    // No manifest for the language (go.mod does not name a C file's package).
+    expect(packageOf("native/n.c")).toBe("codeindex . . .");
   });
 });
