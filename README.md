@@ -875,7 +875,9 @@ Tool calls run one at a time, in arrival order, so answers stay deterministic;
 `ping`, `initialize`, `tools/list` and argument errors are answered at once,
 even behind a long first scan. `notifications/cancelled` is honoured: a queued
 call is skipped, and a running one finishes (an edit is never left half-done)
-but gets no response.
+but gets no response. A call that carries a `progressToken` receives
+`notifications/progress` when its walk and its scan complete, which keeps an
+SDK client's request timeout from firing during a long first scan.
 
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
 into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.

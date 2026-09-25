@@ -45,6 +45,7 @@ import { IGNORE_DIRS, walk, type WalkResult } from "./walk.js";
 import { toolsFor, OUTPUT_SCHEMAS, profileNames } from "./mcp/tools.js";
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
+  PROGRESS_MESSAGE_SINCE,
   RICH_TOOLS_SINCE,
   PROTOCOL_VERSIONS,
   capResponse,
@@ -204,7 +205,13 @@ function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
   return repo;
 }
 
-async function callTool(name: string, args: Record<string, unknown>, repo: string): Promise<string> {
+// `progress` reports phase boundaries of a scan-needing call (see toolsCall).
+async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+  repo: string,
+  progress?: (message: string) => void,
+): Promise<string> {
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // `search`'s optional structural prior. The schema's enum has already
   // rejected anything else, so a typo no longer falls back to lexical in silence.
@@ -220,12 +227,14 @@ async function callTool(name: string, args: Record<string, unknown>, repo: strin
     // immediate request can beat event delivery. Always perform the normal
     // walk/stat proof before trusting a warm scan.
     walked = walk(repo, {});
+    progress?.(`walked ${walked.files.length} files`);
     preparedScan = await getScanParallel(
       repo,
       scanOpts,
       walked,
       () => (walked ? warmGrammarsForWalk(walked) : Promise.resolve()),
     );
+    progress?.(`scan ready: ${preparedScan.files.length} files`);
   }
   const readScan = (): ReturnType<typeof getScan> => preparedScan ?? getScan(repo, scanOpts, walked);
   const readArtifacts = () => getArtifacts(repo, scanOpts, walked, preparedScan);
@@ -816,9 +825,23 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     const version = protocolVersion;
     const id = typeof req.id === "string" || typeof req.id === "number" ? req.id : undefined;
     if (id !== undefined) pendingCalls.add(id);
+    // A first call on a large repo can run for many seconds with nothing on
+    // the wire, and SDK clients time a request out at 60 s unless progress
+    // arrives. When the caller supplied a progressToken, each phase boundary
+    // is reported. Messages only: the result itself is untouched.
+    const token = (params._meta as Record<string, unknown> | undefined)?.progressToken;
+    let step = 0;
+    const progress =
+      typeof token === "string" || typeof token === "number"
+        ? (message: string): void => {
+            if (id !== undefined && cancelledCalls.has(id)) return;
+            const detail = version >= PROGRESS_MESSAGE_SINCE ? { message } : {};
+            send({ method: "notifications/progress", params: { progressToken: token, progress: ++step, ...detail } });
+          }
+        : undefined;
     const run = callQueue.then(async (): Promise<Reply> => {
       if (id !== undefined && cancelledCalls.has(id)) return undefined;
-      return respond(await callResult(name, args, version));
+      return respond(await callResult(name, args, version, progress));
     });
     callQueue = run.catch(() => undefined);
     return run.then((reply) => {
@@ -828,10 +851,15 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     });
   }
 
-  async function callResult(name: string, args: Record<string, unknown>, version: string): Promise<Record<string, unknown>> {
+  async function callResult(
+    name: string,
+    args: Record<string, unknown>,
+    version: string,
+    progress?: (message: string) => void,
+  ): Promise<Record<string, unknown>> {
     try {
       const repo = repoRoot(args, defaultRepo);
-      const raw = await callTool(name, args, repo);
+      const raw = await callTool(name, args, repo, progress);
       // Narrowed or projected, the answer is not what a whole-repo artifact
       // holds, so the size guard must not point at one.
       const narrowed =

@@ -23,6 +23,7 @@ const LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1]!;
 // Feature floors, by the revision that introduced them.
 export const ANNOTATIONS_SINCE = "2025-03-26"; // tool behaviour hints
 export const RICH_TOOLS_SINCE = "2025-06-18"; // Tool.title, resource_link content
+export const PROGRESS_MESSAGE_SINCE = "2025-03-26"; // ProgressNotification.message
 
 // Validate `arguments` against the tool's declared inputSchema.
 //

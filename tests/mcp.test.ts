@@ -403,6 +403,46 @@ describe("MCP server", () => {
     expect((replies[1] as RpcMsg[]).map((m) => m.id)).toEqual([1, 2]);
   }, 20_000);
 
+  it("reports scan phases as progress when the call carries a progressToken", async () => {
+    const call = (id: number, name: string, meta?: Record<string, unknown>) => ({
+      id,
+      method: "tools/call",
+      params: { name, arguments: { repo: REPO }, ...(meta ? { _meta: meta } : {}) },
+    });
+    const lines = await mcpLines(
+      [
+        { id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {} } },
+        call(2, "graph", { progressToken: "p-graph" }),
+        call(3, "graph"), // no token: no progress
+        call(4, "churn", { progressToken: 7 }), // scan-less: nothing to report
+      ],
+      4,
+    );
+    const progress = lines.filter((m) => (m as { method?: string }).method === "notifications/progress");
+    expect(progress.map((m) => (m as { params: unknown }).params)).toEqual([
+      { progressToken: "p-graph", progress: 1, message: expect.stringMatching(/^walked \d+ files$/) },
+      { progressToken: "p-graph", progress: 2, message: expect.stringMatching(/^scan ready: \d+ files$/) },
+    ]);
+    // Both arrive before the answer they belong to.
+    const order = lines.map((m) => m.id ?? (m as { params: { progress: number } }).params.progress * -1);
+    expect(order).toEqual([1, -1, -2, 2, 3, 4]);
+  }, 20_000);
+
+  it("withholds the progress message from a client that predates it", async () => {
+    const lines = await mcpLines(
+      [
+        { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+        { id: 2, method: "tools/call", params: { name: "graph", arguments: { repo: REPO }, _meta: { progressToken: 1 } } },
+      ],
+      2,
+    );
+    const progress = lines.filter((m) => (m as { method?: string }).method === "notifications/progress");
+    expect(progress.map((m) => (m as { params: unknown }).params)).toEqual([
+      { progressToken: 1, progress: 1 },
+      { progressToken: 1, progress: 2 },
+    ]);
+  }, 20_000);
+
   it("answers a request whose explicit id is null", () => {
     const proc = spawnSync(process.execPath, [CLI, "mcp"], {
       input: '{"jsonrpc":"2.0","id":null,"method":"ping"}\n',
