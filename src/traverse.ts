@@ -8,6 +8,7 @@
 // the difference between an answer and a dump.
 import type { Edge, EdgeKind, Graph } from "./types.js";
 import { byStr } from "./sort.js";
+import { shortestPaths } from "./paths.js";
 
 // Only these edge kinds carry a real "depends on" relation. A doc-link or a
 // mention says something references the name, not that it would break.
@@ -323,4 +324,91 @@ export function neighborsOf(graph: Graph, target: string, depth = 1, kinds?: Set
     return { target, scope: "file", links: bfs(graph.fileEdges, target, depth, kinds) };
   }
   return undefined;
+}
+
+export interface DependencyPathStep {
+  file: string;
+  via?: string; // the edge kind from the previous file: import | use | call
+}
+
+export interface DependencyPath {
+  from: string;
+  to: string;
+  hops: number | null; // null when no path within the hop limit
+  paths: DependencyPathStep[][]; // shortest paths, lexicographic by file, at most maxPaths
+  pathCount: number;
+  truncated?: true;
+  depthClamped?: number;
+  // No path from → to, but `to` depends on `from` in this many hops.
+  reverseHops?: number;
+  // No path without them, but one this long through name-inferred calls.
+  inferredHops?: number;
+}
+
+const DEP_PATH_DEFAULT_DEPTH = 8;
+const DEP_PATH_MAX_DEPTH = 16;
+
+// "Why does A depend on B": the shortest chains of import/use/call edges from
+// file `from` to file `to` — impactOf's relation, walked forwards. The same
+// two rules hold: a Go import reaches every non-test file of the package it
+// names, and a call inferred from a name alone is not a step unless
+// includeInferred (a path it alone would open is reported as inferredHops).
+// undefined when either file is not in the graph.
+export function dependencyPath(
+  graph: Graph,
+  from: string,
+  to: string,
+  opts: { depth?: number; maxPaths?: number; includeInferred?: boolean } = {},
+): DependencyPath | undefined {
+  const files = new Set(graph.files.map((f) => f.rel));
+  if (!files.has(from) || !files.has(to)) return undefined;
+  const requested = opts.depth ?? DEP_PATH_DEFAULT_DEPTH;
+  const maxHops = Math.max(1, Math.min(requested, DEP_PATH_MAX_DEPTH));
+  const maxPaths = Math.max(1, opts.maxPaths ?? 5);
+
+  const goPackage = new Map<string, string[]>(); // dir → its non-test Go files
+  for (const rel of [...files].sort(byStr)) {
+    if (!isGoSource(rel)) continue;
+    const dir = dirOf(rel);
+    const members = goPackage.get(dir);
+    if (members) members.push(rel);
+    else goPackage.set(dir, [rel]);
+  }
+  const successors = (withInferred: boolean): ((node: string) => [string, string][]) => {
+    const out = new Map<string, [string, string][]>();
+    for (const e of graph.fileEdges) {
+      if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
+      if (!withInferred && e.confidence === "inferred") continue;
+      const targets = (e.kind === "import" && isGoSource(e.to) && goPackage.get(dirOf(e.to))) || [e.to];
+      const list = out.get(e.from) ?? out.set(e.from, []).get(e.from)!;
+      for (const t of targets) list.push([t, e.kind]);
+    }
+    // Strongest kind first per target, so the step kind kept is the one
+    // that states the dependency (an import over a call to the same file).
+    const rank = (k: string): number => (k === "import" ? 0 : k === "use" ? 1 : 2);
+    for (const list of out.values()) list.sort((a, b) => byStr(a[0], b[0]) || rank(a[1]) - rank(b[1]));
+    return (node) => out.get(node) ?? [];
+  };
+
+  const includeInferred = opts.includeInferred === true;
+  const next = successors(includeInferred);
+  const found = shortestPaths([from], new Set([to]), next, maxHops, maxPaths);
+  const result: DependencyPath = {
+    from,
+    to,
+    hops: found.hops,
+    paths: found.paths.map((p) => p.map((h) => (h.via ? { file: h.node, via: h.via } : { file: h.node }))),
+    pathCount: found.pathCount,
+    ...(found.paths.length < found.pathCount ? { truncated: true as const } : {}),
+    ...(requested > DEP_PATH_MAX_DEPTH ? { depthClamped: DEP_PATH_MAX_DEPTH } : {}),
+  };
+  if (found.hops === null) {
+    const back = shortestPaths([to], new Set([from]), next, maxHops, 0);
+    if (back.hops !== null) result.reverseHops = back.hops;
+    if (!includeInferred) {
+      const inferred = shortestPaths([from], new Set([to]), successors(true), maxHops, 0);
+      if (inferred.hops !== null) result.inferredHops = inferred.hops;
+    }
+  }
+  return result;
 }

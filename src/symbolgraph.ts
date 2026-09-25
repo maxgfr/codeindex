@@ -18,6 +18,7 @@ import { enclosingAmong } from "./callers.js";
 import { familyOf } from "./calls.js";
 import { goImplementations, resolveRelations } from "./relations.js";
 import { byStr } from "./sort.js";
+import { shortestPaths, type PathHop } from "./paths.js";
 import { symbolRefReadings } from "./symref.js";
 
 // Internal Map-key separator. Written as an ESCAPE, never as a literal NUL: a
@@ -364,4 +365,82 @@ export function neighborhood(
     // Said out loud: `--depth 9` used to walk five hops without a word.
     ...(requested > MAX_DEPTH ? { depthClamped: MAX_DEPTH } : {}),
   };
+}
+
+export interface CallPathStep {
+  id: string;
+  name: string;
+  kind: string;
+  file: string;
+  line: number;
+  // How the previous step reaches this one: it calls it, or it is a method
+  // this one overrides, so a call to it may run this one. Absent on the first.
+  via?: "calls" | "dispatch";
+}
+
+export interface CallPath {
+  from: SymbolNode[]; // every declaration the `from` ref names
+  to: SymbolNode[];
+  hops: number | null; // null when no path within the hop limit
+  paths: CallPathStep[][]; // shortest paths, lexicographic by id, at most maxPaths
+  pathCount: number; // every shortest path, listed or not
+  truncated?: true; // paths lists fewer than pathCount
+  depthClamped?: number; // the hop limit walked, when more was asked for
+  // No path from → to, but `to` reaches `from` in this many hops: the question
+  // was probably asked the wrong way round.
+  reverseHops?: number;
+}
+
+const PATH_DEFAULT_DEPTH = 8;
+const PATH_MAX_DEPTH = 16;
+
+/**
+ * How does `from` reach `to`? The shortest chains of calls between them,
+ * following dispatch the way a `direction: out` neighborhood does: a call to a
+ * method may run any method overriding it. Inheritance edges are not steps — a
+ * class extending another does not "reach" it at run time.
+ *
+ * Both refs take every symbol-ref form (src/symref.ts); a bare name starts
+ * from, or ends at, every homonym. An unknown ref answers an empty `from` or
+ * `to`, which callers report as an error.
+ */
+export function callPath(
+  graph: SymbolGraph,
+  fromRef: string,
+  toRef: string,
+  opts: { depth?: number; maxPaths?: number } = {},
+): CallPath {
+  const requested = opts.depth ?? PATH_DEFAULT_DEPTH;
+  const maxHops = Math.max(1, Math.min(requested, PATH_MAX_DEPTH));
+  const maxPaths = Math.max(1, opts.maxPaths ?? 5);
+  const fromIds = rootIdsFor(graph, fromRef);
+  const toIds = rootIdsFor(graph, toRef);
+  const from = fromIds.map((id) => graph.nodes.get(id)!);
+  const to = toIds.map((id) => graph.nodes.get(id)!);
+  const clamped = requested > PATH_MAX_DEPTH ? { depthClamped: PATH_MAX_DEPTH } : {};
+  if (!from.length || !to.length) return { from, to, hops: null, paths: [], pathCount: 0, ...clamped };
+
+  const next = function* (id: string): Generator<readonly [string, string]> {
+    for (const e of graph.out.get(id) ?? []) if (e.kind === "calls") yield [e.to, "calls"];
+    for (const e of graph.in.get(id) ?? []) if (e.kind === "overrides") yield [e.from, "dispatch"];
+  };
+  const found = shortestPaths(fromIds, new Set(toIds), next, maxHops, maxPaths);
+  const step = (hop: PathHop): CallPathStep => {
+    const n = graph.nodes.get(hop.node)!;
+    return { id: n.id, name: n.name, kind: n.kind, file: n.file, line: n.line, ...(hop.via ? { via: hop.via as CallPathStep["via"] } : {}) };
+  };
+  const result: CallPath = {
+    from,
+    to,
+    hops: found.hops,
+    paths: found.paths.map((p) => p.map(step)),
+    pathCount: found.pathCount,
+    ...(found.paths.length < found.pathCount ? { truncated: true as const } : {}),
+    ...clamped,
+  };
+  if (found.hops === null) {
+    const back = shortestPaths(toIds, new Set(fromIds), next, maxHops, 0);
+    if (back.hops !== null) result.reverseHops = back.hops;
+  }
+  return result;
 }

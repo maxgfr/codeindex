@@ -23,7 +23,7 @@ import { preloadSessionLazy, INDEX_DIR } from "./preload.js";
 import { parseCacheEntries } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { implementationsOf, typeEntry } from "./relations.js";
-import { neighborhood } from "./symbolgraph.js";
+import { callPath, neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex, buildRawCallerIndex, callerIndexForNames, lookupCallerEntry, rawCallerSitesFor, refNames } from "./callers.js";
 import { hierarchyFor, symbolGraphFor } from "./derived.js";
 import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymbolRef, symbolAt, symbolsOverview } from "./query.js";
@@ -38,7 +38,7 @@ import { capDeadCode, findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
-import { EDGE_KINDS, impactOf, neighborsOf } from "./traverse.js";
+import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { deltaFor, formatDeltaPanel } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
@@ -81,6 +81,15 @@ Commands:
               supertype method it replaces; --direction out through a method
               reaches its overrides, --direction in to an override reaches
               the base method's callers
+  callpath    How does <from> reach <to>: the shortest chains of calls between
+              two symbols, following dispatch to overrides ("via":
+              "dispatch"), in id order, with pathCount (all equally short
+              ones) and truncated past --limit (default 5); --depth caps the
+              hops (default 8, max 16; depthClamped). No path: hops null, and
+              reverseHops when <to> reaches <from>. --files: two file paths
+              and import/use/call edges instead (why does A depend on B; a Go
+              import reaches its whole package; inferred calls only with
+              --include-inferred, else inferredHops says one would connect)
   find        Declarations by name or Parent/name, each with its complete
               signature, doc, parent and line span (MCP find_symbol): exact
               names first; --substring, --include-body, --concise, --limit
@@ -189,11 +198,11 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (36 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (37 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
               find_symbol, find_references, symbol_at, lsp_status, onboard, repo_map,
               hotspots, coupling, dead_code, complexity, mermaid, grep, search,
-              impact, neighbors,
+              impact, neighbors, call_path,
               explain_search, embed_status, check_rules, the memory quartet and
               the three symbolic-edit writes). Flags: --repo <dir> pins ONE
               repository so the per-tool repo argument becomes optional (an
@@ -240,7 +249,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --no-index-cache    Never reuse a persisted index; always build from scratch
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results: \`search\` (default 20), \`complexity\` (50),
-                      \`risk\` (20), \`deadcode\` (default all), \`find\` (50)
+                      \`risk\` (20), \`deadcode\` (default all), \`find\` (50),
+                      \`callpath\` (5 paths listed)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
   --exact             \`search\`: drop results that carry no verbatim term match
@@ -269,8 +279,9 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --min-count <n>     \`literals\`: total occurrences required (default 3)
   --include-tests     \`literals\`: count test files too. Off by default — a test
                       restating a value is usually asserting it deliberately
-  --include-inferred  \`impact\`: also follow call edges inferred from a name
-                      alone (graph.json confidence "inferred")
+  --include-inferred  \`impact\`, \`callpath --files\`: also follow call edges
+                      inferred from a name alone (graph.json confidence
+                      "inferred")
   --kinds <k>         \`deadcode\`: callable (default: functions, methods,
                       classes, function-valued consts) | all (types, properties
                       and constants too — reported only when unreferenced)
@@ -281,6 +292,7 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --include-body      \`find\`: attach each declaration's source lines
   --concise           \`find\`, \`refs\`, \`outline\`: declarations as
                       name/kind/file/line only
+  --files             \`callpath\`: walk the file link-graph between two files
 `;
 
 interface CliFlags {
@@ -981,6 +993,28 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       if (rel === undefined) throw new Error(`no such file in the index: ${flags.positional}`);
       const overview = symbolsOverview(scan, rel);
       result = flags.concise ? overview.map((s) => symbolLocation(s, s.name)) : overview;
+    }
+    emit(JSON.stringify(result, null, 2) + "\n", flags.out);
+  } else if (cmd === "callpath") {
+    const [from, to] = flags.positionals;
+    if (!from || !to) throw new Error("callpath needs two arguments: cli.mjs callpath <from> <to> --repo <dir> (--files: two file paths)");
+    if (flags.includeInferred && !flags.files) throw new Error("--include-inferred applies to `impact` and `callpath --files` only");
+    const opts = { depth: flags.depth, maxPaths: flags.limit };
+    let result: unknown;
+    if (flags.files) {
+      const { graph } = await readArtifacts();
+      const known = new Set(graph.files.map((f) => f.rel));
+      const [a, b] = [from, to].map((arg) => {
+        const rel = resolveFileArg(flags.repo, arg, (r) => known.has(r));
+        if (rel === undefined) throw new Error(`no such file in the index: ${arg}`);
+        return rel;
+      });
+      result = dependencyPath(graph, a!, b!, { ...opts, includeInferred: flags.includeInferred });
+    } else {
+      const path = callPath(symbolGraphFor(await readScan()), from, to, opts);
+      if (!path.from.length) throw new Error(`no symbol named ${from}`);
+      if (!path.to.length) throw new Error(`no symbol named ${to}`);
+      result = path;
     }
     emit(JSON.stringify(result, null, 2) + "\n", flags.out);
   } else if (cmd === "symbol-at") {

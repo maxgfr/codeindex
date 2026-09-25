@@ -118,6 +118,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   lsp_status: {},
   onboard: { remember: false },
   call_graph: { symbol: "HttpClient", depth: 1 },
+  call_path: { from: "HttpClient/request", to: "backoff" },
   impact: { target: "src/util.ts" },
   neighbors: { target: "src/util.ts", depth: 2 },
   hotspots: {},

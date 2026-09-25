@@ -384,15 +384,16 @@ codeindex find    Client/send --repo .        # declarations: signature, doc, pa
 codeindex refs    backoff --repo .            # defs, bound call sites, referencing files
 codeindex outline src/client.ts --repo .      # one file's symbols, in declaration order
 codeindex symbol-at src/client.ts:42 --repo . # the symbol holding that line, and its id
+codeindex callpath main backoff --repo .      # how main reaches backoff, shortest chains first
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
 ```
 
 ### Naming a symbol
 
-`callers`, `hierarchy`, `implementations` and `callgraph` (and MCP `callers`,
-`find_references`, `type_hierarchy`, `implementations`, `call_graph`) read a
-symbol the same way, so an id copied out of one answer pastes into the next:
+`callers`, `hierarchy`, `implementations`, `callgraph`, `callpath` and `refs`
+(and MCP `callers`, `find_references`, `type_hierarchy`, `implementations`,
+`call_graph`, `call_path`) read a symbol the same way, so an id copied out of one answer pastes into the next:
 
 | form | means |
 |---|---|
@@ -432,6 +433,18 @@ declaration holding the line, with its id, which pastes into `callers`,
 `symbol` is `null` outside every declaration. Regex-tier files record no end
 lines, so there the answer is the nearest declaration above, marked
 `"approximate": true`.
+
+`callpath <from> <to>` (MCP `call_path`) answers how one symbol reaches
+another: the shortest chains of calls, following dispatch like `callgraph`
+(a step onto an override says `"via": "dispatch"`). Ties are listed in id
+order and `pathCount` counts every equally short chain; `--limit` (default 5)
+caps how many are spelled out, with `truncated` set. `--depth` caps the hops
+(default 8, max 16). When there is no path, `hops` is `null`, and
+`reverseHops` says whether `<to>` reaches `<from>` instead. `--files` asks the
+same question of two files over import, use and call edges ("why does A
+depend on B"), with `impact`'s rules: a Go import reaches its whole package,
+and a call inferred from a name alone is a step only with
+`--include-inferred` (otherwise `inferredHops` says one would connect them).
 
 `callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
 any binding, with its receiver and enclosing symbol. `callgraph` walks at most 5
@@ -881,13 +894,13 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**36 tools**, grouped by what they answer:
+**37 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview`, `symbol_at` |
-| impact | `find_references`, `callers`, `call_graph`, `impact`, `neighbors`, `dead_code` |
+| impact | `find_references`, `callers`, `call_graph`, `call_path`, `impact`, `neighbors`, `dead_code` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
@@ -1047,7 +1060,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **36 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **37 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

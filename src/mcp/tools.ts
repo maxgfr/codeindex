@@ -447,6 +447,24 @@ export const TOOLS = [
     },
   },
   {
+    name: "call_path",
+    description:
+      "How does `from` reach `to`? The shortest chains of calls between two symbols (a call to a method may dispatch to an override: `via: \"dispatch\"`), listed in id order with the total count of equally short ones. No path within `depth` hops answers hops: null, plus `reverseHops` when `to` reaches `from` instead. With files: true, `from` and `to` are file paths and the steps are import/use/call edges of the link-graph — why does A depend on B (a path only name-inferred calls would open is reported as `inferredHops` unless includeInferred).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        from: { type: "string", description: `Start — ${symbolRefDescription}; a file path with files: true` },
+        to: { type: "string", description: `End — ${symbolRefDescription}; a file path with files: true` },
+        depth: { type: "number", minimum: 1, description: "Longest path to look for, in hops (default 8, max 16)" },
+        maxPaths: { type: "number", minimum: 1, description: "Shortest paths to list (default 5)" },
+        files: { type: "boolean", description: "Walk the file link-graph instead of the symbol graph (default false)" },
+        includeInferred: { type: "boolean", description: "files: true only — also step through calls inferred from a name alone (default false)" },
+      },
+      required: ["repo", "from", "to"],
+    },
+  },
+  {
     name: "impact",
     description:
       "What breaks if I change this file or module? The reverse dependency closure over the link-graph: every file that transitively imports, uses or calls `target`, nearest first, with the modules touched. A Go import reaches every non-test file of the package it names. A call inferred from a name alone is counted (`inferredDependents`) but not followed unless includeInferred. Answers from the persisted graph — no need to pull the whole `graph`.",
@@ -536,6 +554,22 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       depthClamped: { type: "integer" },
     },
     required: ["root", "nodes", "edges"],
+  },
+  // Symbol or file endpoints: `from`/`to` are node lists or file paths.
+  call_path: {
+    type: "object",
+    properties: {
+      from: {},
+      to: {},
+      hops: { type: ["integer", "null"] },
+      paths: { type: "array", items: { type: "array", items: anyObj } },
+      pathCount: { type: "integer" },
+      truncated: { type: "boolean" },
+      depthClamped: { type: "integer" },
+      reverseHops: { type: "integer" },
+      inferredHops: { type: "integer" },
+    },
+    required: ["from", "to", "hops", "paths", "pathCount"],
   },
   impact: {
     type: "object",
@@ -801,6 +835,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   type_hierarchy: { title: "Type hierarchy" },
   implementations: { title: "Implementations" },
   call_graph: { title: "Call graph neighborhood" },
+  call_path: { title: "Shortest call path" },
   impact: { title: "Reverse dependency closure" },
   neighbors: { title: "Link-graph neighbours" },
   check_rules: { title: "Check architecture rules" },
@@ -841,7 +876,7 @@ export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Locate a thing.
   find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "symbol_at"],
   // Decide whether changing it is safe.
-  impact: ["find_references", "callers", "call_graph", "impact", "neighbors", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
+  impact: ["find_references", "callers", "call_graph", "call_path", "impact", "neighbors", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
   // Change it.
   edit: ["find_symbol", "symbols_overview", "symbol_at", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.

@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import { findReferences, findSymbol, symbolAt, symbolsOverview } from "../src/query.js";
+import { shortestPaths } from "../src/paths.js";
+import { callPath } from "../src/symbolgraph.js";
+import { symbolGraphFor } from "../src/derived.js";
 
 // The navigation queries each surface used to have only on one side: the CLI
 // had no find / refs / outline (MCP-only), and MCP had no impact / neighbors
@@ -43,6 +46,34 @@ const FILES: Record<string, string> = {
     "",
   ].join("\n"),
   "src/empty.ts": "// nothing declared here\n",
+  // Two equally short routes from top to bottom.
+  "src/diamond.ts": [
+    "export function top(): number {",
+    "  return right() + left();",
+    "}",
+    "export function left(): number {",
+    "  return bottom();",
+    "}",
+    "export function right(): number {",
+    "  return bottom();",
+    "}",
+    "export function bottom(): number {",
+    "  return 1;",
+    "}",
+    "",
+  ].join("\n"),
+  // total() calls Shape.area; only dispatch reaches the overrides, and only
+  // Cube's calls side_len.
+  "shapes/base.py": "class Shape:\n    def area(self):\n        raise NotImplementedError\n",
+  "shapes/square.py": "from shapes.base import Shape\n\n\nclass Square(Shape):\n    def area(self):\n        return 1\n",
+  "shapes/cube.py":
+    "from shapes.square import Square\n\n\ndef side_len():\n    return 1\n\n\nclass Cube(Square):\n    def area(self):\n        return side_len() * 6\n",
+  "shapes/total.py": "from shapes.base import Shape\n\n\ndef total(x: Shape):\n    return x.area()\n",
+  // A Go import lands on one file of the package; it reaches all of them.
+  "go.mod": "module example.com/m\n\ngo 1.21\n",
+  "lib/a.go": "package lib\n\nfunc A() int { return 1 }\n",
+  "lib/b.go": "package lib\n\nfunc B() int { return 2 }\n",
+  "cmd/main.go": 'package main\n\nimport "example.com/m/lib"\n\nfunc main() { lib.B() }\n',
   "src/nested.ts": [
     "export class Outer {",
     "  run(): number {",
@@ -176,6 +207,77 @@ describe("symbol at file:line", () => {
   });
 });
 
+describe("shortest paths", () => {
+  // a → b → d, a → c → d, a → d2 → e → d: two shortest paths of two hops.
+  const EDGES: Record<string, string[]> = { a: ["c", "b", "d2"], b: ["d"], c: ["d"], d2: ["e"], e: ["d"] };
+  const next = (reverse: boolean) => (n: string) => (reverse ? [...(EDGES[n] ?? [])].reverse() : EDGES[n] ?? []).map((m) => [m, "calls"] as const);
+
+  it("lists every shortest path in id order, whatever order successors come in", () => {
+    for (const reverse of [false, true]) {
+      const r = shortestPaths(["a"], new Set(["d"]), next(reverse), 5, 10);
+      expect(r.hops).toBe(2);
+      expect(r.pathCount).toBe(2);
+      expect(r.paths.map((p) => p.map((h) => h.node).join(">"))).toEqual(["a>b>d", "a>c>d"]);
+      expect(r.paths[0]![1]).toEqual({ node: "b", via: "calls" });
+    }
+  });
+
+  it("counts the paths it does not list, stops at the hop limit, and answers 0 hops for a shared node", () => {
+    const one = shortestPaths(["a"], new Set(["d"]), next(false), 5, 1);
+    expect(one.paths).toHaveLength(1);
+    expect(one.pathCount).toBe(2);
+    expect(shortestPaths(["a"], new Set(["d"]), next(false), 1, 5)).toEqual({ hops: null, paths: [], pathCount: 0 });
+    expect(shortestPaths(["a", "d"], new Set(["d"]), next(false), 5, 5)).toEqual({ hops: 0, paths: [[{ node: "d" }]], pathCount: 1 });
+  });
+});
+
+describe("callpath", () => {
+  it("answers the shortest call chains, ties in id order, with the count", () => {
+    const r = callPath(symbolGraphFor(scan), "top", "bottom");
+    expect(r.hops).toBe(2);
+    expect(r.pathCount).toBe(2);
+    expect(r.paths.map((p) => p.map((s) => s.name))).toEqual([["top", "left", "bottom"], ["top", "right", "bottom"]]);
+    const cut = cli("callpath", "top", "bottom", "--limit", "1").json();
+    expect(cut).toMatchObject({ hops: 2, pathCount: 2, truncated: true });
+    expect(cut.paths).toEqual([JSON.parse(JSON.stringify(r.paths[0]))]);
+  });
+
+  it("follows dispatch to an override, and says when the question is backwards", () => {
+    const r = cli("callpath", "total", "side_len").json();
+    expect(r.hops).toBe(4);
+    expect(r.paths[0].map((s: { id: string; via?: string }) => `${s.via ?? "start"} ${s.id}`)).toEqual([
+      "start shapes/total.py#total",
+      "calls shapes/base.py#Shape/area",
+      "dispatch shapes/square.py#Square/area",
+      "dispatch shapes/cube.py#Cube/area",
+      "calls shapes/cube.py#side_len",
+    ]);
+    const back = cli("callpath", "bottom", "top").json();
+    expect(back).toMatchObject({ hops: null, paths: [], pathCount: 0, reverseHops: 2 });
+    expect(cli("callpath", "top", "bottom", "--depth", "1").json()).toMatchObject({ hops: null, pathCount: 0 });
+    expect(cli("callpath", "top", "bottom", "--depth", "40").json().depthClamped).toBe(16);
+  });
+
+  it("walks the file graph with --files: why does A depend on B", () => {
+    const r = cli("callpath", "src/app.ts", "./src/util.ts", "--files").json();
+    expect(r).toMatchObject({ from: "src/app.ts", to: "src/util.ts", hops: 2, pathCount: 1 });
+    expect(r.paths[0]).toEqual([{ file: "src/app.ts" }, { file: "src/client.ts", via: "import" }, { file: "src/util.ts", via: "import" }]);
+    expect(cli("callpath", "src/util.ts", "src/app.ts", "--files").json()).toMatchObject({ hops: null, reverseHops: 2 });
+    // The import resolves to one file of package lib; both files are one step away.
+    for (const target of ["lib/a.go", "lib/b.go"]) {
+      expect(cli("callpath", "cmd/main.go", target, "--files").json().paths[0][1], target).toEqual({ file: target, via: "import" });
+    }
+  });
+
+  it("rejects an unknown symbol or file, a missing argument, and --include-inferred without --files", () => {
+    expect(cli("callpath", "top", "nope").err).toMatch(/no symbol named nope/);
+    expect(cli("callpath", "nope", "top").status).toBe(2);
+    expect(cli("callpath", "top").err).toMatch(/callpath needs two arguments/);
+    expect(cli("callpath", "src/app.ts", "nope.ts", "--files").err).toMatch(/no such file in the index: nope\.ts/);
+    expect(cli("callpath", "top", "bottom", "--include-inferred").status).toBe(2);
+  });
+});
+
 describe("MCP query surfaces", () => {
   let client: any;
   beforeAll(async () => {
@@ -210,6 +312,17 @@ describe("MCP query surfaces", () => {
     expect(neighbors).toEqual(cli("neighbors", "src/client.ts", "--kind", "import").json());
     expect(neighbors.links.map((l: { node: string; direction: string }) => `${l.direction}:${l.node}`)).toEqual(["out:src/util.ts", "in:src/app.ts"]);
     expect(await answer("neighbors", { target: "src/client.ts", depth: 2 })).toEqual(cli("neighbors", "src/client.ts", "--depth", "2").json());
+  });
+
+  it("call_path answers what the CLI answers, symbols and files", async () => {
+    expect(await answer("call_path", { from: "total", to: "side_len" })).toEqual(cli("callpath", "total", "side_len").json());
+    expect(await answer("call_path", { from: "top", to: "bottom", maxPaths: 1 })).toEqual(cli("callpath", "top", "bottom", "--limit", "1").json());
+    expect(await answer("call_path", { from: "src/app.ts", to: "src/util.ts", files: true })).toEqual(
+      cli("callpath", "src/app.ts", "src/util.ts", "--files").json(),
+    );
+    for (const args of [{ from: "top", to: "nope" }, { from: "top" }, { from: "src/app.ts", to: "nope.ts", files: true }, { from: "top", to: "bottom", includeInferred: true }]) {
+      expect((await call("call_path", args)).isError, JSON.stringify(args)).toBe(true);
+    }
   });
 
   it("impact and neighbors reject an unknown target or edge kind", async () => {

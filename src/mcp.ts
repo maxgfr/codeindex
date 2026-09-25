@@ -17,7 +17,7 @@ import { renderGraphJson } from "./render/graph-json.js";
 import { buildCallerIndex, lookupCallerEntry, rawCallerSitesFor } from "./callers.js";
 import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
 import { implementationsOf, typeEntry } from "./relations.js";
-import { neighborhood, type Direction } from "./symbolgraph.js";
+import { callPath, neighborhood, type Direction } from "./symbolgraph.js";
 import { detectWorkspaces } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
@@ -29,7 +29,7 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef, symbolAt } from "./query.js";
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
-import { EDGE_KINDS, impactOf, neighborsOf } from "./traverse.js";
+import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
@@ -550,6 +550,27 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     });
     if (!result.root.length) throw new Error(`no symbol named ${symbol}`);
     return JSON.stringify(result, null, 2);
+  }
+  if (name === "call_path") {
+    const from = str(args.from);
+    const to = str(args.to);
+    if (!from || !to) throw new Error("`from` and `to` are required");
+    const opts = { depth: positiveNum(args.depth), maxPaths: positiveNum(args.maxPaths) };
+    if (args.files === true) {
+      const { graph } = readArtifacts();
+      const known = new Set(graph.files.map((f) => f.rel));
+      const [a, b] = [from, to].map((arg) => {
+        const rel = resolveFileArg(repo, arg, (r) => known.has(r));
+        if (rel === undefined) throw new Error(`no such file in the index: ${arg}`);
+        return rel;
+      });
+      return JSON.stringify(dependencyPath(graph, a!, b!, { ...opts, includeInferred: args.includeInferred === true }), null, 2);
+    }
+    if (args.includeInferred === true) throw new Error("includeInferred applies to files: true only");
+    const path = callPath(symbolGraphFor(readScan()), from, to, opts);
+    if (!path.from.length) throw new Error(`no symbol named ${from}`);
+    if (!path.to.length) throw new Error(`no symbol named ${to}`);
+    return JSON.stringify(path, null, 2);
   }
   if (name === "impact" || name === "neighbors") {
     // Pure functions of the link-graph, so the persisted artifacts answer

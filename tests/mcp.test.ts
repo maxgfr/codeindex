@@ -362,7 +362,7 @@ describe("MCP server", () => {
 
     expect(res.get(1)!.result!.serverInfo!.name).toBe("codeindex");
     const toolNames = res.get(2)!.result!.tools!.map((t) => t.name);
-    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "symbol_at", "lsp_status", "onboard", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "impact", "neighbors", "check_rules"]);
+    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "symbol_at", "lsp_status", "onboard", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "call_path", "impact", "neighbors", "check_rules"]);
 
     const summary = JSON.parse(res.get(3)!.result!.content![0]!.text) as { fileCount: number };
     expect(summary.fileCount).toBeGreaterThan(0);
