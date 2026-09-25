@@ -21,7 +21,7 @@ import {
 } from "../src/embed/model.js";
 import type { EmbedPullTarget } from "../src/engine.js";
 import { basicTokenize, encode, intDot, roundHalfToEven, tokenize, wordpiece } from "../src/embed/encode.js";
-import { buildEmbeddingIndex, deserializeEmbeddings, serializeEmbeddings } from "../src/embed/index.js";
+import { buildEmbeddingIndex, deserializeEmbeddings, embeddingUnits, serializeEmbeddings } from "../src/embed/index.js";
 import { explainSemantic, searchSemantic } from "../src/embed/search.js";
 import { explainQuery, searchIndex } from "../src/bm25.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
@@ -278,6 +278,28 @@ describe("embeddings index — serialize / determinism", () => {
     const forDoc = idx.records.filter((r) => r.file === "docs/guide.md");
     expect(forDoc.length).toBe(1);
     expect(forDoc[0]!.symbol).toBeUndefined();
+  });
+
+  it("a symbol unit carries its doc comment; a re-export gets no unit of its own", () => {
+    const rel = "src/index.ts";
+    const barrel = file(rel);
+    barrel.symbols = [
+      { ...sym("retryRequest", rel), kind: "reexport" },
+      { ...sym("*", rel), kind: "reexport-all" },
+    ];
+    const def = file("src/http/retry.ts", { summary: "Retry helpers." });
+    def.symbols = [{ ...sym("retryRequest", def.rel, "retryRequest(n)"), line: 4, doc: "Resend a failed request with backoff." }];
+    const units = embeddingUnits(scanOf([barrel, def]));
+    expect(units).toEqual([
+      // the pure barrel is still represented, by a file-level unit
+      { file: rel, text: "\n\nsrc index.ts" },
+      {
+        file: "src/http/retry.ts",
+        symbol: "retryRequest",
+        line: 4,
+        text: "retryRequest\nretryRequest(n)\nResend a failed request with backoff.\nRetry helpers.\nsrc http retry.ts",
+      },
+    ]);
   });
 
   it("serialize → deserialize round-trips byte-identically", () => {

@@ -652,8 +652,13 @@ offset 8+headerLen  int8 body   count × dim signed bytes, row-major
 No absolute path and no timestamp; records follow scan order, so two builds of
 an unchanged repo are byte-identical. `EMBED_VERSION` + `modelId` + `dim`
 invalidate a stale or foreign artifact. Granularity is per-symbol (name +
-signature + file summary + path segments), with a per-file fallback for
-symbol-less files so every file with content is represented.
+signature + doc comment + file summary + path segments), with a per-file
+fallback for symbol-less files so every file with content is represented.
+Re-exports get no unit of their own: the defining file already has one, and a
+barrel of nothing but re-exports falls back to its file-level unit. With the
+doc comment in the unit, the fused ranking beats plain BM25 on every set we
+measured with the official model (MRR: flask 0.8307 vs 0.8232, gin 0.7862 vs
+0.7642, the judged corpus 0.9583 vs 0.9375).
 
 **Fusion is by RANK, never a score blend**: BM25 scores and integer dot products
 live on incomparable scales, so `searchSemantic` uses the shared `rrf` helper

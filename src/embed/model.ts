@@ -19,7 +19,10 @@ import { join } from "node:path";
 // model) instead of misranking with it. SCHEMA_VERSION is deliberately left
 // UNTOUCHED — embeddings are a purely additive sidecar with zero impact on the
 // graph.json / symbols.json consumers.
-export const EMBED_VERSION = 1;
+//
+// 2: symbol units carry their doc comment, re-exports get no unit, and the
+// header records a corpus fingerprint (see serializeEmbeddings).
+export const EMBED_VERSION = 2;
 
 // The default sub-directory a `pull` writes into and a `status` reports.
 export const DEFAULT_EMBED_DIRNAME = "models";

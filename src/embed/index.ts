@@ -1,4 +1,5 @@
 import type { RepoScan } from "../scan.js";
+import type { CodeSymbol } from "../types.js";
 import { encode } from "./encode.js";
 import { EMBED_VERSION, type StaticEmbedModel } from "./model.js";
 
@@ -22,12 +23,27 @@ export interface EmbeddingIndex {
 }
 
 // The text encoded for one symbol: its name (camelCase-split by the tokenizer),
-// its signature, the owning file's one-line summary, and the file's path segments
-// — the same signal bm25 indexes, but pooled into a single vector. Newline-joined
-// so the tokenizer's non-alphanumeric split cleanly separates the parts.
-function symbolText(rel: string, name: string, signature: string | undefined, summary: string | undefined): string {
-  return [name, signature ?? "", summary ?? "", rel.replace(/\//g, " ")].join("\n");
+// its signature, its own doc comment, the owning file's one-line summary, and
+// the file's path segments — the same signal bm25 indexes, but pooled into a
+// single vector. Newline-joined so the tokenizer's non-alphanumeric split
+// cleanly separates the parts.
+//
+// The doc comment is the one field that says what a symbol is FOR in words a
+// query uses, which is exactly what an embedding can match without sharing a
+// token. Without it the tier lost to plain BM25 on every measured set; with it
+// (potion-base-8M, MRR over 38/40/16 labelled queries) flask goes 0.7934 →
+// 0.8307, gin 0.7500 → 0.7862 and the judged corpus 0.9219 → 0.9583, all now
+// above lexical (0.8232, 0.7642, 0.9375).
+function symbolText(rel: string, s: CodeSymbol, summary: string | undefined): string {
+  return [s.name, s.signature ?? "", s.doc ?? "", summary ?? "", rel.replace(/\//g, " ")].join("\n");
 }
+
+// A re-export names a declaration made in another module (`export { x } from
+// "./x"`, `export * from`, Python's `from .x import y as y`). The defining
+// file already has that symbol's unit; a barrel's copy would only let it
+// outrank the definition on the definition's own name. bm25 indexes these as
+// prose for the same reason.
+const REEXPORT_KINDS = new Set(["reexport", "reexport-all"]);
 
 // A file-level record's text (symbol-less files): title, summary, headings, path.
 function fileText(rel: string, title: string | undefined, summary: string | undefined, headings: string[]): string {
@@ -53,10 +69,11 @@ export function embeddingUnits(scan: RepoScan): EmbeddingUnit[] {
     const seen = new Set<string>();
     let hadSymbol = false;
     for (const s of f.symbols) {
+      if (REEXPORT_KINDS.has(s.kind)) continue; // a pure barrel falls back to a file-level unit
       if (seen.has(s.name)) continue; // dedupe by name within a file (bm25 parity)
       seen.add(s.name);
       hadSymbol = true;
-      units.push({ file: f.rel, symbol: s.name, line: s.line, text: symbolText(f.rel, s.name, s.signature, f.summary) });
+      units.push({ file: f.rel, symbol: s.name, line: s.line, text: symbolText(f.rel, s, f.summary) });
     }
     if (!hadSymbol) {
       const text = fileText(f.rel, f.title, f.summary, f.headings);
