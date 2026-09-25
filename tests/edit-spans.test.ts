@@ -45,6 +45,7 @@ describe("braceBodyEnd (regex-tier declaration spans)", () => {
   it("ends a body-less declaration at its semicolon", () => {
     expect(end("int add(int a, int b) => a + b;\n\nint sub() {\n}\n", 1, "dart")).toBe(1);
     expect(end("int add(int a, int b) =>\n    a + b;\nint sub() {\n}\n", 1, "dart")).toBe(2);
+    expect(end("bool isAlpha(int c) =>\n    (c >= 65 && c <= 90) ||\n    (c >= 97 && c <= 122);\n", 1, "dart")).toBe(3);
   });
 
   it("refuses rather than borrowing a sibling's braces", () => {

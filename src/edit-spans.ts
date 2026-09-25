@@ -146,13 +146,14 @@ export function braceBodyEnd(lines: readonly string[], start: number, lang: stri
     if (stack.length > 1 || opened || depth > 0 || parens > 0) continue;
     // The header line ended with no body opened. Continue only into a line
     // that visibly belongs to this header — an Allman `{`, or a deeper-indented
-    // continuation after a trailing `,` `:` `=` `>` — never into a sibling
-    // declaration, whose braces would then be taken for this one's.
+    // continuation after a trailing separator or operator (`,` `:` `=>` `->`
+    // `||` …) — never into a sibling declaration, whose braces would then be
+    // taken for this one's.
     const next = lines.slice(row + 1, last).findIndex((l) => l.trim() !== "");
     if (next < 0) return undefined;
     const following = lines[row + 1 + next]!;
     if (following.trim().startsWith("{")) continue;
-    if (/[,:=>]/.test(lastCode) && leadingSpace(following).length > indent.length && following.startsWith(indent)) continue;
+    if (/[,:=>|&+\-*/?.]/.test(lastCode) && leadingSpace(following).length > indent.length && following.startsWith(indent)) continue;
     return undefined;
   }
   return undefined;
