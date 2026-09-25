@@ -13,6 +13,8 @@ import { spawn } from "node:child_process";
 import type { LspTransport } from "./client.js";
 import type { LspServerConfig } from "./config.js";
 
+const STDERR_TAIL = 2048;
+
 export function spawnLspTransport(server: LspServerConfig, cwd: string): LspTransport | undefined {
   let child;
   try {
@@ -27,6 +29,13 @@ export function spawnLspTransport(server: LspServerConfig, cwd: string): LspTran
   }
 
   let exited = false;
+  // The last STDERR_TAIL characters the server wrote. A server that refuses to
+  // start says why on stderr (a rustup proxy without the component, a missing
+  // runtime, a bad flag); without this the caller only ever learns an exit code.
+  let tail = "";
+  const note = (text: string): void => {
+    tail = (tail + text).slice(-STDERR_TAIL);
+  };
   const dataListeners: ((chunk: Uint8Array | string) => void)[] = [];
   const exitListeners: ((code: number | null) => void)[] = [];
 
@@ -39,7 +48,10 @@ export function spawnLspTransport(server: LspServerConfig, cwd: string): LspTran
   // ENOENT arrives asynchronously, as an `error` event on a child object that
   // has ALREADY been returned — which is why absence cannot be detected by a
   // try/catch and has to travel through onExit like any other death.
-  child.on("error", () => fireExit(null));
+  child.on("error", (error: Error) => {
+    note(error.message);
+    fireExit(null);
+  });
   child.on("close", (code: number | null) => fireExit(code));
   // Pipe failures are emitted asynchronously on the stream, not thrown by
   // write(). A server can close stdin before the child itself emits close.
@@ -50,10 +62,11 @@ export function spawnLspTransport(server: LspServerConfig, cwd: string): LspTran
   child.stdout?.on("data", (chunk: unknown) => {
     for (const listener of dataListeners) listener(chunk as Uint8Array);
   });
-  // stderr is drained and discarded. A language server writes progress and
-  // warnings there continuously; leaving the pipe unread fills its buffer and
-  // deadlocks the process it belongs to.
-  child.stderr?.on("data", () => {});
+  // stderr must be drained: a language server writes progress and warnings
+  // there continuously, and leaving the pipe unread fills its buffer and
+  // deadlocks the process it belongs to. Only a bounded tail is kept.
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: unknown) => note(String(chunk)));
 
   return {
     write(chunk) {
@@ -67,6 +80,11 @@ export function spawnLspTransport(server: LspServerConfig, cwd: string): LspTran
     },
     onData(cb) {
       dataListeners.push(cb);
+    },
+    lastError() {
+      const lines = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const last = lines[lines.length - 1];
+      return last && last.length > 300 ? `${last.slice(0, 300)}…` : last;
     },
     onExit(cb) {
       if (exited) cb(null);

@@ -437,6 +437,28 @@ describe("the tier end to end, through the real spawn", () => {
     expect(result.lsp?.refs.map((r) => r.file)).toEqual(["src/client.ts"]);
   }, 30_000);
 
+  it("names the server's own stderr complaint when it will not start", async () => {
+    const scan = scanRepo(MINI);
+    const statik = findReferences(scan, "HttpClient");
+    const refused = repoWithConfig([], "refuse");
+    const exited = await referencesWithLsp(scanRepo(refused), refused, "HttpClient", statik);
+    expect(exited.lsp?.reason).toBe("fake: language server exited (code 1): error: Unknown binary 'fake-analyzer' in official toolchain");
+    const status = await lspStatus(scanRepo(refused), refused, true);
+    expect(status.servers[0]!.error).toBe("language server exited (code 1): error: Unknown binary 'fake-analyzer' in official toolchain");
+
+    // A server that never answers `initialize` gets the same detail on its timeout.
+    const previous = process.env.CODEINDEX_LSP_STARTUP_TIMEOUT_MS;
+    process.env.CODEINDEX_LSP_STARTUP_TIMEOUT_MS = "600";
+    try {
+      const mute = repoWithConfig([], "mute");
+      const timedOut = await referencesWithLsp(scanRepo(mute), mute, "HttpClient", statik);
+      expect(timedOut.lsp?.reason).toBe("fake: initialize exceeded 600ms: error: Unknown binary 'fake-analyzer' in official toolchain");
+    } finally {
+      if (previous === undefined) delete process.env.CODEINDEX_LSP_STARTUP_TIMEOUT_MS;
+      else process.env.CODEINDEX_LSP_STARTUP_TIMEOUT_MS = previous;
+    }
+  }, 30_000);
+
   it("spawnLspTransport reports an absent command through onExit, not a throw", async () => {
     const transport = spawnLspTransport({ id: "x", languages: ["typescript"], command: "definitely-not-a-binary-9f3a" }, MINI);
     expect(transport).toBeDefined();

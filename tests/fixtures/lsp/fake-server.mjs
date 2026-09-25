@@ -13,6 +13,9 @@
 //   crash    exit non-zero right after initialize
 //   garbage  emit an unframed log line before each real frame
 //   slow     delay every reply past a short per-request budget
+//   refuse   explain on stderr why it cannot start, then exit 1 (a rustup
+//            proxy without its component does exactly this)
+//   mute     explain on stderr, then never answer initialize
 //
 // FAKE_LSP_REFS is a JSON array of {file, line, character} the server reports,
 // relative to FAKE_LSP_ROOT.
@@ -22,6 +25,12 @@ const ROOT = process.env.FAKE_LSP_ROOT ?? process.cwd();
 const REFS = JSON.parse(process.env.FAKE_LSP_REFS ?? "[]");
 
 const encoder = new TextEncoder();
+
+if (MODE === "refuse" || MODE === "mute") {
+  process.stderr.write("info: syncing channel updates\n");
+  process.stderr.write("error: Unknown binary 'fake-analyzer' in official toolchain\n\n");
+  if (MODE === "refuse") process.exit(1);
+}
 
 function send(message) {
   const body = JSON.stringify(message);
@@ -73,6 +82,7 @@ process.stdin.on("data", (chunk) => {
 
 function handle(message) {
   const { id, method } = message;
+  if (MODE === "mute") return;
   if (method === "initialize") {
     initialized = true;
     const capabilities =

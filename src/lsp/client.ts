@@ -20,6 +20,14 @@ export interface LspTransport {
   /** Fired when the far side goes away, however it went away. */
   onExit(cb: (code: number | null) => void): void;
   close(): void;
+  /** The last non-empty line the far side wrote to stderr, when there is one. */
+  lastError?(): string | undefined;
+}
+
+/** `message`, with the server's own last stderr line appended when it has one. */
+export function withServerError(message: string, transport: LspTransport): string {
+  const detail = transport.lastError?.();
+  return detail && !message.includes(detail) ? `${message}: ${detail}` : message;
 }
 
 export interface LspSessionOptions {
@@ -107,7 +115,7 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
     }
   });
 
-  transport.onExit((code) => failAll(new Error(`language server exited (code ${code ?? "unknown"})`)));
+  transport.onExit((code) => failAll(new Error(withServerError(`language server exited (code ${code ?? "unknown"})`, transport))));
 
   const notify = (method: string, params: unknown): void => {
     if (dead) return;

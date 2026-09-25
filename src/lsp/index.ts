@@ -9,7 +9,7 @@
 import type { RepoScan } from "../scan.js";
 import { findSymbol, type SymbolReferences } from "../query.js";
 import { have } from "../util.js";
-import { openLspSession, type LspCapabilities, type LspSession } from "./client.js";
+import { openLspSession, withServerError, type LspCapabilities, type LspSession } from "./client.js";
 import {
   loadLspConfig,
   resolveLspConfigPath,
@@ -116,7 +116,8 @@ async function tryOpen(server: LspServerConfig, root: string): Promise<OpenResul
     return { ok: true, session };
   } catch (e) {
     transport.close();
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    // An `initialize` timeout says nothing about why; the server's stderr may.
+    return { ok: false, reason: withServerError(e instanceof Error ? e.message : String(e), transport) };
   }
 }
 

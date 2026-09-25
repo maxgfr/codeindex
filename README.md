@@ -701,7 +701,10 @@ Three deliberate constraints:
   `typescript-language-server` happened to be installed would make the same repo
   answer differently per machine.
 - **Every failure degrades to the static answer on exit 0**, with a stated
-  reason for unavailable configured servers. For compatibility, references
+  reason for unavailable configured servers. A server that exits or never
+  answers `initialize` is reported with the last line it wrote to stderr
+  (`language server exited (code 1): error: Unknown binary 'rust-analyzer'
+  …`), in `lsp status --probe` as in query answers. For compatibility, references
   without any configuration retain their original static-only shape; the new
   callers option explicitly reports missing configuration.
 
