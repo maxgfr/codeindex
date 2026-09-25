@@ -87,8 +87,10 @@ Commands:
                                containerized embedding server (rich tier)
   lsp         Optional LSP tier (opt-in by asset — the tier is active only when
               <repo>/.codeindex/lsp.json exists, or CODEINDEX_LSP_CONFIG points
-              at one). It annotates QUERY answers only and never touches
-              graph.json/symbols.json:
+              at one; CODEINDEX_LSP_CONFIG=off disables it). It annotates QUERY
+              answers only and never touches graph.json/symbols.json.
+              CODEINDEX_LSP_TIMEOUT_MS / CODEINDEX_LSP_STARTUP_TIMEOUT_MS
+              override every server's timeoutMs / startupTimeoutMs:
                 lsp status     Config path and source, each server with whether
                                its command is on PATH and how many files it
                                claims, and the languages nothing covers (JSON).

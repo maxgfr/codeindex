@@ -664,6 +664,14 @@ codeindex lsp status --repo .           # config, PATH resolution, files claimed
 codeindex lsp status --repo . --probe   # also start each server, read its real capabilities
 ```
 
+Each server may set `timeoutMs` (per request, default 5000) and
+`startupTimeoutMs` (the `initialize` handshake, default 15000). The environment
+variables `CODEINDEX_LSP_TIMEOUT_MS` and `CODEINDEX_LSP_STARTUP_TIMEOUT_MS`
+override both for every server and take precedence over `lsp.json`, so a CI
+job or a slow machine can retune them without editing a shared file.
+`CODEINDEX_LSP_CONFIG` points at a config elsewhere; set to `off`, `0` or an
+empty string, it disables the tier even when the repository has one.
+
 The TypeScript example disables its separate syntax server because codeindex
 opens short-lived query sessions. Otherwise an early reference request can be
 answered before the semantic project is ready and return only the declaration.
@@ -857,11 +865,11 @@ nothing changes. Over it — where a whole-repo `graph` on a large monorepo runs
 to millions of tokens and no client can accept it — the response is replaced by
 a short notice naming the size, the arguments of that tool that narrow it, and
 the persisted artifact when one on disk holds exactly the withheld answer
-(checked byte for byte; a stale one gets the command that refreshes it). The notice is sent as a tool error
-(`isError: true`): the model reads it and narrows the call, and a client that
-validates `structuredContent` is not handed a result that cannot conform. Most
-tools also take a `limit`/`maxResults`/`top`/`maxEdges` argument to stay well
-under it.
+(checked byte for byte; a stale one gets the command that refreshes it). The
+notice is sent as a tool error (`isError: true`): the model reads it and
+narrows the call, and a client that validates `structuredContent` is not
+handed a result that cannot conform. Most tools also take a
+`limit`/`maxResults`/`top`/`maxEdges` argument to stay well under it.
 
 Tool calls run one at a time, in arrival order, so answers stay deterministic;
 `ping`, `initialize`, `tools/list` and argument errors are answered at once,
