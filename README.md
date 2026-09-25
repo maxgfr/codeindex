@@ -481,7 +481,14 @@ every point comes with the reason that fired it.
 ```sh
 codeindex delta --repo .                  # the branch vs its merge-base with the default branch
 codeindex delta --repo . --staged --json  # the staged changeset, as JSON
+codeindex delta --repo . --fail-on HIGH   # CI gate: exit 1 when a module scores HIGH
 ```
+
+The MCP `delta` tool answers the same question for an agent that has just
+edited files: `{base?, staged?, depth?}` return the JSON result, `concise`
+drops the hunks and reduces each enclosing symbol to `name/kind/line`, `limit`
+keeps the highest-scoring modules (and says it truncated), and
+`format: "text"` returns the panel. It is in the `impact` and `risk` profiles.
 
 - **A removed file that is still imported is the highest-weighted signal**
   (`brokenImport`, 40). The worktree's graph no longer holds a deleted or
@@ -814,13 +821,13 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**33 tools**, grouped by what they answer:
+**34 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
-| impact | `find_references`, `callers`, `call_graph`, `dead_code` |
+| impact | `find_references`, `callers`, `call_graph`, `dead_code`, `delta` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
@@ -835,7 +842,7 @@ of rebuilding.
 ### Smaller read responses
 
 MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`
-accept `concise: true`. Declarations are reduced to `name/kind/file/line` while
+accept `concise: true` (and `delta`, where it drops each change's hunks). Declarations are reduced to `name/kind/file/line` while
 result membership, order, reference groups, call-site locations, confidence
 labels and LSP metadata stay intact. Defaults retain their full existing shape.
 `symbols` keeps its name-keyed groups and references for full-index requests.
@@ -902,7 +909,7 @@ introduced are only sent to clients that asked for it, so an older client sees
 exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
-the 27 read tools, `destructiveHint`/`idempotentHint` on the six that write —
+the 28 read tools, `destructiveHint`/`idempotentHint` on the six that write —
 which is what lets a host auto-approve reads and confirm only writes. From
 `2025-06-18`, the 20 tools whose result is always a JSON object also declare an
 `outputSchema` and return `structuredContent`, so a client can validate and type
@@ -980,7 +987,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **33 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **34 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

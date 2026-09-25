@@ -1,13 +1,17 @@
 // `delta` against real temporary git repositories: what a removal breaks, what
 // the diff side must ignore, and the CI gate.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { brokenImports, computeDelta, deltaFor, deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff, RISK_WEIGHTS } from "../src/delta.js";
 import type { DeltaResult } from "../src/delta.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
+
+const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
+const clientModule = new URL("../scripts/bench/mcp-client.mjs", import.meta.url).href;
 
 function git(dir: string, args: string[]): string {
   return execFileSync("git", ["-C", dir, "-c", "commit.gpgsign=false", ...args], {
@@ -230,4 +234,64 @@ describe("delta: symbol attribution reads only the changed files' defs", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("delta: the CI gate", () => {
+  it("--fail-on exits 1 once a module reaches the bucket, and writes the panel either way", () => {
+    const root = repo(HUB_REPO);
+    try {
+      rmSync(join(root, "lib/hub.ts")); // lib scores >= brokenImport (40): MEDIUM at least
+      const run = (...args: string[]) => spawnSync(process.execPath, [CLI, "delta", "--repo", root, ...args], { encoding: "utf8" });
+      const plain = run();
+      expect(plain.status).toBe(0);
+      const lib = (JSON.parse(run("--json").stdout) as DeltaResult).modules.find((m) => m.slug === "lib")!;
+      expect(lib.bucket).not.toBe("LOW");
+      const gated = run("--fail-on", "medium");
+      expect(gated.status).toBe(1);
+      expect(gated.stdout).toBe(plain.stdout);
+      expect(run("--fail-on", "HIGH").status).toBe(lib.bucket === "HIGH" ? 1 : 0);
+      expect(run("--fail-on", "urgent").stderr).toMatch(/--fail-on expects HIGH, MEDIUM or LOW/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delta over MCP", () => {
+  it("returns the review as JSON, concise, capped or as the panel", async () => {
+    const root = repo(HUB_REPO);
+    const { startMcpClient } = await import(/* @vite-ignore */ clientModule);
+    const client = startMcpClient(process.execPath, [CLI, "mcp", "--repo", root, "--tools", "risk"], { timeoutMs: 30_000 });
+    try {
+      expect((await client.handshake()).ok).toBe(true);
+      const listed = await client.request("tools/list", {});
+      expect(listed.result.tools.map((t: { name: string }) => t.name)).toContain("delta");
+      const call = async (args: Record<string, unknown>): Promise<string> => {
+        const r = await client.request("tools/call", { name: "delta", arguments: args });
+        expect(r.result.isError, JSON.stringify(r.result)).not.toBe(true);
+        return r.result.content[0].text as string;
+      };
+      expect(JSON.parse(await call({}))).toMatchObject({ changes: [], modules: [] });
+
+      rmSync(join(root, "lib/hub.ts"));
+      write(root, { "app/b.ts": 'import { hub } from "../lib/hub";\nexport const b = hub() * 2;\n' });
+      const full = JSON.parse(await call({})) as DeltaResult;
+      expect(full).toEqual(delta(root));
+      expect(full.modules.map((m) => m.slug)).toEqual(["lib", "app"]);
+
+      const concise = JSON.parse(await call({ concise: true }));
+      expect(concise).toEqual({
+        ...full,
+        changes: [
+          { path: "app/b.ts", status: "modified", module: "app", symbols: [{ name: "b", kind: "const", line: 2 }] },
+          { path: "lib/hub.ts", status: "deleted", symbols: [] },
+        ],
+      });
+      expect(JSON.parse(await call({ limit: 1 }))).toEqual({ ...full, modules: full.modules.slice(0, 1), totalModules: 2, truncated: true });
+      expect(await call({ format: "text" })).toBe(formatDeltaPanel(full));
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

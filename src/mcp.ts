@@ -29,12 +29,13 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
-import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
+import { conciseCaller, conciseDelta, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
+import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
@@ -538,6 +539,27 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const rules = parseRules(payload); // throws a descriptive error on a malformed payload
     const { graph } = readArtifacts();
     return JSON.stringify(checkRules(graph, rules), null, 2);
+  }
+  if (name === "delta") {
+    // The CLI's review panel, for an agent that just edited files over this
+    // server. The session scan is re-proven fresh on every call, so the graph
+    // is the worktree's as it sits now. The diff is read first: when it is
+    // empty the artifacts are not needed.
+    const diff = readDeltaDiff(repo, { base: str(args.base), staged: args.staged === true });
+    if ("error" in diff) throw new Error(diff.error);
+    const depth = positiveNum(args.depth);
+    let res = emptyDelta(diff, depth);
+    if (diff.files.length) {
+      const { scan, graph, symbols } = readArtifacts();
+      res = deltaOfDiff(diff, graph, symbols, { depth, scan });
+    }
+    if (str(args.format) === "text") return formatDeltaPanel(res);
+    const out = args.concise === true ? conciseDelta(res) : res;
+    const limit = positiveNum(args.limit);
+    // Modules are ranked highest score first, so a cap keeps the riskiest; it
+    // says so, same doctrine as dead_code.
+    if (limit === undefined || out.modules.length <= limit) return JSON.stringify(out, null, 2);
+    return JSON.stringify({ ...out, modules: out.modules.slice(0, limit), totalModules: out.modules.length, truncated: true }, null, 2);
   }
   throw new Error(`unknown tool: ${name}`);
 }

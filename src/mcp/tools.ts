@@ -1,4 +1,4 @@
-// The MCP tool catalogue: the 29 tool definitions, their display metadata, and
+// The MCP tool catalogue: the tool definitions, their display metadata, and
 // the per-protocol-version view of the list a client actually receives.
 //
 // Split out of mcp.ts because it is pure data plus one projection function —
@@ -458,6 +458,24 @@ export const TOOLS = [
       required: ["repo"],
     },
   },
+  {
+    name: "delta",
+    description:
+      "What does my change break? Maps the git diff (the branch against its merge-base with the default branch, uncommitted and untracked work included; or the staged changeset) onto the graph: each changed file with the symbols enclosing its hunks, and per module a 0-100 risk score (HIGH/MEDIUM/LOW) in which every point comes with its reason — exported API changed, hub, blast radius, test gap, a deleted or renamed file that is still imported (`broken`, with its importers), dangling imports. `open` names the files to read first. Call it after editing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...conciseProp,
+        base: { type: "string", description: "Branch or ref to review against (default: origin/HEAD, origin/main, origin/master, main, master; else HEAD)" },
+        staged: { type: "boolean", description: "Review the staged changeset against HEAD instead (default false)" },
+        depth: { type: "number", minimum: 1, description: "Blast-radius hops (default 2)" },
+        limit: { type: "number", minimum: 1, description: "Max modules, highest score first (default: all)" },
+        format: { type: "string", enum: ["json", "text"], description: '"text" returns the compact human panel instead of JSON (default "json")' },
+      },
+      required: ["repo"],
+    },
+  },
 ] as const;
 
 
@@ -477,7 +495,7 @@ export const TOOLS = [
 //     option that breaks neither.
 //   * argument-dependent shapes — dead_code (array, object with `limit`),
 //     complexity (array, object with `risk`), search (array, object with
-//     `semantic` or `explain`). A schema that cannot describe every response is
+//     `semantic` or `explain`), delta (object, text with `format: "text"`). A schema that cannot describe every response is
 //     worse than none: it would make a conforming client reject valid output.
 //     `explain_search` exists precisely because of this rule — it is the same
 //     answer with ONE shape, so it can carry a schema where `search` cannot.
@@ -722,6 +740,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   implementations: { title: "Implementations" },
   call_graph: { title: "Call graph neighborhood" },
   check_rules: { title: "Check architecture rules" },
+  delta: { title: "Review the diff" },
 };
 
 export function annotationsFor(name: string): Record<string, boolean> | undefined {
@@ -759,11 +778,11 @@ export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Locate a thing.
   find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
   // Decide whether changing it is safe.
-  impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
+  impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status", "delta"],
   // Change it.
   edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.
-  risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"],
+  risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code", "delta"],
 };
 
 export function profileNames(): string[] {

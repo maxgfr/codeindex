@@ -134,6 +134,7 @@ const NARROWER: Record<string, string> = {
   dead_code: "pass `scope` to a subdirectory",
   find_references: "the symbol is referenced very widely — narrow with `scope` on a graph query",
   check_rules: "narrow the rule set, or pass `scope` to a subdirectory",
+  delta: 'pass `concise: true` (no hunks), a `limit` on modules, or `format: "text"` for the panel',
 };
 
 // The persisted artifact backing a tool, when a `codeindex index` already wrote

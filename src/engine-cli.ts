@@ -134,8 +134,9 @@ Commands:
   delta       Review panel for the git diff: changed files -> enclosing symbols ->
               blast radius -> risk score with explained reasons; a deleted or
               renamed file that is still imported is listed under \`broken\`
-              with its importers (--base <ref> | --staged, --depth <n>, --json).
-              Paths under the --index directory are not part of the review
+              with its importers (--base <ref> | --staged, --depth <n>, --json,
+              --fail-on HIGH|MEDIUM|LOW to exit 1 as a CI gate). Paths under
+              the --index directory are not part of the review
   impact      Reverse dependency closure of a file or module: everything that
               transitively imports/uses/calls it (--depth <n>; JSON)
   neighbors   Graph neighbours of a file or module, both directions
@@ -147,12 +148,12 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (33 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (34 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
               find_symbol, find_references, lsp_status, onboard, repo_map,
               hotspots, coupling, dead_code, complexity, mermaid, grep, search,
-              explain_search, embed_status, check_rules, the memory quartet and
-              the three symbolic-edit writes). Flags: --repo <dir> pins ONE
+              explain_search, embed_status, check_rules, delta, the memory
+              quartet and the three symbolic-edit writes). Flags: --repo <dir> pins ONE
               repository so the per-tool repo argument becomes optional (an
               explicit per-call repo still wins); --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
@@ -277,6 +278,7 @@ interface CliFlags {
   direction?: "out" | "in" | "both"; // callgraph: which way to walk
   rank?: "graph" | "lexical"; // search: structural prior (default lexical)
   json?: boolean; // delta: emit JSON instead of the human panel
+  failOn?: "HIGH" | "MEDIUM" | "LOW"; // delta: exit 1 when a module reaches this bucket
   positional?: string; // e.g. the grep pattern or search query
 }
 
@@ -353,6 +355,11 @@ function parseFlags(args: string[]): CliFlags {
       flags.direction = v;
     }
     else if (a === "--json") flags.json = true;
+    else if (a === "--fail-on") {
+      const v = next().toUpperCase();
+      if (v !== "HIGH" && v !== "MEDIUM" && v !== "LOW") throw new Error(`--fail-on expects HIGH, MEDIUM or LOW, got "${v}"`);
+      flags.failOn = v;
+    }
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
   }
@@ -388,6 +395,8 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
 // excluded by the positional check at the warm site. `grammars` (status/pull)
 // resolves/downloads the wasms itself and must not warm them.
 // version/help/mcp return before we get there.
+const bucketRank = (b: "HIGH" | "MEDIUM" | "LOW"): number => (b === "HIGH" ? 2 : b === "MEDIUM" ? 1 : 0);
+
 const SCANLESS_COMMANDS = new Set(["grep", "churn", "workspaces", "grammars"]);
 
 // Flags for `codeindex mcp`. Kept separate from parseFlags on purpose (see the
@@ -1143,6 +1152,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       res = deltaOfDiff(diff, graph, symbols, { ...opts, scan });
     }
     emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);
+    // The CI gate, like `rules`: the output is written either way.
+    if (flags.failOn && res.modules.some((m) => bucketRank(m.bucket) >= bucketRank(flags.failOn!))) process.exitCode = 1;
   } else if (cmd === "impact") {
     if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
     const { graph } = await readArtifacts();
