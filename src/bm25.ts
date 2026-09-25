@@ -338,7 +338,10 @@ export function buildStemIndex(docs: Doc[]): Map<string, string[]> {
       if (seen.has(term)) continue;
       seen.add(term);
       const stem = stemOf(term);
-      if (stem === term) continue; // an unchanged stem adds no new bridge
+      // A word that is its own stem is not filed under it: that would be one
+      // entry per vocabulary word, and the lookup can test the corpus for the
+      // bare stem directly (see runSearch).
+      if (stem === term) continue;
       let arr = index.get(stem);
       if (!arr) index.set(stem, (arr = []));
       arr.push(term);
@@ -515,7 +518,16 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
       const stemIndex = bm25StemsFor(scan);
       const stillUnmatched: string[] = [];
       for (const t of unmatched) {
-        const viaStem = (stemIndex.get(stemOf(t)) ?? []).filter((v) => v !== t);
+        const stem = stemOf(t);
+        const viaStem = (stemIndex.get(stem) ?? []).filter((v) => v !== t);
+        // The index files only words that change under stemming, so the bare
+        // word itself — "retry" for "retries", "query" for "queries" — is
+        // checked against the corpus here. Without it the commonest plurals
+        // bridged to nothing: their stem is exactly the word the code uses.
+        if (stem !== t && stemOf(stem) === stem && docs.some((d) => d.all.has(stem))) {
+          viaStem.push(stem);
+          viaStem.sort(byStr);
+        }
         if (viaStem.length) {
           fuzzyCandidates.set(
             t,

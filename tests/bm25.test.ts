@@ -452,6 +452,29 @@ describe("searchIndex: stem fallback", () => {
     expect(hits[0]!.fuzzyTerms).toEqual(["caching"]);
   });
 
+  it("bridges to a word that is its own stem: \"retries\" and \"retrying\" find retry()", () => {
+    // "retry", "query", "body" do not change under stemming, so the stem index
+    // never filed them — and their plurals, the commonest inflection there is,
+    // bridged to nothing at all.
+    const repo = repoWith({
+      "src/retry.ts": "export function retry(): void {}\n",
+      "src/query.ts": "export function query(): void {}\n",
+      "src/other.ts": "export function unrelated(): void {}\n",
+    });
+    const scan = scanRepo(repo);
+    for (const [q, file, to] of [
+      ["retries", "src/retry.ts", "retry"],
+      ["retrying", "src/retry.ts", "retry"],
+      ["queries", "src/query.ts", "query"],
+    ] as const) {
+      const { results, explain } = explainQuery(scan, q);
+      expect(results.map((r) => r.file), q).toEqual([file]);
+      expect(results[0]!.topSymbols).toEqual([to]);
+      expect(explain.terms[0]!.bridge).toEqual({ via: "stem", to: [to], dice: 0.9 });
+      expect(explain.unresolvedTerms).toEqual([]);
+    }
+  });
+
   it("prefers the literal term over the stemmed one", () => {
     const repo = repoWith({
       "exact.ts": "// handles retries for us\nexport function a1(): void {}\n",
