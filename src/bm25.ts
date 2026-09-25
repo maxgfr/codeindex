@@ -329,8 +329,9 @@ export function buildDocs(scan: RepoScan): Doc[] {
 
 // All-lowercase compound file names — tsconfigparsing.go, knownsymlinks.go,
 // commandlineparser.go — have no case or punctuation boundary for `subtokens`
-// to split on, so each stayed ONE path token and "parse tsconfig json" or
-// "symlink cache" could not reach the file that is named for exactly that.
+// to split on, so each stayed ONE path token and "parse tsconfig json" could
+// not reach the file named for exactly that (microsoft/TypeScript: not in the
+// top 10; first once split).
 //
 // Such a token is split into words the corpus itself uses as names: a word
 // break over the name-field vocabulary (pieces of 3+ letters), fewest pieces
