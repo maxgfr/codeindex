@@ -15,7 +15,8 @@ import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { createCallBinder } from "./bind.js";
 import { enclosingAmong } from "./callers.js";
-import { resolveRelations } from "./relations.js";
+import { familyOf } from "./calls.js";
+import { goImplementations, resolveRelations } from "./relations.js";
 import { byStr } from "./sort.js";
 import { symbolRefReadings } from "./symref.js";
 
@@ -31,7 +32,12 @@ const SEP = "\u0000";
 // re-exports. Same set the caller index and the graph builder use.
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
-export type SymbolEdgeKind = "calls" | "extends" | "implements";
+// `overrides`: a method to the supertype method of the same name it replaces
+// (or implements). A call site binds to the method its receiver's DECLARED
+// type names — `x.area()` on a `Shape` reaches `Shape/area` — while at run
+// time any override may answer; the walk below follows these edges so a
+// neighborhood shows what dispatch can reach.
+export type SymbolEdgeKind = "calls" | "extends" | "implements" | "overrides";
 
 export interface SymbolNode {
   /** Stable id: `file#Parent/name` for a member, `file#name` otherwise. */
@@ -50,7 +56,7 @@ export interface SymbolEdge {
   from: string; // node id
   to: string; // node id
   kind: SymbolEdgeKind;
-  /** How many distinct call sites back a `calls` edge. Always 1 for inheritance. */
+  /** How many distinct call sites back a `calls` edge. Always 1 for inheritance and overrides. */
   weight: number;
 }
 
@@ -134,13 +140,25 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   }
 
   // --- inheritance: subtype declaration → supertype declaration -------------
+  // Go states no implementations; the type hierarchy's assertion and
+  // method-set matches (relations.ts goImplementations) stand in for them.
   const typeIdByNameFile = new Map<string, string>();
-  for (const node of nodes.values()) typeIdByNameFile.set(`${node.name} ${node.file}`, node.id);
-  for (const r of resolveRelations(scan, importPairs)) {
+  // A top-level declaration wins over a same-named member of the same file:
+  // Go's `Render` interface declares a `Render` method.
+  for (const node of nodes.values()) {
+    const key = `${node.name} ${node.file}`;
+    if (!typeIdByNameFile.has(key) || node.id === `${node.file}#${node.name}`) typeIdByNameFile.set(key, node.id);
+  }
+  const relations: TypeRelation[] = resolveRelations(scan, importPairs);
+  for (const r of goImplementations(scan)) relations.push({ ...r, kind: "implements" });
+  for (const r of relations) {
     const from = typeIdByNameFile.get(`${r.from} ${r.fromFile}`);
     const to = typeIdByNameFile.get(`${r.to} ${r.toFile}`);
     if (from && to) add(from, to, r.kind);
   }
+
+  // --- overrides: method → the supertype method it replaces -----------------
+  for (const { sub, sup } of overridePairs(scan, relations)) add(symbolId(sub), symbolId(sup), "overrides");
 
   const edges = [...agg.values()].sort(
     (a, b) => byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to),
@@ -160,6 +178,76 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   }
 
   return { nodes, edges, out, in: inc, byName };
+}
+
+/** An inheritance link between two type declarations, by name and file. */
+export interface TypeRelation {
+  kind: "extends" | "implements";
+  from: string;
+  fromFile: string;
+  to: string;
+  toFile: string;
+}
+
+// Member kinds that can override: what a subtype redefines under the same name.
+const METHOD_KINDS = new Set(["method", "function", "def", "getter", "setter", "operator"]);
+
+/**
+ * Every method that overrides (or implements) a supertype's method: for each
+ * inheritance relation, each method of the subtype paired with the NEAREST
+ * declaration of the same name up the supertype chain — `Square/area` with
+ * `Base/area`, and `Base/area` with `Shape/area`, not `Square/area` with
+ * both. A Go type's methods may live in any file of its package, so Go types
+ * are keyed by directory. Sorted by (sub, sup) id.
+ */
+export function overridePairs(scan: RepoScan, relations: readonly TypeRelation[]): { sub: CodeSymbol; sup: CodeSymbol }[] {
+  const langOf = new Map(scan.files.map((f) => [f.rel, f.lang]));
+  const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+  const typeKey = (name: string, file: string): string =>
+    familyOf(langOf.get(file) ?? "") === "go" ? `go${SEP}${dirOf(file)}${SEP}${name}` : `${file}${SEP}${name}`;
+
+  const members = new Map<string, Map<string, CodeSymbol>>();
+  for (const f of scan.files) {
+    for (const s of f.symbols) {
+      if (!s.parent || !METHOD_KINDS.has(s.kind)) continue;
+      const key = typeKey(s.parent, s.file);
+      let own = members.get(key);
+      if (!own) members.set(key, (own = new Map()));
+      if (!own.has(s.name)) own.set(s.name, s);
+    }
+  }
+  const supers = new Map<string, string[]>();
+  for (const r of relations) {
+    const k = typeKey(r.from, r.fromFile);
+    const list = supers.get(k) ?? [];
+    const sup = typeKey(r.to, r.toFile);
+    if (sup !== k && !list.includes(sup)) list.push(sup);
+    supers.set(k, list);
+  }
+  for (const list of supers.values()) list.sort(byStr);
+
+  // The nearest declarations of `name` above type `key`, one per branch.
+  const nearest = (key: string, name: string, seen: Set<string>, out: CodeSymbol[]): void => {
+    for (const sup of supers.get(key) ?? []) {
+      if (seen.has(sup)) continue;
+      seen.add(sup);
+      const decl = members.get(sup)?.get(name);
+      if (decl) out.push(decl);
+      else nearest(sup, name, seen, out);
+    }
+  };
+
+  const out: { sub: CodeSymbol; sup: CodeSymbol }[] = [];
+  for (const key of [...supers.keys()].sort(byStr)) {
+    const own = members.get(key);
+    if (!own) continue;
+    for (const name of [...own.keys()].sort(byStr)) {
+      const found: CodeSymbol[] = [];
+      nearest(key, name, new Set([key]), found);
+      for (const sup of found) out.push({ sub: own.get(name)!, sup });
+    }
+  }
+  return out.sort((a, b) => byStr(symbolId(a.sub), symbolId(b.sub)) || byStr(symbolId(a.sup), symbolId(b.sup)));
 }
 
 export type Direction = "out" | "in" | "both";
@@ -238,8 +326,23 @@ export function neighborhood(
           next.push(o);
         }
       };
-      if (direction !== "in") step(graph.out.get(id), (e) => e.to);
-      if (direction !== "out") step(graph.in.get(id), (e) => e.from);
+      // Dispatch runs against the edge: walking out through a method reaches
+      // the methods overriding it (a call to `Shape/area` may run
+      // `Square/area`), and walking in to an override reaches the callers of
+      // the method it overrides. An override never reaches its base the other
+      // way round, so a one-way walk takes `overrides` edges backwards only.
+      const outs = graph.out.get(id);
+      const ins = graph.in.get(id);
+      if (direction === "both") {
+        step(outs, (e) => e.to);
+        step(ins, (e) => e.from);
+      } else if (direction === "out") {
+        step(outs?.filter((e) => e.kind !== "overrides"), (e) => e.to);
+        step(ins?.filter((e) => e.kind === "overrides"), (e) => e.from);
+      } else {
+        step(ins?.filter((e) => e.kind !== "overrides"), (e) => e.from);
+        step(outs?.filter((e) => e.kind === "overrides"), (e) => e.to);
+      }
     }
     frontier = next;
   }

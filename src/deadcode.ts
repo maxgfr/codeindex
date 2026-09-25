@@ -36,7 +36,8 @@ import type { RepoScan } from "./scan.js";
 import { callerIndexFor, importPairsFor, resolveContextFor, symbolRefsFor } from "./derived.js";
 import { familyOf, importTargets } from "./calls.js";
 import { tierForPath } from "./modules.js";
-import { resolveRelations } from "./relations.js";
+import { goImplementations, resolveRelations, type ResolvedRelation } from "./relations.js";
+import { overridePairs, type TypeRelation } from "./symbolgraph.js";
 import { distToSrcCandidates, resolveImport, tolerantJsonParse, type ResolveContext } from "./resolve.js";
 import { isTestPath } from "./tests-map.js";
 import { readText } from "./walk.js";
@@ -119,6 +120,16 @@ export function findDeadCode(scan: RepoScan, opts: DeadCodeOptions = {}): DeadSy
   const pairs = importPairsFor(scan);
   const relations = resolveRelations(scan, pairs);
   const roots = publicRoots(scan, pairs, relations);
+  const isCalled = (s: CodeSymbol): boolean => {
+    // The qualified key FIRST: when several files export the same name, the
+    // bare key holds the first-sorted def's entry, and the others live under
+    // "name@file" only. Looking the bare key up first would answer with a
+    // homonym from another file, fail the file check below, and flag a
+    // symbol that IS called as dead.
+    const entry = callers.get(`${s.name}@${s.file}`) ?? callers.get(s.name);
+    return !!entry && entry.def.file === s.file && entry.callers.length > 0;
+  };
+  const dispatched = dispatchLiveness(scan, relations, (s) => isCalled(s) || roots.has(`${s.name}${SEP}${s.file}`));
 
   const candidates: CodeSymbol[] = [];
   for (const f of scan.files) {
@@ -127,14 +138,7 @@ export function findDeadCode(scan: RepoScan, opts: DeadCodeOptions = {}): DeadSy
     for (const s of f.symbols) {
       if (!s.exported || REFERENCE_KINDS.has(s.kind) || isProtocolName(s)) continue;
       if (!all && !isCallable(s)) continue;
-      if (roots.has(`${s.name}${SEP}${s.file}`)) continue;
-      // The qualified key FIRST: when several files export the same name, the
-      // bare key holds the first-sorted def's entry, and the others live under
-      // "name@file" only. Looking the bare key up first would answer with a
-      // homonym from another file, fail the file check below, and flag a
-      // symbol that IS called as dead.
-      const entry = callers.get(`${s.name}@${s.file}`) ?? callers.get(s.name);
-      if (entry && entry.def.file === s.file && entry.callers.length > 0) continue;
+      if (roots.has(`${s.name}${SEP}${s.file}`) || isCalled(s) || dispatched(s)) continue;
       candidates.push(s);
     }
   }
@@ -148,6 +152,58 @@ export function findDeadCode(scan: RepoScan, opts: DeadCodeOptions = {}): DeadSy
     out.push({ name: s.name, file: s.file, line: s.line, kind: s.kind, tier: seen ? "uncalled" : "unreferenced" });
   }
   return out.sort((a, b) => byStr(a.tier, b.tier) || byStr(a.file, b.file) || a.line - b.line);
+}
+
+// Is method `s` reachable by dispatch? A call binds to the method its
+// receiver's declared type names (`x.area()` on a `Shape` reaches
+// `Shape/area`), so an override of a live method is live: `Square/area` is
+// run by every call to `Shape/area`. The top of an override chain in a class
+// with a base outside the repo may override THAT (a jinja loader's
+// `get_source`), which the framework calls: live too. Go is left out of the
+// second rule: its "bases" are embedded fields, and a method matching an
+// outside interface (`Error`, `String`) is already at most "uncalled".
+function dispatchLiveness(
+  scan: RepoScan,
+  relations: ResolvedRelation[],
+  live: (s: CodeSymbol) => boolean,
+): (s: CodeSymbol) => boolean {
+  const typeRelations: TypeRelation[] = [...relations];
+  for (const r of goImplementations(scan)) typeRelations.push({ ...r, kind: "implements" });
+  const overridden = new Map<CodeSymbol, CodeSymbol[]>();
+  for (const { sub, sup } of overridePairs(scan, typeRelations)) {
+    const list = overridden.get(sub) ?? [];
+    list.push(sup);
+    overridden.set(sub, list);
+  }
+  // Types with a declared base that resolved nowhere in the repo.
+  const resolvedCount = new Map<string, number>();
+  for (const r of relations) {
+    const k = `${r.from}${SEP}${r.fromFile}`;
+    resolvedCount.set(k, (resolvedCount.get(k) ?? 0) + 1);
+  }
+  const external = new Set<string>();
+  for (const f of scan.files) {
+    if (familyOf(f.lang) === "go") continue;
+    const declared = new Map<string, number>();
+    for (const r of f.relations ?? []) declared.set(r.from, (declared.get(r.from) ?? 0) + 1);
+    for (const [from, n] of declared) if (n > (resolvedCount.get(`${from}${SEP}${f.rel}`) ?? 0)) external.add(`${from}${SEP}${f.rel}`);
+  }
+
+  const memo = new Map<CodeSymbol, boolean>();
+  const check = (s: CodeSymbol, seen: Set<CodeSymbol>): boolean => {
+    const known = memo.get(s);
+    if (known !== undefined) return known;
+    const sups = overridden.get(s);
+    let result: boolean;
+    if (!sups) result = !!s.parent && external.has(`${s.parent}${SEP}${s.file}`);
+    else {
+      seen.add(s);
+      result = sups.some((u) => live(u) || (!seen.has(u) && check(u, seen)));
+    }
+    memo.set(s, result);
+    return result;
+  };
+  return (s) => !!s.parent && check(s, new Set());
 }
 
 // Does a file other than the declaring one name `s`? Built once for the whole

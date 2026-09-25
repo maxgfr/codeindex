@@ -414,7 +414,12 @@ site binds to is still an answer, and says why it is empty:
 
 `callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
 any binding, with its receiver and enclosing symbol. `callgraph` walks at most 5
-hops and says `depthClamped` when asked for more. `neighbors` reports every edge
+hops and says `depthClamped` when asked for more. It also follows dispatch. An
+`overrides` edge links a method to the nearest supertype method of the same
+name (a Go method to the method of an interface its type implements). A call
+binds to the method its receiver's declared type names, so walking out through
+`Shape/area` also reaches `Square/area`, and walking in to `Square/area`
+reaches the callers of `Shape/area`. `neighbors` reports every edge
 kind linking each neighbour — an incoming import and an outgoing inferred call to
 the same file are two links, strongest evidence first — and rejects an unknown
 `--kind`. `impact` walks imports, uses and calls backwards; a Go import reaches
@@ -450,6 +455,10 @@ candidates:
   `testdata`) unless `--include-tail` is passed;
 - names the language calls itself (Python `__dunder__`, Go `init`/`main`, JS
   `constructor`);
+- a method that overrides a live one (called, or public API), since dispatch
+  runs it whenever the base method is called. The same goes for the top of an
+  override chain in a class whose base lies outside the repo, which the
+  framework may call;
 - the package's public API. That means what a manifest entry point declares or
   re-exports: package.json `main`/`module`/`exports`/`bin`/`types`, with a
   build path like `dist/index.js` or `scripts/cli.mjs` mapped back to its

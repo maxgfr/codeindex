@@ -257,7 +257,7 @@ export const TOOLS = [
   {
     name: "dead_code",
     description:
-      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND no other file names it) and 'uncalled' (named elsewhere — import, type position, base-class list, a same-name call site — but no call binds). Exported callables only unless `kinds: \"all\"`; test and tail files (examples, docs, fixtures, scripts — `includeTail` to include them), the package's public API (manifest entry points and what they re-export) and language protocol names are never candidates. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
+      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND no other file names it) and 'uncalled' (named elsewhere — import, type position, base-class list, a same-name call site — but no call binds). Exported callables only unless `kinds: \"all\"`; test and tail files (examples, docs, fixtures, scripts — `includeTail` to include them), the package's public API (manifest entry points and what they re-export), language protocol names and overrides of live methods are never candidates. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
     inputSchema: {
       type: "object",
       properties: {
@@ -420,7 +420,7 @@ export const TOOLS = [
   {
     name: "call_graph",
     description:
-      "What does this symbol reach, and what reaches it? A bounded symbol-to-symbol neighborhood around `symbol` — `depth` hops (default 2) following `calls`/`extends`/`implements` edges, `direction` out (callees) | in (callers) | both. Answers impact questions the one-hop `callers` tool cannot.",
+      "What does this symbol reach, and what reaches it? A bounded symbol-to-symbol neighborhood around `symbol` — `depth` hops (default 2) following `calls`/`extends`/`implements`/`overrides` edges, `direction` out (callees) | in (callers) | both. Dispatch is followed: walking out through a method also reaches the methods overriding it, and walking in to an override reaches the callers of the method it overrides. Answers impact questions the one-hop `callers` tool cannot.",
     inputSchema: {
       type: "object",
       properties: {

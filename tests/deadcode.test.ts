@@ -154,3 +154,32 @@ describe("deadcode: roots", () => {
     expect(names).toContain("b");
   });
 });
+
+describe("deadcode: dispatch", () => {
+  it("an override of a called method is live; so is one of a base outside the repo", () => {
+    const root = repo({
+      "shapes/base.py": "class Shape:\n    def area(self):\n        raise NotImplementedError\n\n    def perimeter(self):\n        raise NotImplementedError\n",
+      "shapes/square.py": [
+        "from shapes.base import Shape",
+        "",
+        "",
+        "class Square(Shape):",
+        "    def area(self):",
+        "        return 1",
+        "",
+        "    def perimeter(self):",
+        "        return 4",
+        "",
+      ].join("\n"),
+      "shapes/total.py": "from shapes.base import Shape\n\n\ndef total(x: Shape):\n    return x.area()\n",
+      "shapes/loader.py": "from jinja2 import BaseLoader\n\n\nclass Loader(BaseLoader):\n    def get_source(self, env, name):\n        return name\n",
+    });
+    const dead = findDeadCode(scanRepo(root)).map((d) => `${d.file}:${d.name}`);
+    // x.area() binds to Shape/area; Square/area runs whenever it is called.
+    expect(dead).not.toContain("shapes/square.py:area");
+    // Nothing calls perimeter, through the base or otherwise.
+    expect(dead).toContain("shapes/square.py:perimeter");
+    // get_source overrides jinja's BaseLoader method, which jinja calls.
+    expect(dead).not.toContain("shapes/loader.py:get_source");
+  });
+});

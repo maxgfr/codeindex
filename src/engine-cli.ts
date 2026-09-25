@@ -75,7 +75,10 @@ Commands:
               or by method set (name + parameter count, embedding included;
               marked "structural": true)
   callgraph   Bounded symbol-to-symbol neighborhood (--depth up to 5,
-              --direction)
+              --direction). An 'overrides' edge links a method to the
+              supertype method it replaces; --direction out through a method
+              reaches its overrides, --direction in to an override reaches
+              the base method's callers
               A <symbol> above is any of: name, name@file, file#name,
               file#Parent/name (a callgraph id), Parent/name
   workspaces  Monorepo packages + dependency graph (JSON)
@@ -134,9 +137,9 @@ Commands:
               (named elsewhere — import, type position, base-class list,
               same-name call site — but no call binds). Callables only unless
               --kinds all; test and tail files (--include-tail), the package's
-              public API (manifest entry points and what they re-export) and
+              public API (manifest entry points and what they re-export),
               language protocol names (__dunder__, Go init/main, constructor)
-              are never candidates. --limit <n> caps the list as
+              and overrides of live methods are never candidates. --limit <n> caps the list as
               {total, shown, truncated, candidates}
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
               positional for one file; omit for the repo-wide top (--limit,
