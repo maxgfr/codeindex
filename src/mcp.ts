@@ -181,17 +181,30 @@ const SCANLESS_TOOLS = new Set([
   "scan_summary",
 ]);
 
-async function callTool(name: string, args: Record<string, unknown>, defaultRepo?: string): Promise<string> {
-  // An explicit per-call `repo` always wins; `defaultRepo` is the server-level
-  // pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
-  // to one workspace, so agents need not know — or restate — the absolute path.
-  const repo = str(args.repo) ?? defaultRepo;
-  if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
+// The repository a call is about, in its ONE canonical spelling.
+//
+// An explicit per-call `repo` always wins; `defaultRepo` is the server-level
+// pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
+// to one workspace, so agents need not know — or restate — the absolute path.
+//
+// The session cache, the size guard and the watcher all key on this string,
+// so `/r`, `/r/`, `r` and `./r` used to be four cold scans (5.5-9 s each on a
+// 5k-file repo) filling all four LRU slots with one repository. resolve() is
+// the same normalization the CLI gives `--repo`; symlinks are deliberately
+// NOT followed, since the root's own name is what onboard reports.
+function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
+  const requested = str(args.repo) ?? defaultRepo;
+  if (!requested) throw new Error("`repo` is required (absolute path to the repository root)");
+  const repo = resolve(requested);
   try {
     if (!statSync(repo).isDirectory()) throw new Error("not a directory");
   } catch {
-    throw new Error(`repository root is not a readable directory: ${repo}`);
+    throw new Error(`repository root is not a readable directory: ${requested}`);
   }
+  return repo;
+}
+
+async function callTool(name: string, args: Record<string, unknown>, repo: string): Promise<string> {
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // `search`'s optional structural prior. The schema's enum has already
   // rejected anything else, so a typo no longer falls back to lexical in silence.
@@ -613,7 +626,11 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   let protocolVersion: string = PROTOCOL_VERSIONS[0];
   // Rebuilt when negotiation lands: the pin cannot change mid-session, but the
   // fields we are allowed to advertise depend on the version.
-  let tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
+  // Canonical like every per-call repo (see repoRoot): an embedder may pin a
+  // relative or slash-terminated path, and the watcher's invalidations must
+  // name the same session entries the calls do.
+  const defaultRepo = opts.defaultRepo === undefined ? undefined : resolve(opts.defaultRepo);
+  let tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
   // What a call is validated against: EVERY tool, whatever the profile. A
   // profile trims what is advertised, not what is answerable, so a tool called
   // by name from outside it must be checked like any other — looking it up in
@@ -621,27 +638,27 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   // pin is what shapes `required` (it drops `repo`); the protocol version
   // never touches an inputSchema, so one map serves the whole session.
   const callable = new Map(
-    (toolsFor(opts.defaultRepo) as { name: string; inputSchema: Parameters<typeof validateArgs>[0] }[]).map((t) => [
+    (toolsFor(defaultRepo) as { name: string; inputSchema: Parameters<typeof validateArgs>[0] }[]).map((t) => [
       t.name,
       t.inputSchema,
     ]),
   );
   let watcher: FSWatcher | undefined;
-  if (opts.watch && opts.defaultRepo) {
+  if (opts.watch && defaultRepo) {
     try {
-      watcher = watchFs(opts.defaultRepo, { recursive: true }, (_event, filename) => {
+      watcher = watchFs(defaultRepo, { recursive: true }, (_event, filename) => {
         const rel = filename?.toString().replaceAll("\\", "/") ?? "";
         const ignored = rel.split("/").some((segment) =>
           IGNORE_DIRS.has(segment) || segment.startsWith(".codeindex-edit-"),
         );
         if (ignored) return;
-        sessionInvalidate(opts.defaultRepo!, rel || undefined);
+        sessionInvalidate(defaultRepo, rel || undefined);
       });
       watcher.on("error", (error) => {
         process.stderr.write(`codeindex: MCP watcher disabled (${error.message}); using freshness scans\n`);
         watcher?.close();
         watcher = undefined;
-        sessionInvalidate(opts.defaultRepo!);
+        sessionInvalidate(defaultRepo);
       });
     } catch (error) {
       process.stderr.write(
@@ -742,7 +759,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     try {
       if (req.method === "initialize") {
         protocolVersion = negotiateProtocol(req.params?.protocolVersion);
-        tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
+        tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
         return respond({
           result: {
             protocolVersion,
@@ -813,8 +830,8 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
 
   async function callResult(name: string, args: Record<string, unknown>, version: string): Promise<Record<string, unknown>> {
     try {
-      const raw = await callTool(name, args, opts.defaultRepo);
-      const repo = str(args.repo) ?? opts.defaultRepo ?? "";
+      const repo = repoRoot(args, defaultRepo);
+      const raw = await callTool(name, args, repo);
       const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
       // A capped whole-repo response points at an artifact already on disk.
       // From 2025-06-18 the protocol has a content type that says exactly

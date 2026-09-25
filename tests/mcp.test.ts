@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, write
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -1315,6 +1315,24 @@ describe("MCP --repo pin", () => {
     const res = await mcpSession([...handshake, { id: 2, method: "tools/call", params: { name: "scan_summary", arguments: {} } }]);
     expect(res.get(2)!.result!.isError).toBe(true);
     expect(res.get(2)!.result!.content![0]!.text).toContain("`repo` is required");
+  }, 20_000);
+
+  // `/r`, `/r/`, `r` and `./r` were four session entries — four cold scans
+  // filling the whole LRU with one repository. The canonical spelling is what
+  // reaches the session cache and the size guard alike, and the guard's
+  // notice shows it.
+  it("canonicalizes every spelling of a repo path to one root", async () => {
+    const rel = relative(process.cwd(), REPO);
+    const spellings = [REPO, `${REPO}/`, rel, `./${rel}`, `${REPO}/src/..`];
+    const res = await mcpSession(
+      spellings.map((repo, i) => ({ id: i + 1, method: "tools/call", params: { name: "graph", arguments: { repo } } })),
+      undefined,
+      [CLI, "mcp", "--max-response-bytes", "40"],
+    );
+    spellings.forEach((repo, i) => {
+      const notice = JSON.parse(res.get(i + 1)!.result!.content![0]!.text) as { artifactNote: string };
+      expect(notice.artifactNote, repo).toBe(`Run \`codeindex index --repo ${REPO} --out ${join(REPO, ".codeindex")}\` to get this as a file.`);
+    });
   }, 20_000);
 
   it("lets an explicit per-call repo override the pin", async () => {
