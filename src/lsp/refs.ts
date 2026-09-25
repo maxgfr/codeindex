@@ -62,12 +62,89 @@ export function lspUnavailable(server: string, reason: string): LspBlock {
  */
 export function columnOfSymbol(root: string, rel: string, line: number, name: string): number {
   try {
-    const lines = readFileSync(join(root, rel), "utf8").split(/\r?\n/);
-    const index = lines[line - 1]?.indexOf(name) ?? -1;
-    return index < 0 ? 0 : index;
+    const text = readFileSync(join(root, rel), "utf8").split(/\r?\n/)[line - 1];
+    return text === undefined ? 0 : nameColumn(text, name);
   } catch {
     return 0;
   }
+}
+
+const IDENT_CHAR = /[\p{L}\p{N}_$]/u;
+
+/**
+ * Where `name` starts on one declaration line, as a UTF-16 offset (LSP's
+ * default position encoding, and what a JS string index already is).
+ *
+ * A bare substring search is wrong often enough to matter, and wrong in the
+ * worst way: the anchor lands inside `async` (`async def sync`), `def`
+ * (`def f`), `export` (`export function port`) or a Go receiver type
+ * (`func (w *responseWriter) Write`), and the server answers — confidently,
+ * `ok: true` — about a keyword or a different type. So the match must be a
+ * whole identifier, and a Go receiver is skipped: it is the one common syntax
+ * that names ANOTHER type before the declared name, possibly with the same
+ * spelling (`func (n Node) Node()`).
+ *
+ * The first whole match is the name, with one exception: a name spelled like
+ * the modifier or keyword that may precede it (`readonly readonly: boolean`,
+ * `get get()`, `async function async`). For those, the LAST match before the
+ * first parameter list, annotation, initializer or body opener is taken. It
+ * is not the general rule because Go writes the type AFTER the name with
+ * nothing in between (`Params Params`, `node *node`).
+ */
+export function nameColumn(text: string, name: string): number {
+  if (!name) return 0;
+  const guardStart = IDENT_CHAR.test(name[0]!);
+  const guardEnd = IDENT_CHAR.test(name[name.length - 1]!);
+  const isWhole = (at: number): boolean =>
+    (!guardStart || at === 0 || !IDENT_CHAR.test(text[at - 1]!)) &&
+    (!guardEnd || at + name.length >= text.length || !IDENT_CHAR.test(text[at + name.length]!));
+  const wholeFrom = (from: number): number[] => {
+    const hits: number[] = [];
+    for (let at = text.indexOf(name, from); at >= 0; at = text.indexOf(name, at + 1)) if (isWhole(at)) hits.push(at);
+    return hits;
+  };
+  const skip = goReceiverEnd(text);
+  const hits = wholeFrom(skip);
+  if (hits.length) {
+    if (!DECLARATION_WORDS.has(name)) return hits[0]!;
+    const head = headEnd(text, skip);
+    const inHead = hits.filter((at) => at < head);
+    return inHead.length ? inHead[inHead.length - 1]! : hits[0]!;
+  }
+  // A substring-only hit is exactly the keyword-interior case above, so it is
+  // not a fallback: column 0 is.
+  return skip > 0 ? (wholeFrom(0)[0] ?? 0) : 0;
+}
+
+// Words that open or modify a declaration in the languages with a language
+// server worth configuring, and that are also legal member names in at least
+// one of them.
+const DECLARATION_WORDS = new Set([
+  "abstract", "async", "const", "declare", "def", "default", "export", "final", "fn", "fun", "func",
+  "function", "get", "internal", "let", "open", "override", "private", "protected", "pub", "public",
+  "readonly", "set", "static", "type", "val", "var", "virtual",
+]);
+
+/** First `(`, `:` (not `::`), `=`, `<`, `{` or `;` at or after `from`. */
+function headEnd(text: string, from: number): number {
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (c === ":" && (text[i + 1] === ":" || text[i - 1] === ":")) continue;
+    if (c === "(" || c === ":" || c === "=" || c === "<" || c === "{" || c === ";") return i;
+  }
+  return text.length;
+}
+
+/** Offset just past `func (...)`, or 0 when the line is not a Go method. */
+function goReceiverEnd(text: string): number {
+  const head = /^\s*func\s*\(/.exec(text);
+  if (!head) return 0;
+  let depth = 0;
+  for (let i = head[0].length - 1; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    else if (text[i] === ")" && --depth === 0) return i + 1;
+  }
+  return 0;
 }
 
 /** Cross the two answers into the agreement matrix, deterministically. */

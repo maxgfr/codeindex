@@ -20,7 +20,7 @@ import { createFramer, encodeMessage, fileUri, relFromUri, locationsToRefs } fro
 import { openLspSession, LspTimeout, type LspTransport } from "../src/lsp/client.js";
 import { parseLspConfig, resolveLspConfigPath, serverForLang, loadLspConfig } from "../src/lsp/config.js";
 import { spawnLspTransport } from "../src/lsp/spawn.js";
-import { agreementOf, columnOfSymbol } from "../src/lsp/refs.js";
+import { agreementOf, columnOfSymbol, nameColumn } from "../src/lsp/refs.js";
 import { lspStatus, referencesWithLsp } from "../src/lsp/index.js";
 import { findReferences } from "../src/query.js";
 import { scanRepo } from "../src/scan.js";
@@ -328,6 +328,43 @@ describe("agreement matrix", () => {
   it("derives a column from source rather than persisting one", () => {
     // CodeSymbol carries no column on purpose; LSP needs one.
     expect(columnOfSymbol(MINI, "src/client.ts", 1, "definitely-not-there")).toBe(0);
+  });
+
+  it("anchors on the declared identifier, not the first substring hit", () => {
+    // Each of these used to anchor inside a keyword or a receiver type, and the
+    // server answered ok:true with nothing — a confident, empty LSP answer.
+    const cases: [string, string, number][] = [
+      ["async def sync(x):", "sync", 10],
+      ["def f(y):", "f", 4],
+      ["export function port() {}", "port", 16],
+      ["export async function sync() {}", "sync", 22],
+      ["export function on(event: string) {}", "on", 16],
+      ["func (w *responseWriter) Write(data []byte) (n int, err error) {", "Write", 25],
+      ["func (protobufBinding) Bind(req *http.Request, obj any) error {", "Bind", 23],
+      ["func (err SliceValidationError) Error() string {", "Error", 32],
+      // A receiver may share the method's spelling.
+      ["func (n Node) Node() {}", "Node", 14],
+      // Go puts the type after the name: the first match is the field.
+      ["\tParams   Params", "Params", 1],
+      ["\tnode        *node", "node", 1],
+      // A name spelled like its own modifier is the last one in the head.
+      ["  readonly readonly: boolean;", "readonly", 11],
+      ["  get get() { return 1; }", "get", 6],
+      ["async function async() {}", "async", 15],
+      // Names that are not identifiers at both ends still match.
+      ["  def save!(x)", "save!", 6],
+    ];
+    for (const [line, name, want] of cases) expect([line, nameColumn(line, name)]).toEqual([line, want]);
+    // Only a substring hit (the name is not on this line): column 0, never a
+    // position inside a keyword.
+    expect(nameColumn("def fetch(self):", "f")).toBe(0);
+  });
+
+  it("reads the declaration line from disk", () => {
+    const dir = mkdtempSync(join(tmpdir(), "codeindex-lsp-col-"));
+    writeFileSync(join(dir, "mod.py"), "import os\r\nasync def sync(x):\r\n    return x\r\n");
+    expect(columnOfSymbol(dir, "mod.py", 2, "sync")).toBe(10);
+    expect(columnOfSymbol(dir, "missing.py", 2, "sync")).toBe(0);
   });
 });
 
