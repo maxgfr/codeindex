@@ -36,11 +36,31 @@ compares](#how-it-compares).
 - **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
   `grammars pull`) or per-language regex rules (16 languages, always available).
   Each symbol carries its **complete signature** (parameters and return type,
-  not the first physical line), its own **doc comment**, its qualified `parent`,
+  not the first physical line; one line, with no comment and no body — not an
+  arrow's expression body, a Go interface's method list or a macro's
+  expansion), its own **doc comment**, its qualified `parent`,
   and its line span — including the members a declaration-only walk misses:
   interface members, class fields, enum members, every `declare`/`.d.ts`
-  declaration, Rust trait method signatures, Go interface method sets, record
-  components and constructor `val` parameters.
+  declaration, Rust trait method signatures, Go interface method sets and type
+  aliases, record components, constructor `val` parameters and their
+  TypeScript (`private readonly dep: Dep`) and PHP 8 (promoted) twins, every
+  name of a multi-name declaration (`var a, b int`, `int x, y;`,
+  `a, b = 1, 2`), C `#define` macros and the members of a `typedef struct`,
+  Python declarations under `if TYPE_CHECKING:` / `try:` / `with` blocks, Ruby
+  `class << self` methods, `private def x` definitions and the block of
+  `Point = Struct.new(…) do`, Elixir clauses with a `when` guard and
+  `defguard`, and the members of a class bound by `module.exports =` or an
+  anonymous `export default class` (a default export with no name of its own
+  is named after the file stem). A doc comment is found across Rust
+  attributes and TypeScript decorators. Visibility is read from a
+  declaration's modifiers, never from its parameter names or default values;
+  an `export { … }` list marks only the bindings of its own scope; and a
+  Python module's `__all__` (when written as literals) decides which of its
+  top-level names are public, the names it imports and lists becoming
+  `reexport` symbols. An out-of-line C++ definition (`void Widget::draw()`)
+  belongs to its class, and a Lua `function M.go()` to its table; a `.h`
+  header is parsed as C++ when its content is (a namespace, class or
+  template), as C otherwise.
 - **Resolve imports** across languages: tsconfig `paths` (tsc's precedence:
   exact alias, then longest prefix) and `baseUrl`, `extends` chains into
   workspace packages and `${configDir}`, package `exports` and `imports`
@@ -82,7 +102,7 @@ vocabulary:
 | **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, against ctags' 94.6% on the same files |
 | **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | reports **2,014** declarations ctags does not over 6 real repositories, and reproduces **61.7%–98.8%** of ctags' names — what is left bucketed by kind, per repo below |
 | **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
-| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **208** declaration-ish node types still unhandled |
+| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **209** declaration-ish node types still unhandled |
 
 ### The one head-to-head
 
@@ -172,12 +192,12 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 265 labelled declarations in 18 files |
-| kind accuracy | **100%** | the same 265 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 94.4% on Go | the same 265 declarations |
-| doc comment attached | **100%** | the 147 declarations labelled with a doc |
-| complete signature | **100%** | the 29 declarations labelled with a signature |
-| call edges / inheritance (F1) | **100% / 100%** | 47 labelled call sites, 21 relations |
+| symbol precision / recall | **100% / 100%** | 346 labelled declarations in 23 files |
+| kind accuracy | **100%** | the same 346 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.8% on Go | the same 346 declarations |
+| doc comment attached | **100%** | the 188 declarations labelled with a doc |
+| complete signature | **100%** | the 32 declarations labelled with a signature |
+| call edges / inheritance (F1) | **100% / 100%** | 54 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
 
 `pnpm quality:report` reproduces every number; `tests/quality.test.ts` enforces
@@ -491,7 +511,7 @@ flattening them into one confidence-free list:
 | `bypassed` | a constant holds it, other files rewrite it anyway | import the constant at those sites |
 | `uncentralized` | nothing holds it | decide whether it deserves an owner |
 
-Two things make the output readable rather than a wall of strings:
+Three things make the output readable rather than a wall of strings:
 
 - **Namespace families.** Path-like values are grouped by their root, so an app
   with forty route literals reports one `/checkout` finding, not forty.
@@ -500,6 +520,11 @@ Two things make the output readable rather than a wall of strings:
   cross a language boundary — a threshold declared in TypeScript and again in a
   rules JSON, a route called from a Kubernetes manifest. Nothing else compares
   those pairs.
+- **Only fixed values count.** A template with an interpolation (`${id}`,
+  `f"{id}"`, `#{id}`) is not a value another file could restate, and a string
+  standing alone as a statement — a Python docstring, a `"use client"`
+  directive — is documentation or a pragma. Wherever a grammar parsed the file,
+  neither is collected (the regex fallback reads lines, not syntax).
 
 ```sh
 codeindex literals --repo . --min-files 3 --min-count 5   # tighten the floors
@@ -642,8 +667,8 @@ tested architecture and runtime checks.
 `codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six
 weighted fields: symbol names, path segments, markdown headings, the file
 summary, per-symbol **doc comments**, and the **prose body** (words from comments
-and short string literals, captured at extraction time so they ride the
-incremental cache).
+and short string literals, a template's fixed text included, captured at
+extraction time so they ride the incremental cache).
 
 The last two are the point. An index built only from names — what a tags file or
 a symbol-only search ships — is a perfectly scored index of the wrong text: the

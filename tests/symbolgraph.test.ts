@@ -164,8 +164,6 @@ describe("neighborhood", () => {
   });
 
   it("survives a call cycle", () => {
-    // Two-letter names on purpose: extraction drops single-character callees as
-    // noise (`name.length < 2`), so `a()` would never become a call site at all.
     const g = graphOf({
       "aa.ts": ['import { bb } from "./bb.js";', "export function aa(): number {", "  return bb();", "}", ""].join("\n"),
       "bb.ts": ['import { aa } from "./aa.js";', "export function bb(): number {", "  return aa();", "}", ""].join("\n"),

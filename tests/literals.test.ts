@@ -4,6 +4,8 @@ import { join, dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findLiteralDuplications } from "../src/literals.js";
 import { collectLiteralsRegex, extractCode } from "../src/extract/code.js";
+import { unquote } from "../src/extract/literals.js";
+import { grammarReady } from "../src/ast/loader.js";
 import { scanRepo } from "../src/scan.js";
 import type { FileRecord } from "../src/types.js";
 import type { RepoScan } from "../src/scan.js";
@@ -115,6 +117,12 @@ describe("literal duplication tiers", () => {
       rec("fn3.ts", {
         literals: [{ value: PATH, line: 4, kind: "string" }],
         symbols: [{ ...holder("onStart", 1, "onStart = async ()"), endLine: 9, exported: false }],
+      }),
+      // An expression body is cut too, so a one-parameter arrow keeps only its
+      // parameter: `const toHref = id => "…"` arrives as `toHref = id`.
+      rec("fn4.ts", {
+        literals: [{ value: PATH, line: 1, kind: "string" }],
+        symbols: [holder("toHref", 1, "toHref = id")],
       }),
     ]);
     const [dup] = findLiteralDuplications(scan).duplications;
@@ -323,5 +331,73 @@ describe("extraction tier parity", () => {
     expect(threshold).toMatchObject({ tier: "bypassed" });
     expect(threshold!.holders.map((h) => h.holder)).toEqual(["THRESHOLD"]);
     expect(threshold!.literals.map((l) => l.file)).toEqual(["rules.json"]);
+  });
+});
+
+// Every tree-sitter-python `string` holds string_start/string_end delimiter
+// nodes, so the AST tier once judged no Python string a plain value: `literals`
+// saw nothing but numbers in a Python repo. Pinned over REAL extraction, not
+// hand-built records, so the grammar/extractor contract is what is tested.
+describe("Python string literals", () => {
+  const values = (rel: string, src: string) =>
+    (extractCode(rel, rel.slice(rel.lastIndexOf(".")), src).literals ?? []).map((l) => `${l.value} @${l.line}`);
+
+  it("are read by the AST tier", () => {
+    expect(grammarReady("python")).toBe(true);
+    const src = [
+      'API_ROOT = "/api/v1/users"',
+      "RAW = r'^/users/\\d+$'",
+      'BLOCK = """shared-value"""',
+      "def root():",
+      '    """Return the users route."""',
+      '    return f"/api/v1/users/{uid}" or "fallback-route"',
+      "",
+    ].join("\n");
+    // The docstring is documentation, and the f-string a template: neither is a
+    // value another file could restate.
+    expect(values("m.py", src)).toEqual(["/api/v1/users @1", "^/users/\\d+$ @2", "fallback-route @6", "shared-value @3"]);
+  });
+
+  it("agree with the regex tier on single-line values", () => {
+    const src = ['API_ROOT = "/api/v1/users"', "TIMEOUT = 4096", "KEY = 'SESSION_COOKIE_SAMESITE'", ""].join("\n");
+    const shape = (ls: { kind: string; value: string; line: number }[]) =>
+      ls.map((l) => `${l.kind} ${l.value} @${l.line}`).sort();
+    const ast = extractCode("m.py", ".py", src).literals ?? [];
+    expect(shape(ast)).toEqual(shape(collectLiteralsRegex(src) ?? []));
+    expect(shape(ast)).toContain("string SESSION_COOKIE_SAMESITE @3");
+  });
+
+  it("feed the duplication analysis", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-literals-py-"));
+    for (const name of ["a", "b", "c"]) {
+      writeFileSync(join(dir, `${name}.py`), `API_ROOT = "/api/v1/users"\n\ndef ${name}():\n    return "/api/v1/users"\n`);
+    }
+    const dup = findLiteralDuplications(scanRepo(dir)).duplications.find((d) => d.value === "/api/v1/users");
+    expect(dup).toMatchObject({ tier: "competing", files: 3, count: 6 });
+    expect(dup!.holders.map((h) => `${h.file}:${h.holder}`)).toEqual(["a.py:API_ROOT", "b.py:API_ROOT", "c.py:API_ROOT"]);
+  });
+});
+
+describe("a string that is a statement", () => {
+  it("is a directive, not a literal", () => {
+    const lits = extractCode("page.tsx", ".tsx", '"use client";\nexport const route = "/app/settings";\n').literals ?? [];
+    expect(lits.map((l) => l.value)).toEqual(["/app/settings"]);
+  });
+});
+
+describe("unquote", () => {
+  it("strips a triple-quoted delimiter whole", () => {
+    expect(unquote('"""shared-value"""')).toBe("shared-value");
+    expect(unquote("'''shared-value'''")).toBe("shared-value");
+    expect(unquote('r"""^\\d+$"""')).toBe("^\\d+$");
+    expect(unquote('""""""')).toBe("");
+  });
+
+  it("strips one quote a side otherwise", () => {
+    expect(unquote('"a"')).toBe("a");
+    expect(unquote('""')).toBe("");
+    expect(unquote('@"say ""hi"""')).toBe('say ""hi""');
+    expect(unquote('r#"raw"#')).toBe("raw");
+    expect(unquote("`tick`")).toBe("tick");
   });
 });

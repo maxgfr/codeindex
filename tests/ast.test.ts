@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { ensureGrammars, allGrammarKeys, grammarReady } from "../src/ast/loader.js";
 import { extractAst } from "../src/ast/extract.js";
+import { collectCallsRegex } from "../src/extract/code.js";
 
 // Load every committed grammar once before the suite. This exercises the exact
 // path the CLI uses (wasmBinary init + Language.load from scripts/grammars/).
@@ -168,11 +169,12 @@ describe("AST call-site + imported-name collection", () => {
     expect(names).toContain("render");
   });
 
-  it("drops single-character and computed callees, and has no calls for a regex-fallback language", () => {
-    // `x()` is below the length-2 floor; a bracket/computed call has no static name.
-    const names = callNames("a.ts", ".ts", "export function r() {\n  x();\n  tbl['k']();\n  ok();\n}\n");
-    expect(names).not.toContain("x");
-    expect(names).toContain("ok");
+  it("keeps one-letter callees, drops `_` and computed callees, and has no calls for a regex-fallback language", () => {
+    // `x()` is a name like any other (the binder discards what nothing
+    // defines); `_` is a discard or gettext's alias; a bracket/computed call has
+    // no static name.
+    const names = callNames("a.ts", ".ts", "export function r() {\n  x();\n  _('msg');\n  tbl['k']();\n  ok();\n}\n");
+    expect(names).toEqual(["ok", "x"]);
     // Swift has no committed grammar → extractAst is undefined, so no calls.
     expect(extractAst("s.swift", ".swift", "f()")).toBeUndefined();
   });
@@ -183,6 +185,43 @@ describe("AST call-site + imported-name collection", () => {
     expect(extractAst("caps.ts", ".ts", src)!.calls.length).toBe(4);
     // Capped: at most 2 — dedup/sort semantics unchanged, then sliced.
     expect(extractAst("caps.ts", ".ts", src, { maxCalls: 2 })!.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  // tsgo's parser.go kept 512 of its 2,748 call sites and every one was an
+  // exported (uppercase) call: the cap sliced the NAME-sorted list, and
+  // code-unit order puts `Z` before `a`. `parseStatement` had no caller.
+  it("keeps one site per distinct callee, in source order, before filling the cap", () => {
+    const src = ["export function run() {", "  Alpha();", "  Alpha();", "  Alpha();", "  Bravo();", "  Bravo();", "  lower();", "  zulu();", "}"].join(
+      "\n",
+    );
+    const sites = (max: number) => extractAst("caps.ts", ".ts", src, { maxCalls: max })!.calls.map((c) => `${c.name}@${c.line}`);
+    expect(sites(4)).toEqual(["Alpha@2", "Bravo@5", "lower@7", "zulu@8"]);
+    expect(sites(6)).toEqual(["Alpha@2", "Alpha@3", "Alpha@4", "Bravo@5", "lower@7", "zulu@8"]);
+    expect(sites(2)).toEqual(["Alpha@2", "Bravo@5"]);
+    // The regex tier keeps the very same sites.
+    const regex = collectCallsRegex(src, [], 4).map((c) => `${c.name}@${c.line}`);
+    expect(regex).toEqual(sites(4));
+  });
+
+  it("truncates referenced identifiers and named imports in source order, not name order", () => {
+    const ids = (p: string, n: number) => Array.from({ length: n }, (_, i) => `${p}${String(i).padStart(3, "0")}`);
+    const src = [
+      // Four-letter import names stay under the idents' five-letter floor.
+      `import { ${[...ids("z", 150), ...ids("a", 150)].join(", ")} } from "./names";`,
+      `use(${[...ids("lower", 300), ...ids("Upper", 300)].join(", ")});`,
+    ].join("\n");
+    const r = extractAst("big.ts", ".ts", src)!;
+    // 512 idents: every lowercase one written first, then the first 212 Upper*.
+    expect(r.idents).toHaveLength(512);
+    expect(r.idents).toContain("lower299");
+    expect(r.idents).toContain("Upper211");
+    expect(r.idents).not.toContain("Upper212");
+    expect(r.idents).toEqual([...r.idents].sort());
+    // 256 imported names: all 150 z*, then the first 106 a*.
+    expect(r.importedNames).toHaveLength(256);
+    expect(r.importedNames).toContain("z149");
+    expect(r.importedNames).toContain("a105");
+    expect(r.importedNames).not.toContain("a106");
   });
 });
 
@@ -325,9 +364,12 @@ describe("Lua AST extraction", () => {
   it("extracts declaration- and assignment-style functions; `local function` is not exported", () => {
     const syms = extractAst("m.lua", ".lua", src)!.symbols;
     expect(syms.find((s) => s.name === "hidden")!.exported).toBe(false); // local function → file-local
-    expect(syms.find((s) => s.name === "M.add")!.exported).toBe(true); // dotted name kept whole
-    expect(syms.find((s) => s.name === "M:method")!.exported).toBe(true); // colon method form
-    const alias = syms.find((s) => s.name === "M.alias")!; // assignment-style def
+    // A table function is the table's member: named by its last segment (what
+    // a call site records), parented to the table.
+    expect(syms.find((s) => s.name === "add" && s.parent === "M")!.exported).toBe(true);
+    expect(syms.find((s) => s.name === "method" && s.parent === "M")!.exported).toBe(true); // colon method form
+    expect(syms.some((s) => /[.:]/.test(s.name))).toBe(false);
+    const alias = syms.find((s) => s.name === "alias" && s.parent === "M")!; // assignment-style def
     expect(alias.kind).toBe("function");
     expect(alias.line).toBe(15);
     expect(alias.endLine).toBe(17);

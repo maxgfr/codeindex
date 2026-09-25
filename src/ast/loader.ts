@@ -50,6 +50,31 @@ export function grammarKeyForExt(ext: string): string | undefined {
   return EXT_GRAMMAR[ext];
 }
 
+// `.h` is the one extension two shipped grammars claim. It maps to C, and a C++
+// header parsed as C is mostly ERROR nodes: leveldb's 56 headers yielded 142
+// symbols that way against 963 as C++ — fewer than the regex tier found — with
+// `namespace leveldb` read as a function and the whole `DB` class gone. Parsing
+// every `.h` as C++ is no fix either, since a pure-C header (cJSON's) loses a
+// third of its symbols to C++'s stricter grammar. So the content decides, on
+// constructs C cannot contain: a namespace block or `using namespace`, a
+// template, a class head (optionally behind an export macro:
+// `class LEVELDB_EXPORT DB {`), an access specifier, a standard C++ include
+// (`<string>` — C's are all `.h`), or `extern "C++"`. Each alternative is
+// anchored at a line start so prose in a comment rarely trips it, and leading
+// indentation is `[ \t]*` so a run of blank lines is never rescanned.
+// Deterministic: a pure function of the bytes.
+const CPP_HEADER =
+  /^[ \t]*(?:namespace(?:[ \t]+[A-Za-z_][\w:]*)?\s*\{|using[ \t]+namespace[ \t]|template[ \t]*<|class[ \t]+(?:[A-Z_][A-Z0-9_]*[ \t]+)?[A-Za-z_]\w*(?:[ \t]+final)?[ \t]*(?:[:;{]|$)|(?:public|private|protected)[ \t]*:(?!:)|#[ \t]*include[ \t]*<[a-z_]+>|extern[ \t]+"C\+\+")/m;
+
+// The grammar to parse ONE file with: the extension's, except a `.h` whose
+// content reads as C++ (above). The file keeps its "c" language either way —
+// c and cpp are one family for every cross-file join — so this changes how the
+// header is parsed, not what it is.
+export function grammarKeyFor(ext: string, content: string): string | undefined {
+  const key = EXT_GRAMMAR[ext];
+  return ext === ".h" && CPP_HEADER.test(content) ? "cpp" : key;
+}
+
 // Which supplier furnished the resolved grammars dir. Reported by
 // `codeindex grammars status`; "none" is the regex-tier signal.
 export type GrammarsTierName = "adjacent" | "env" | "cache" | "none";
@@ -222,7 +247,8 @@ export function allGrammarKeys(): string[] {
 }
 
 // The grammar keys needed for a set of file extensions: each mapped through
-// EXT_GRAMMAR, unknown extensions dropped, then deduped and sorted. Warming
+// EXT_GRAMMAR (and `.h` to cpp as well — see grammarKeyFor), unknown extensions
+// dropped, then deduped and sorted. Warming
 // exactly this set (instead of every committed grammar) skips the wasm load for
 // languages the repo doesn't contain, while keeping output byte-identical:
 // extractAst falls back to regex only when grammarReady(key) is false, and the
@@ -234,6 +260,10 @@ export function grammarKeysForExts(exts: Iterable<string>): string[] {
   for (const ext of exts) {
     const key = EXT_GRAMMAR[ext];
     if (key !== undefined) keys.add(key);
+    // A `.h` may be parsed as C++ (grammarKeyFor). Leaving cpp cold in a repo
+    // with no .cpp would send those headers to the C grammar instead, making the
+    // output depend on which OTHER files the repo has.
+    if (ext === ".h") keys.add("cpp");
   }
   return [...keys].sort();
 }

@@ -1,7 +1,7 @@
 import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector } from "./literals.js";
 import { extractSymbols } from "../lang/registry.js";
-import { extractAst } from "../ast/extract.js";
+import { capCallSites, extractAst } from "../ast/extract.js";
 import { extractReexports, MAX_REEXPORTS } from "../lang/common.js";
 import { isBanner, isDirective, stripCommentMarkers } from "./doc-text.js";
 import { subtokens } from "../util.js";
@@ -438,7 +438,8 @@ const DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bm
 // Regex-tier call-site collection for files with no AST grammar — a
 // conservative `identifier(` scan so call data exists wasm-free (the AST tier
 // stays authoritative when available). Same contract as ast/extract's
-// collector: cap 512, deduped by name+line, sorted by name then line. An
+// collector: deduped by name+line, capped at 512 by the same capCallSites
+// (so the file is scanned to its end), sorted by name then line. An
 // immediate `receiver.` prefix is captured too (`axios.get(` → receiver
 // "axios"; `a.b.c(` → receiver "b" — the group anchors to the segment right
 // before the called name); bare calls carry no receiver.
@@ -474,7 +475,7 @@ export function collectCallsRegex(
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
   const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
-  for (let i = 0; i < lines.length && out.size < maxCalls; i++) {
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     // Cheap comment guard: a line-leading comment marker means no calls here
     // (block-comment interiors and strings stay best-effort, like the symbol
@@ -499,7 +500,7 @@ export function collectCallsRegex(
     CALL_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
     const fallbackExcluded = new Set<string>();
-    while ((m = CALL_RE.exec(line)) !== null && out.size < maxCalls) {
+    while ((m = CALL_RE.exec(line)) !== null) {
       const receiver = m[1];
       const name = m[2]!;
       if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
@@ -514,7 +515,7 @@ export function collectCallsRegex(
       if (!out.has(key)) out.set(key, receiver ? { name, line: i + 1, receiver } : { name, line: i + 1 });
     }
   }
-  return [...out.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.line - b.line));
+  return capCallSites([...out.values()], maxCalls);
 }
 
 const MAX_TERMS = 512;

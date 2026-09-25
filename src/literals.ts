@@ -100,8 +100,11 @@ const FAMILY_MIN_PREFIX = 4;
 // declaration header, so `const onStart = async () => { … }` arrives as
 // `onStart = async ()` with no `=>` to key on. Requiring the arrow missed every
 // multi-line handler and reported it as a source of truth for the paths in its
-// body.
-const FUNCTION_RHS = /^\s*(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*=>)/;
+// body. An arrow's EXPRESSION body is cut the same way, so a one-parameter
+// `const toHref = id => "/a/" + id` arrives as `toHref = id`: a lone identifier
+// ending the header is that parameter. (A true alias, `const A = B`, holds no
+// literal in its one-line span either way.)
+const FUNCTION_RHS = /^\s*(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*(?:=>|$))/;
 
 function isFunctionValued(signature: string | undefined): boolean {
   if (!signature) return false;

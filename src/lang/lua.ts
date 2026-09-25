@@ -13,6 +13,12 @@ export const lua = {
   lang: "lua",
   exts: [".lua"],
   extract(rel: string, content: string): CodeSymbol[] {
-    return scan(rel, content, "lua", RULES);
+    // A table function (`M.go`, `M:start`) is the table's member, named by its
+    // last segment — what a call site (`u.go()`) records — exactly as the AST
+    // tier names it (see luaMember in ast/specs.ts).
+    return scan(rel, content, "lua", RULES).map((s) => {
+      const at = Math.max(s.name.lastIndexOf("."), s.name.lastIndexOf(":"));
+      return at > 0 && at < s.name.length - 1 ? { ...s, name: s.name.slice(at + 1), parent: s.name.slice(0, at) } : s;
+    });
   },
 };

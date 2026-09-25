@@ -25,7 +25,15 @@ class Scheduler extends BaseWorker implements Runnable
     public const MAX_ATTEMPTS = 5;
 
     /** Jobs waiting for a slot. */
-    private array $pending = [];
+    private array $pending = [], $failed = [];
+
+    public function __construct(
+        private readonly Clock $clock,
+        /** How many jobs run at once. */
+        public int $capacity = 4,
+        int $seed = 0,
+    ) {
+    }
 
     /** Drain the pending queue. */
     public function start(): void
@@ -50,6 +58,11 @@ class Scheduler extends BaseWorker implements Runnable
     private function reset(): void
     {
         $this->pending = [];
+    }
+
+    /** Stop taking jobs; `$private` keeps the pause out of the audit log. */
+    public function pause(bool $private = false): void
+    {
     }
 
     public function depth(): int

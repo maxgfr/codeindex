@@ -92,6 +92,22 @@
           "parent": "String"
         },
         {
+          "name": "Credentials",
+          "kind": "class",
+          "doc": true
+        },
+        {
+          "name": "user",
+          "parent": "Credentials",
+          "kind": "val"
+        },
+        {
+          "name": "secret",
+          "parent": "Credentials",
+          "kind": "val",
+          "exported": false
+        },
+        {
           "name": "SchedulerFactory",
           "kind": "object",
           "doc": true

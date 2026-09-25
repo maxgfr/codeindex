@@ -20,6 +20,7 @@
         { "name": "JobSpec", "parent": "worker", "kind": "struct", "doc": true },
         { "name": "name", "parent": "JobSpec", "kind": "field", "doc": true },
         { "name": "attempts", "parent": "JobSpec", "kind": "field" },
+        { "name": "priority", "parent": "JobSpec", "kind": "field" },
         { "name": "Runnable", "parent": "worker", "kind": "class", "doc": true },
         { "name": "start", "parent": "Runnable", "kind": "method" },
         { "name": "depth", "parent": "Runnable", "kind": "method" },
@@ -46,6 +47,33 @@
       ],
       "calls": [],
       "relations": [{ "kind": "extends", "from": "Scheduler", "to": "Runnable" }]
+    },
+    "service.cpp": {
+      "symbols": [
+        { "name": "worker", "kind": "namespace" },
+        { "name": "backoff_ms", "parent": "detail", "kind": "function", "doc": true },
+        { "name": "start", "parent": "Scheduler", "kind": "function", "doc": true },
+        { "name": "dispatch", "parent": "Scheduler", "kind": "function", "sig": "int max_attempts" },
+        { "name": "depth", "parent": "Scheduler", "kind": "function" },
+        { "name": "operator==", "parent": "worker", "kind": "function", "doc": true }
+      ],
+      "calls": [],
+      "relations": []
+    },
+    "policy.h": {
+      "symbols": [
+        { "name": "worker", "kind": "namespace" },
+        { "name": "RetryPolicy", "parent": "worker", "kind": "class", "doc": true },
+        { "name": "RetryPolicy", "parent": "RetryPolicy", "kind": "function", "doc": true },
+        { "name": "~RetryPolicy", "parent": "RetryPolicy", "kind": "function" },
+        { "name": "allows", "parent": "RetryPolicy", "kind": "method", "doc": true },
+        { "name": "name", "parent": "RetryPolicy", "kind": "method", "doc": true },
+        { "name": "operator=", "parent": "RetryPolicy", "kind": "function" },
+        { "name": "operator bool", "parent": "RetryPolicy", "kind": "function", "doc": true },
+        { "name": "max_attempts_", "parent": "RetryPolicy", "kind": "field", "exported": false }
+      ],
+      "calls": [],
+      "relations": []
     }
   }
 }
