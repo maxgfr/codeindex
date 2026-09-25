@@ -767,10 +767,43 @@ labels and LSP metadata stay intact. Defaults retain their full existing shape.
 `symbols` keeps its name-keyed groups and references for full-index requests.
 The option is a query projection; it never changes persisted artifacts.
 
-Symbolic edits preserve supported source encodings (UTF-8/BOM, UTF-16 LE/BE,
-Latin-1) and line endings. Malformed UTF-16 and replacements that cannot be
-represented in a Latin-1 source fail before writing. Memory notes stay under
-`.codeindex/memories`; linked storage paths are refused rather than followed.
+### Symbolic edits
+
+`replace_symbol_body`, `insert_after_symbol` and `insert_before_symbol` resolve
+`namePath` over every matching declaration. `file` narrows the matches to one
+file (`./src/a.ts` and absolute paths inside the repo are accepted). `line`
+selects one of several same-file homonyms, such as a property getter and
+setter or TypeScript overloads. Pass the declaration's first line or any line
+inside it; the ambiguity error lists the lines to choose from.
+
+- **Spans.** A replacement covers the declaration's own line span. The doc
+  comment above it stays, and so do decorators that the grammar keeps outside
+  the declaration (TypeScript, Python, Rust). `insert_before_symbol` inserts
+  above the decorators, attributes and attached doc comment, so they stay with
+  their declaration. Regex-tier symbols record only a first line. For them,
+  the end is taken from brace matching only when it is unambiguous (Swift,
+  Dart, and Kotlin without its extended grammar). Otherwise replace and
+  insert-after are refused.
+- **Verification.** Nothing is written until the edited text has been
+  re-extracted in memory. The target must still be on its indexed line, so a
+  stale scan is refused. The result then carries `warnings` when a declaration
+  outside the edited lines changed (for example, an unindented Python body that
+  re-parents the methods after it), when the replaced lines no longer declare
+  the target (renamed or moved), or when the edit adds syntax errors. With `strict: true`, such an
+  edit is refused and nothing is written. A clean edit's result has no
+  `warnings` key.
+- **Encodings.** Supported source encodings (UTF-8/BOM, UTF-16 LE/BE, Latin-1)
+  are preserved. A valid UTF-8 file that contains U+FFFD stays UTF-8. Every
+  untouched line keeps its own line ending, so a mixed CRLF/LF file stays
+  mixed. New lines copy the ending of the line they replace or sit next to, and
+  a missing final newline stays missing. Malformed UTF-16 and replacements that
+  cannot be represented in a Latin-1 source fail before writing.
+- **Cache.** After an edit, the server revokes only the edited file's cached
+  stat proof, so the next call re-reads that one file. Other files and other
+  repositories stay warm.
+
+Memory notes stay under `.codeindex/memories`; linked storage paths are refused
+rather than followed.
 
 ### Advertising fewer tools
 
