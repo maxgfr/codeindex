@@ -40,7 +40,7 @@ import { onboardBrief } from "./onboard.js";
 import { indexStatus } from "./status.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
-import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
+import { explainQuery, type RankMode } from "./bm25.js";
 import { checkRules, parseRules, parseRulesText, type ArchRule } from "./rules.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
