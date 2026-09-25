@@ -578,6 +578,18 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   // Rebuilt when negotiation lands: the pin cannot change mid-session, but the
   // fields we are allowed to advertise depend on the version.
   let tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
+  // What a call is validated against: EVERY tool, whatever the profile. A
+  // profile trims what is advertised, not what is answerable, so a tool called
+  // by name from outside it must be checked like any other — looking it up in
+  // the advertised list found nothing and silently skipped validation. The
+  // pin is what shapes `required` (it drops `repo`); the protocol version
+  // never touches an inputSchema, so one map serves the whole session.
+  const callable = new Map(
+    (toolsFor(opts.defaultRepo) as { name: string; inputSchema: Parameters<typeof validateArgs>[0] }[]).map((t) => [
+      t.name,
+      t.inputSchema,
+    ]),
+  );
   let watcher: FSWatcher | undefined;
   if (opts.watch && opts.defaultRepo) {
     try {
@@ -681,13 +693,27 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
         return respond({ result: { tools } });
       } else if (req.method === "tools/call") {
         const params = req.params ?? {};
-        const name = str(params.name) ?? "";
-        const args = (params.arguments ?? {}) as Record<string, unknown>;
+        // A call whose params do not have the CallToolRequest shape is a
+        // malformed request — a protocol error, as the SDK server answers it.
+        // `arguments: "xyz"` used to run the tool with no arguments at all.
+        const rawArgs = params.arguments;
+        if (typeof params.name !== "string") {
+          return respond({ error: { code: -32602, message: "invalid params: tools/call requires a string `name`" } });
+        }
+        if (rawArgs !== undefined && rawArgs !== null && (typeof rawArgs !== "object" || Array.isArray(rawArgs))) {
+          return respond({ error: { code: -32602, message: "invalid params: tools/call `arguments` must be an object" } });
+        }
+        const name = params.name;
+        const args = (rawArgs ?? {}) as Record<string, unknown>;
         try {
-          const decl = (tools as { name: string; inputSchema: { properties?: Record<string, unknown> } }[]).find(
-            (t) => t.name === name,
-          );
-          const invalid = decl ? validateArgs(decl.inputSchema, args) : undefined;
+          // Everything checkable from the request alone is checked BEFORE
+          // callTool, which walks and scans the repo first: an unknown tool or
+          // a missing argument used to cost a full walk to report. An unknown
+          // tool stays a tool error rather than -32602 — what the reference
+          // SDK server puts on the wire, and what clients already handle.
+          const schema = callable.get(name);
+          if (!schema) throw new Error(`unknown tool: ${name}`);
+          const invalid = validateArgs(schema, args);
           if (invalid) throw new Error(invalid);
           const raw = await callTool(name, args, opts.defaultRepo);
           const repo = str(args.repo) ?? opts.defaultRepo ?? "";

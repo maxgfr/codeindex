@@ -1503,6 +1503,74 @@ describe("validateArgs", () => {
   it("ignores null, undefined and undeclared extras", () => {
     expect(validateArgs(schema, { limit: undefined, substring: null, future: "whatever" })).toBeUndefined();
   });
+
+  it("checks the declared required list, naming the argument and what it is for", () => {
+    const required = {
+      properties: { repo: { type: "string", description: "Absolute path to the repository root" }, namePath: { type: "string" } },
+      required: ["repo", "namePath"],
+    };
+    expect(validateArgs(required, { namePath: "A" })).toBe("`repo` is required (Absolute path to the repository root)");
+    expect(validateArgs(required, { repo: "/x", namePath: null })).toBe("`namePath` is required");
+    expect(validateArgs(required, { repo: "/x", namePath: "A" })).toBeUndefined();
+  });
+});
+
+// Everything checkable from the request alone used to be checked only after
+// callTool had walked and scanned the repo — 13.5 s to learn that `namePath`
+// was missing on a 66k-file repo. A repository that does not exist proves the
+// order: callTool's first act is to stat it, so any answer OTHER than "not a
+// readable directory" was produced before the repo was touched.
+describe("tools/call is validated before the repo is touched", () => {
+  const missingRepo = join(tmpdir(), "codeindex-never-created");
+
+  it("rejects unknown tools, missing required arguments and bad types without a scan", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "nope", arguments: { repo: missingRepo } } },
+      { id: 2, method: "tools/call", params: { name: "find_symbol", arguments: { repo: missingRepo } } },
+      { id: 3, method: "tools/call", params: { name: "call_graph", arguments: { repo: missingRepo, symbol: "A", depth: "abc" } } },
+      { id: 4, method: "tools/call", params: { name: "find_symbol", arguments: { repo: missingRepo, namePath: "A" } } },
+    ]);
+    const text = (id: number) => res.get(id)!.result!.content![0]!.text;
+    for (const id of [1, 2, 3, 4]) expect(res.get(id)!.result!.isError, String(id)).toBe(true);
+    expect(text(1)).toBe("unknown tool: nope");
+    expect(text(2)).toMatch(/^`namePath` is required/);
+    expect(text(3)).toMatch(/`depth` must be a number/);
+    // The control: a well-formed call does reach the repo check.
+    expect(text(4)).toMatch(/not a readable directory/);
+  }, 20_000);
+
+  it("answers a tools/call whose params are malformed with -32602", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "scan_summary", arguments: "xyz" } },
+      { id: 2, method: "tools/call", params: { name: "scan_summary", arguments: [REPO] } },
+      { id: 3, method: "tools/call", params: {} },
+      { id: 4, method: "tools/call", params: { name: "scan_summary", arguments: { repo: REPO } } },
+    ]);
+    for (const id of [1, 2, 3]) {
+      expect(res.get(id)!.result, String(id)).toBeUndefined();
+      expect(res.get(id)!.error!.code, String(id)).toBe(-32602);
+    }
+    expect(res.get(4)!.result!.isError).toBeUndefined();
+  }, 20_000);
+
+  it("validates a tool left out of the active profile like any other", async () => {
+    const res = await mcpSession(
+      [
+        { id: 1, method: "tools/call", params: { name: "call_graph", arguments: { repo: REPO, symbol: "HttpClient", depth: "abc" } } },
+        { id: 2, method: "tools/call", params: { name: "call_graph", arguments: { repo: REPO, symbol: "HttpClient", depth: 9 } } },
+        { id: 3, method: "tools/call", params: { name: "dead_code", arguments: { repo: REPO, limit: "x" } } },
+        { id: 4, method: "tools/call", params: { name: "write_memory", arguments: { repo: REPO, content: "x" } } },
+      ],
+      undefined,
+      [CLI, "mcp", "--tools", "find"],
+    );
+    const text = (id: number) => res.get(id)!.result!.content![0]!.text;
+    for (const id of [1, 2, 3, 4]) expect(res.get(id)!.result!.isError, String(id)).toBe(true);
+    expect(text(1)).toMatch(/`depth` must be a number/);
+    expect(text(2)).toMatch(/`depth` must be at most 5/);
+    expect(text(3)).toMatch(/`limit` must be a number/);
+    expect(text(4)).toMatch(/`name` is required/);
+  }, 20_000);
 });
 
 // The playground indexed socialgouv/egapro on a guessed `master` while the

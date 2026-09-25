@@ -37,11 +37,14 @@ export const RICH_TOOLS_SINCE = "2025-06-18"; // Tool.title, resource_link conte
 // JSON Schema implementation. The spec (2025-11-25) is explicit that input
 // validation failures belong in a Tool Execution Error, not a protocol error,
 // precisely so the model can read the message and retry.
-// Required-ness stays with callTool, which raises tool-specific messages
-// ("`rules` (or `configPath`) is required"); duplicating it here would only let
-// the two drift.
+//
+// The declared `required` list is checked here too, because this runs BEFORE
+// the call walks and scans the repo: a missing `namePath` used to be reported
+// only after a full walk (13.5 s for the first call on a 66k-file repo).
+// Requirements a schema cannot express — `rules` or `configPath`, `lsp` needing
+// `name` — stay with callTool and its tool-specific messages.
 export function validateArgs(
-  schema: { properties?: Record<string, unknown> },
+  schema: { properties?: Record<string, unknown>; required?: readonly string[] },
   args: Record<string, unknown>,
 ): string | undefined {
   const props = (schema.properties ?? {}) as Record<string, {
@@ -49,7 +52,13 @@ export function validateArgs(
     items?: { type?: string };
     minimum?: number;
     maximum?: number;
+    description?: string;
   }>;
+  for (const key of schema.required ?? []) {
+    if (args[key] !== undefined && args[key] !== null) continue;
+    const description = props[key]?.description;
+    return description ? `\`${key}\` is required (${description})` : `\`${key}\` is required`;
+  }
   for (const [key, value] of Object.entries(args)) {
     if (value === undefined || value === null) continue;
     const spec = props[key];
