@@ -31,8 +31,11 @@ export type {
 export { walk, readText, DEFAULT_MAX_FILES, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
 export type { WalkOptions, WalkedFile, WalkResult, WalkSkip, WalkEntry } from "./walk.js";
 export { scanRepo, scanSummary } from "./scan.js";
-export type { RepoScan, ScanOptions, ScanSummary, ExtractedRecord } from "./scan.js";
+export type { RepoScan, ScanOptions, ScanSummary, ScanSkip, ExtractedRecord } from "./scan.js";
 export { keptCodeFiles, buildCodeRecord } from "./scan.js";
+// Why a path is, or is not, in a scan (`codeindex scan --why` / `--skipped`).
+export { whyPath, scanSkips, skipHistogram } from "./why.js";
+export type { PathVerdict, PathVerdictReason } from "./why.js";
 // Reusing a persisted `.codeindex/` index instead of rebuilding it. The MCP
 // server and every CLI read command go through this; a consumer that vendors
 // the engine gets the same shortcut. Every function degrades to undefined
@@ -51,7 +54,7 @@ export type { IndexStatus, IndexStatusOptions, IndexStaleness } from "./status.j
 // the engine" — the pool would silently run sequential forever.
 export { scanRepoParallel, extractInParallel, runExtractWorker, workerCount } from "./pool.js";
 export { compileGlobs } from "./glob.js";
-export { parseGitignore, isIgnored } from "./ignore.js";
+export { parseGitignore, isIgnored, decidingRule } from "./ignore.js";
 export type { IgnoreRule } from "./ignore.js";
 export { classify, isCode, isDoc, MARKDOWN_EXT } from "./classify.js";
 export { categorize } from "./categorize.js";

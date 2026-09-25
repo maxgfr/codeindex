@@ -1,6 +1,6 @@
 import { basename, isAbsolute, posix, relative, resolve, sep } from "node:path";
 import type { FileRecord, FileKind } from "./types.js";
-import { walk, readText, type WalkEntry, type WalkOptions, type WalkResult, type WalkedFile } from "./walk.js";
+import { walk, readText, type WalkEntry, type WalkOptions, type WalkResult, type WalkSkip, type WalkedFile } from "./walk.js";
 import { headCommit } from "./git.js";
 import { sha1 } from "./hash.js";
 import { classify, MARKDOWN_EXT } from "./classify.js";
@@ -95,7 +95,16 @@ export interface ScanOptions {
   // shared buildCodeRecord, so a hit is byte-identical to extracting here.
   // Populated by scanRepoParallel — never set this by hand.
   extracted?: Map<string, ExtractedRecord>;
+  // Observe every path the scan leaves out, and why (see ScanSkip). A
+  // precomputed walk already ran without it: only the scan's own skips are
+  // reported then.
+  onSkip?: (skip: ScanSkip) => void;
 }
+
+// A path the scan leaves out: a walk skip (WalkSkip — ignore rules, size,
+// lockfile, binary, filters, symlinks, nested repos), or a file of the index
+// the scan must not describe (see selfIndexGuard).
+export type ScanSkip = WalkSkip | { rel: string; reason: "index-output"; directory: false; size: number };
 
 export interface ExtractedRecord {
   size: number;
@@ -287,6 +296,26 @@ export function scanPathFilter(root: string, opts: ScanOptions): ((entry: WalkEn
       : (!inScope || inScope(rel)) && (!include || include(rel)) && !exclude?.(rel);
 }
 
+// Which of --scope/--include/--exclude leaves the file `rel` out, for `scan
+// --why`: the scope it lies outside of, the include globs none of which
+// matches it, the first exclude glob that does — each as the caller spelled
+// it, tested in scanPathFilter's normalized form. undefined when the filter
+// keeps the file.
+export function explainPathFilter(
+  root: string,
+  opts: ScanOptions,
+  rel: string,
+): { scope?: string; include?: string[]; exclude?: string } | undefined {
+  const matches = (globs: string[]): boolean => compileGlobs(globs.map((g) => normalizeGlob(root, g)))?.(rel) ?? true;
+  const scope = opts.scope === undefined ? "" : normalizeScope(root, opts.scope);
+  const out: { scope?: string; include?: string[]; exclude?: string } = {};
+  if (scope && !matches([scope, `${scope}/**`])) out.scope = opts.scope;
+  if (opts.include?.length && !matches(opts.include)) out.include = opts.include;
+  const exclude = opts.exclude?.find((g) => matches([g]));
+  if (exclude !== undefined) out.exclude = exclude;
+  return out.scope !== undefined || out.include || out.exclude !== undefined ? out : undefined;
+}
+
 // The walk a scan with these options performs. ONE builder for every walk that
 // feeds a scan — scanRepo's own, the CLI's grammar-warm walk handed over as
 // precomputedWalk, scanRepoParallel's and preloadSessionLazy's — so none of
@@ -300,6 +329,7 @@ export function scanWalkOptions(root: string, opts: ScanOptions): WalkOptions {
     gitignore: opts.gitignore,
     ignoreDirs: opts.ignoreDirs,
     ...(filter ? { filter } : {}),
+    ...(opts.onSkip ? { onSkip: opts.onSkip } : {}),
   };
 }
 
@@ -319,8 +349,14 @@ function* keptFiles(
   const filter = opts.precomputedWalk ? walkOpts.filter : undefined;
 
   for (const f of walked) {
-    if (guard && guard(f)) continue;
-    if (filter && !filter({ rel: f.rel, abs: f.abs, directory: false })) continue;
+    if (guard && guard(f)) {
+      opts.onSkip?.({ rel: f.rel, reason: "index-output", directory: false, size: f.size });
+      continue;
+    }
+    if (filter && !filter({ rel: f.rel, abs: f.abs, directory: false })) {
+      opts.onSkip?.({ rel: f.rel, reason: "filter", directory: false, size: f.size });
+      continue;
+    }
     yield { f, kind: classify(f.rel, f.ext), lang: extToLang(f.ext) };
   }
   return { capped, excluded };
@@ -369,11 +405,12 @@ export function keptCodeFiles(root: string, opts: ScanOptions = {}): { f: Walked
 // Every file this scan would keep, unread, in walk order: the file set and the
 // stats a freshness check compares against cache.json (status.ts), without a
 // record being built.
-export function keptWalkedFiles(root: string, opts: ScanOptions = {}): WalkedFile[] {
-  const out: WalkedFile[] = [];
+export function keptWalkedFiles(root: string, opts: ScanOptions = {}): { files: WalkedFile[]; capped: boolean } {
+  const files: WalkedFile[] = [];
   const it = keptFiles(root, opts);
-  for (let step = it.next(); !step.done; step = it.next()) out.push(step.value.f);
-  return out;
+  let step = it.next();
+  for (; !step.done; step = it.next()) files.push(step.value.f);
+  return { files, capped: step.value.capped };
 }
 
 // File count + language histogram WITHOUT reading or parsing a single file.

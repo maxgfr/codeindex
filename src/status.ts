@@ -85,7 +85,7 @@ export function indexStatus(repo: string, opts: IndexStatusOptions = {}, indexDi
     maxCallsPerFile: scanOpts.maxCallsPerFile,
     ast: (key) => ast !== false && (grammarReady(key) || resolvable.has(key)),
   });
-  const walked = keptWalkedFiles(repo, scanOpts);
+  const walked = keptWalkedFiles(repo, scanOpts).files;
   const files = { indexed: cacheMap.size, unchanged: 0, touched: 0, modified: 0, added: 0, deleted: 0, reextract: 0 };
   for (const f of walked) {
     const entry = cacheMap.get(f.rel);

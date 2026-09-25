@@ -344,7 +344,8 @@ export async function scanRepoParallel(
   // Files the cache will serve by its stat fastpath are skipped — extracting
   // them would be work whose result scanRepo discards.
   const jobs: Job[] = [];
-  for (const { f } of keptCodeFiles(root, scanOpts)) {
+  // Without onSkip: the scan below reports its own skips, once.
+  for (const { f } of keptCodeFiles(root, { ...scanOpts, onSkip: undefined })) {
     const cached = opts.cache?.get(f.rel);
     if (
       !opts.fullHash &&

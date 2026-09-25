@@ -1,6 +1,6 @@
 import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, existsSync, type Dirent } from "node:fs";
 import { join, resolve, sep, extname } from "node:path";
-import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
+import { parseGitignore, isIgnored, decidingRule, type IgnoreRule } from "./ignore.js";
 import { readTextEx } from "./text.js";
 import { sh } from "./util.js";
 export { readTextEx } from "./text.js";
@@ -168,6 +168,8 @@ export interface WalkSkip {
   reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "file-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
   directory: boolean;
   size?: number;
+  /** For "gitignored": the rule that decided it — its file, 1-based line, and pattern as written. */
+  rule?: { source: string; line: number; pattern: string };
 }
 
 export interface WalkEntry {
@@ -278,6 +280,19 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const skip = (rel: string, reason: WalkSkip["reason"], directory = false, size?: number): void => {
     opts.onSkip?.({ rel, reason, directory, ...(size === undefined ? {} : { size }) });
   };
+  // A gitignored skip names its deciding rule. Looked up again only when
+  // someone observes skips; the walk itself needs just the verdict.
+  const skipIgnored = (rel: string, rules: readonly IgnoreRule[], directory: boolean, size?: number): void => {
+    if (!opts.onSkip) return;
+    const rule = decidingRule(rules, rel, directory);
+    opts.onSkip({
+      rel,
+      reason: "gitignored",
+      directory,
+      ...(size === undefined ? {} : { size }),
+      ...(rule?.source !== undefined ? { rule: { source: rule.source, line: rule.line!, pattern: rule.pattern! } } : {}),
+    });
+  };
 
   // Containment root for the symlink-escape guard: a symlinked file or
   // directory whose real path leaves the repo must not be indexed (it would
@@ -340,11 +355,12 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     if (useGitignore && !frame.rel) {
       // `.git/info/exclude` sits BEFORE every .gitignore in git's own
       // precedence (a .gitignore rule can still negate it — later rules win).
-      const parsed = parseGitignore(readInfoExclude(gitDir), "");
+      const parsed = parseGitignore(readInfoExclude(gitDir), "", ".git/info/exclude");
       if (parsed.length) rules = [...rules, ...parsed];
     }
     if (useGitignore && entries.some((e) => e.name === ".gitignore")) {
-      const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel);
+      const source = frame.rel ? `${frame.rel}/.gitignore` : ".gitignore";
+      const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel, source);
       if (parsed.length) rules = [...rules, ...parsed];
     }
     for (const entry of entries) {
@@ -387,7 +403,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         // aliased, filesystem-order-dependent indexes. Out-of-repo links are
         // covered by the containment guard above.
         if (isLink) { skip(rel, "directory-symlink", true); continue; }
-        if (useGitignore && rules.length && isIgnored(rules, rel, true)) { skip(rel, "gitignored", true); continue; }
+        if (useGitignore && rules.length && isIgnored(rules, rel, true)) { skipIgnored(rel, rules, true); continue; }
         if (opts.filter && !opts.filter({ rel, abs, directory: true })) { skip(rel, "filter", true); continue; }
         stack.push({ dir: abs, rel, rules });
         continue;
@@ -405,7 +421,8 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       else if ((name.endsWith(".min.js") || name.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
       if (reason) {
         excluded++;
-        skip(rel, reason, false, st.size);
+        if (reason === "gitignored") skipIgnored(rel, rules, false, st.size);
+        else skip(rel, reason, false, st.size);
         continue;
       }
       // Symlink-escape guard for files (statSync above follows links). A link

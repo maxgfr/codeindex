@@ -17,7 +17,9 @@ import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
-import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan } from "./scan.js";
+import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan, type ScanSkip } from "./scan.js";
+import { skipHistogram, whyPath } from "./why.js";
+import { byKey } from "./sort.js";
 import { scanRepoParallel } from "./pool.js";
 import {
   indexDirPath,
@@ -74,7 +76,13 @@ Commands:
               artifact is replaced atomically (temp file + rename). An --out
               inside the repo is excluded from the scan; at the repo root only
               the artifacts are
-  scan        Scan summary: file count, language histogram, capped flag
+  scan        Scan summary: file count, language histogram, capped flag, the
+              files the walk rejected (excluded) and every skip by reason
+              (skipped; a skipped directory counts once). --why <path> says
+              why ONE path is or is not indexed ({path, indexed, reason,
+              detail}: the deciding .gitignore line, the size over --max-bytes,
+              the --scope/--include/--exclude glob, the skipped directory
+              above it…); --skipped lists every skip, sorted by path (JSON)
   status      Is the persisted index (--index, default .codeindex) fresh for
               this tree and these flags? JSON: whether cache.json is usable (or
               why not: absent/unreadable/corrupt/schema/extractor), the indexed
@@ -237,6 +245,9 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       unchanged (size, mtime) — for an edit that kept both.
                       Unchanged content still reuses its extraction
   --check             \`status\`: exit 1 unless the artifacts are fresh
+  --why <path>        \`scan\`: explain why one path (repo-relative or absolute)
+                      is or is not indexed
+  --skipped           \`scan\`: list every path the scan leaves out, and why
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
@@ -281,6 +292,8 @@ interface CliFlags {
   noIndexCache?: boolean; // never reuse a persisted index
   fullHash?: boolean; // re-read and re-hash every file (no (size, mtime) fastpath)
   check?: boolean; // status: exit 1 unless the artifacts are fresh
+  why?: string; // scan: explain one path
+  skipped?: boolean; // scan: list every skip
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
@@ -350,6 +363,8 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--no-index-cache") flags.noIndexCache = true;
     else if (a === "--full-hash") flags.fullHash = true;
     else if (a === "--check") flags.check = true;
+    else if (a === "--why") flags.why = next();
+    else if (a === "--skipped") flags.skipped = true;
     else if (a === "--workers") {
       // 0 is meaningful here (force sequential), so this cannot use num().
       const raw = next();
@@ -574,6 +589,7 @@ const VALUE_FLAGS = new Set([
   "--kind",
   "--rank",
   "--direction",
+  "--why",
 ]);
 
 // Accept global flags BEFORE the subcommand as well as after, so
@@ -900,19 +916,32 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       process.stderr.write(`codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${embedNote}${scan.capped ? " (capped)" : ""}\n`);
     }
   } else if (cmd === "scan") {
-    // Summary-only: a file count and a language histogram need the walk and the
-    // path-based classifiers, never a read or a parse. Same numbers as before by
-    // construction — scanSummary and scanRepo share the keptFiles loop.
-    const s = scanSummary(flags.repo, scanOptions(flags, precomputedWalk));
-    if (s.fileCount === 0) warnEmptyScan(flags);
-    const summary = {
-      engineVersion: ENGINE_VERSION,
-      commit: s.commit,
-      fileCount: s.fileCount,
-      languages: s.languages,
-      capped: s.capped,
-    };
-    emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
+    if (flags.why !== undefined && flags.skipped) throw new Error("scan takes --why <path> or --skipped, not both");
+    if (flags.why !== undefined) {
+      emit(JSON.stringify(whyPath(flags.repo, flags.why, scanOptions(flags)), null, 2) + "\n", flags.out);
+    } else {
+      // Summary-only: a file count and a language histogram need the walk and
+      // the path-based classifiers, never a read or a parse. Same numbers as
+      // before by construction — scanSummary and scanRepo share the keptFiles
+      // loop. The skips are observed on the same walk.
+      const skips: ScanSkip[] = [];
+      const s = scanSummary(flags.repo, { ...scanOptions(flags), onSkip: (skip) => skips.push(skip) });
+      if (s.fileCount === 0) warnEmptyScan(flags);
+      if (flags.skipped) {
+        emit(JSON.stringify(skips.sort(byKey((skip) => skip.rel)), null, 2) + "\n", flags.out);
+      } else {
+        const summary = {
+          engineVersion: ENGINE_VERSION,
+          commit: s.commit,
+          fileCount: s.fileCount,
+          languages: s.languages,
+          capped: s.capped,
+          excluded: s.excluded,
+          skipped: skipHistogram(skips),
+        };
+        emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
+      }
+    }
   } else if (cmd === "status") {
     // The index the read commands would consult, judged under THIS run's scan
     // flags: an index built with --scope src is stale for a whole-repo read.

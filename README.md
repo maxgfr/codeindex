@@ -380,6 +380,7 @@ brew install maxgfr/tap/codeindex        # or: npm i -g @maxgfr/codeindex
 
 codeindex index   --repo . --out .codeindex   # graph + symbols + incremental cache
 codeindex status  --repo . --check            # is .codeindex still fresh? (exit 1 if not)
+codeindex scan    --repo . --why src/big.go   # why is this file (not) indexed?
 codeindex graph   --repo . > graph.json
 codeindex scip    --repo . --out index.scip   # SCIP index (--out - for stdout)
 codeindex callers --repo .                    # per-symbol caller index
@@ -432,6 +433,16 @@ is never listed (a `--scope` over 186 files of a 66k-file repo walks those
 186). `grep` is the exception: it adds the scope to its globs. A `--scope`
 that does not exist, an `--ignore-dir` given a path rather than a directory
 name, and a filter that keeps no file at all each print a warning on stderr.
+
+`scan` also counts what the walk left out, by reason (`skipped`: `gitignored`,
+`ignore-dir`, `over-max-bytes`, `binary-ext`, `lockfile`, `minified`, `filter`,
+`nested-repo`, the symlink cases and `index-output`; a skipped directory counts
+once, since its contents are never listed). `scan --skipped` lists every skip,
+sorted by path, and `scan --why <path>` explains one path as `{path, indexed,
+reason, detail}`: the detail names the ignore file, line and pattern that
+decided it, its size against `--max-bytes`, the
+`--scope`/`--include`/`--exclude` that filtered it out, or the skipped
+directory above it.
 
 ## Values with no single source of truth
 

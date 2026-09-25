@@ -19,6 +19,12 @@ export interface IgnoreRule {
   // pattern allows it (see fastMatcher). Set by parseGitignore; a hand-built
   // rule without it is tested through `re`, exactly as before.
   test?: (rel: string, base: string) => boolean;
+  // Where the rule was written, for `scan --why` to name the rule that decided
+  // a path: the ignore file (as parseGitignore's caller names it), the 1-based
+  // line, and the pattern as written there.
+  source?: string;
+  line?: number;
+  pattern?: string;
 }
 
 // Compile one gitignore pattern segment-wise. Differs from glob.ts: `**` here
@@ -93,15 +99,18 @@ function patternToRegExpSource(pattern: string): string {
 
 // Parse one .gitignore file. `baseRel` is the directory holding the file,
 // relative to the repo root ("" for the root .gitignore), posix-style.
-export function parseGitignore(content: string, baseRel: string): IgnoreRule[] {
+// `source`, when given, is recorded on each rule with its line (see IgnoreRule).
+export function parseGitignore(content: string, baseRel: string, source?: string): IgnoreRule[] {
   const rules: IgnoreRule[] = [];
   const prefix = baseRel ? escapeRegExp(baseRel) + "/" : "";
-  for (const rawLine of content.split(/\r?\n/)) {
+  const lines = content.split(/\r?\n/);
+  for (let n = 0; n < lines.length; n++) {
     // Trailing SPACES are ignored unless backslash-escaped (git trims only
     // 0x20 — a trailing tab is significant). Blank lines and comments carry no
     // rule. Escapes (`\ `, `\*`, `\#`…) are consumed by the pattern compiler.
-    let line = rawLine.replace(/(?<!\\) +$/, "");
+    let line = lines[n]!.replace(/(?<!\\) +$/, "");
     if (!line || line.startsWith("#")) continue;
+    const written = line;
     let negated = false;
     if (line.startsWith("!")) {
       negated = true;
@@ -118,10 +127,12 @@ export function parseGitignore(content: string, baseRel: string): IgnoreRule[] {
     const anchored = line.includes("/");
     if (line.startsWith("/")) line = line.slice(1);
     const body = patternToRegExpSource(line);
-    const source = anchored ? `^${prefix}${body}$` : `^${prefix}(?:[^/]+/)*${body}$`;
+    const reSource = anchored ? `^${prefix}${body}$` : `^${prefix}(?:[^/]+/)*${body}$`;
     try {
-      const re = new RegExp(source);
-      rules.push({ re, negated, dirOnly, test: fastMatcher(line, body, anchored, baseRel ? baseRel + "/" : "", re) });
+      const re = new RegExp(reSource);
+      const rule: IgnoreRule = { re, negated, dirOnly, test: fastMatcher(line, body, anchored, baseRel ? baseRel + "/" : "", re) };
+      if (source !== undefined) Object.assign(rule, { source, line: n + 1, pattern: written });
+      rules.push(rule);
     } catch {
       // An unparsable pattern is dropped rather than crashing the walk.
     }
@@ -185,15 +196,20 @@ function fastMatcher(
 // rule chain (root rules first, deeper .gitignore rules appended after — which
 // realizes "later rules win" across nesting levels too). Returns the verdict of
 // the LAST matching rule, or false when none match.
-//
-// Scanned from the END: the first rule that matches there is the last match,
-// so the rest of the chain is never tested.
 export function isIgnored(rules: readonly IgnoreRule[], rel: string, isDir: boolean): boolean {
+  const rule = decidingRule(rules, rel, isDir);
+  return rule !== undefined && !rule.negated;
+}
+
+// The rule whose verdict isIgnored returns: the LAST one matching `rel`, or
+// undefined when none does. Scanned from the END: the first rule that matches
+// there is the last match, so the rest of the chain is never tested.
+export function decidingRule(rules: readonly IgnoreRule[], rel: string, isDir: boolean): IgnoreRule | undefined {
   const base = rel.slice(rel.lastIndexOf("/") + 1);
   for (let i = rules.length - 1; i >= 0; i--) {
     const rule = rules[i]!;
     if (rule.dirOnly && !isDir) continue;
-    if (rule.test ? rule.test(rel, base) : rule.re.test(rel)) return !rule.negated;
+    if (rule.test ? rule.test(rel, base) : rule.re.test(rel)) return rule;
   }
-  return false;
+  return undefined;
 }
