@@ -1730,6 +1730,22 @@ describe("getScan — bounded LRU, not a single entry", () => {
     expect(after.files.find((f) => f.rel === "src/client.ts")).toBe(s1.files.find((f) => f.rel === "src/client.ts"));
   });
 
+  it("forgets the edited file even against a walk the --watch oracle hands back unchanged", async () => {
+    const repo = tmpFixtureCopy("ci-scan-forget-proven-");
+    const file = join(repo, "src", "util.ts");
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const walked = walk(repo, {});
+    const scan = await getScanParallel(repo, {}, walked);
+    // A symbolic edit that kept the byte count and (here, forced) the mtime.
+    writeFileSync(file, readFileSync(file, "utf8").replace("1000", "9999"));
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    expect(getScan(repo, {}, walked)).toBe(scan);
+    sessionForgetFile(file);
+    const after = getScan(repo, {}, walked);
+    expect(after).not.toBe(scan);
+    expect(after.files.find((f) => f.rel === "src/util.ts")!.hash).not.toBe(scan.files.find((f) => f.rel === "src/util.ts")!.hash);
+  });
+
   it("forgets the edited file in an entry keyed by another spelling of the root", () => {
     const repo = tmpFixtureCopy("ci-scan-forget-link-");
     const link = join(mkdtempSync(join(tmpdir(), "ci-scan-forget-alias-")), "alias");

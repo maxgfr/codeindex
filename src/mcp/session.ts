@@ -183,15 +183,29 @@ function sessionPut(entry: SessionEntry): SessionEntry {
 // and serve the pre-edit record. Without the stat keys the next scan re-reads
 // and re-hashes exactly this file — and a no-op edit (same hash) still keeps
 // the warm scan object.
+//
+// The entry's proven walk goes with it: under --watch a call that is handed
+// back the same walk object would otherwise return the cached scan without a
+// single stat, whatever the write did (see sessionInvalidate, which poisons
+// the same way).
 export function sessionForgetFile(abs: string): void {
   const real = realpathOr(abs);
   for (const entry of sessionCaches) {
     const rels = new Set([relInside(entry.scan.root, abs), relInside(realpathOr(entry.scan.root), real)]);
     for (const rel of rels) {
       const cached = rel === undefined ? undefined : entry.cacheMap.get(rel);
-      if (cached) entry.cacheMap.set(rel!, { hash: cached.hash, record: cached.record });
+      if (!cached) continue;
+      poison(entry.cacheMap, rel!, cached);
+      entry.walked = undefined;
     }
   }
+}
+
+// Drop an entry's (size, mtimeMs) stat proof, keeping its hash and record: the
+// next scan re-reads and re-hashes the file, and reuses the record when the
+// bytes are the same.
+function poison(cacheMap: SessionCacheMap, key: string, entry: SessionCacheEntry): void {
+  cacheMap.set(key, { hash: entry.hash, record: entry.record });
 }
 
 function realpathOr(path: string): string {
@@ -225,9 +239,6 @@ function relInside(root: string, abs: string): string | undefined {
 // re-extraction.
 export function sessionInvalidate(repo: string, rel?: string): void {
   const prefix = repo + "\0";
-  const poison = (cacheMap: SessionCacheMap, key: string, entry: SessionCacheEntry): void => {
-    cacheMap.set(key, { hash: entry.hash, record: entry.record });
-  };
   for (const entry of sessionCaches) {
     if (!entry.key.startsWith(prefix)) continue;
     entry.walked = undefined;
