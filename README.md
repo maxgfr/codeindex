@@ -758,6 +758,14 @@ codeindex lsp status --repo .           # config, PATH resolution, files claimed
 codeindex lsp status --repo . --probe   # also start each server, read its real capabilities
 ```
 
+Each server may set `timeoutMs` (per request, default 5000) and
+`startupTimeoutMs` (the `initialize` handshake, default 15000). The environment
+variables `CODEINDEX_LSP_TIMEOUT_MS` and `CODEINDEX_LSP_STARTUP_TIMEOUT_MS`
+override both for every server and take precedence over `lsp.json`, so a CI
+job or a slow machine can retune them without editing a shared file.
+`CODEINDEX_LSP_CONFIG` points at a config elsewhere; set to `off`, `0` or an
+empty string, it disables the tier even when the repository has one.
+
 The TypeScript example disables its separate syntax server because codeindex
 opens short-lived query sessions. Otherwise an early reference request can be
 answered before the semantic project is ready and return only the declaration.
@@ -852,10 +860,19 @@ claude mcp add codeindex -- codeindex mcp
 and persists it as the `onboarding` memory, so the second session reads instead
 of rebuilding.
 
+Arguments are checked against each tool's schema before anything is walked or
+scanned: types, required arguments and enums (`call_graph`'s `direction`,
+`search`'s `rank`). A mistake comes back at once as a tool error that names the
+argument, never as a default applied in silence. `file` arguments accept
+`./src/a.ts`, an absolute path inside the repository or `src\a.ts`. A file the
+index does not hold is an error suggesting indexed files with the same name,
+not an empty answer.
+
 ### Smaller read responses
 
 MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`
-accept `concise: true`. Declarations are reduced to `name/kind/file/line` while
+accept `concise: true`. Declarations are reduced to `name/kind/file/line`, plus
+`parent` for a member so its `Parent/name` path stays formable, while
 result membership, order, reference groups, call-site locations, confidence
 labels and LSP metadata stay intact. Defaults retain their full existing shape.
 `symbols` keeps its name-keyed groups and references for full-index requests.
@@ -873,11 +890,12 @@ turn**, so a session that only ever searches is paying for the graph analytics
 all day. `--tools` advertises a named subset:
 
 ```sh
-codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview
+codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview, embed_status
 codeindex mcp --tools orient,impact # compose profiles with a comma
 ```
 
-Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`.
+Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`
+and `memory` (all four memory tools). Every tool belongs to at least one.
 The MCP initialization response names the available profiles and active selection
 in its `instructions`, so a client can discover this configuration in-session.
 It trims what is **advertised**, not what is answerable: a tool left out of the
@@ -898,14 +916,21 @@ codeindex mcp --repo /path/to/workspace
 An explicit per-call `repo` still wins, so a pinned server can still answer
 about another checkout. `--server-name <name>` overrides the announced
 `serverInfo.name` for hosts that embed the server under their own identity.
-Add `--watch` to a pinned server for proactive recursive filesystem
-invalidation. Every request still verifies freshness with the normal stat walk
-because a request can arrive before its filesystem event; the watcher is a hint,
-not a correctness oracle. Directories excluded by the scanner (`.git`, build
-outputs, dependency caches, `.codeindex`, edit temporaries, etc.) are ignored by
-the watcher too. Git commit metadata is still refreshed by the per-request
-check. When the platform cannot provide recursive watching, the server warns
-and continues with those normal freshness scans.
+Add `--watch` to a pinned server to stop paying a whole-tree walk on every
+call. On Linux the server watches each directory the scan walks, one inotify
+watch per directory and never an ignored tree (`node_modules`, `.git`, build
+outputs, gitignored paths…), up to 8192 directories. Before a call it waits
+until every earlier filesystem event has been delivered (a barrier file in a
+private temp directory). When no watched directory changed since the last walk,
+the call reuses that walk and the scan behind it without a single stat: a warm
+`find_symbol` on the 66k-file TypeScript repo drops from about 2.3 s to under
+15 ms. Any change, including a deletion, a new directory or a `.gitignore`
+edit, makes the call walk and re-check exactly as without `--watch`, so answers
+never lag behind the disk. Git commit metadata is refreshed on every call. When
+the watcher cannot prove freshness (too many directories, the inotify budget
+exhausted, a barrier that never arrives), the server warns where relevant and
+each call walks as usual. On macOS and Windows the native recursive watcher only
+invalidates changed files eagerly, and every call still walks.
 
 **Prime the index first** and activation becomes a load, not a rebuild:
 `codeindex index --repo <dir> --out <dir>/.codeindex`. The first tool call
@@ -929,14 +954,31 @@ which is what lets a host auto-approve reads and confirm only writes. From
 the result instead of re-parsing a string. The remaining tools return arrays,
 argument-dependent shapes or plain text, which cannot yield a conforming
 structured result without diverging from the text block — they are left
-unschema'd rather than described inaccurately.
+unschema'd rather than described inaccurately. Every schema is rooted at
+`type: "object"`, as the official TypeScript SDK requires to list tools at all.
+A lookup miss (`call_graph`, `type_hierarchy` or `implementations` naming
+nothing in the repo) keeps its `{ "error": ... }` text but is flagged
+`isError`, so a client validating against the schema reads it as the tool
+error it is.
 
 Responses are capped (`--max-response-bytes`, default 1 MB). Under the cap
 nothing changes. Over it — where a whole-repo `graph` on a large monorepo runs
 to millions of tokens and no client can accept it — the response is replaced by
-a short notice naming the size, the artifact already on disk, and the narrower
-tool that answers the question. Most tools also take a `limit`/`maxResults`/
-`top`/`maxEdges` argument to stay well under it.
+a short notice naming the size, the arguments of that tool that narrow it, and
+the persisted artifact when one on disk holds exactly the withheld answer
+(checked byte for byte; a stale one gets the command that refreshes it). The
+notice is sent as a tool error (`isError: true`): the model reads it and
+narrows the call, and a client that validates `structuredContent` is not
+handed a result that cannot conform. Most tools also take a
+`limit`/`maxResults`/`top`/`maxEdges` argument to stay well under it.
+
+Tool calls run one at a time, in arrival order, so answers stay deterministic;
+`ping`, `initialize`, `tools/list` and argument errors are answered at once,
+even behind a long first scan. `notifications/cancelled` is honoured: a queued
+call is skipped, and a running one finishes (an edit is never left half-done)
+but gets no response. A call that carries a `progressToken` receives
+`notifications/progress` when its walk and its scan complete, which keeps an
+SDK client's request timeout from firing during a long first scan.
 
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
 into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.

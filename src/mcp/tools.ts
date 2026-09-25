@@ -1,4 +1,4 @@
-// The MCP tool catalogue: the 29 tool definitions, their display metadata, and
+// The MCP tool catalogue: the tool definitions, their display metadata, and
 // the per-protocol-version view of the list a client actually receives.
 //
 // Split out of mcp.ts because it is pure data plus one projection function —
@@ -7,7 +7,7 @@
 import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protocol.js";
 
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
-const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
+const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line, plus parent for a member) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
   include: { type: "array", items: { type: "string" }, description: "Include globs" },
@@ -95,7 +95,7 @@ export const TOOLS = [
   {
     name: "find_symbol",
     description:
-      "Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Each match carries its COMPLETE SIGNATURE (parameters and return type) by default, because \"what shape is it\" is the question that follows \"where is it\" almost every time and one round trip beats two. Options: substring matching, includeBody for the declaration's source, concise to drop everything but name/kind/file/line when you genuinely only want a location. Exact-name matches rank first.",
+      "Find symbol declarations by name or name path ('Class/method' matches a method inside Class). Each match carries its COMPLETE SIGNATURE (parameters and return type) by default, because \"what shape is it\" is the question that follows \"where is it\" almost every time and one round trip beats two. Options: substring matching, includeBody for the declaration's source, concise to drop everything but name/kind/file/line (and a member's parent) when you genuinely only want a location. Exact-name matches rank first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -106,7 +106,7 @@ export const TOOLS = [
         concise: {
           type: "boolean",
           description:
-            "Return only name/kind/file/line — drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false).",
+            "Return only name/kind/file/line (plus parent for a member) — drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false).",
         },
         maxResults: { type: "number", minimum: 1, description: "Cap matches (default 50)" },
       },
@@ -353,6 +353,7 @@ export const TOOLS = [
         },
         rank: {
           type: "string",
+          enum: ["lexical", "graph"],
           description:
             'Structural prior: "graph" multiplies the lexical score by the file\'s PageRank over the resolved import graph; "lexical" (default) scores on text alone. Unproven on the judged corpus — see SearchOptions.rank.',
         },
@@ -428,7 +429,7 @@ export const TOOLS = [
         ...repoProp,
         symbol: { type: "string", description: "Symbol name to centre on" },
         depth: { type: "number", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
-        direction: { type: "string", description: "out | in | both (default both)" },
+        direction: { type: "string", enum: ["out", "in", "both"], description: "out | in | both (default both)" },
       },
       required: ["repo", "symbol"],
     },
@@ -494,6 +495,13 @@ export const TOOLS = [
 //
 // Shapes are deliberately open (no `additionalProperties: false`): a later
 // engine adding a field must not turn a strict client's success into a failure.
+//
+// Every root is `type: "object"`, including the ones whose alternatives live in
+// a `oneOf`. The spec types Tool.outputSchema as an object schema, and the
+// official TypeScript SDK enforces it when it parses tools/list: a bare
+// `{ oneOf: [...] }` root made its client reject the WHOLE list, so every
+// SDK-based host saw zero tools. tests/mcp-output.test.ts pins this for every
+// declared schema, including ones added later.
 const strArr = { type: "array", items: { type: "string" } };
 const anyObj = { type: "object" };
 
@@ -536,6 +544,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   // Two shapes, both objects: the whole index, or one symbol's entry.
   symbols: {
+    type: "object",
     oneOf: [
       {
         type: "object",
@@ -551,6 +560,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   // The whole index (symbol name -> entry), one entry, or the not-found notice.
   callers: {
+    type: "object",
     oneOf: [
       { type: "object", additionalProperties: anyObj },
       { type: "object", properties: { def: anyObj, callers: { type: "array", items: anyObj }, lsp: anyObj }, required: ["def", "callers"] },
@@ -695,9 +705,9 @@ for (const name of ["replace_symbol_body", "insert_after_symbol", "insert_before
 
 // Per-tool display title and behaviour hints.
 //
-// The hints matter operationally: they are what lets a host auto-approve the 23
-// read-only tools and hold a confirmation for the 5 that write. Without them a
-// client must treat `scan_summary` and `replace_symbol_body` alike.
+// The hints matter operationally: they are what lets a host auto-approve the
+// read-only tools and hold a confirmation for the ones that write. Without them
+// a client must treat `scan_summary` and `replace_symbol_body` alike.
 //
 // openWorldHint is true only where a call can leave this machine — `search`
 // with semantic:true and `embed_status` may contact CODEINDEX_EMBED_ENDPOINT.
@@ -771,25 +781,33 @@ export function annotationsFor(name: string): Record<string, boolean> | undefine
  * Named subsets of the tool list, by the question they answer.
  *
  * Every advertised tool's full JSON Schema sits in an agent's context on EVERY
- * turn, so 32 of them is a standing cost paid whether or not the session ever
- * touches a graph. A profile trims what is advertised, not what exists: the
- * server still answers a tool that was not advertised, so nothing breaks for a
- * client that knows a name from elsewhere.
+ * turn, so the whole catalogue is a standing cost paid whether or not the
+ * session ever touches a graph. A profile trims what is advertised, not what
+ * exists: the server still answers a tool that was not advertised, so nothing
+ * breaks for a client that knows a name from elsewhere.
+ *
+ * Every tool belongs to at least one profile (tests/mcp.test.ts checks it):
+ * a tool in none can only be reached by a client that already knows its name,
+ * which is how write_memory went unadvertised by every narrowed server while
+ * read_memory was on offer.
  *
  * The default is `all`, deliberately. Narrowing by default would silently
  * remove capability from every existing configuration.
  */
 export const TOOL_PROFILES: Record<string, readonly string[]> = {
-  // Land in an unfamiliar repository and get your bearings.
-  orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "read_memory", "list_memories"],
-  // Locate a thing.
-  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
+  // Land in an unfamiliar repository and get your bearings — and keep what
+  // was learned: onboard persists its brief, write_memory anything else.
+  orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "graph", "read_memory", "list_memories", "write_memory"],
+  // Locate a thing. embed_status says whether `search` semantic:true fuses.
+  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "embed_status"],
   // Decide whether changing it is safe.
   impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status", "resolution_report"],
   // Change it.
   edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.
   risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"],
+  // The project notes, whole: write, read, list, delete.
+  memory: ["write_memory", "read_memory", "list_memories", "delete_memory"],
 };
 
 export function profileNames(): string[] {
@@ -805,7 +823,9 @@ export function toolsInProfiles(spec: string): Set<string> {
   const out = new Set<string>();
   for (const name of names) {
     if (name === "all") return new Set(TOOLS.map((t) => t.name));
-    const profile = TOOL_PROFILES[name];
+    // Own keys only — `--tools constructor` must be an unknown profile, not
+    // Object.prototype.constructor failing to iterate.
+    const profile = Object.hasOwn(TOOL_PROFILES, name) ? TOOL_PROFILES[name] : undefined;
     if (!profile) throw new Error(`unknown tool profile "${name}" — one of: ${profileNames().join(", ")}`);
     for (const tool of profile) out.add(tool);
   }

@@ -15,6 +15,7 @@ beforeAll(async () => {
   repo = mkdtempSync(join(tmpdir(), "ci-concise-"));
   writeFileSync(join(repo, "lib.ts"), '/** Return a friendly greeting. */\nexport function greet(name: string): string {\n return "hello " + name;\n}\nexport function unused(): void {}\n');
   writeFileSync(join(repo, "app.ts"), 'import { greet } from "./lib";\nexport function main(): void {\n greet("world");\n}\n');
+  writeFileSync(join(repo, "shapes.ts"), "export class Square {\n  area(): number { return 1; }\n}\nexport class Circle {\n  area(): number { return 3; }\n}\n");
   const { startMcpClient } = await import(/* @vite-ignore */ clientModule);
   client = startMcpClient(process.execPath, [CLI, "mcp", "--repo", repo, "--tools", "find,impact"], { timeoutMs: 10_000 });
   handshake = await client.handshake();
@@ -28,7 +29,7 @@ async function call(name: string, args: Record<string, unknown> = {}) {
   expect(response.result.isError, JSON.stringify(response.result)).not.toBe(true);
   return JSON.parse(response.result.content[0].text);
 }
-const location = ({ name, kind, file, line }: any) => ({ name, kind, file, line });
+const location = ({ name, kind, file, line, parent }: any) => ({ name, kind, file, line, ...(parent ? { parent } : {}) });
 
 describe("concise MCP read answers", () => {
   it("advertises each concise option and the available/active profiles", async () => {
@@ -86,5 +87,30 @@ describe("concise MCP read answers", () => {
     }
     const full = await call("find_references", { name: "greet", lsp: true });
     expect(await call("find_references", { name: "greet", lsp: true, concise: true })).toEqual({ ...full, defs: full.defs.map(location) });
+  });
+  it("keeps a member's parent, so same-named methods stay addressable", async () => {
+    const overview = await call("symbols_overview", { file: "shapes.ts", concise: true });
+    expect(overview.filter((s: any) => s.name === "area")).toEqual([
+      { name: "area", kind: "method", file: "shapes.ts", line: 2, parent: "Square" },
+      { name: "area", kind: "method", file: "shapes.ts", line: 5, parent: "Circle" },
+    ]);
+    // Top-level declarations carry no parent key at all.
+    expect(overview.find((s: any) => s.name === "Square")).toEqual({ name: "Square", kind: "class", file: "shapes.ts", line: 1 });
+    const found = await call("find_symbol", { namePath: "area", concise: true });
+    expect(found.map((s: any) => `${s.parent}/${s.name}`)).toEqual(["Square/area", "Circle/area"]);
+    // The concise path round-trips into a namePath lookup.
+    expect(await call("find_symbol", { namePath: `${found[1].parent}/${found[1].name}`, concise: true })).toEqual([found[1]]);
+    const indexed = await call("symbols", { name: "area", concise: true });
+    expect(indexed.defs.map((d: any) => d.parent)).toEqual(["Square", "Circle"]);
+  });
+  it("answers Object.prototype names as absent symbols, not prototype members", async () => {
+    // The index is a plain object: `defs.toString` used to be the inherited
+    // function (serialized away, or `defs.map is not a function` under
+    // concise) and `__proto__` answered `{}` where arrays belong.
+    for (const name of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      for (const concise of [false, true]) {
+        expect(await call("symbols", { name, concise }), `${name} concise=${concise}`).toEqual({ name, defs: [], refs: [] });
+      }
+    }
   });
 });

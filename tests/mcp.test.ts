@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, write
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -15,10 +15,15 @@ import {
   negotiateProtocol,
   scanFingerprint,
   toCacheMap,
+  TOOL_PROFILES,
+  TOOLS,
+  profileNames,
+  toolsInProfiles,
   validateArgs,
 } from "../src/mcp.js";
 import { parseMcpFlags } from "../src/engine-cli.js";
-import { sessionInvalidate } from "../src/mcp/session.js";
+import { getScanParallel, sessionInvalidate } from "../src/mcp/session.js";
+import { walk } from "../src/walk.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -86,6 +91,40 @@ function mcpSession(
     child.on("error", reject);
     for (const r of requests) child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...r }) + "\n");
     child.stdin.end();
+  });
+}
+
+// Every response line in the order the server wrote it, collected until the
+// response with id `until` arrives. For tests about ORDER and about requests
+// that must never be answered, which mcpSession (keyed by id, waiting for
+// every id) cannot express.
+function mcpLines(requests: Record<string, unknown>[], until: number, argv: string[] = [CLI, "mcp"]): Promise<RpcMsg[]> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, argv, { stdio: ["pipe", "pipe", "inherit"] });
+    const lines: RpcMsg[] = [];
+    let buf = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`mcp timeout — got ids ${lines.map((m) => m.id).join(",")}`));
+    }, 15_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line) as RpcMsg;
+        lines.push(msg);
+        if (msg.id === until) {
+          clearTimeout(timer);
+          child.kill();
+          resolvePromise(lines);
+        }
+      }
+    });
+    child.on("error", reject);
+    child.stdin.write(requests.map((r) => JSON.stringify({ jsonrpc: "2.0", ...r }) + "\n").join(""));
   });
 }
 
@@ -302,6 +341,108 @@ describe("MCP server", () => {
     expect(replies).toHaveLength(1);
     expect(replies[0]!.id).toBe(1);
   });
+
+  // The read loop awaited each message before reading the next, so a ping
+  // sent during a cold scan waited for the scan, and a cancellation was read
+  // only after the call it cancelled had been answered.
+  it("answers a ping while a tool call is still running", async () => {
+    const lines = await mcpLines(
+      [
+        { id: 1, method: "tools/call", params: { name: "graph", arguments: { repo: REPO } } },
+        { id: 2, method: "ping" },
+      ],
+      1,
+    );
+    expect(lines.map((m) => m.id)).toEqual([2, 1]);
+    expect(lines[0]!.result).toEqual({});
+    expect(lines[1]!.result!.isError).toBeUndefined();
+  }, 20_000);
+
+  it("never answers a cancelled call, queued or already running", async () => {
+    const graph = (id: number) => ({ id, method: "tools/call", params: { name: "graph", arguments: { repo: REPO } } });
+    const lines = await mcpLines(
+      [
+        graph(1), // running when its cancellation is read: finishes, answer dropped
+        graph(2), // still queued behind 1: skipped
+        { method: "notifications/cancelled", params: { requestId: 1, reason: "test" } },
+        { method: "notifications/cancelled", params: { requestId: 2 } },
+        // Unknown ids are ignored, and nothing is remembered for them.
+        { method: "notifications/cancelled", params: { requestId: 99 } },
+        { id: 3, method: "tools/call", params: { name: "scan_summary", arguments: { repo: REPO } } },
+      ],
+      3,
+    );
+    // Calls run in order, so 1 and 2 would have been answered before 3.
+    expect(lines.map((m) => m.id)).toEqual([3]);
+    expect(JSON.parse(lines[0]!.result!.content![0]!.text).fileCount).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("keeps a batch holding a tool call in one reply array, and answers what follows first", async () => {
+    const child = spawn(process.execPath, [CLI, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
+    const replies: unknown[] = [];
+    let buf = "";
+    const done = new Promise<void>((resolve) => {
+      child.stdout.on("data", (chunk: Buffer) => {
+        buf += chunk.toString();
+        let nl;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          replies.push(JSON.parse(buf.slice(0, nl)));
+          buf = buf.slice(nl + 1);
+        }
+        if (replies.length === 2) resolve();
+      });
+    });
+    child.stdin.write(
+      JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "ping" },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "scan_summary", arguments: { repo: REPO } } },
+      ]) + "\n" + JSON.stringify({ jsonrpc: "2.0", id: 3, method: "ping" }) + "\n",
+    );
+    await done;
+    child.kill();
+    expect(replies[0]).toEqual({ jsonrpc: "2.0", id: 3, result: {} });
+    expect((replies[1] as RpcMsg[]).map((m) => m.id)).toEqual([1, 2]);
+  }, 20_000);
+
+  it("reports scan phases as progress when the call carries a progressToken", async () => {
+    const call = (id: number, name: string, meta?: Record<string, unknown>) => ({
+      id,
+      method: "tools/call",
+      params: { name, arguments: { repo: REPO }, ...(meta ? { _meta: meta } : {}) },
+    });
+    const lines = await mcpLines(
+      [
+        { id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {} } },
+        call(2, "graph", { progressToken: "p-graph" }),
+        call(3, "graph"), // no token: no progress
+        call(4, "churn", { progressToken: 7 }), // scan-less: nothing to report
+      ],
+      4,
+    );
+    const progress = lines.filter((m) => (m as { method?: string }).method === "notifications/progress");
+    expect(progress.map((m) => (m as { params: unknown }).params)).toEqual([
+      { progressToken: "p-graph", progress: 1, message: expect.stringMatching(/^walked \d+ files$/) },
+      { progressToken: "p-graph", progress: 2, message: expect.stringMatching(/^scan ready: \d+ files$/) },
+    ]);
+    // Both arrive before the answer they belong to.
+    const order = lines.map((m) => m.id ?? (m as { params: { progress: number } }).params.progress * -1);
+    expect(order).toEqual([1, -1, -2, 2, 3, 4]);
+  }, 20_000);
+
+  it("withholds the progress message from a client that predates it", async () => {
+    const lines = await mcpLines(
+      [
+        { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+        { id: 2, method: "tools/call", params: { name: "graph", arguments: { repo: REPO }, _meta: { progressToken: 1 } } },
+      ],
+      2,
+    );
+    const progress = lines.filter((m) => (m as { method?: string }).method === "notifications/progress");
+    expect(progress.map((m) => (m as { params: unknown }).params)).toEqual([
+      { progressToken: 1, progress: 1 },
+      { progressToken: 1, progress: 2 },
+    ]);
+  }, 20_000);
 
   it("answers a request whose explicit id is null", () => {
     const proc = spawnSync(process.execPath, [CLI, "mcp"], {
@@ -1217,6 +1358,58 @@ describe("MCP --repo pin", () => {
     expect(res.get(2)!.result!.content![0]!.text).toContain("`repo` is required");
   }, 20_000);
 
+  // `/r`, `/r/`, `r` and `./r` were four session entries — four cold scans
+  // filling the whole LRU with one repository. The canonical spelling is what
+  // reaches the session cache and the size guard alike, and the guard's
+  // notice shows it.
+  it("offers the persisted artifact only while it is the answer", async () => {
+    const repo = tmpFixtureCopy("ci-cap-e2e-");
+    execFileSync(process.execPath, [CLI, "index", "--repo", repo, "--out", join(repo, ".codeindex")], { stdio: "pipe" });
+    const graphCall = (id: number, args: Record<string, unknown> = {}) => ({
+      id,
+      method: "tools/call",
+      params: { name: "graph", arguments: { repo, ...args } },
+    });
+    const run = () =>
+      mcpSession(
+        [
+          { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+          graphCall(2),
+          graphCall(3, { scope: "src" }),
+        ],
+        undefined,
+        [CLI, "mcp", "--max-response-bytes", "40"],
+      );
+    const notice = (m: RpcMsg) => JSON.parse(m.result!.content![0]!.text) as { artifact?: string; artifactNote?: string };
+
+    const fresh = await run();
+    expect(notice(fresh.get(2)!).artifact).toBe(join(repo, ".codeindex", "graph.json"));
+    expect(fresh.get(2)!.result!.content![1]).toMatchObject({ type: "resource_link", name: "graph.json" });
+    // A scoped graph is not what graph.json holds.
+    expect(notice(fresh.get(3)!).artifact).toBeUndefined();
+    expect(notice(fresh.get(3)!).artifactNote).toBeUndefined();
+
+    writeFileSync(join(repo, "src", "util.ts"), readFileSync(join(repo, "src", "util.ts"), "utf8") + "export function staleProbe() {}\n");
+    const stale = await run();
+    expect(notice(stale.get(2)!).artifact).toBeUndefined();
+    expect(notice(stale.get(2)!).artifactNote).toMatch(/does not match this answer/);
+    expect(stale.get(2)!.result!.content).toHaveLength(1);
+  }, 30_000);
+
+  it("canonicalizes every spelling of a repo path to one root", async () => {
+    const rel = relative(process.cwd(), REPO);
+    const spellings = [REPO, `${REPO}/`, rel, `./${rel}`, `${REPO}/src/..`];
+    const res = await mcpSession(
+      spellings.map((repo, i) => ({ id: i + 1, method: "tools/call", params: { name: "graph", arguments: { repo } } })),
+      undefined,
+      [CLI, "mcp", "--max-response-bytes", "40"],
+    );
+    spellings.forEach((repo, i) => {
+      const notice = JSON.parse(res.get(i + 1)!.result!.content![0]!.text) as { artifactNote: string };
+      expect(notice.artifactNote, repo).toBe(`Run \`codeindex index --repo ${REPO} --out ${join(REPO, ".codeindex")}\` to get this as a file.`);
+    });
+  }, 20_000);
+
   it("lets an explicit per-call repo override the pin", async () => {
     const other = tmpFixtureCopy("ci-pin-override-");
     writeFileSync(join(other, "extra-marker.go"), "package p\nfunc MarkerOnlyHere() {}\n");
@@ -1294,6 +1487,90 @@ describe("getScan — bounded LRU, not a single entry", () => {
     expect(getScan(two, {})).toBe(other);
   });
 
+  it("drops a deleted file after the watcher invalidates it", () => {
+    // The watcher reports the deleted path itself. Removing its cache entry
+    // used to shrink the cache and the walk by the same one file, so the
+    // stale scan was proven unchanged and kept answering with the file.
+    const repo = tmpFixtureCopy("ci-scan-invalidate-deleted-");
+    const before = getScan(repo, {});
+    expect(before.files.some((f) => f.rel === "src/util.ts")).toBe(true);
+    rmSync(join(repo, "src", "util.ts"));
+    sessionInvalidate(repo, "src/util.ts");
+    const after = getScan(repo, {});
+    expect(after).not.toBe(before);
+    expect(after.files.map((f) => f.rel)).toEqual(before.files.map((f) => f.rel).filter((rel) => rel !== "src/util.ts"));
+
+    // A removed directory is reported file by file or by its own name; either
+    // way the vanished records must leave the scan.
+    rmSync(join(repo, "gopkg"), { recursive: true });
+    sessionInvalidate(repo, "gopkg/sub/sub.go");
+    sessionInvalidate(repo, "gopkg");
+    expect(getScan(repo, {}).files.some((f) => f.rel.startsWith("gopkg/"))).toBe(false);
+  });
+
+  it("trusts a walk handed back unchanged until the watcher invalidates it", async () => {
+    // The --watch oracle hands the SAME walk object back only when no watched
+    // directory changed since it was taken; the scan proven against it is then
+    // returned without a single stat or read.
+    const repo = tmpFixtureCopy("ci-scan-proven-walk-");
+    const file = join(repo, "src", "util.ts");
+    // A whole-second mtime, so restoring it below is exact.
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const walked = walk(repo, {});
+    const scan = await getScanParallel(repo, {}, walked);
+    expect(await getScanParallel(repo, {}, walked)).toBe(scan);
+    expect(getScan(repo, {}, walked)).toBe(scan);
+    // A fresh walk object is checked as usual (and proves the scan unchanged).
+    expect(getScan(repo, {}, walk(repo, {}))).toBe(scan);
+    // An invalidated repo is re-checked even against the same walk object:
+    // the poisoned entry forces the read that sees the new bytes.
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replaceAll("function backoff(", "function backofx("));
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const proven = walk(repo, {});
+    expect(await getScanParallel(repo, {}, proven)).toBe(scan);
+    sessionInvalidate(repo, "src/util.ts");
+    const after = await getScanParallel(repo, {}, proven);
+    expect(after).not.toBe(scan);
+    expect(after.files.find((f) => f.rel === "src/util.ts")!.symbols.map((s) => s.name)).toContain("backofx");
+  });
+
+  it("re-reads an invalidated file without re-extracting identical bytes", () => {
+    const repo = tmpFixtureCopy("ci-scan-invalidate-same-");
+    const before = getScan(repo, {});
+    const record = before.files.find((f) => f.rel === "src/client.ts");
+    // Same bytes, same size, same mtime: only the event says it was touched.
+    // The poisoned entry forces a read, the hash matches, and the scan (and
+    // the record object inside it) is proven unchanged.
+    sessionInvalidate(repo, "src/client.ts");
+    expect(getScan(repo, {})).toBe(before);
+    // An unknown filename poisons every entry the same way.
+    sessionInvalidate(repo);
+    const again = getScan(repo, {});
+    expect(again).toBe(before);
+    expect(again.files.find((f) => f.rel === "src/client.ts")).toBe(record);
+  });
+
+  it("sees a same-size, same-mtime rewrite once the watcher reports it", () => {
+    const repo = tmpFixtureCopy("ci-scan-invalidate-samestat-");
+    const file = join(repo, "src", "util.ts");
+    const original = readFileSync(file, "utf8");
+    // A whole-second mtime, so restoring it below is exact.
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    getScan(repo, {});
+    // Rename one identifier to another of the same length, then restore the
+    // mtime: the (size, mtimeMs) fastpath alone cannot see this edit.
+    const edited = original.replaceAll("function backoff(", "function backofx(");
+    expect(edited).not.toBe(original);
+    writeFileSync(file, edited);
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    expect(getScan(repo, {}).files.find((f) => f.rel === "src/util.ts")!.symbols.map((s) => s.name)).toContain("backoff");
+    sessionInvalidate(repo, "src/util.ts");
+    const names = getScan(repo, {}).files.find((f) => f.rel === "src/util.ts")!.symbols.map((s) => s.name);
+    expect(names).toContain("backofx");
+    expect(names).not.toContain("backoff");
+  });
+
   it("keeps memoized artifacts when an ignored background path changes", () => {
     const repo = tmpFixtureCopy("ci-scan-invalidate-ignored-");
     const artifacts = getArtifacts(repo, {});
@@ -1359,13 +1636,57 @@ describe("capResponse — a guard, not a default page size", () => {
     expect(parsed.narrower).toMatch(/scope|repo_map|mermaid/);
   });
 
-  it("points at the persisted artifact when one exists", () => {
+  it("points at the persisted artifact when it holds exactly the withheld payload", () => {
     const dir = tmpFixtureCopy("ci-cap-");
     mkdirSync(join(dir, ".codeindex"), { recursive: true });
-    writeFileSync(join(dir, ".codeindex", "graph.json"), "{}");
-    const parsed = JSON.parse(capResponse("x".repeat(5000), "graph", dir, 1000));
-    expect(parsed.artifact).toBe(join(dir, ".codeindex", "graph.json"));
-    expect(parsed.artifactNote).toMatch(/on disk/);
+    const payload = `{"big":"${"x".repeat(5000)}"}`;
+    // The persisted rendering ends in a newline the tool response may lack.
+    for (const onDisk of [payload, payload + "\n"]) {
+      writeFileSync(join(dir, ".codeindex", "graph.json"), onDisk);
+      const parsed = JSON.parse(capResponse(payload, "graph", dir, 1000));
+      expect(parsed.artifact).toBe(join(dir, ".codeindex", "graph.json"));
+      expect(parsed.artifactNote).toMatch(/on disk/);
+    }
+  });
+
+  // It used to be offered whenever the file EXISTED — including after an edit
+  // since the last index, when it no longer held what the call would return.
+  it("does not vouch for an artifact that differs from the payload", () => {
+    const dir = tmpFixtureCopy("ci-cap-stale-");
+    mkdirSync(join(dir, ".codeindex"), { recursive: true });
+    const payload = `{"big":"${"x".repeat(5000)}"}`;
+    for (const onDisk of ["{}", payload.replace("x", "y"), payload + "\n\n"]) {
+      writeFileSync(join(dir, ".codeindex", "graph.json"), onDisk);
+      const parsed = JSON.parse(capResponse(payload, "graph", dir, 1000));
+      expect(parsed.artifact).toBeUndefined();
+      expect(parsed.artifactNote).toMatch(/does not match this answer/);
+      expect(parsed.artifactNote).toContain(`codeindex index --repo ${dir}`);
+    }
+  });
+
+  it("mentions no artifact for a narrowed request, which no artifact answers", () => {
+    const dir = tmpFixtureCopy("ci-cap-narrow-");
+    mkdirSync(join(dir, ".codeindex"), { recursive: true });
+    const payload = `{"big":"${"x".repeat(5000)}"}`;
+    writeFileSync(join(dir, ".codeindex", "graph.json"), payload);
+    const parsed = JSON.parse(capResponse(payload, "graph", dir, 1000, false));
+    expect(parsed.artifact).toBeUndefined();
+    expect(parsed.artifactNote).toBeUndefined();
+  });
+
+  // A generic "pass a `limit`" sent find_symbol callers after an argument it
+  // does not take. Iterates the live catalogue, so a hint added for a new tool
+  // is checked too.
+  it("names only arguments the tool itself takes in its narrowing hint", () => {
+    for (const tool of TOOLS) {
+      const { narrower } = JSON.parse(capResponse("x".repeat(100), tool.name, repo, 10)) as { narrower: string };
+      const props = Object.keys(tool.inputSchema.properties);
+      for (const [, arg] of narrower.matchAll(/`([^`]+)`/g)) {
+        expect(props, `${tool.name}: hint names \`${arg}\``).toContain(arg);
+      }
+    }
+    expect(JSON.parse(capResponse("x".repeat(100), "find_symbol", repo, 10)).narrower).toMatch(/`maxResults`/);
+    expect(JSON.parse(capResponse("x".repeat(100), "grep", repo, 10)).narrower).toMatch(/`maxHits`/);
   });
 
   it("tells you how to create the artifact when there is none", () => {
@@ -1503,6 +1824,152 @@ describe("validateArgs", () => {
   it("ignores null, undefined and undeclared extras", () => {
     expect(validateArgs(schema, { limit: undefined, substring: null, future: "whatever" })).toBeUndefined();
   });
+
+  it("enforces a declared enum instead of falling back to the default in silence", () => {
+    const enumerated = { properties: { direction: { type: "string", enum: ["out", "in", "both"] } } };
+    expect(validateArgs(enumerated, { direction: "in" })).toBeUndefined();
+    expect(validateArgs(enumerated, { direction: "sideways" })).toBe('`direction` must be one of "out", "in", "both", got "sideways"');
+  });
+
+  it("says 'an array' when the items are not strings", () => {
+    const untyped = { properties: { rules: { type: "array" } } };
+    expect(validateArgs(untyped, { rules: { from: "a" } })).toBe("`rules` must be an array, got object");
+    expect(validateArgs(untyped, { rules: [{ from: "a" }] })).toBeUndefined();
+  });
+
+  it("checks the declared required list, naming the argument and what it is for", () => {
+    const required = {
+      properties: { repo: { type: "string", description: "Absolute path to the repository root" }, namePath: { type: "string" } },
+      required: ["repo", "namePath"],
+    };
+    expect(validateArgs(required, { namePath: "A" })).toBe("`repo` is required (Absolute path to the repository root)");
+    expect(validateArgs(required, { repo: "/x", namePath: null })).toBe("`namePath` is required");
+    expect(validateArgs(required, { repo: "/x", namePath: "A" })).toBeUndefined();
+  });
+});
+
+// `file` arguments are matched against the index's repo-relative spelling.
+// `./src/util.ts`, an absolute path or `src\util.ts` used to answer an empty
+// `[]` — indistinguishable from a file that declares nothing — and an edit
+// qualified that way reported that no symbol matched.
+describe("file arguments", () => {
+  it("accepts ./, absolute and backslash spellings of an indexed file", async () => {
+    const spellings = ["src/util.ts", "./src/util.ts", join(REPO, "src", "util.ts"), "src\\util.ts", "src//util.ts"];
+    const res = await mcpSession([
+      ...spellings.map((file, i) => ({ id: i + 1, method: "tools/call", params: { name: "symbols_overview", arguments: { repo: REPO, file } } })),
+      { id: 10, method: "tools/call", params: { name: "complexity", arguments: { repo: REPO, file: "./src/util.ts" } } },
+      { id: 11, method: "tools/call", params: { name: "complexity", arguments: { repo: REPO, file: "src/util.ts" } } },
+    ]);
+    const canonical = res.get(1)!.result!.content![0]!.text;
+    expect(JSON.parse(canonical).map((s: { name: string }) => s.name)).toContain("backoff");
+    spellings.forEach((file, i) => {
+      expect(res.get(i + 1)!.result!.isError, file).toBeUndefined();
+      expect(res.get(i + 1)!.result!.content![0]!.text, file).toBe(canonical);
+    });
+    expect(res.get(10)!.result!.content![0]!.text).toBe(res.get(11)!.result!.content![0]!.text);
+    expect(JSON.parse(res.get(11)!.result!.content![0]!.text).length).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("reports a file the index does not hold, with same-name suggestions", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "symbols_overview", arguments: { repo: REPO, file: "util.ts" } } },
+      { id: 2, method: "tools/call", params: { name: "complexity", arguments: { repo: REPO, file: "nope.go" } } },
+      { id: 3, method: "tools/call", params: { name: "symbols_overview", arguments: { repo: REPO, file: "../outside.ts" } } },
+      { id: 4, method: "tools/call", params: { name: "insert_after_symbol", arguments: { repo: REPO, namePath: "backoff", body: "x", file: "nope.ts" } } },
+    ]);
+    const text = (id: number) => res.get(id)!.result!.content![0]!.text;
+    for (const id of [1, 2, 3, 4]) expect(res.get(id)!.result!.isError, String(id)).toBe(true);
+    expect(text(1)).toBe("file not in the index: util.ts — did you mean src/util.ts?");
+    expect(text(2)).toMatch(/^file not in the index: nope\.go \(paths are repo-relative/);
+    expect(text(3)).toBe("`file` is outside the repository: ../outside.ts");
+    // Rejected before the edit could touch anything.
+    expect(text(4)).toMatch(/^file not in the index: nope\.ts/);
+  }, 20_000);
+
+  it("resolves an edit's ./-qualified file to the indexed one", async () => {
+    const repo = tmpFixtureCopy("ci-edit-file-");
+    const res = await mcpSession([
+      {
+        id: 1,
+        method: "tools/call",
+        params: { name: "insert_after_symbol", arguments: { repo, namePath: "backoff", file: "./src/util.ts", body: "export const AFTER = 1;" } },
+      },
+    ]);
+    expect(res.get(1)!.result!.isError).toBeUndefined();
+    expect(JSON.parse(res.get(1)!.result!.content![0]!.text).file).toBe("src/util.ts");
+    expect(readFileSync(join(repo, "src", "util.ts"), "utf8")).toContain("export const AFTER = 1;");
+  }, 20_000);
+
+  it("rejects an enum value a tool does not understand", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "call_graph", arguments: { repo: REPO, symbol: "HttpClient", direction: "sideways" } } },
+      { id: 2, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", rank: "pagerank" } } },
+      { id: 3, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", rank: "graph" } } },
+    ]);
+    expect(res.get(1)!.result!.isError).toBe(true);
+    expect(res.get(1)!.result!.content![0]!.text).toMatch(/`direction` must be one of "out", "in", "both"/);
+    expect(res.get(2)!.result!.isError).toBe(true);
+    expect(res.get(2)!.result!.content![0]!.text).toMatch(/`rank` must be one of "lexical", "graph"/);
+    expect(res.get(3)!.result!.isError).toBeUndefined();
+  }, 20_000);
+});
+
+// Everything checkable from the request alone used to be checked only after
+// callTool had walked and scanned the repo — 13.5 s to learn that `namePath`
+// was missing on a 66k-file repo. A repository that does not exist proves the
+// order: callTool's first act is to stat it, so any answer OTHER than "not a
+// readable directory" was produced before the repo was touched.
+describe("tools/call is validated before the repo is touched", () => {
+  const missingRepo = join(tmpdir(), "codeindex-never-created");
+
+  it("rejects unknown tools, missing required arguments and bad types without a scan", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "nope", arguments: { repo: missingRepo } } },
+      { id: 2, method: "tools/call", params: { name: "find_symbol", arguments: { repo: missingRepo } } },
+      { id: 3, method: "tools/call", params: { name: "call_graph", arguments: { repo: missingRepo, symbol: "A", depth: "abc" } } },
+      { id: 4, method: "tools/call", params: { name: "find_symbol", arguments: { repo: missingRepo, namePath: "A" } } },
+    ]);
+    const text = (id: number) => res.get(id)!.result!.content![0]!.text;
+    for (const id of [1, 2, 3, 4]) expect(res.get(id)!.result!.isError, String(id)).toBe(true);
+    expect(text(1)).toBe("unknown tool: nope");
+    expect(text(2)).toMatch(/^`namePath` is required/);
+    expect(text(3)).toMatch(/`depth` must be a number/);
+    // The control: a well-formed call does reach the repo check.
+    expect(text(4)).toMatch(/not a readable directory/);
+  }, 20_000);
+
+  it("answers a tools/call whose params are malformed with -32602", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "scan_summary", arguments: "xyz" } },
+      { id: 2, method: "tools/call", params: { name: "scan_summary", arguments: [REPO] } },
+      { id: 3, method: "tools/call", params: {} },
+      { id: 4, method: "tools/call", params: { name: "scan_summary", arguments: { repo: REPO } } },
+    ]);
+    for (const id of [1, 2, 3]) {
+      expect(res.get(id)!.result, String(id)).toBeUndefined();
+      expect(res.get(id)!.error!.code, String(id)).toBe(-32602);
+    }
+    expect(res.get(4)!.result!.isError).toBeUndefined();
+  }, 20_000);
+
+  it("validates a tool left out of the active profile like any other", async () => {
+    const res = await mcpSession(
+      [
+        { id: 1, method: "tools/call", params: { name: "call_graph", arguments: { repo: REPO, symbol: "HttpClient", depth: "abc" } } },
+        { id: 2, method: "tools/call", params: { name: "call_graph", arguments: { repo: REPO, symbol: "HttpClient", depth: 9 } } },
+        { id: 3, method: "tools/call", params: { name: "dead_code", arguments: { repo: REPO, limit: "x" } } },
+        { id: 4, method: "tools/call", params: { name: "write_memory", arguments: { repo: REPO, content: "x" } } },
+      ],
+      undefined,
+      [CLI, "mcp", "--tools", "find"],
+    );
+    const text = (id: number) => res.get(id)!.result!.content![0]!.text;
+    for (const id of [1, 2, 3, 4]) expect(res.get(id)!.result!.isError, String(id)).toBe(true);
+    expect(text(1)).toMatch(/`depth` must be a number/);
+    expect(text(2)).toMatch(/`depth` must be at most 5/);
+    expect(text(3)).toMatch(/`limit` must be a number/);
+    expect(text(4)).toMatch(/`name` is required/);
+  }, 20_000);
 });
 
 // The playground indexed socialgouv/egapro on a guessed `master` while the
@@ -1576,8 +2043,23 @@ describe("tool profiles and onboarding", () => {
     expect(res.get(3)!.result!.isError).toBeUndefined();
   }, 20_000);
 
+  // Iterates the live catalogue, so a tool added later must be placed too.
+  it("places every tool in at least one profile, and names only real tools", () => {
+    const names = new Set<string>(TOOLS.map((t) => t.name));
+    const profiled = new Set(Object.values(TOOL_PROFILES).flat());
+    expect([...names].filter((n) => !profiled.has(n)), "tools in no profile").toEqual([]);
+    expect([...profiled].filter((n) => !names.has(n)), "profile entries that are not tools").toEqual([]);
+    // A narrowed agent that can read memories is told it can write them.
+    expect(toolsInProfiles("orient").has("write_memory")).toBe(true);
+    expect([...toolsInProfiles("memory")].sort()).toEqual(["delete_memory", "list_memories", "read_memory", "write_memory"]);
+    expect(profileNames()).toContain("memory");
+  });
+
   it("rejects an unknown profile at startup rather than advertising everything", () => {
     expect(() => parseMcpFlags(["--tools", "nonsense"])).toThrow(/unknown tool profile/);
+    // Own keys only: an Object.prototype member is not a profile.
+    expect(() => parseMcpFlags(["--tools", "constructor"])).toThrow(/unknown tool profile/);
+    expect(() => parseMcpFlags(["--tools", "toString"])).toThrow(/unknown tool profile/);
     // "all" is the default and must stay expressible.
     expect(parseMcpFlags(["--tools", "all"]).profile).toBeUndefined();
     expect(parseMcpFlags(["--tools", "find,impact"]).profile).toBe("find,impact");

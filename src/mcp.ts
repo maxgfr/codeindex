@@ -1,6 +1,6 @@
 // MCP (Model Context Protocol) server over stdio — hand-rolled JSON-RPC 2.0 so
-// the engine stays zero-dependency. Newline-delimited JSON messages, protocol
-// 2024-11-05 (compatible with later revisions' initialize handshake). Exposes
+// the engine stays zero-dependency. Newline-delimited JSON messages; the
+// protocol revision is negotiated at initialize (see mcp/protocol.ts). Exposes
 // the engine's indexing capabilities as MCP tools; every tool takes a `repo`
 // path and returns text content — JSON, except repo_map, mermaid and
 // read_memory, which return their own formats.
@@ -9,13 +9,15 @@
 // (NOT `node scripts/engine.mjs mcp`: engine.mjs is a side-effect-free library
 // with no main-module guard — see src/engine.ts — so that command does nothing.
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
-import { readFileSync, statSync, watch as watchFs, type FSWatcher } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
-import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
+import { callerIndexFor, fileByRelFor, hierarchyFor, symbolGraphFor } from "./derived.js";
+import { byStr } from "./sort.js";
+import type { RepoScan } from "./scan.js";
 import { implementationsOf } from "./relations.js";
 import { neighborhood, type Direction } from "./symbolgraph.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
@@ -40,10 +42,12 @@ import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
-import { IGNORE_DIRS, walk, type WalkResult } from "./walk.js";
+import { walk, type WalkResult } from "./walk.js";
+import { watchRepo, type RepoWatch } from "./mcp/watch.js";
 import { toolsFor, OUTPUT_SCHEMAS, profileNames } from "./mcp/tools.js";
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
+  PROGRESS_MESSAGE_SINCE,
   RICH_TOOLS_SINCE,
   PROTOCOL_VERSIONS,
   capResponse,
@@ -100,6 +104,9 @@ interface RpcRequest {
   params?: Record<string, unknown>;
 }
 
+// A JSON-RPC response to send, or undefined for none (a notification).
+type Reply = Record<string, unknown> | undefined;
+
 function isRpcRequest(value: unknown): value is RpcRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const req = value as Record<string, unknown>;
@@ -134,6 +141,36 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+// A `file` argument, as the index spells it: repo-relative, `/`-separated.
+//
+// Agents pass `./gin.go`, an absolute path they just read, or `src\a.ts`, and
+// every spelling but the indexed one answered an empty `[]` — indistinguishable
+// from "this file declares nothing" — or, for an edit, "no symbol matches".
+// An exact indexed spelling is taken as is, so no working call changes. A path
+// that names nothing indexed is an error with same-basename suggestions, since
+// the empty answer is precisely what hid the mistake.
+function indexedFile(scan: RepoScan, repo: string, file: string): string {
+  const byRel = fileByRelFor(scan);
+  if (byRel.has(file)) return file;
+  const rel = relative(repo, resolve(repo, file.replaceAll("\\", "/"))).split(sep).join("/");
+  if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) throw new Error(`\`file\` is outside the repository: ${file}`);
+  if (byRel.has(rel)) return rel;
+  const name = basename(rel);
+  const near = scan.files.filter((f) => basename(f.rel) === name).map((f) => f.rel).sort(byStr).slice(0, 5);
+  throw new Error(
+    `file not in the index: ${file}` +
+      (near.length ? ` — did you mean ${near.join(", ")}?` : " (paths are repo-relative, as symbols_overview and find_symbol report them)"),
+  );
+}
+
+// "There is no such symbol/type" from a lookup tool. Its text stays the
+// `{ "error": ... }` JSON it always was, but it travels as a tool execution
+// error (isError): it is not a result, and a declared outputSchema describes
+// results. An SDK client validates structuredContent on every NON-error
+// response, so `call_graph`'s notice used to surface as a -32602 protocol
+// failure instead of the sentence the model needed to read.
+class NotFound extends Error {}
+
 // Tools that never scan the file tree (git/grep/memory/embed-status only) — they
 // must not trigger a grammar warm. Every other tool is scan-needing and warms
 // the repo's grammars first; defaulting to "warm" keeps a newly added scan tool
@@ -147,19 +184,42 @@ const SCANLESS_TOOLS = new Set([
   "scan_summary",
 ]);
 
-async function callTool(name: string, args: Record<string, unknown>, defaultRepo?: string): Promise<string> {
-  // An explicit per-call `repo` always wins; `defaultRepo` is the server-level
-  // pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
-  // to one workspace, so agents need not know — or restate — the absolute path.
-  const repo = str(args.repo) ?? defaultRepo;
-  if (!repo) throw new Error("`repo` is required (absolute path to the repository root)");
+// The repository a call is about, in its ONE canonical spelling.
+//
+// An explicit per-call `repo` always wins; `defaultRepo` is the server-level
+// pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
+// to one workspace, so agents need not know — or restate — the absolute path.
+//
+// The session cache, the size guard and the watcher all key on this string,
+// so `/r`, `/r/`, `r` and `./r` used to be four cold scans (5.5-9 s each on a
+// 5k-file repo) filling all four LRU slots with one repository. resolve() is
+// the same normalization the CLI gives `--repo`; symlinks are deliberately
+// NOT followed, since the root's own name is what onboard reports.
+function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
+  const requested = str(args.repo) ?? defaultRepo;
+  if (!requested) throw new Error("`repo` is required (absolute path to the repository root)");
+  const repo = resolve(requested);
   try {
     if (!statSync(repo).isDirectory()) throw new Error("not a directory");
   } catch {
-    throw new Error(`repository root is not a readable directory: ${repo}`);
+    throw new Error(`repository root is not a readable directory: ${requested}`);
   }
+  return repo;
+}
+
+// `progress` reports phase boundaries of a scan-needing call (see toolsCall).
+// `walkRepo` supplies the call's walk: the --watch oracle's for the pinned
+// repository, a plain walk otherwise.
+async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+  repo: string,
+  progress?: (message: string) => void,
+  walkRepo: (repo: string) => Promise<{ walked: WalkResult; reused: boolean }> = async (r) => ({ walked: walk(r, {}), reused: false }),
+): Promise<string> {
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
-  // `search`'s optional structural prior; anything else falls back to the default.
+  // `search`'s optional structural prior. The schema's enum has already
+  // rejected anything else, so a typo no longer falls back to lexical in silence.
   const rankArg = str(args.rank);
   const rankOpt: { rank?: RankMode } = rankArg === "graph" || rankArg === "lexical" ? { rank: rankArg } : {};
   // Scan-needing tools warm the present-language grammars (re-derived per call)
@@ -171,16 +231,19 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   // needs the scan (and its grammars) like any graph tool.
   const scanless = SCANLESS_TOOLS.has(name) && !(name === "workspaces" && args.check === true);
   if (!scanless) {
-    // fs.watch is an eager invalidation hint, never a freshness oracle: an
-    // immediate request can beat event delivery. Always perform the normal
-    // walk/stat proof before trusting a warm scan.
-    walked = walk(repo, {});
+    // An event can arrive after the request that should see it, so a warm
+    // scan is trusted only against a walk: a fresh one, or the one the
+    // --watch oracle proves still current (see src/mcp/watch.ts).
+    const fresh = await walkRepo(repo);
+    walked = fresh.walked;
+    progress?.(fresh.reused ? `unchanged since the last call: ${walked.files.length} files` : `walked ${walked.files.length} files`);
     preparedScan = await getScanParallel(
       repo,
       scanOpts,
       walked,
       () => (walked ? warmGrammarsForWalk(walked) : Promise.resolve()),
     );
+    progress?.(`scan ready: ${preparedScan.files.length} files`);
   }
   const readScan = (): ReturnType<typeof getScan> => preparedScan ?? getScan(repo, scanOpts, walked);
   const readArtifacts = () => getArtifacts(repo, scanOpts, walked, preparedScan);
@@ -200,8 +263,12 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const { symbols } = readArtifacts();
     const lookup = str(args.name);
     if (lookup) {
-      const defs = symbols.defs[lookup] ?? [];
-      return JSON.stringify({ name: lookup, defs: args.concise === true ? defs.map((s) => symbolLocation(s, lookup)) : defs, refs: symbols.refs[lookup] ?? [] }, null, 2);
+      // Own keys only: the index is a plain object, so `toString`,
+      // `constructor` or `__proto__` read straight off Object.prototype
+      // (a function, or `{}`) instead of the empty answer.
+      const defs = Object.hasOwn(symbols.defs, lookup) ? symbols.defs[lookup]! : [];
+      const refs = Object.hasOwn(symbols.refs, lookup) ? symbols.refs[lookup]! : [];
+      return JSON.stringify({ name: lookup, defs: args.concise === true ? defs.map((s) => symbolLocation(s, lookup)) : defs, refs }, null, 2);
     }
     return JSON.stringify(args.concise === true ? conciseSymbolIndex(symbols) : symbols, null, 2);
   }
@@ -242,7 +309,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "symbols_overview") {
     const file = str(args.file);
     if (!file) throw new Error("`file` is required");
-    const overview = symbolsOverview(readScan(), file);
+    const scan = readScan();
+    const overview = symbolsOverview(scan, indexedFile(scan, repo, file));
     return JSON.stringify(args.concise === true ? overview.map((s) => symbolLocation(s, s.name)) : overview, null, 2);
   }
   if (name === "find_symbol") {
@@ -276,7 +344,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
     const scan = readScan();
     const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
-    const result = fn(scan, namePath, body, str(args.file));
+    const file = str(args.file);
+    const result = fn(scan, namePath, body, file === undefined ? undefined : indexedFile(scan, repo, file));
     // A write WE just performed must not be trusted to the stat oracle: an
     // edit landing in the same mtime tick with the same byte count would pass
     // the (size, mtimeMs) fastpath and serve a stale scan. Drop the whole
@@ -343,7 +412,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       const { churn, ok } = gitChurn(repo, { since: str(args.since) });
       return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, positiveNum(args.top)) }, null, 2);
     }
-    return JSON.stringify(symbolComplexity(scan, str(args.file), positiveNum(args.top)), null, 2);
+    const file = str(args.file);
+    const rel = file === undefined ? undefined : indexedFile(scan, repo, file);
+    return JSON.stringify(symbolComplexity(scan, rel, positiveNum(args.top)), null, 2);
   }
   if (name === "mermaid") {
     const { graph } = readArtifacts();
@@ -493,14 +564,14 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       return JSON.stringify(obj, null, 2);
     }
     const entry = hierarchy.get(wanted);
-    if (!entry) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
+    if (!entry) throw new NotFound(`no type named ${wanted}`);
     return JSON.stringify(entry, null, 2);
   }
   if (name === "implementations") {
     const wanted = str(args.name);
     if (!wanted) throw new Error("`name` is required");
     const hierarchy = hierarchyFor(readScan());
-    if (!hierarchy.has(wanted)) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
+    if (!hierarchy.has(wanted)) throw new NotFound(`no type named ${wanted}`);
     return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted) }, null, 2);
   }
   if (name === "call_graph") {
@@ -512,7 +583,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       ...(positiveNum(args.depth) !== undefined ? { depth: positiveNum(args.depth)! } : {}),
       direction: dir,
     });
-    if (!result.root.length) return JSON.stringify({ error: `no symbol named ${symbol}` }, null, 2);
+    if (!result.root.length) throw new NotFound(`no symbol named ${symbol}`);
     return JSON.stringify(result, null, 2);
   }
   if (name === "check_rules") {
@@ -559,10 +630,10 @@ export interface McpServerOptions {
   // what is ADVERTISED, not what is answerable: a tool left out of the profile
   // still works when called. Undefined = all tools, so no existing setup moves.
   profile?: string;
-  // Opt into proactive event-driven invalidation for a pinned repository.
-  // Every request still performs the normal freshness proof because event
-  // delivery can lag behind a request. Unsupported platforms warn and retain
-  // the same per-call freshness scan.
+  // Watch the pinned repository (see src/mcp/watch.ts). On Linux the watcher
+  // proves when nothing changed, so a call skips the walk and the stat pass;
+  // elsewhere it only invalidates eagerly. Whenever it cannot prove freshness
+  // a call walks exactly as without it.
   watch?: boolean;
 }
 
@@ -577,30 +648,27 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   let protocolVersion: string = PROTOCOL_VERSIONS[0];
   // Rebuilt when negotiation lands: the pin cannot change mid-session, but the
   // fields we are allowed to advertise depend on the version.
-  let tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
-  let watcher: FSWatcher | undefined;
-  if (opts.watch && opts.defaultRepo) {
-    try {
-      watcher = watchFs(opts.defaultRepo, { recursive: true }, (_event, filename) => {
-        const rel = filename?.toString().replaceAll("\\", "/") ?? "";
-        const ignored = rel.split("/").some((segment) =>
-          IGNORE_DIRS.has(segment) || segment.startsWith(".codeindex-edit-"),
-        );
-        if (ignored) return;
-        sessionInvalidate(opts.defaultRepo!, rel || undefined);
-      });
-      watcher.on("error", (error) => {
-        process.stderr.write(`codeindex: MCP watcher disabled (${error.message}); using freshness scans\n`);
-        watcher?.close();
-        watcher = undefined;
-        sessionInvalidate(opts.defaultRepo!);
-      });
-    } catch (error) {
-      process.stderr.write(
-        `codeindex: MCP watcher unavailable (${error instanceof Error ? error.message : String(error)}); using freshness scans\n`,
-      );
-    }
-  }
+  // Canonical like every per-call repo (see repoRoot): an embedder may pin a
+  // relative or slash-terminated path, and the watcher's invalidations must
+  // name the same session entries the calls do.
+  const defaultRepo = opts.defaultRepo === undefined ? undefined : resolve(opts.defaultRepo);
+  let tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
+  // What a call is validated against: EVERY tool, whatever the profile. A
+  // profile trims what is advertised, not what is answerable, so a tool called
+  // by name from outside it must be checked like any other — looking it up in
+  // the advertised list found nothing and silently skipped validation. The
+  // pin is what shapes `required` (it drops `repo`); the protocol version
+  // never touches an inputSchema, so one map serves the whole session.
+  const callable = new Map(
+    (toolsFor(defaultRepo) as { name: string; inputSchema: Parameters<typeof validateArgs>[0] }[]).map((t) => [
+      t.name,
+      t.inputSchema,
+    ]),
+  );
+  const watcher: RepoWatch | undefined =
+    opts.watch && defaultRepo ? watchRepo(defaultRepo, (message) => process.stderr.write(`codeindex: ${message}\n`)) : undefined;
+  const walkRepo = async (repo: string): Promise<{ walked: WalkResult; reused: boolean }> =>
+    watcher && repo === defaultRepo ? watcher.walk() : { walked: walk(repo, {}), reused: false };
   // No startup warm: each scan-needing tool warms the present-language grammars
   // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
@@ -611,6 +679,28 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
       ? msg.map((entry) => ({ jsonrpc: "2.0", ...entry }))
       : { jsonrpc: "2.0", ...msg };
     process.stdout.write(JSON.stringify(wire) + "\n");
+  };
+
+  // Tool calls run ONE AT A TIME, in arrival order: results stay deterministic,
+  // and a call never observes a half-applied edit or a session cache another
+  // call is refilling. Everything else is answered the moment it is read. The
+  // loop used to await each message before reading the next, so a `ping` sent
+  // during a cold scan was answered only when the scan finished (7.6 s in the
+  // audit) and a `notifications/cancelled` could not be seen until the call
+  // it cancelled had already been answered.
+  let callQueue: Promise<unknown> = Promise.resolve();
+  // Ids of tool calls queued or running, and those the client has cancelled.
+  // A cancelled call gets no response (the spec's rule): one still queued is
+  // skipped, one already running finishes — an edit cannot be half-undone —
+  // and its answer is dropped.
+  const pendingCalls = new Set<string | number>();
+  const cancelledCalls = new Set<string | number>();
+  // Replies still being computed; drained before the server returns, so
+  // closing stdin never loses an answer.
+  const outstanding = new Set<Promise<void>>();
+  const track = (reply: Promise<void>): void => {
+    const settled = reply.finally(() => outstanding.delete(settled));
+    outstanding.add(settled);
   };
 
   const rl = createInterface({ input: process.stdin, terminal: false });
@@ -629,44 +719,50 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
         send({ id: null, error: { code: -32600, message: "invalid request" } });
         continue;
       }
-      const dispatch = async (req: unknown): Promise<Record<string, unknown> | undefined> => {
-        // The server currently initiates no requests, but a peer response is
-        // still a response — JSON-RPC forbids replying to it with -32600.
-        if (isRpcResponse(req)) return undefined;
-        if (!isRpcRequest(req)) {
-          return { id: null, error: { code: -32600, message: "invalid request" } };
-        }
-        return handle(req);
-      };
       if (Array.isArray(parsed)) {
-        const replies: Record<string, unknown>[] = [];
-        for (const req of parsed) {
-          const reply = await dispatch(req);
-          if (reply) replies.push(reply);
-        }
+        const replies = parsed.map(dispatch);
         // A notification-only batch has no response. Any actual responses must
-        // share one JSON array, as required by JSON-RPC 2.0.
-        if (replies.length > 0) send(replies);
+        // share one JSON array, as required by JSON-RPC 2.0 — so a batch that
+        // holds a tool call is answered when its last member is.
+        const sendBatch = (settled: Reply[]): void => {
+          const answered = settled.filter((r): r is Record<string, unknown> => r !== undefined);
+          if (answered.length > 0) send(answered);
+        };
+        if (replies.some((r) => r instanceof Promise)) track(Promise.all(replies).then(sendBatch));
+        else sendBatch(replies as Reply[]);
       } else {
-        const reply = await dispatch(parsed);
-        if (reply) send(reply);
+        const reply = dispatch(parsed);
+        if (reply instanceof Promise) track(reply.then((r) => (r ? send(r) : undefined)));
+        else if (reply) send(reply);
       }
     }
+    while (outstanding.size > 0) await Promise.all(outstanding);
   } finally {
     watcher?.close();
   }
 
-  async function handle(req: RpcRequest): Promise<Record<string, unknown> | undefined> {
+  function dispatch(req: unknown): Reply | Promise<Reply> {
+    // The server currently initiates no requests, but a peer response is
+    // still a response — JSON-RPC forbids replying to it with -32600.
+    if (isRpcResponse(req)) return undefined;
+    if (!isRpcRequest(req)) {
+      return { id: null, error: { code: -32600, message: "invalid request" } };
+    }
+    return handle(req);
+  }
+
+  // Synchronous for everything but a valid tool call, which is what keeps the
+  // immediate replies in the order their requests arrived.
+  function handle(req: RpcRequest): Reply | Promise<Reply> {
     // Only an ABSENT id denotes a notification. Explicit null is discouraged
     // by JSON-RPC but remains a request and must receive an id:null response.
     const notification = !("id" in req);
-    const respond = (body: Record<string, unknown>): Record<string, unknown> | undefined =>
-      notification ? undefined : { id: req.id ?? null, ...body };
+    const respond = (body: Record<string, unknown>): Reply => (notification ? undefined : { id: req.id ?? null, ...body });
 
     try {
       if (req.method === "initialize") {
         protocolVersion = negotiateProtocol(req.params?.protocolVersion);
-        tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
+        tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
         return respond({
           result: {
             protocolVersion,
@@ -680,50 +776,123 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
       } else if (req.method === "tools/list") {
         return respond({ result: { tools } });
       } else if (req.method === "tools/call") {
-        const params = req.params ?? {};
-        const name = str(params.name) ?? "";
-        const args = (params.arguments ?? {}) as Record<string, unknown>;
-        try {
-          const decl = (tools as { name: string; inputSchema: { properties?: Record<string, unknown> } }[]).find(
-            (t) => t.name === name,
-          );
-          const invalid = decl ? validateArgs(decl.inputSchema, args) : undefined;
-          if (invalid) throw new Error(invalid);
-          const raw = await callTool(name, args, opts.defaultRepo);
-          const repo = str(args.repo) ?? opts.defaultRepo ?? "";
-          const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-          // A capped whole-repo response points at an artifact already on disk.
-          // From 2025-06-18 the protocol has a content type that says exactly
-          // that, so the client can fetch the bytes instead of re-asking.
-          //
-          // Gated on `text !== raw` — i.e. capResponse actually replaced the
-          // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
-          // every single call just to discover it was not truncated.
-          const capped = text !== raw;
-          const link = capped && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
-          // Typed, validatable result alongside the text block — for the tools
-          // that declare an outputSchema, and never when the guard replaced the
-          // payload (see structuredContentFor).
-          const structured =
-            protocolVersion >= RICH_TOOLS_SINCE
-              ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined)
-              : undefined;
-          return respond({
-            result: {
-              content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
-              ...(structured ? { structuredContent: structured } : {}),
-            },
-          });
-        } catch (e) {
-          return respond({
-            result: { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true },
-          });
+        return toolsCall(req, respond);
+      } else if (req.method === "notifications/cancelled") {
+        const cancelled = req.params?.requestId;
+        if ((typeof cancelled === "string" || typeof cancelled === "number") && pendingCalls.has(cancelled)) {
+          cancelledCalls.add(cancelled);
         }
+        return undefined;
       } else {
         return respond({ error: { code: -32601, message: `method not found: ${req.method}` } });
       }
     } catch (e) {
-      return respond({ error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+      return respond({ error: { code: -32603, message: errMessage(e) } });
+    }
+  }
+
+  function toolsCall(req: RpcRequest, respond: (body: Record<string, unknown>) => Reply): Reply | Promise<Reply> {
+    const params = req.params ?? {};
+    // A call whose params do not have the CallToolRequest shape is a
+    // malformed request — a protocol error, as the SDK server answers it.
+    // `arguments: "xyz"` used to run the tool with no arguments at all.
+    const rawArgs = params.arguments;
+    if (typeof params.name !== "string") {
+      return respond({ error: { code: -32602, message: "invalid params: tools/call requires a string `name`" } });
+    }
+    if (rawArgs !== undefined && rawArgs !== null && (typeof rawArgs !== "object" || Array.isArray(rawArgs))) {
+      return respond({ error: { code: -32602, message: "invalid params: tools/call `arguments` must be an object" } });
+    }
+    const name = params.name;
+    const args = (rawArgs ?? {}) as Record<string, unknown>;
+    // Everything checkable from the request alone is checked BEFORE callTool,
+    // which walks and scans the repo first — and before the queue, so a
+    // mistake is answered at once even behind a slow call. An unknown tool
+    // stays a tool error rather than -32602: that is what the reference SDK
+    // server puts on the wire, and what clients already handle.
+    const schema = callable.get(name);
+    const invalid = schema ? validateArgs(schema, args) : `unknown tool: ${name}`;
+    if (invalid) return respond({ result: { content: [{ type: "text", text: invalid }], isError: true } });
+
+    // The version in force when the call ARRIVED shapes its answer, however
+    // long it waits in the queue.
+    const version = protocolVersion;
+    const id = typeof req.id === "string" || typeof req.id === "number" ? req.id : undefined;
+    if (id !== undefined) pendingCalls.add(id);
+    // A first call on a large repo can run for many seconds with nothing on
+    // the wire, and SDK clients time a request out at 60 s unless progress
+    // arrives. When the caller supplied a progressToken, each phase boundary
+    // is reported. Messages only: the result itself is untouched.
+    const token = (params._meta as Record<string, unknown> | undefined)?.progressToken;
+    let step = 0;
+    const progress =
+      typeof token === "string" || typeof token === "number"
+        ? (message: string): void => {
+            if (id !== undefined && cancelledCalls.has(id)) return;
+            const detail = version >= PROGRESS_MESSAGE_SINCE ? { message } : {};
+            send({ method: "notifications/progress", params: { progressToken: token, progress: ++step, ...detail } });
+          }
+        : undefined;
+    const run = callQueue.then(async (): Promise<Reply> => {
+      if (id !== undefined && cancelledCalls.has(id)) return undefined;
+      return respond(await callResult(name, args, version, progress));
+    });
+    callQueue = run.catch(() => undefined);
+    return run.then((reply) => {
+      if (id === undefined) return reply;
+      pendingCalls.delete(id);
+      return cancelledCalls.delete(id) ? undefined : reply;
+    });
+  }
+
+  async function callResult(
+    name: string,
+    args: Record<string, unknown>,
+    version: string,
+    progress?: (message: string) => void,
+  ): Promise<Record<string, unknown>> {
+    try {
+      const repo = repoRoot(args, defaultRepo);
+      const raw = await callTool(name, args, repo, progress, walkRepo);
+      // Narrowed or projected, the answer is not what a whole-repo artifact
+      // holds, so the size guard must not point at one.
+      const narrowed =
+        str(args.scope) !== undefined ||
+        strArray(args.include) !== undefined ||
+        strArray(args.exclude) !== undefined ||
+        str(args.name) !== undefined ||
+        args.concise === true;
+      const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES, !narrowed);
+      // A capped whole-repo response points at an artifact already on disk.
+      // From 2025-06-18 the protocol has a content type that says exactly
+      // that, so the client can fetch the bytes instead of re-asking.
+      //
+      // Gated on `text !== raw` — i.e. capResponse actually replaced the
+      // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
+      // every single call just to discover it was not truncated.
+      const capped = text !== raw;
+      const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+      // Typed, validatable result alongside the text block — for the tools
+      // that declare an outputSchema, and never when the guard replaced the
+      // payload (see structuredContentFor).
+      const structured =
+        version >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined) : undefined;
+      return {
+        result: {
+          content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
+          ...(structured ? { structuredContent: structured } : {}),
+          // The withheld-payload notice is a tool execution error: the call
+          // did not deliver what was asked, and the notice is exactly the
+          // actionable text such an error exists to carry. It is also the
+          // only honest option for a tool with an outputSchema — the notice
+          // cannot conform to it, and SDK clients reject a non-error result
+          // that lacks conforming structuredContent.
+          ...(capped ? { isError: true } : {}),
+        },
+      };
+    } catch (e) {
+      const text = e instanceof NotFound ? JSON.stringify({ error: e.message }, null, 2) : errMessage(e);
+      return { result: { content: [{ type: "text", text }], isError: true } };
     }
   }
 }

@@ -94,8 +94,10 @@ Commands:
                                containerized embedding server (rich tier)
   lsp         Optional LSP tier (opt-in by asset — the tier is active only when
               <repo>/.codeindex/lsp.json exists, or CODEINDEX_LSP_CONFIG points
-              at one). It annotates QUERY answers only and never touches
-              graph.json/symbols.json:
+              at one; CODEINDEX_LSP_CONFIG=off disables it). It annotates QUERY
+              answers only and never touches graph.json/symbols.json.
+              CODEINDEX_LSP_TIMEOUT_MS / CODEINDEX_LSP_STARTUP_TIMEOUT_MS
+              override every server's timeoutMs / startupTimeoutMs:
                 lsp status     Config path and source, each server with whether
                                its command is on PATH and how many files it
                                claims, and the languages nothing covers (JSON).
@@ -164,13 +166,15 @@ Commands:
               --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
               tool response (default 1e6; a response under the cap is
-              byte-identical, one over it is replaced by an actionable notice
-              instead of an unusable blob); --tools <profile[,profile]>
+              byte-identical, one over it is replaced by an actionable notice,
+              sent as a tool error, instead of an unusable blob);
+              --tools <profile[,profile]>
               advertises a named subset (all | orient | find | impact | edit |
-              risk, default all) — every advertised tool's schema costs an agent
+              risk | memory, default all) — every advertised tool's schema costs an agent
               context on EVERY turn, and a tool left out is still answerable
-              when called by name; --watch enables proactive invalidation for a
-              pinned repo while retaining per-request freshness verification
+              when called by name; --watch watches the pinned repo so a call
+              skips the whole-tree walk when nothing changed since the last one
+              (Linux; elsewhere it only invalidates eagerly)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
