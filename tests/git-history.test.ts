@@ -335,6 +335,12 @@ describe("CLI", () => {
     commit(root, { "src/a.ts": bump(), "docs/x.ts": bump() });
     const churn = JSON.parse(cli(["churn", "--repo", root, "--scope", "src", "--exclude", "src/b.ts"]).stdout);
     expect(churn).toEqual({ ok: true, churn: { "src/a.ts": 2 } });
+    // The scan's own path filter: the scope is normalized like every command
+    // reads it, and ANDed with --include (not a union of the two).
+    const spelled = JSON.parse(cli(["churn", "--repo", root, "--scope", "./src/", "--include", "**/a.ts"]).stdout);
+    expect(spelled).toEqual({ ok: true, churn: { "src/a.ts": 2 } });
+    const none = JSON.parse(cli(["churn", "--repo", root, "--scope", "src", "--include", "docs/**"]).stdout);
+    expect(none).toEqual({ ok: true, churn: {} });
     const hot = JSON.parse(cli(["hotspots", "--repo", root, "--limit", "1", "--no-index-cache"]).stdout);
     expect(hot.hotspots.map((h: { rel: string }) => h.rel)).toHaveLength(1);
   });

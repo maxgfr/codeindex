@@ -18,7 +18,7 @@ import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
-import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan, type ScanSkip } from "./scan.js";
+import { normalizeScope, scanPathFilter, scanSummary, scanWalkOptions, type RepoScan, type ScanSkip } from "./scan.js";
 import { skipHistogram, whyPath } from "./why.js";
 import { byKey } from "./sort.js";
 import { scanRepoParallel } from "./pool.js";
@@ -49,7 +49,6 @@ import { formatSymbolRef } from "./symref.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
 import { gitChurn, historyStatus } from "./git.js";
 import { grepRepoEx } from "./grep.js";
-import { compileGlobFilter } from "./glob.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { capDeadCode, findDeadCode } from "./deadcode.js";
@@ -1720,10 +1719,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "churn") {
     const res = gitChurn(flags.repo, { since: flags.since });
     // churn reads git, not the walk, so the global --scope/--include/--exclude
-    // are applied to its keys here — the same predicate the scan uses.
-    const scopeGlobs = flags.scope ? [`${flags.scope.replace(/\/+$/, "")}/**`] : [];
-    const globs = [...scopeGlobs, ...flags.include, ...flags.exclude.map((g) => `!${g}`)];
-    const keep = compileGlobFilter(globs.length ? globs : undefined);
+    // are applied to its keys here — the very predicate the scan's walk uses
+    // (scope normalized, and ANDed with the globs).
+    const filter = scanPathFilter(flags.repo, scanOptions(flags));
+    const keep = filter && ((rel: string): boolean => filter({ rel, abs: join(flags.repo, rel), directory: false }));
     const sorted: Record<string, number> = {};
     for (const k of [...res.churn.keys()].sort()) if (!keep || keep(k)) sorted[k] = res.churn.get(k)!;
     emit(JSON.stringify({ ok: res.ok, ...historyStatus(res), churn: sorted }, null, 2) + "\n", flags.out);
