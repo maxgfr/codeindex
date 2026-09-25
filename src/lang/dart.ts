@@ -1,5 +1,6 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { maskBraced } from "../extract/imports.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Dart. Regex-only, deliberately: `tree-sitter-dart` publishes a wasm, but
 // web-tree-sitter 0.26 cannot load it (an ABI mismatch), so shipping it would put
@@ -95,9 +96,10 @@ const CTOR = new RegExp(
   String.raw`^(?<indent>\s*)${ANNOT}(?:(?:const|factory|external)\s+)*(?<type>[\w$]+)(?:\.(?<name>[\w$]+))?\s*\(`,
 );
 
-function constructors(rel: string, content: string, taken: Set<number>): CodeSymbol[] {
+function constructors(rel: string, content: string, masked: string, taken: Set<number>): CodeSymbol[] {
   const out: CodeSymbol[] = [];
-  const lines = content.split(/\r?\n/);
+  const lines = masked.split(/\r?\n/);
+  const raw = content.split(/\r?\n/);
   let owner: string | undefined;
   let ownerIndent = 0;
   // Indentation of the owner's members: that of the first line of its body.
@@ -126,7 +128,7 @@ function constructors(rel: string, content: string, taken: Set<number>): CodeSym
       kind: "constructor",
       file: rel,
       line: i + 1,
-      signature: line.trim().slice(0, 200),
+      signature: raw[i]!.trim().slice(0, 200),
       exported: !name.startsWith("_") && !owner.startsWith("_"),
       lang: "dart",
     });
@@ -137,9 +139,15 @@ function constructors(rel: string, content: string, taken: Set<number>): CodeSym
 export const dart = {
   lang: "dart",
   exts: [".dart"],
-  extract(rel: string, content: string): CodeSymbol[] {
-    const symbols = scan(rel, content, "dart", RULES);
-    const ctors = constructors(rel, content, new Set(symbols.map((s) => s.line)));
+  lexis: {
+    mask: (src: string) => maskBraced(src, { nested: true, triple: true, squote: "string" }),
+    comment: /^\s*\/\//,
+    block: true,
+    decoration: /^\s*@/,
+  } satisfies Lexis,
+  extract(rel: string, content: string, masked = content): CodeSymbol[] {
+    const symbols = scan(rel, content, "dart", RULES, masked);
+    const ctors = constructors(rel, content, masked, new Set(symbols.map((s) => s.line)));
     if (!ctors.length) return symbols;
     // Merged back into line order, the order `scan` emits and every consumer
     // of a regex-tier file sees.

@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Shell (bash/zsh/sh). Both function syntaxes: `function name { … }` and
 // `name() { … }`.
@@ -11,6 +11,9 @@ const RULES: Rule[] = [
 export const shell = {
   lang: "shell",
   exts: [".sh", ".bash", ".zsh", ".ksh"],
+  lexis: {
+    comment: /^\s*#(?!!)/,
+  } satisfies Lexis,
   extract(rel: string, content: string): CodeSymbol[] {
     return scan(rel, content, "shell", RULES);
   },

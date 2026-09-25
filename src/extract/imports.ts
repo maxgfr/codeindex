@@ -326,6 +326,118 @@ export function maskPython(src: string): string {
   return mask.done();
 }
 
+// What a brace language's literals and comments look like, for maskBraced.
+export interface BracedLexis {
+  /** `/* … *\/` nests (Swift, Kotlin, Rust, Scala, Dart). */
+  nested?: boolean;
+  /** `#` opens a line comment (PHP). */
+  hash?: boolean;
+  /** `"""` opens a multi-line string (Kotlin, Swift, Scala, Dart, Java; Dart `'''` too). */
+  triple?: boolean;
+  /**
+   * What `'` opens: a string (Dart, PHP), a character literal (C, Java, Go,
+   * Kotlin, C#, Scala, Rust), or nothing (Swift). A character literal is only
+   * taken when it closes within a few characters, so a Rust lifetime (`&'a T`)
+   * or a Scala symbol (`'sym`) is left alone instead of swallowing the line.
+   */
+  squote: "string" | "char" | "none";
+  /** `` ` `` opens a raw, multi-line string (Go). */
+  backtick?: boolean;
+  /** A quoted string may span lines (Rust, PHP). */
+  multiline?: boolean;
+  /**
+   * Raw strings fenced by hashes, which may hold bare quotes: Rust's
+   * `r#"…"#` (`"r"`), Swift's `#"…"#` (`"#"`).
+   */
+  raw?: "r" | "#";
+}
+
+const CHAR_LITERAL = /'(?:\\(?:u\{[0-9A-Fa-f]{1,6}\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|.)|[^\\'\n])'/y;
+
+// Mask a brace-language file (the regex tier's C family, lang/common.ts): every
+// comment and string body blanked, offsets and lines kept. The line rules then
+// match code only — a declaration quoted in a KDoc example or a multi-line
+// string is not one — and a declaration's braces can be matched to find where
+// its body ends. A string ends at its line's end unless the language lets it
+// span lines, which bounds the damage of a quote this scanner misreads (an
+// interpolation that nests quotes, `"${m["k"]}"`) to one line.
+export function maskBraced(src: string, lex: BracedLexis): string {
+  const n = src.length;
+  const mask = new Mask(src);
+  let i = 0;
+  while (i < n) {
+    const c = src.charCodeAt(i);
+    if ((c === SLASH && src.charCodeAt(i + 1) === SLASH) || (c === HASH && lex.hash)) {
+      const end = src.indexOf("\n", i);
+      const stop = end === -1 ? n : end;
+      mask.blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === SLASH && src.charCodeAt(i + 1) === STAR) {
+      let j = i + 2;
+      let depth = 1;
+      while (j < n) {
+        if (src.charCodeAt(j) === STAR && src.charCodeAt(j + 1) === SLASH) {
+          j += 2;
+          if (--depth === 0) break;
+        } else if (lex.nested && src.charCodeAt(j) === SLASH && src.charCodeAt(j + 1) === STAR) {
+          j += 2;
+          depth++;
+        } else j++;
+      }
+      const end = Math.min(j, n);
+      mask.blank(i, end);
+      i = end;
+      continue;
+    }
+    if (c === DQUOTE && lex.raw) {
+      // Hashes before the quote, and for Rust the `r` before them.
+      let h = i;
+      while (h > 0 && src.charCodeAt(h - 1) === HASH) h--;
+      const hashes = i - h;
+      const isRaw = lex.raw === "r" ? /[rR]$/.test(src.slice(Math.max(0, h - 2), h)) : hashes > 0;
+      if (isRaw) {
+        const close = src.indexOf('"' + "#".repeat(hashes), i + 1);
+        const end = close === -1 ? n : close;
+        mask.blank(i + 1, end);
+        i = close === -1 ? n : close + 1 + hashes;
+        continue;
+      }
+    }
+    const quote = c === DQUOTE || (c === SQUOTE && lex.squote === "string");
+    if (quote || (c === BACKTICK && lex.backtick)) {
+      const triple = quote && lex.triple && src.charCodeAt(i + 1) === c && src.charCodeAt(i + 2) === c;
+      const open = i + (triple ? 3 : 1);
+      let j = open;
+      if (triple) {
+        const close = src.indexOf(c === DQUOTE ? '"""' : "'''", open);
+        j = close === -1 ? n : close;
+      } else {
+        while (j < n) {
+          const ch = src.charCodeAt(j);
+          if (ch === c || (ch === NEWLINE && c !== BACKTICK && !lex.multiline)) break;
+          j += ch === BACKSLASH && c !== BACKTICK ? 2 : 1;
+        }
+      }
+      const end = Math.min(j, n);
+      mask.blank(open, end);
+      i = end < n && src.charCodeAt(end) === c ? end + (triple ? 3 : 1) : end;
+      continue;
+    }
+    if (c === SQUOTE && lex.squote === "char") {
+      CHAR_LITERAL.lastIndex = i;
+      if (CHAR_LITERAL.test(src)) {
+        mask.blank(i + 1, CHAR_LITERAL.lastIndex - 1);
+        i = CHAR_LITERAL.lastIndex;
+        continue;
+      }
+    }
+    i++;
+  }
+  return mask.done();
+}
+
 // --- per-language scans -----------------------------------------------------
 
 // JS/TS static import/export-from clause, matched STRUCTURALLY: optional

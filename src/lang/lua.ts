@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Lua. `function name(…)`, `local function name(…)`, `Table.method(…)` /
 // `Table:method(…)`, and `name = function(…)`.
@@ -12,6 +12,9 @@ const RULES: Rule[] = [
 export const lua = {
   lang: "lua",
   exts: [".lua"],
+  lexis: {
+    comment: /^\s*--/,
+  } satisfies Lexis,
   extract(rel: string, content: string): CodeSymbol[] {
     return scan(rel, content, "lua", RULES);
   },

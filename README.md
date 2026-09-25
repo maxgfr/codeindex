@@ -57,6 +57,14 @@ compares](#how-it-compares).
   symbols, imports, and calls from both the script and the template, bound in
   the JS/TS call family. A Svelte prop (`export let`) and an Astro frontmatter
   export are not module exports, so they are never reported as dead code.
+  The regex tier (the only one for Swift and Dart, and for the extended
+  languages until a pull) reads code only: comments and strings are masked,
+  so an example in a doc comment or a code generator's template is not a
+  declaration. It takes each declaration's doc comment from the lines above
+  it and, in brace languages, its line span, but only where the body's
+  braces close as a formatter puts them; otherwise the span is left out
+  rather than guessed. Its signature is the declaration's first line, and it
+  reports no `parent`.
   Each file's **summary** is the first leading comment that describes
   something: license and copyright text (MIT, BSD, Apache, GPL, MPL, the Go
   "governed by" line), linter and editor magic comments (`frozen_string_literal`,

@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Elixir. Modules and def/defp/defmacro. `defp` is private (not exported).
 const RULES: Rule[] = [
@@ -12,6 +12,11 @@ const RULES: Rule[] = [
 export const elixir = {
   lang: "elixir",
   exts: [".ex", ".exs"],
+  lexis: {
+    comment: /^\s*#/,
+    decoration: /^\s*@(?!(?:doc|moduledoc|typedoc)\b)\w+/,
+    docAttr: true,
+  } satisfies Lexis,
   extract(rel: string, content: string): CodeSymbol[] {
     return scan(rel, content, "elixir", RULES);
   },
