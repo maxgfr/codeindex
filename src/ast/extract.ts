@@ -133,6 +133,38 @@ function isPlainString(node: TSNode): boolean {
   return node.namedChildren.every((c) => STRING_PART.test(c.type));
 }
 
+// The call sites a file keeps, sorted by name then line; `sites` is in source
+// order. Past the cap the survivors are chosen BEFORE that sort: slicing the
+// sorted list kept whatever sorts first, and code-unit order puts every
+// uppercase name ahead of every lowercase one — tsgo's parser.go kept 512 of its
+// 2,748 sites, every one an exported call, so `p.parseStatement()` (10 sites)
+// had no caller at all. One site per distinct callee comes first, in source
+// order, so every name a file calls stays bindable by the caller index, the call
+// edges and dead code; the rest of the budget then goes in source order. Shared
+// with the regex tier, so both keep the same sites.
+export function capCallSites<T extends { name: string; line: number }>(sites: T[], max: number): T[] {
+  let kept = sites.slice();
+  if (sites.length > max) {
+    const keep = new Uint8Array(sites.length);
+    const named = new Set<string>();
+    let n = 0;
+    for (let i = 0; i < sites.length && n < max; i++) {
+      if (named.has(sites[i]!.name)) continue;
+      named.add(sites[i]!.name);
+      keep[i] = 1;
+      n++;
+    }
+    for (let i = 0; i < sites.length && n < max; i++) {
+      if (keep[i] === 0) {
+        keep[i] = 1;
+        n++;
+      }
+    }
+    kept = sites.filter((_, i) => keep[i] === 1);
+  }
+  return kept.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+}
+
 function collectAll(
   root: TSNode,
   spec: LangSpec,
@@ -291,12 +323,13 @@ function collectAll(
   };
   visit(root);
 
-  calls.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+  // Every capped list below is truncated in SOURCE order (Set insertion order)
+  // and only then sorted — see MAX_TERMS and capCallSites.
   return {
     refs,
-    idents: [...identsFound].sort().slice(0, MAX_REF_IDENTS),
-    calls: calls.slice(0, maxCalls),
-    importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
+    idents: [...identsFound].slice(0, MAX_REF_IDENTS).sort(),
+    calls: capCallSites(calls, maxCalls),
+    importedNames: [...namesFound].slice(0, MAX_IMPORTED_NAMES).sort(byStr),
     terms: [...termsFound].sort(byStr),
     literals: literals.result() ?? [],
   };

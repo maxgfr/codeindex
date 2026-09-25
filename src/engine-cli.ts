@@ -175,7 +175,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --max-files <n>     Cap walked files (default: none — the whole tree is
                       indexed; a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
-  --max-calls <n>     Per-file call-site cap for extraction (default 512)
+  --max-calls <n>     Per-file call-site cap for extraction (default 512); a
+                      capped file keeps one site per distinct callee first
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
   --workers <n>       \`index\`: extraction worker threads (default: cores-1,
                       capped at 8; 0 or 1 forces the single-threaded path).

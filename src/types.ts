@@ -201,11 +201,13 @@ export interface FileRecord {
   refs: RawRef[]; // unresolved outbound links/imports
   pkg?: string; // Java: the file's `package` declaration — anchors source roots
   idents?: string[]; // distinctive identifiers referenced (transient — feeds `use` edges, not persisted)
-  // Unresolved call-site callee names (cap 512, deduped by name+line, sorted by
-  // name then line). Transient-ish: consumed by the graph builder's global call
-  // resolution pass, not surfaced in the graph itself. `receiver` is the simple
-  // name of the IMMEDIATE receiver of a qualified call — `axios.get(...)` →
-  // {name: "get", receiver: "axios"}, `a.b.c(...)` → {name: "c", receiver: "b"}
+  // Unresolved call-site callee names (deduped by name+line, sorted by name then
+  // line; cap 512, where a capped file keeps one site per distinct callee
+  // first — see capCallSites). Transient-ish: consumed by the graph builder's
+  // global call resolution pass, not surfaced in the graph itself. `receiver`
+  // is the simple name of the IMMEDIATE receiver of a qualified call —
+  // `axios.get(...)` → {name: "get", receiver: "axios"}, `a.b.c(...)` →
+  // {name: "c", receiver: "b"}
   // — absent for a bare call (`get()`) or a computed/complex receiver
   // (`fetch().then(...)`). Receiver-gated sink catalogs (ultrasec) key on it.
   calls?: { name: string; line: number; receiver?: string }[];
