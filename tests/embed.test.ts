@@ -1,6 +1,6 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,12 +16,15 @@ import {
   parseEmbedModel,
   resolveEmbedModelDir,
   resolveEmbedPullUrl,
+  tryLoadEmbedModel,
   type StaticEmbedModel,
 } from "../src/embed/model.js";
 import type { EmbedPullTarget } from "../src/engine.js";
 import { basicTokenize, encode, intDot, roundHalfToEven, tokenize, wordpiece } from "../src/embed/encode.js";
-import { buildEmbeddingIndex, deserializeEmbeddings, serializeEmbeddings } from "../src/embed/index.js";
-import { searchSemantic } from "../src/embed/search.js";
+import { buildEmbeddingIndex, deserializeEmbeddings, embeddingUnits, serializeEmbeddings, type EmbeddingIndex } from "../src/embed/index.js";
+import { readEmbeddingsFile } from "../src/embed/persist.js";
+import { explainSemantic, searchSemantic } from "../src/embed/search.js";
+import { explainQuery, searchIndex } from "../src/bm25.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
 
@@ -127,6 +130,66 @@ describe("parseEmbedModel — shape validation (issue #12: guards the custom-URL
   });
 });
 
+// A model.json that exists but does not load is "no usable model", not a
+// crash: the README's degradation table promises every row exits 0.
+describe("broken model.json degrades instead of failing", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+  const brokenDir = (body: string): string => {
+    const d = mkdtempSync(join(tmpdir(), "ci-embed-bad-"));
+    dirs.push(d);
+    writeFileSync(join(d, "model.json"), body);
+    return d;
+  };
+  const run = (args: string[], embedDir: string) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, CODEINDEX_EMBED_DIR: embedDir };
+    delete env.CODEINDEX_EMBED_ENDPOINT;
+    return spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", env });
+  };
+
+  it("tryLoadEmbedModel returns the error (naming the file) instead of throwing", () => {
+    const shape = brokenDir('{"modelId":"x"}');
+    expect(tryLoadEmbedModel(shape)).toEqual({ error: expect.stringMatching(/bad dim undefined in .*model\.json/) });
+    const json = brokenDir("{not json");
+    expect(tryLoadEmbedModel(json).error).toMatch(/model\.json is not valid JSON/);
+    expect(tryLoadEmbedModel(MODEL_DIR).model?.modelId).toBe("codeindex-fixture-tiny-8d");
+    expect(tryLoadEmbedModel(undefined)).toEqual({});
+  });
+
+  it("`search --semantic` returns the lexical results on exit 0 and names the broken file", () => {
+    const bad = brokenDir('{"modelId":"x"}');
+    const r = run(["search", "http client retry", "--repo", REPO, "--semantic"], bad);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/semantic search unavailable \(embed model: bad dim undefined in .*model\.json\) — returning lexical results/);
+    const lexical = spawnSync(process.execPath, [CLI, "search", "http client retry", "--repo", REPO], { encoding: "utf8" });
+    expect(r.stdout).toBe(lexical.stdout);
+  });
+
+  it("`embed status` reports the model as present with its error, mode none, exit 0", () => {
+    const bad = brokenDir('{"modelId":"x"}');
+    const r = run(["embed", "status", "--repo", REPO], bad);
+    expect(r.status).toBe(0);
+    const status = JSON.parse(r.stdout) as { mode: string; model: { present: boolean; dir?: string; error?: string } };
+    expect(status.mode).toBe("none");
+    expect(status.model.present).toBe(true);
+    expect(status.model.dir).toBe(bad);
+    expect(status.model.error).toMatch(/bad dim undefined/);
+  });
+
+  it("`index` still writes graph.json + symbols.json, skipping only embeddings.bin", () => {
+    const bad = brokenDir("{not json");
+    const out = mkdtempSync(join(tmpdir(), "ci-embed-bad-idx-"));
+    dirs.push(out);
+    const r = run(["index", "--repo", REPO, "--out", out], bad);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/not valid JSON .*embeddings\.bin skipped/);
+    expect(existsSync(join(out, "graph.json"))).toBe(true);
+    expect(existsSync(join(out, "embeddings.bin"))).toBe(false);
+  });
+});
+
 describe("tokenizer + wordpiece", () => {
   it("splits camelCase, folds diacritics, lowercases", () => {
     expect(basicTokenize("verifyAuthToken")).toEqual(["verify", "auth", "token"]);
@@ -218,6 +281,28 @@ describe("embeddings index — serialize / determinism", () => {
     expect(forDoc[0]!.symbol).toBeUndefined();
   });
 
+  it("a symbol unit carries its doc comment; a re-export gets no unit of its own", () => {
+    const rel = "src/index.ts";
+    const barrel = file(rel);
+    barrel.symbols = [
+      { ...sym("retryRequest", rel), kind: "reexport" },
+      { ...sym("*", rel), kind: "reexport-all" },
+    ];
+    const def = file("src/http/retry.ts", { summary: "Retry helpers." });
+    def.symbols = [{ ...sym("retryRequest", def.rel, "retryRequest(n)"), line: 4, doc: "Resend a failed request with backoff." }];
+    const units = embeddingUnits(scanOf([barrel, def]));
+    expect(units).toEqual([
+      // the pure barrel is still represented, by a file-level unit
+      { file: rel, text: "\n\nsrc index.ts" },
+      {
+        file: "src/http/retry.ts",
+        symbol: "retryRequest",
+        line: 4,
+        text: "retryRequest\nretryRequest(n)\nResend a failed request with backoff.\nRetry helpers.\nsrc http retry.ts",
+      },
+    ]);
+  });
+
   it("serialize → deserialize round-trips byte-identically", () => {
     const idx = buildEmbeddingIndex(scan, model());
     const bin = serializeEmbeddings(idx);
@@ -231,6 +316,77 @@ describe("embeddings index — serialize / determinism", () => {
     const a = serializeEmbeddings(buildEmbeddingIndex(scan, model()));
     const b = serializeEmbeddings(buildEmbeddingIndex(scanOf(scan.files), model()));
     expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+  });
+});
+
+// embeddings.bin used to be written and never read: every `search --semantic`
+// re-encoded the whole corpus (9.4 s on microsoft/TypeScript). A previous index
+// now donates the vector of every unchanged unit — and only under the same
+// EMBED_VERSION and model, since that is what makes a vector reusable.
+describe("reusing a previous embedding index", () => {
+  const scan = scanOf([
+    file("src/auth/service.ts", { symbols: ["AuthService", "verifyAuthToken"] }),
+    file("src/http/client.ts", { symbols: ["HttpClient", "retryRequest"] }),
+  ]);
+  // A previous index whose every vector is a marker no encode would produce,
+  // so a reused vector is visible in the result.
+  const marked = (idx: EmbeddingIndex, patch: Partial<EmbeddingIndex> = {}): EmbeddingIndex => ({
+    ...idx,
+    ...patch,
+    records: idx.records.map((r) => ({ ...r, vec: new Int8Array(idx.dim).fill(7) })),
+  });
+
+  it("a rebuild from a previous index is byte-identical to a fresh one", () => {
+    const fresh = buildEmbeddingIndex(scan, model());
+    const bin = serializeEmbeddings(fresh);
+    const reused = buildEmbeddingIndex(scan, model(), { previous: deserializeEmbeddings(bin) });
+    expect(Buffer.from(serializeEmbeddings(reused)).equals(Buffer.from(bin))).toBe(true);
+    expect(fresh.records.every((r) => /^[0-9a-f]{16}$/.test(r.textHash ?? ""))).toBe(true);
+  });
+
+  it("reuses by unit text: an unchanged unit takes the previous vector, a changed one is encoded", () => {
+    const previous = marked(buildEmbeddingIndex(scan, model()));
+    const edited = scanOf([scan.files[0]!, file("src/http/client.ts", { symbols: ["HttpClient", "retryRequest"], summary: "now documented" })]);
+    const out = buildEmbeddingIndex(edited, model(), { previous });
+    const sevens = out.records.map((r) => r.vec.every((v) => v === 7));
+    expect(out.records.map((r) => r.file)).toEqual(["src/auth/service.ts", "src/auth/service.ts", "src/http/client.ts", "src/http/client.ts"]);
+    expect(sevens).toEqual([true, true, false, false]);
+  });
+
+  it("nothing is reused across a model, dim or EMBED_VERSION change", () => {
+    const base = buildEmbeddingIndex(scan, model());
+    for (const patch of [{ modelId: "another-model" }, { embedVersion: EMBED_VERSION - 1 }, { dim: base.dim + 1 }]) {
+      const out = buildEmbeddingIndex(scan, model(), { previous: marked(base, patch) });
+      expect(out).toEqual(base);
+    }
+  });
+
+  it("deserialize rejects a malformed header; readEmbeddingsFile turns every failure into undefined", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-embed-read-"));
+    try {
+      const good = serializeEmbeddings(buildEmbeddingIndex(scan, model()));
+      const header = (json: string): Uint8Array => {
+        const h = new TextEncoder().encode(json);
+        const out = new Uint8Array(8 + h.length);
+        out.set([0x43, 0x49, 0x45, 0x31]);
+        new DataView(out.buffer).setUint32(4, h.length, true);
+        out.set(h, 8);
+        return out;
+      };
+      expect(() => deserializeEmbeddings(header('{"embedVersion":2}'))).toThrow(/malformed header/);
+      expect(() => deserializeEmbeddings(header("{not json"))).toThrow();
+      expect(() => deserializeEmbeddings(good.subarray(0, good.length - 1))).toThrow(/truncated body/);
+      const cases: [string, Uint8Array | undefined][] = [
+        ["missing.bin", undefined],
+        ["garbage.bin", new TextEncoder().encode("not an index")],
+        ["truncated.bin", good.subarray(0, good.length - 1)],
+        ["good.bin", good],
+      ];
+      for (const [name, bytes] of cases) if (bytes) writeFileSync(join(dir, name), bytes);
+      expect(cases.map(([name]) => readEmbeddingsFile(join(dir, name)) !== undefined)).toEqual([false, false, false, true]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -265,6 +421,85 @@ describe("searchSemantic — RRF fusion + degradation", () => {
     expect(semantic.map((r) => r.file)).toEqual(lexical.map((r) => r.file));
     expect(semantic.every((r) => r.semanticSymbol === undefined)).toBe(true);
     expect(semantic[0]!.file).toBe("src/auth/service.ts");
+  });
+});
+
+// The fused list used to drop every lexical option but `fuzzy`, and every
+// lexical field but matchedTerms/topSymbols/fuzzyTerms, and the CLI printed the
+// LEXICAL verdict ("No file matches") above rows the embedding side had found.
+describe("explainSemantic — lexical options, fields and an honest verdict", () => {
+  const withLines = (rel: string, decls: [string, number][]): FileRecord => ({
+    ...file(rel),
+    symbols: decls.map(([name, line]) => ({ ...sym(name, rel), line })),
+  });
+  const scan = scanOf([
+    withLines("src/auth/service.ts", [["AuthService", 3], ["verifyAuthToken", 9]]),
+    withLines("src/http/client.ts", [["HttpClient", 4], ["retryRequest", 12]]),
+    withLines("src/billing/invoice.ts", [["InvoiceBuilder", 7]]),
+  ]);
+  const m = model();
+  const idx = buildEmbeddingIndex(scan, m);
+
+  it("a row the lexical side ranked keeps all its lexical fields", () => {
+    const [lex] = searchIndex(scan, "retry request");
+    const [fused] = searchSemantic(scan, "retry request", idx, { model: m });
+    expect(fused).toEqual({ ...lex, score: fused!.score, semanticSymbol: "retryRequest" });
+    expect(fused!.line).toBe(12);
+    expect(fused!.symbolHits).toEqual([{ name: "retryRequest", kind: "function", line: 12 }]);
+    expect(fused!.matchedFields).toEqual(["name"]);
+  });
+
+  it("a row only the embedding side found points at its closest symbol's line", () => {
+    // "password" shares the auth dimension in the fixture model, and no word.
+    expect(searchIndex(scan, "password")).toEqual([]);
+    const results = searchSemantic(scan, "password", idx, { model: m });
+    expect(results).toEqual([
+      { file: "src/auth/service.ts", score: results[0]!.score, matchedTerms: [], topSymbols: [], line: 3, semanticSymbol: "AuthService" },
+    ]);
+  });
+
+  it("`exact` drops the lexical side's bridged-only rows, as it does without --semantic", () => {
+    const loose = searchSemantic(scan, "authh", idx, { model: m });
+    expect(loose.map((r) => [r.file, r.bridgedOnly])).toEqual([["src/auth/service.ts", true]]);
+    expect(searchIndex(scan, "authh", { exact: true })).toEqual([]);
+    // "authh" is out of the model's vocabulary, so the embedding side has
+    // nothing either: the bridged row is gone rather than relabelled.
+    expect(searchSemantic(scan, "authh", idx, { model: m, exact: true })).toEqual([]);
+    const both = searchSemantic(scan, "authh password", idx, { model: m, exact: true });
+    expect(both.map((r) => r.file)).toEqual(["src/auth/service.ts"]);
+    expect(both[0]!.bridgedOnly).toBeUndefined();
+    expect(both[0]!.fuzzyTerms).toBeUndefined();
+    expect(both[0]!.matchedTerms).toEqual([]);
+  });
+
+  it("the verdict describes the fused rows: embedding-only answers are weak, never 'No file matches'", () => {
+    const { results, explain } = explainSemantic(scan, "password", idx, { model: m });
+    expect(results.length).toBe(1);
+    expect(explain).toMatchObject({ verdict: "weak", resultCount: 1, bridgedOnlyResults: 0, semanticOnlyResults: 1 });
+    expect(explain.note).toBe(
+      'No file in this index defines or mentions "password". The 1 result below: 1 embedding neighbour with no lexical match (see semanticSymbol).',
+    );
+    const mixed = explainSemantic(scan, "authh client", idx, { model: m }).explain;
+    expect(mixed.verdict).toBe("match");
+    expect(mixed.note).toBeUndefined();
+    const bridged = explainSemantic(scan, "authh zzqx", idx, { model: m }).explain;
+    expect(bridged.verdict).toBe("weak");
+    expect(bridged.note).toBe(
+      'Nothing matched the query verbatim (the term zzqx appears nowhere in this index). The 1 result below: 1 near match ("authh" → auth).',
+    );
+  });
+
+  it("with nothing on either side, the lexical sentence stands", () => {
+    const { results, explain } = explainSemantic(scan, "zzqx", idx, { model: m });
+    expect(results).toEqual([]);
+    expect(explain.verdict).toBe("none");
+    expect(explain.note).toBe(explainQuery(scan, "zzqx").explain.note);
+  });
+
+  it("degraded (no model) it IS explainQuery, options included", () => {
+    for (const opts of [{}, { exact: true }, { rank: "graph" as const, limit: 1 }, { fuzzy: false }]) {
+      expect(explainSemantic(scan, "authh client", idx, opts)).toEqual(explainQuery(scan, "authh client", opts));
+    }
   });
 });
 
@@ -319,6 +554,48 @@ describe("CLI embed + search --semantic", () => {
     expect(existsSync(join(out, "embeddings.bin"))).toBe(true);
   });
 
+  it("`search --semantic` reads the embeddings.bin `index` wrote, and ignores one from another model", () => {
+    const repo = join(mkdtempSync(join(tmpdir(), "ci-embed-reuse-")), "mini-repo");
+    tmpDirs.push(join(repo, ".."));
+    cpSync(REPO, repo, { recursive: true });
+    const q = ["search", "http client retry", "--repo", repo, "--semantic"];
+    const fresh = runWithModel(q).stdout;
+    expect(runWithModel(["index", "--repo", repo, "--out", join(repo, ".codeindex")]).status).toBe(0);
+    const bin = join(repo, ".codeindex", "embeddings.bin");
+    expect(runWithModel(q).stdout).toBe(fresh);
+
+    // Zero every stored vector: if search reads the file, no file keeps a
+    // positive similarity and the embedding side contributes nothing.
+    const onDisk = deserializeEmbeddings(readFileSync(bin));
+    const zeroed = { ...onDisk, records: onDisk.records.map((r) => ({ ...r, vec: new Int8Array(onDisk.dim) })) };
+    writeFileSync(bin, serializeEmbeddings(zeroed));
+    const fromZeroed = JSON.parse(runWithModel(q).stdout) as { semanticSymbol?: string }[];
+    expect(fromZeroed.every((r) => r.semanticSymbol === undefined)).toBe(true);
+
+    // The same bytes under another model id are not trusted.
+    writeFileSync(bin, serializeEmbeddings({ ...zeroed, modelId: "another-model" }));
+    expect(runWithModel(q).stdout).toBe(fresh);
+    // Nor is a corrupt file.
+    writeFileSync(bin, "garbage");
+    expect(runWithModel(q).stdout).toBe(fresh);
+  });
+
+  it("an incremental `index` reuses the previous embeddings.bin and writes the bytes a fresh build would", () => {
+    const repo = join(mkdtempSync(join(tmpdir(), "ci-embed-incr-")), "mini-repo");
+    tmpDirs.push(join(repo, ".."));
+    cpSync(REPO, repo, { recursive: true });
+    const out = join(repo, ".codeindex");
+    runWithModel(["index", "--repo", repo, "--out", out]);
+    writeFileSync(join(repo, "src", "extra.ts"), "export function chargePayment(): void {}\n");
+    runWithModel(["index", "--repo", repo, "--out", out]);
+    const fresh = mkdtempSync(join(tmpdir(), "ci-embed-incr-fresh-"));
+    tmpDirs.push(fresh);
+    runWithModel(["embed", "build", "--repo", repo, "--out", fresh]);
+    const incremental = readFileSync(join(out, "embeddings.bin"));
+    expect(incremental.equals(readFileSync(join(fresh, "embeddings.bin")))).toBe(true);
+    expect(deserializeEmbeddings(incremental).records.some((r) => r.symbol === "chargePayment")).toBe(true);
+  });
+
   it("`search --semantic` with a model returns fused JSON, byte-identical across runs", () => {
     // "http client retry" all appear in the mini-repo (HttpClient / request /
     // "HTTP client with retry") and in the fixture model vocab, so both tiers fire.
@@ -331,6 +608,31 @@ describe("CLI embed + search --semantic", () => {
     expect(parsed[0]!.file).toBe("src/client.ts");
     // the embedding tier attributed a symbol to the top file
     expect(parsed.some((r) => r.semanticSymbol !== undefined)).toBe(true);
+  });
+
+  it("`search --semantic --explain` wraps the fused rows with their verdict; the stderr note agrees with stdout", () => {
+    // "password" shares the auth dimension in the fixture model, and no word
+    // with this repo.
+    const repo = mkdtempSync(join(tmpdir(), "ci-embed-explain-"));
+    tmpDirs.push(repo);
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "auth.ts"), "export class AuthService {}\n");
+    writeFileSync(join(repo, "src", "http.ts"), "export function httpClient() {}\n");
+    const env: NodeJS.ProcessEnv = { ...process.env, CODEINDEX_EMBED_DIR: MODEL_DIR };
+    delete env.CODEINDEX_EMBED_ENDPOINT;
+    const r = spawnSync(process.execPath, [CLI, "search", "password", "--repo", repo, "--semantic", "--explain"], { encoding: "utf8", env });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout) as {
+      results: { file: string; line?: number; semanticSymbol?: string }[];
+      explain: { verdict: string; semanticOnlyResults: number; resultCount: number; note?: string };
+    };
+    expect(out.results).toEqual([expect.objectContaining({ file: "src/auth.ts", line: 1, semanticSymbol: "AuthService", matchedTerms: [] })]);
+    expect(out.explain).toMatchObject({ verdict: "weak", resultCount: out.results.length, semanticOnlyResults: out.results.length });
+    expect(r.stderr).toBe(`codeindex: ${out.explain.note}\n`);
+    expect(r.stderr).not.toMatch(/No file matches/);
+    // Without --explain the same rows come back as the bare array.
+    const bare = spawnSync(process.execPath, [CLI, "search", "password", "--repo", repo, "--semantic"], { encoding: "utf8", env });
+    expect(JSON.parse(bare.stdout)).toEqual(out.results);
   });
 
   it("DEGRADATION: `search --semantic` WITHOUT a model → lexical results, exit 0", () => {

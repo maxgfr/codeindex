@@ -19,4 +19,12 @@ defmodule Worker.Scheduler do
   defmacro trace(expr) do
     expr
   end
+
+  defguard is_attempt(n) when is_integer(n) and n > 0
+
+  def retry(spec, n) when is_attempt(n) do
+    dispatch(spec, n)
+  end
+
+  defp backoff(n) when n > 1, do: n * 2
 end

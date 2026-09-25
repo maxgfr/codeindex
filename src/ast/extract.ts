@@ -1,12 +1,14 @@
-import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
-import { LiteralCollector } from "../extract/literals.js";
+import type { CodeLiteral, CodeSymbol, ImportAlias, RawRef, RawRelation } from "../types.js";
+import { LiteralCollector, unquote } from "../extract/literals.js";
 import { byStr } from "../sort.js";
-import { grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
-import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
-import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, type LangSpec } from "./specs.js";
+import { grammarKeyFor, grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
+import { COMMENT_NODE, IDENT_LEAF, nameOf, readName, readReceiver, type TSNode } from "./node.js";
+import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, luaMember, type LangSpec } from "./specs.js";
 import { declHeader } from "./signature.js";
 import { docCommentFor, docstringFor } from "./doc.js";
+import { readImportAliases } from "./aliases.js";
 import { stripCommentMarkers } from "../extract/doc-text.js";
+import { extractImports, extractPackage } from "../extract/imports.js";
 import { subtokens } from "../util.js";
 
 export interface AstResult {
@@ -24,6 +26,9 @@ export interface AstResult {
   calls: { name: string; line: number; receiver?: string }[];
   // JS/TS named-import bindings — always present (empty for non-JS/TS).
   importedNames: string[];
+  // Import bindings that rename (src/ast/aliases.ts) — always present (empty
+  // outside JS/TS, Python and Go).
+  importAliases: ImportAlias[];
   // Inheritance stated by this file's declarations, deduped and sorted. Always
   // present (empty when the grammar has no `relationsFrom` mapping).
   relations: RawRelation[];
@@ -83,12 +88,9 @@ const REF_IDENT_TEXT = /^[A-Za-z_]\w{4,}$/;
 // on (name, line) then sorts — so folding them into a single pre-order walk in
 // the original per-node order produces byte-identical results.
 //
-// `refs`/`pkg` are computed only when `wantImports` is set: the production path
-// (extractCode) recomputes both with regex and discards the AST's versions, so
-// paying for them by default was pure waste. The public `extractAst` still asks
-// for them, keeping its contract intact.
+// Import specifiers are NOT read here: extract/imports.ts computes them for
+// both tiers (see extractAst).
 interface Collected {
-  refs: RawRef[];
   idents: string[];
   calls: { name: string; line: number; receiver?: string }[];
   importedNames: string[];
@@ -96,7 +98,6 @@ interface Collected {
   literals: CodeLiteral[];
 }
 
-const COMMENT_NODE = /(^|_)comment$/;
 const STRING_NODE = /(^|_)string(_literal)?$/;
 // Numeric and regex leaves, named consistently enough across the grammars to
 // match structurally: `integer`/`float`/`number`/`*_literal` for numbers,
@@ -106,8 +107,12 @@ const REGEX_NODE = /(^|_)(regex|regular_expression)(_pattern|_literal)?$/;
 // Children a string node may have and still be one fixed value. An
 // interpolation (`${x}`, `#{x}`, `{}`) makes the text a TEMPLATE, whose
 // concatenated source is not a value anything else can equal — storing it
-// would invent duplications that do not exist.
-const STRING_PART = /(^|_)(fragment|content|escape_sequence|character)$/;
+// would invent duplications that do not exist. `start`/`end` are delimiter
+// nodes: Python's string_start/string_end (which EVERY Python string has, so
+// without them no Python string was ever plain) and C#'s raw_string_start/end.
+const STRING_PART = /(^|_)(fragment|content|escape_sequence|character|start|end)$/;
+// The parts of a string that carry its words (not delimiters or escapes).
+const PROSE_PART = /(^|_)(fragment|content)$/;
 
 // Type-class bits for collectAll's visitor, memoized per node type (see
 // typeFlagsOf). The regexes above stay the single source of truth.
@@ -133,21 +138,66 @@ function typeFlagsOf(type: string): number {
 function isPlainString(node: TSNode): boolean {
   return node.namedChildren.every((c) => STRING_PART.test(c.type));
 }
+// A string that IS a statement — a Python docstring, a `"use strict"` /
+// `"use client"` directive — is documentation or a pragma, not a value anyone
+// could centralize. Kept out of `literals`, or every module restating
+// """Tests for the CLI.""" or "use client" reads as a duplicated constant; its
+// words still reach the prose terms.
+function isStatementString(node: TSNode): boolean {
+  const parent = node.parent;
+  return parent !== null && parent.type === "expression_statement" && parent.namedChildCount === 1;
+}
+
+// The call sites a file keeps, sorted by name then line; `sites` is in source
+// order. Past the cap the survivors are chosen BEFORE that sort: slicing the
+// sorted list kept whatever sorts first, and code-unit order puts every
+// uppercase name ahead of every lowercase one — tsgo's parser.go kept 512 of its
+// 2,748 sites, every one an exported call, so `p.parseStatement()` (10 sites)
+// had no caller at all. One site per distinct callee comes first, in source
+// order, so every name a file calls stays bindable by the caller index, the call
+// edges and dead code; the rest of the budget then goes in source order. Shared
+// with the regex tier, so both keep the same sites.
+export function capCallSites<T extends { name: string; line: number }>(sites: T[], max: number): T[] {
+  let kept = sites.slice();
+  if (sites.length > max) {
+    const keep = new Uint8Array(sites.length);
+    const named = new Set<string>();
+    let n = 0;
+    for (let i = 0; i < sites.length && n < max; i++) {
+      if (named.has(sites[i]!.name)) continue;
+      named.add(sites[i]!.name);
+      keep[i] = 1;
+      n++;
+    }
+    for (let i = 0; i < sites.length && n < max; i++) {
+      if (keep[i] === 0) {
+        keep[i] = 1;
+        n++;
+      }
+    }
+    kept = sites.filter((_, i) => keep[i] === 1);
+  }
+  return kept.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+}
 
 function collectAll(
   root: TSNode,
   spec: LangSpec,
   defNames: Set<string>,
   maxCalls: number,
-  wantImports: boolean,
 ): Collected {
   const identsFound = new Set<string>();
 
   const wantCalls = spec.calls !== undefined;
   const calls: { name: string; line: number; receiver?: string }[] = [];
   const callSeen = new Set<string>();
+  // A one-letter callee is a name like any other: `a()` and `b()` calling each
+  // other is a cycle, and i18n's `t()` and hyperscript's `h()` are real APIs. A
+  // name nothing in the repo defines is discarded by the binder, which is the
+  // noise a length floor used to guard against here. A bare `_` stays out: a
+  // discard, or gettext's and lodash's alias — never a definition to reach.
   const addCall = (name: string | undefined, node: TSNode, receiver?: string): void => {
-    if (!name || name.length < 2 || !/^[A-Za-z_]\w*$/.test(name)) return;
+    if (!name || name === "_" || !/^[A-Za-z_]\w*$/.test(name)) return;
     const line = node.startPosition.row + 1;
     const key = `${name} ${line}`;
     if (callSeen.has(key)) return;
@@ -172,17 +222,6 @@ function collectAll(
   const wantNames = spec.imports?.import_statement !== undefined;
   const namesFound = new Set<string>();
 
-  const wantRefs = wantImports && spec.imports !== undefined;
-  const refs: RawRef[] = [];
-  const refSeen = new Set<string>();
-  const addRef = (s: string): void => {
-    const v = s.trim();
-    if (v && !refSeen.has(v)) {
-      refSeen.add(v);
-      refs.push({ kind: "import", spec: v });
-    }
-  };
-
   const visit = (node: TSNode): void => {
     const type = node.type;
     const kids = node.namedChildren;
@@ -197,21 +236,27 @@ function collectAll(
       if (REF_IDENT_TEXT.test(text) && !defNames.has(text)) identsFound.add(text);
     }
 
+    // A string node is rarely a leaf: TypeScript's `string` holds
+    // string_fragment children, Go's its _content, every Python string its
+    // string_start/string_end. So both passes below ask "is this one fixed
+    // value" of its children — a leaf-only guard here once kept every string
+    // word out of `body` for TypeScript, Python and Go.
+    const plain = flags & T_STRING ? isPlainString(node) : false;
+
     // --- prose: comments and short string literals ---
     if (flags & T_COMMENT) {
       for (const line of node.text.split(/\r?\n/)) addTerms(stripCommentMarkers(line));
-    } else if (kids.length === 0 && flags & T_STRING && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
-      addTerms(node.text.replace(/^['"`]+|['"`]+$/g, ""));
+    } else if (flags & T_STRING && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
+      // A template is no VALUE, but its fixed text is still prose:
+      // `Unknown command: ${cmd}` is where "unknown command" is handled.
+      if (plain) addTerms(unquote(node.text));
+      else for (const k of kids) if (PROSE_PART.test(k.type)) addTerms(k.text);
     }
 
     // --- literal values (kept verbatim, unlike the prose pass above) ---
-    // NOT gated on `kids.length === 0`, unlike the prose pass: in several
-    // grammars (TypeScript among them) a `string` node is a PARENT whose text
-    // lives in a `string_fragment` child, so a leaf-only guard sees no strings
-    // at all in the very languages this analysis is most needed for.
     if (!literals.full) {
       if (flags & T_STRING) {
-        if (isPlainString(node)) literals.addString(node.text, node.startPosition.row + 1);
+        if (plain && !isStatementString(node)) literals.addString(node.text, node.startPosition.row + 1);
       } else if (kids.length === 0 && flags & T_NUMBER) literals.add("number", node.text.trim(), node.startPosition.row + 1);
       else if (flags & T_REGEX) literals.add("regex", node.text, node.startPosition.row + 1);
     }
@@ -240,7 +285,12 @@ function collectAll(
           node.childForFieldName("target") ??
           kids[0] ??
           null;
-        addCall(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
+        // A curried callee (`self.ensure_sync(f)()`) is named through the inner
+        // call, so its receiver is the inner callee's; read off the outer call it
+        // is nothing, and this site — visited first, so the inner one dedupes
+        // away — would read as a bare `ensure_sync()`.
+        const inner = callee && spec.calls![callee.type] === "function" ? callee.childForFieldName("function") : null;
+        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node));
       } else if (how === "member") {
         addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
       } else if (how === "constructor") {
@@ -274,35 +324,54 @@ function collectAll(
       }
     }
 
-    // --- raw import specifiers. "string" pulls the first string literal's inner
-    // text; "path" takes the dotted/namespaced module text verbatim (resolution
-    // happens later).
-    if (wantRefs) {
-      const how = spec.imports![type];
-      if (how === "string") {
-        const str = findFirst(node, (n) => /string/.test(n.type));
-        if (str) addRef(str.text.replace(/^['"]|['"]$/g, ""));
-      } else if (how === "path") {
-        const name = node.childForFieldName("name") ?? node.childForFieldName("module_name");
-        addRef((name ?? node).text.replace(/^(import|from)\s+/, "").split(/\s+/)[0]!);
-      }
-    }
-
     for (const c of kids) visit(c);
   };
   visit(root);
 
-  calls.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+  // Every capped list below is truncated in SOURCE order (Set insertion order)
+  // and only then sorted — see MAX_TERMS and capCallSites.
   return {
-    refs,
-    idents: [...identsFound].sort().slice(0, MAX_REF_IDENTS),
-    calls: calls.slice(0, maxCalls),
-    importedNames: [...namesFound].sort(byStr).slice(0, MAX_IMPORTED_NAMES),
+    idents: [...identsFound].slice(0, MAX_REF_IDENTS).sort(),
+    calls: capCallSites(calls, maxCalls),
+    importedNames: [...namesFound].slice(0, MAX_IMPORTED_NAMES).sort(byStr),
     terms: [...termsFound].sort(byStr),
     literals: literals.result() ?? [],
   };
 }
 
+
+// Parts of a declaration that can spell its name BEFORE the name itself does,
+// or that hold free text — never searched for it: an annotation argument
+// (`@Column(name = "name") private String name` — the JPA idiom), a modifier
+// list, a parameter list, a body, a string.
+const NAME_SEARCH_SKIP = /annotation|attribute|decorator|modifier|parameter|argument|body|block|string|comment|_list$/;
+
+// Where a declaration's NAME starts: the first leaf, in source order, whose
+// text is the name. Bounded to three levels (C#'s field_declaration →
+// variable_declaration → variable_declarator is the deepest real shape), and
+// undefined when a spec synthesized the name (`this[]`, `aws_instance.web`).
+function nameStart(node: TSNode, name: string): number | undefined {
+  const visit = (n: TSNode, depth: number): number | undefined => {
+    for (const c of n.namedChildren) {
+      if (c.namedChildren.length === 0) {
+        if (c.text === name) return c.startIndex;
+      } else if (depth < 3 && !NAME_SEARCH_SKIP.test(c.type)) {
+        const hit = visit(c, depth + 1);
+        if (hit !== undefined) return hit;
+      }
+    }
+    return undefined;
+  };
+  return visit(node, 0);
+}
+
+// The last line a declaration occupies. A node whose final byte is a newline —
+// every C preprocessor directive, `#define` included — ends at column 0 of the
+// NEXT line, which is not part of it.
+function endLineOf(node: TSNode): number {
+  const end = node.endPosition;
+  return end.column === 0 && end.row > node.startPosition.row ? end.row : end.row + 1;
+}
 
 // Every identifier a destructuring pattern BINDS, in source order. Recurses so
 // nested and defaulted patterns (`const { a: { b }, c = 1 } = …`) yield `b` and
@@ -353,20 +422,24 @@ interface WalkCtx {
 // regex extractor). Walks top-level declarations, type members, and declarations
 // nested up to MAX_FUNC_DEPTH function bodies deep.
 // `opts.maxCalls` overrides the per-file call-site cap (default MAX_CALLS).
-// `opts.imports` (default true) computes `refs`/`pkg`; extractCode passes false
-// because it recomputes both with regex and discards these — see collectAll.
+// `opts.imports` (default true) fills `refs`/`pkg` from extract/imports.ts — the
+// very scan the index runs, so this API and the graph agree on every file;
+// extractCode passes false because it runs that scan itself.
 export function extractAst(
   rel: string,
   ext: string,
   content: string,
   opts: { maxCalls?: number; imports?: boolean; maxSymbols?: number } = {},
 ): AstResult | undefined {
-  const key = grammarKeyForExt(ext);
+  const key = grammarKeyFor(ext, content);
   if (!key || !grammarReady(key)) return undefined;
   const spec = SPECS[key];
   if (!spec) return undefined;
   const parser = parserFor(key);
   if (!parser) return undefined;
+  // A `.h` read as C++ is still a "c" file (see grammarKeyFor), and its symbols
+  // carry the language every other `.h` symbol carries.
+  const lang = SPECS[grammarKeyForExt(ext) ?? key]?.lang ?? spec.lang;
 
   let tree: { rootNode: TSNode; delete(): void } | null = null;
   try {
@@ -380,18 +453,36 @@ export function extractAst(
     // `export default Foo;` / `export { Foo }` re-export a declaration made
     // earlier in the file; record those names and mark the matching symbols
     // exported after the walk (the declaration node itself is not wrapped).
-    const exportedNames = new Set<string>();
+    // Keyed by the SCOPE the list was written in: it names that scope's own
+    // bindings, never a class member or a function's local that happens to
+    // share the name — `export { save }` used to publish `private save()` too.
+    const exportedNames = new Map<string, Set<string>>();
+    const scopeKey = (at: { parent?: string; parentPath?: string }): string => at.parentPath ?? at.parent ?? "";
+    const exportName = (name: string, ctx: WalkCtx): void => {
+      const key = scopeKey(ctx);
+      let names = exportedNames.get(key);
+      if (!names) exportedNames.set(key, (names = new Set()));
+      names.add(name);
+    };
 
     const emit = (s: CodeSymbol): void => {
       if (symbols.length < maxSymbols) symbols.push(s);
     };
+    // The public surface the module declares (Python's `__all__`), read before
+    // the walk: it decides visibility after it, and which imports are
+    // re-exports during it.
+    const publicNames = spec.publicNames?.(root);
 
     const relations: RawRelation[] = [];
     const relSeen = new Set<string>();
     // `self` is what the relation is ABOUT: a class's own name, Rust's impl
     // target, or the enclosing class for a Ruby `include`.
-    const collectRelations = (node: TSNode, self: string | undefined): void => {
-      const reader = spec.relationsFrom?.[node.type];
+    // `as` reads the node as another type: a class EXPRESSION states its
+    // heritage exactly like the declaration form, but only where the walk knows
+    // what it is bound to (see declareValue) — keyed on its own type, every
+    // `return class extends Base {}` would make the enclosing function extend Base.
+    const collectRelations = (node: TSNode, self: string | undefined, as = node.type): void => {
+      const reader = spec.relationsFrom?.[as];
       if (!reader) return;
       for (const r of reader(node, { self })) {
         if (r.from === r.to) continue; // a type does not inherit from itself
@@ -411,7 +502,9 @@ export function extractAst(
       if (spec.publicMember?.(node) === true) return true;
       if (!ctx.sectionPublic) return false;
       if (ctx.forcePublic) return true;
-      return ctx.exported || spec.exported(header, name);
+      if (ctx.exported) return true;
+      const at = nameStart(node, name);
+      return spec.exported(header, name, at === undefined ? header : content.slice(node.startIndex, at));
     };
 
     const docOf = (node: TSNode): string | undefined =>
@@ -432,43 +525,71 @@ export function extractAst(
           }
         }
         const childCtx = sectionPublic === ctx.sectionPublic ? ctx : { ...ctx, sectionPublic };
-
-        // Enum members written without an initialiser are a bare identifier
-        // leaf, not a declaration node any table can key on.
-        if (bareKind && c.namedChildren.length === 0 && IDENT_LEAF.test(c.type)) {
-          emit({
-            name: c.text,
-            kind: bareKind,
-            file: rel,
-            line: c.startPosition.row + 1,
-            endLine: c.endPosition.row + 1,
-            ...(childCtx.parent ? { parent: childCtx.parent } : {}),
-            exported: childCtx.forcePublic || childCtx.exported,
-            lang: spec.lang,
-          });
-          continue;
+        const wrapped = spec.inlineVisibility?.(c);
+        if (wrapped) {
+          for (const inner of wrapped.nodes) walkMember(inner, bareKind, { ...childCtx, sectionPublic: wrapped.public });
+        } else {
+          walkMember(c, bareKind, childCtx);
         }
-
-        for (const extra of spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody }) ?? []) {
-          const header = declHeader(c, content);
-          const doc = docCommentFor(c);
-          emit({
-            name: extra.name,
-            kind: extra.kind,
-            file: rel,
-            line: c.startPosition.row + 1,
-            endLine: c.endPosition.row + 1,
-            ...(childCtx.parent ? { parent: childCtx.parent } : {}),
-            ...(childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {}),
-            signature: header,
-            ...(doc ? { doc } : {}),
-            exported: visibilityOf(c, header, extra.name, childCtx),
-            lang: spec.lang,
-          });
-        }
-
-        walk(c, childCtx);
       }
+    };
+
+    // One member of a container body: a bare enum member, the extras the spec
+    // reads off it, then the member itself.
+    const walkMember = (c: TSNode, bareKind: string | undefined, childCtx: WalkCtx): void => {
+      // Enum members written without an initialiser are a bare identifier
+      // leaf, not a declaration node any table can key on.
+      if (bareKind && c.namedChildren.length === 0 && IDENT_LEAF.test(c.type)) {
+        emit({
+          name: c.text,
+          kind: bareKind,
+          file: rel,
+          line: c.startPosition.row + 1,
+          endLine: endLineOf(c),
+          ...(childCtx.parent ? { parent: childCtx.parent } : {}),
+          exported: childCtx.forcePublic || childCtx.exported,
+          lang,
+        });
+        return;
+      }
+
+      const extras = spec.extraMembers?.(c, { ownerKind: childCtx.ownerKind, inFunctionBody: childCtx.inFunctionBody, publicNames });
+      for (const extra of extras ?? []) {
+        const at = extra.node ?? c;
+        const header = declHeader(at, content);
+        const doc = spec.docFrom?.(at) ?? docCommentFor(at);
+        emit({
+          name: extra.name,
+          kind: extra.kind,
+          file: rel,
+          line: at.startPosition.row + 1,
+          endLine: endLineOf(at),
+          ...(childCtx.parent ? { parent: childCtx.parent } : {}),
+          ...(childCtx.parentPath && childCtx.parentPath !== childCtx.parent ? { parentPath: childCtx.parentPath } : {}),
+          signature: header,
+          ...(doc ? { doc } : {}),
+          exported: visibilityOf(at, header, extra.name, childCtx),
+          lang,
+        });
+      }
+
+      walk(c, childCtx);
+    };
+
+    // The context a declaration's body is walked in: its members hang off it,
+    // and a function's body is executable code, one level deeper.
+    const bodyCtx = (name: string, kind: string, parentPath: string | undefined, ctx: WalkCtx, exported: boolean): WalkCtx => {
+      const entersFunction = FUNCTION_KINDS.has(kind);
+      return {
+        parent: name,
+        parentPath: parentPath ? `${parentPath}/${name}` : name,
+        ownerKind: kind,
+        exported,
+        forcePublic: PUBLIC_MEMBER_KINDS.has(kind),
+        inFunctionBody: ctx.inFunctionBody || entersFunction,
+        funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
+        sectionPublic: true,
+      };
     };
 
     // Descend into a declaration's body. Normally the body is a container CHILD
@@ -480,6 +601,8 @@ export function extractAst(
     // container (Ruby's `class`, whose body_statement is the container) does not
     // get its body walked twice and emit every member twice.
     const walkBody = (node: TSNode, ctx: WalkCtx): void => {
+      const holder = spec.bodyFrom?.[node.type]?.(node);
+      if (holder) return walkBody(holder, ctx);
       let descended = false;
       for (const c of node.namedChildren) {
         if (!spec.containers.has(c.type)) continue;
@@ -489,6 +612,16 @@ export function extractAst(
       if (!descended && spec.containers.has(node.type)) walkChildren(node, ctx);
     };
 
+    // Walk a function or class VALUE as the declaration of a name the walk
+    // assigned it: an anonymous `export default`, a `module.exports =` or an
+    // `exports.x =`. A class expression is neither a def nor a container, so
+    // without this every member of `export default class extends
+    // React.Component { … }` or `module.exports = class { … }` was lost.
+    const declareValue = (value: TSNode, name: string, kind: string, ctx: WalkCtx, exported: boolean): void => {
+      collectRelations(value, name, value.type === "class" ? "class_declaration" : value.type);
+      walkBody(value, bodyCtx(name, kind, ctx.parentPath, ctx, exported));
+    };
+
     const walk = (node: TSNode, ctx: WalkCtx): void => {
       if (ctx.funcDepth > MAX_FUNC_DEPTH) return;
       const type = node.type;
@@ -496,37 +629,45 @@ export function extractAst(
       // `export …` / `declare …` marks everything it wraps as public.
       const isExportMarker = spec.exportMarkers?.has(type) === true;
       const nowExported = ctx.exported || isExportMarker;
-      if (type === "export_statement") {
+      // `export { a } from "./x"` re-exports ANOTHER module's binding and
+      // names nothing declared here.
+      if (type === "export_statement" && !node.childForFieldName("source")) {
         for (const c of node.namedChildren) {
-          if (c.type === "identifier") exportedNames.add(c.text);
+          if (c.type === "identifier") exportName(c.text, ctx);
           else if (c.type === "export_clause") {
             for (const clause of c.namedChildren) {
               const nm = clause.childForFieldName("name") ?? clause.namedChildren[0];
-              if (nm?.text) exportedNames.add(nm.text);
+              if (nm?.text) exportName(nm.text, ctx);
             }
           }
         }
+      }
+      if (type === "export_statement") {
         // An anonymous `export default function/class/arrow` has no name node the
         // declaration walk could pick up — name it after the file stem (ultradoc
         // parity), so the module's default export is a real, referencable symbol.
+        // Its body is then walked as that symbol's, so members and nested
+        // declarations hang off the stem rather than off nothing.
         if (stem && node.children.some((c) => c.type === "default")) {
           for (const c of node.namedChildren) {
             const fnLike = ANON_DEFAULT_FN.has(c.type);
             const classLike = ANON_DEFAULT_CLASS.has(c.type);
             if ((fnLike || classLike) && !c.childForFieldName("name")) {
               const doc = docCommentFor(node);
+              const kind = classLike ? "class" : "function";
               emit({
                 name: stem,
-                kind: classLike ? "class" : "function",
+                kind,
                 file: rel,
                 line: node.startPosition.row + 1,
-                endLine: node.endPosition.row + 1,
+                endLine: endLineOf(node),
                 signature: declHeader(node, content),
                 ...(doc ? { doc } : {}),
                 exported: true,
-                lang: spec.lang,
+                lang,
               });
-              break;
+              declareValue(c, stem, kind, ctx, true);
+              return;
             }
           }
         }
@@ -536,6 +677,11 @@ export function extractAst(
       // expression. Named after the assigned property (or identifier); only
       // `exports.*` / `module.exports.*` targets count as exported — augmenting
       // a local object (res.*, Foo.prototype.*) is not a module export.
+      // `module.exports = <function|class>` itself is the module's DEFAULT
+      // export, named like an anonymous ESM one: the value's own name, else the
+      // file stem. Reading it as an assignment to a property named `exports` on
+      // an object named `module` made every Express middleware and webpack
+      // loader a private function called "exports".
       if (spec.assignments && type === "expression_statement") {
         const expr = node.namedChildren[0];
         if (expr?.type === "assignment_expression") {
@@ -547,19 +693,19 @@ export function extractAst(
             // exported surface, identifier value = the local declaration).
             if (right.type === "object") {
               for (const p of right.namedChildren) {
-                if (p.type === "shorthand_property_identifier") exportedNames.add(p.text);
+                if (p.type === "shorthand_property_identifier") exportName(p.text, ctx);
                 else if (p.type === "pair") {
                   const k = p.childForFieldName("key");
                   const v = p.childForFieldName("value");
-                  if (k?.type === "property_identifier") exportedNames.add(k.text);
-                  if (v?.type === "identifier") exportedNames.add(v.text);
+                  if (k?.type === "property_identifier") exportName(k.text, ctx);
+                  if (v?.type === "identifier") exportName(v.text, ctx);
                 }
               }
               return;
             }
             // `module.exports = Foo;` — the CJS default export of a local decl.
             if (right.type === "identifier") {
-              exportedNames.add(right.text);
+              exportName(right.text, ctx);
               return;
             }
           }
@@ -567,7 +713,10 @@ export function extractAst(
           if (left && right && funcy) {
             let name: string | undefined;
             let exportedAssign = false;
-            if (left.type === "member_expression") {
+            if (left.type === "member_expression" && left.text === "module.exports") {
+              name = right.childForFieldName("name")?.text ?? (stem || undefined);
+              exportedAssign = true;
+            } else if (left.type === "member_expression") {
               const prop = left.childForFieldName("property");
               if (prop?.type === "property_identifier") {
                 name = prop.text;
@@ -579,18 +728,21 @@ export function extractAst(
             }
             if (name) {
               const doc = docCommentFor(node);
+              const kind = right.type === "class" ? "class" : "function";
+              const exported = !ctx.inFunctionBody && (nowExported || exportedAssign);
               emit({
                 name,
-                kind: right.type === "class" ? "class" : "function",
+                kind,
                 file: rel,
                 line: expr.startPosition.row + 1,
-                endLine: expr.endPosition.row + 1,
+                endLine: endLineOf(expr),
                 ...(ctx.parent ? { parent: ctx.parent } : {}),
                 signature: declHeader(expr, content),
                 ...(doc ? { doc } : {}),
-                exported: !ctx.inFunctionBody && (nowExported || exportedAssign),
-                lang: spec.lang,
+                exported,
+                lang,
               });
+              declareValue(right, name, kind, ctx, exported);
               return;
             }
           } else if (left?.type === "member_expression" && right) {
@@ -602,18 +754,18 @@ export function extractAst(
             if (prop?.type === "property_identifier") {
               const obj = left.text.slice(0, left.text.length - prop.text.length - 1);
               if (obj === "exports" || obj === "module.exports") {
-                if (right.type === "identifier") exportedNames.add(right.text);
+                if (right.type === "identifier") exportName(right.text, ctx);
                 if (right.type !== "identifier" || right.text !== prop.text) {
                   emit({
                     name: prop.text,
                     kind: "const",
                     file: rel,
                     line: expr.startPosition.row + 1,
-                    endLine: expr.endPosition.row + 1,
+                    endLine: endLineOf(expr),
                     ...(ctx.parent ? { parent: ctx.parent } : {}),
                     signature: declHeader(expr, content),
                     exported: true,
-                    lang: spec.lang,
+                    lang,
                   });
                 }
                 return;
@@ -627,8 +779,7 @@ export function extractAst(
       // `local alias = function(y) … end` — an assignment_statement pairs a
       // `variable_list` of targets with an `expression_list` of values (fields
       // name/value, index-aligned). Only function-valued targets become
-      // symbols, named after the full target text (dotted/colon names stay
-      // whole — regex-tier parity).
+      // symbols; a table field is the table's member (see luaMember).
       if (spec.assignments && type === "assignment_statement") {
         const vars = node.children.find((c) => c.type === "variable_list");
         const vals = node.children.find((c) => c.type === "expression_list");
@@ -636,22 +787,22 @@ export function extractAst(
         const values = vals?.namedChildren ?? [];
         const pairs = Math.min(targets.length, values.length);
         for (let i = 0; i < pairs; i++) {
-          const target = targets[i]!;
-          const value = values[i]!;
-          if (value.type !== "function_definition" || !/^[\w.:]+$/.test(target.text)) continue;
+          const member = luaMember(targets[i]);
+          if (values[i]!.type !== "function_definition" || !member) continue;
           const header = declHeader(node, content);
           const doc = docCommentFor(node);
+          const parent = member.table ?? ctx.parent;
           emit({
-            name: target.text,
+            name: member.name,
             kind: "function",
             file: rel,
             line: node.startPosition.row + 1,
-            endLine: node.endPosition.row + 1,
-            ...(ctx.parent ? { parent: ctx.parent } : {}),
+            endLine: endLineOf(node),
+            ...(parent ? { parent } : {}),
             signature: header,
             ...(doc ? { doc } : {}),
-            exported: visibilityOf(node, header, target.text, { ...ctx, exported: nowExported }),
-            lang: spec.lang,
+            exported: visibilityOf(node, header, member.name, { ...ctx, exported: nowExported }),
+            lang,
           });
         }
         return;
@@ -692,12 +843,12 @@ export function extractAst(
               kind,
               file: rel,
               line: node.startPosition.row + 1,
-              endLine: node.endPosition.row + 1,
+              endLine: endLineOf(node),
               ...(ctx.parent ? { parent: ctx.parent } : {}),
               signature: header,
               ...(doc ? { doc } : {}),
               exported: visibilityOf(node, header, bound, { ...ctx, exported: nowExported }),
-              lang: spec.lang,
+              lang,
             });
           }
           return;
@@ -719,31 +870,25 @@ export function extractAst(
           const doc = docOf(node);
           const parent = qualifier ?? ctx.parent;
           const parentPath = qualifier ?? ctx.parentPath;
-          emit({
-            name,
-            kind,
-            file: rel,
-            line: node.startPosition.row + 1,
-            endLine: node.endPosition.row + 1,
-            ...(parent ? { parent } : {}),
-            ...(parentPath && parentPath !== parent ? { parentPath } : {}),
-            signature: header,
-            ...(doc ? { doc } : {}),
-            exported: visibilityOf(node, header, name, { ...ctx, exported: nowExported }),
-            lang: spec.lang,
-          });
+          // `var a, b int` / `int x, y;` declare every name they list.
+          const several = spec.namesFrom?.[type]?.(node);
+          for (const each of several && several.length > 1 ? several : [name]) {
+            emit({
+              name: each,
+              kind,
+              file: rel,
+              line: node.startPosition.row + 1,
+              endLine: endLineOf(node),
+              ...(parent ? { parent } : {}),
+              ...(parentPath && parentPath !== parent ? { parentPath } : {}),
+              signature: header,
+              ...(doc ? { doc } : {}),
+              exported: visibilityOf(node, header, each, { ...ctx, exported: nowExported }),
+              lang,
+            });
+          }
           collectRelations(node, name);
-          const entersFunction = FUNCTION_KINDS.has(kind);
-          walkBody(node, {
-            parent: name,
-            parentPath: parentPath ? `${parentPath}/${name}` : name,
-            ownerKind: kind,
-            exported: nowExported,
-            forcePublic: PUBLIC_MEMBER_KINDS.has(kind),
-            inFunctionBody: ctx.inFunctionBody || entersFunction,
-            funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
-            sectionPublic: true,
-          });
+          walkBody(node, bodyCtx(name, kind, parentPath, ctx, nowExported));
           return;
         }
       }
@@ -767,6 +912,7 @@ export function extractAst(
           inFunctionBody: ctx.inFunctionBody || entersFunction,
           funcDepth: ctx.funcDepth + (entersFunction ? 1 : 0),
           ...(qualifier ? { parent: qualifier, parentPath: qualifier, ownerKind: "type" } : {}),
+          ...(spec.sectionScopes?.has(type) ? { sectionPublic: true } : {}),
         });
       }
     };
@@ -779,22 +925,30 @@ export function extractAst(
       sectionPublic: true,
     });
     if (exportedNames.size) {
-      for (const s of symbols) if (!s.exported && exportedNames.has(s.name)) s.exported = true;
+      for (const s of symbols) if (!s.exported && exportedNames.get(scopeKey(s))?.has(s.name)) s.exported = true;
+    }
+    // A module that STATES its public surface overrides the naming convention
+    // for its own top-level names; members keep theirs.
+    if (publicNames) {
+      for (const s of symbols) if (s.parent === undefined) s.exported = publicNames.has(s.name);
+      // A listed name the module both defines and imports — asyncio's
+      // pure-Python functions, replaced by `_asyncio`'s when that import
+      // succeeds — is declared once, by its definition.
+      const defined = new Set(symbols.filter((s) => s.parent === undefined && s.kind !== "reexport").map((s) => s.name));
+      let kept = 0;
+      for (const s of symbols) if (s.parent !== undefined || s.kind !== "reexport" || !defined.has(s.name)) symbols[kept++] = s;
+      symbols.length = kept;
     }
 
-    const wantImports = opts.imports !== false;
-    const { refs, idents, calls, importedNames, terms, literals } = collectAll(
+    const { idents, calls, importedNames, terms, literals } = collectAll(
       root,
       spec,
       new Set(symbols.map((s) => s.name)),
       opts.maxCalls ?? MAX_CALLS,
-      wantImports,
     );
-    let pkg: string | undefined;
-    if (wantImports && spec.lang === "java") {
-      const p = findFirst(root, (n) => n.type === "package_declaration");
-      if (p) pkg = p.text.replace(/^package\s+/, "").replace(/;.*$/, "").trim();
-    }
+    const wantImports = opts.imports !== false;
+    const refs = wantImports ? extractImports(ext, content) : [];
+    const pkg = wantImports ? extractPackage(ext, content) : undefined;
     relations.sort((a, b) => byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to));
     return {
       symbols,
@@ -803,6 +957,7 @@ export function extractAst(
       idents,
       calls,
       importedNames,
+      importAliases: readImportAliases(root, spec.lang),
       relations,
       terms,
       literals,

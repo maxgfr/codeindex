@@ -22,6 +22,8 @@
         { "name": "Error", "kind": "enum", "doc": true },
         { "name": "Timeout", "parent": "Error", "kind": "enum-member" },
         { "name": "Rejected", "parent": "Error", "kind": "enum-member" },
+        { "name": "Options", "kind": "struct", "doc": true },
+        { "name": "max_pending", "parent": "Options", "kind": "field", "doc": true },
         { "name": "Scheduler", "kind": "struct", "doc": true },
         { "name": "queue", "parent": "Scheduler", "kind": "field" },
         { "name": "pending", "parent": "Scheduler", "kind": "field", "exported": false },
@@ -35,10 +37,11 @@
         },
         { "name": "backoff", "parent": "dispatch", "kind": "function", "exported": false, "doc": true },
         { "name": "reset", "parent": "Scheduler", "kind": "function", "exported": false },
+        { "name": "is_idle", "parent": "Scheduler", "kind": "function", "doc": true },
         { "name": "start", "parent": "Scheduler", "kind": "function" },
         { "name": "fmt", "parent": "Error", "kind": "function" }
       ],
-      "calls": ["Ok", "backoff", "clear", "new", "reset"],
+      "calls": ["Ok", "backoff", "clear", "is_empty", "new", "reset"],
       "relations": [
         { "kind": "implements", "from": "Scheduler", "to": "Runnable" },
         { "kind": "implements", "from": "Error", "to": "Display" }

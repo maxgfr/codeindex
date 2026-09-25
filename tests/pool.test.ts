@@ -5,7 +5,8 @@ import { cpSync, mkdtempSync, rmSync, readFileSync, statSync, utimesSync, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanRepo } from "../src/scan.js";
-import { scanRepoParallel, workerCount } from "../src/pool.js";
+import { runExtractWorker, scanRepoParallel, workerCount } from "../src/pool.js";
+import { sha1 } from "../src/hash.js";
 import { buildIndexArtifacts, buildArtifactsFromScan } from "../src/pipeline.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
 import { renderSymbolsJson } from "../src/render/symbols-json.js";
@@ -166,6 +167,60 @@ describe("scanRepoParallel — sequential-identical", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// A file queued only because its (size, mtime) moved is usually byte-identical
+// (touch, branch round-trip, CI cache restore). The worker used to extract it
+// anyway and scanRepo threw the record away on the cache's hash hit: after a
+// `touch` of every file, `index --workers 3` took 5x the wall time of the
+// sequential scan that merely hashed them.
+describe("worker hash check", () => {
+  it("skips extraction when the content still hashes to the cached hash", async () => {
+    const abs = join(REPO, "src", "client.ts");
+    const hash = sha1(readFileSync(abs, "utf8"));
+    const posted: Parameters<Parameters<typeof runExtractWorker>[1]>[0][] = [];
+    await runExtractWorker(
+      {
+        jobs: [
+          { abs, rel: "src/client.ts", ext: ".ts", cachedHash: hash },
+          { abs, rel: "src/client.ts", ext: ".ts", cachedHash: "stale" },
+          { abs, rel: "src/client.ts", ext: ".ts" },
+        ],
+        grammarKeys: [],
+      },
+      (o) => posted.push(o),
+    );
+    const [same, changed, fresh] = posted[0]!.records;
+    expect(same!.hash).toBe(hash);
+    expect(same!.record).toBeUndefined();
+    expect(changed!.record?.hash).toBe(hash);
+    expect(fresh!.record?.hash).toBe(hash);
+  });
+
+  it("scanRepo reuses the cached record for a record-less worker entry, and only then", () => {
+    const first = scanRepo(REPO);
+    const rel = "src/client.ts";
+    const real = first.files.find((f) => f.rel === rel)!;
+    const st = statSync(join(REPO, rel));
+    const cache = new Map(first.files.map((f) => [f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: 0 }]));
+    // Hash hit: the cached record comes back, the scan still proves itself unchanged.
+    const hit = scanRepo(REPO, {
+      cache,
+      extracted: new Map([[rel, { size: st.size, mtimeMs: st.mtimeMs, hash: real.hash }]]),
+    });
+    expect(hit.files).toEqual(first.files);
+    expect(hit.contentUnchanged).toBe(true);
+    // A record-less entry that no longer matches the cache (it was built
+    // against another one) is not trusted: the file is read and extracted here.
+    const marker = { ...real, summary: "CACHED-MARKER" };
+    const stale = new Map(cache).set(rel, { hash: "other", record: marker, size: real.size, mtimeMs: 0 });
+    const miss = scanRepo(REPO, {
+      cache: stale,
+      extracted: new Map([[rel, { size: st.size, mtimeMs: st.mtimeMs, hash: real.hash }]]),
+    });
+    expect(miss.files.find((f) => f.rel === rel)).toEqual(real);
+    expect(miss.contentUnchanged).toBe(false);
   });
 });
 

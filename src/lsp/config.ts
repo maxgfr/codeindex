@@ -140,11 +140,16 @@ export function serverForLang(config: LspConfig, lang: string): LspServerConfig 
 export const DEFAULT_TIMEOUT_MS = 5000;
 export const DEFAULT_STARTUP_TIMEOUT_MS = 15000;
 
-/** Per-request budget: config first, then env, then the default. */
+/**
+ * Per-request budget: the env override first, then the server's config, then
+ * the default. The env var wins so an operator (a CI job, a slow machine) can
+ * retune every server without editing an lsp.json the team shares.
+ */
 export function timeoutFor(server: LspServerConfig): number {
   return positiveEnv("CODEINDEX_LSP_TIMEOUT_MS") ?? server.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 }
 
+/** The `initialize` budget, with the same precedence as timeoutFor. */
 export function startupTimeoutFor(server: LspServerConfig): number {
   return positiveEnv("CODEINDEX_LSP_STARTUP_TIMEOUT_MS") ?? server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 }

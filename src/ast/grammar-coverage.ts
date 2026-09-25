@@ -38,8 +38,18 @@ import { byStr } from "../sort.js";
  * their members that way (`type_spec`, `method_elem`, `function_item`);
  * `_signature$` because a TypeScript `.d.ts` is nothing else, and it is what
  * surfaces the still-unindexed `call_signature` / `index_signature`.
+ *
+ * The last three alternatives name declarations whose node types fit none of
+ * those shapes, so a miss on them was invisible here: Go's `type_alias`
+ * (`type B = int` is not a type_spec) and C's `#define` (`preproc_def` /
+ * `preproc_function_def`) both went unindexed AND unreported. Python 3.12's
+ * `type_alias_statement` and Ruby's `class << self` (`singleton_class`) are
+ * still unindexed — now at least reported. Anchored rather than a bare
+ * `alias`, which would pull in Elixir's `alias` — a module NAME, not a
+ * declaration.
  */
-export const DECLARATIVE_TYPE = /declaration|definition|_spec$|_item$|_signature$|_elem$|_body$|_declarator$/;
+export const DECLARATIVE_TYPE =
+  /declaration|definition|_spec$|_item$|_signature$|_elem$|_body$|_declarator$|type_alias(_statement)?$|^preproc_(function_)?def$|^singleton_class$/;
 
 /**
  * A SUPERTYPE whose members are all declaration-ish, so its `subtypes()` list can
@@ -93,7 +103,7 @@ const blank = (key: string): GrammarCoverage => ({
 const ratio = (n: number, d: number): number => (d === 0 ? 0 : Number((n / d).toFixed(4)));
 
 /**
- * The node types a LangSpec KEYS ON, from exactly the eleven hooks whose keys are
+ * The node types a LangSpec KEYS ON, from exactly the twelve hooks whose keys are
  * node types.
  *
  * `lang`, `exported`, `assignments`, `docstring`, `docFrom`, `sectionVisibility`,
@@ -114,6 +124,7 @@ function specKeysFor(key: string): Set<string> {
     spec.nameFrom,
     spec.kindFrom,
     spec.parentFrom,
+    spec.bodyFrom,
     spec.publicMembersIn,
     spec.bareMembers,
     spec.relationsFrom,

@@ -36,7 +36,7 @@ import { computeSymbolRefs } from "./render/symbols-json.js";
 import { buildCallerIndex, type CallerIndex } from "./callers.js";
 import { buildTypeHierarchy, type TypeHierarchyEntry } from "./relations.js";
 import { buildSymbolGraph, type SymbolGraph } from "./symbolgraph.js";
-import { buildDocs, buildStemIndex, buildTrigramIndex, type Doc } from "./bm25.js";
+import { buildDocs, buildStemIndex, buildTrigramIndex, type Doc, type TrigramIndex } from "./bm25.js";
 import { pagerankOf } from "./centrality.js";
 import { complexityOfSource } from "./complexity.js";
 import { readText } from "./walk.js";
@@ -49,7 +49,7 @@ interface DerivedCache {
   uniqueDefs?: Map<string, string>; // uniqueSymbolDefs(scan)
   symbolRefs?: Map<string, Set<string>>; // computeSymbolRefs(scan)
   callerIndex?: CallerIndex; // DEFAULT precision opts only — never recall mode
-  bm25?: { docs: Doc[]; trigrams?: Map<string, Set<string>>; stems?: Map<string, string[]> };
+  bm25?: { docs: Doc[]; trigrams?: TrigramIndex; stems?: Map<string, string[]> };
   hierarchy?: Map<string, TypeHierarchyEntry>;
   symbolGraph?: SymbolGraph;
   fileComplexity?: Map<string, number>; // rel → whole-file branch count + 1 (code files)
@@ -114,6 +114,8 @@ export function importPairsFor(scan: RepoScan): Set<string> {
     for (const f of scan.files) {
       for (const ref of f.refs) {
         if (ref.kind !== "import") continue;
+        // No `soft` special case needed: a soft ref adds a pair exactly when
+        // buildGraph gives it an edge — resolved to another in-repo file.
         const r = resolveImport(f.rel, f.ext, ref.spec, ctx);
         if (r.kind === "resolved" && r.target !== f.rel) pairs.add(`${f.rel}|${r.target}`);
       }
@@ -218,7 +220,7 @@ export function bm25DocsFor(scan: RepoScan): Doc[] {
 // The corpus-vocabulary trigram index stays LAZY: built only when searchIndex
 // first meets a zero-df query term (the pre-cache behavior), then cached so
 // later fuzzy queries on the same scan skip the rebuild.
-export function bm25TrigramsFor(scan: RepoScan): Map<string, Set<string>> {
+export function bm25TrigramsFor(scan: RepoScan): TrigramIndex {
   const c = cacheFor(scan);
   const bm25 = (c.bm25 ??= { docs: buildDocs(scan) });
   return (bm25.trigrams ??= buildTrigramIndex(bm25.docs));
@@ -254,7 +256,7 @@ export function bm25StemsFor(scan: RepoScan): Map<string, string[]> {
 }
 
 // Whole-file branch counts for every code file (riskHotspots' per-file
-// complexity). The FIRST call still reads each code file from disk — accepted;
+// complexity), over code only (complexity.ts codeOnly). The FIRST call still reads each code file from disk — accepted;
 // repeat calls on the same scan become lookups.
 export function fileComplexityFor(scan: RepoScan): Map<string, number> {
   const c = cacheFor(scan);
@@ -262,7 +264,7 @@ export function fileComplexityFor(scan: RepoScan): Map<string, number> {
     const m = new Map<string, number>();
     for (const f of scan.files) {
       if (f.kind !== "code") continue;
-      m.set(f.rel, complexityOfSource(readText(join(scan.root, f.rel))));
+      m.set(f.rel, complexityOfSource(readText(join(scan.root, f.rel)), f.lang));
     }
     c.fileComplexity = m;
   }

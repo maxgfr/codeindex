@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { keywords, rankedKeywords, slugify, rrf, escapeRegExp, clip, clipInline } from "../src/util.js";
+import { keywords, rankedKeywords, slugify, rrf, escapeRegExp, clip, clipInline, foldText } from "../src/util.js";
 
 describe("keywords", () => {
   it("drops stopwords and short noise, keeps identifiers", () => {
@@ -13,6 +13,17 @@ describe("keywords", () => {
   it("dedupes case-insensitively but preserves original token", () => {
     const k = keywords("Backoff backoff BACKOFF");
     expect(k).toEqual(["Backoff"]);
+  });
+});
+
+describe("foldText", () => {
+  it("returns ASCII untouched and folds everything else exactly as NFKD would", () => {
+    // ASCII skips the ICU call; the output must be what the slow path gives.
+    const plain = "parse_JSONBody retries 429 ~!@#$%^&*()\t\n\u007f";
+    expect(foldText(plain)).toBe(plain);
+    expect(foldText(plain)).toBe(plain.normalize("NFKD"));
+    expect(foldText("café")).toBe("cafe");
+    expect(foldText("Ｆｕｌｌwidth ﬁle naïve")).toBe("Fullwidth file naive");
   });
 });
 

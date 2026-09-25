@@ -74,7 +74,19 @@ export const SCHEMA_VERSION = 5;
 // threshold. Config files (JSON/YAML/TOML) get the same collector, because the
 // dangerous duplications are the ones that cross a language boundary where no
 // compiler is looking.
-export const EXTRACTOR_VERSION = 14;
+// v15 folds the extraction fixes of one integration round: declarations the
+// AST walk dropped or misread (multi-name declarations, `__all__`, Ruby
+// singleton classes, Elixir guards, Lua table members, TS/PHP promoted
+// parameters, C++ out-of-line owners), one-line signatures with no comment or
+// body, source-order call caps and one-letter callees, Python and non-leaf
+// string literals; imports scanned from code only on both tiers, with soft
+// refs for `from pkg import name` and Kotlin/Scala/Dart/Lua/shell/Elixir
+// specifiers plus Rust `#[path]` modules; FileRecord.importAliases and
+// FileRecord.generated (minified files and bundles); Vue/Svelte/Astro script
+// extraction; regex-tier docs and spans; reStructuredText docs; file
+// summaries that skip licenses; and UTF-8 decoding of files holding a literal
+// U+FFFD.
+export const EXTRACTOR_VERSION = 15;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
@@ -101,7 +113,7 @@ export interface CodeSymbol {
   kind: string; // function | class | method | const | type | interface | enum | struct | trait | def
   file: string; // relative to repo root
   line: number; // 1-based
-  endLine?: number; // 1-based end of the declaration node (AST extractor only)
+  endLine?: number; // 1-based end of the declaration (AST tier; regex tier: brace languages, when safe)
   parent?: string; // enclosing symbol name for a nested member (AST extractor only)
   // Full ancestor path ("Scheduler/dispatch") for a symbol nested two or more
   // levels deep — a closure inside a method. Absent when it would only repeat
@@ -114,7 +126,7 @@ export interface CodeSymbol {
   signature?: string;
   // The declaration's own doc comment, reduced to one sentence: JSDoc, `///`
   // rustdoc, godoc, javadoc, C# XML docs, or a Python docstring. Absent when
-  // the declaration is undocumented. AST extractor only.
+  // the declaration is undocumented. The regex tier reads comments above only.
   doc?: string;
   exported: boolean;
   lang: string;
@@ -126,6 +138,8 @@ export interface CodeSymbol {
 export interface RawRef {
   kind: "doc-link" | "import";
   spec: string; // the target/specifier exactly as written
+  /** Speculative ref: an edge when it resolves to an in-repo file, otherwise dropped silently (never external, never dangling). */
+  soft?: true;
 }
 
 // A literal VALUE as written, kept verbatim. `terms` destroys exactly this:
@@ -184,6 +198,19 @@ export interface RawRelation {
   line: number; // 1-based line of the declaration stating it
 }
 
+// A name a file's imports bind to something declared elsewhere under ANOTHER
+// name — what makes `salute("a")` (after `import { greet as salute }`) a call
+// to `greet`. `name` is the imported name, `"*"` for the module itself (a JS
+// namespace import, Python `import a.b as c`, a Go package alias) or
+// `"default"` for a JS default import. `from` is the specifier as written;
+// absent only on the entry `{ local: "default", name: X }` that records a JS
+// module's own `export default X`.
+export interface ImportAlias {
+  local: string;
+  name: string;
+  from?: string;
+}
+
 // Everything extracted from one file in a single pass. The unit the graph and
 // renderers consume; nothing here requires the model.
 export interface FileRecord {
@@ -201,20 +228,33 @@ export interface FileRecord {
   refs: RawRef[]; // unresolved outbound links/imports
   pkg?: string; // Java: the file's `package` declaration — anchors source roots
   idents?: string[]; // distinctive identifiers referenced (transient — feeds `use` edges, not persisted)
-  // Unresolved call-site callee names (cap 512, deduped by name+line, sorted by
-  // name then line). Transient-ish: consumed by the graph builder's global call
-  // resolution pass, not surfaced in the graph itself. `receiver` is the simple
-  // name of the IMMEDIATE receiver of a qualified call — `axios.get(...)` →
-  // {name: "get", receiver: "axios"}, `a.b.c(...)` → {name: "c", receiver: "b"}
+  // Unresolved call-site callee names (deduped by name+line, sorted by name then
+  // line; cap 512, where a capped file keeps one site per distinct callee
+  // first — see capCallSites). Transient-ish: consumed by the graph builder's
+  // global call resolution pass, not surfaced in the graph itself. `receiver`
+  // is the simple name of the IMMEDIATE receiver of a qualified call —
+  // `axios.get(...)` → {name: "get", receiver: "axios"}, `a.b.c(...)` →
+  // {name: "c", receiver: "b"}
   // — absent for a bare call (`get()`) or a computed/complex receiver
   // (`fetch().then(...)`). Receiver-gated sink catalogs (ultrasec) key on it.
   calls?: { name: string; line: number; receiver?: string }[];
   // JS/TS named-import bindings (cap 256, deduped, sorted) — feeds the JS/TS
   // import-evidence gate in call resolution.
   importedNames?: string[];
+  // Import bindings that rename (cap 256, deduped, sorted by local, name,
+  // from): JS `{ a as b }` / default / namespace imports and the module's own
+  // `export default X`, Python module imports and `from m import a as b`, Go
+  // package aliases. AST tier only; absent when the file has none.
+  importAliases?: ImportAlias[];
   // A per-file extraction cap truncated this record's symbols. Same doctrine as
   // the walk's `capped`: a bounded result says so instead of looking complete.
   truncated?: true;
+  // Build output detected from the content, whatever the file is named:
+  // "minified" JavaScript or a "bundle" (esbuild, webpack). The record keeps its
+  // summary and imports, but no symbols, calls or vocabulary — one-letter noise
+  // for the first, copies of the sources' definitions for the second. Set so an
+  // empty record is never mistaken for an empty file.
+  generated?: "minified" | "bundle";
   // Inheritance stated by declarations in this file (cap 256, deduped, sorted).
   // Resolved into `extends`/`implements` edges by the graph builder.
   relations?: RawRelation[];
@@ -249,6 +289,8 @@ export interface FileNode {
   pagerank?: number;
   // Present (true) only when the path classifies as a test file (tests-map.ts).
   testFile?: true;
+  // Present only for build output indexed without symbols (FileRecord.generated).
+  generated?: "minified" | "bundle";
 }
 
 export interface ModuleNode {
@@ -332,7 +374,7 @@ export interface SurpriseEdge {
 // reference it (populated by the use/mention pass). Deterministically ordered.
 export interface SymbolIndex {
   schemaVersion: number;
-  // `endLine` mirrors CodeSymbol.endLine (AST extractor only).
+  // `endLine` mirrors CodeSymbol.endLine.
   defs: Record<
     string,
     { file: string; line: number; endLine?: number; kind: string; exported: boolean; lang: string; parent?: string }[]

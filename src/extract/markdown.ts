@@ -7,25 +7,58 @@ export interface MarkdownInfo {
   refs: RawRef[]; // doc-link refs (local relative targets only)
 }
 
-// Strip fenced code blocks (``` … ``` and ~~~ … ~~~) so links/headings inside
-// them are not mistaken for real content. Replaces them with blank lines to
-// preserve line-based scanning elsewhere.
-function stripFences(content: string): string {
+// Blank out code blocks so links/headings inside them are not mistaken for
+// real content. Replaces them with blank lines to preserve line-based
+// scanning elsewhere.
+//
+// Fenced blocks (``` … ``` and ~~~ … ~~~) close only on a fence of the same
+// character at least as long as the opening one, with nothing after it: a
+// ````-fenced example that shows a ```-fenced one is one block, not two with
+// live markdown between them.
+//
+// Indented blocks (four spaces or a tab, after a blank line) are code too, but
+// only outside a list, where that indentation is how a list item continues.
+function stripCode(content: string): string {
   const lines = content.split(/\r?\n/);
   const out: string[] = [];
-  let fence: string | null = null;
+  let fence: RegExp | null = null; // what closes the open fenced block
+  let inList = false;
+  let indented = false; // inside an indented code block
+  let prevBlank = true;
   for (const line of lines) {
-    const m = /^\s*(```+|~~~+)/.exec(line);
     if (fence) {
-      if (m && line.trim().startsWith(fence[0]![0]!.repeat(3).slice(0, 3))) fence = null;
+      if (fence.test(line)) fence = null;
       out.push("");
       continue;
     }
+    // At any indentation: a fence nested in a list item is indented as deep as
+    // the item's content, often with a tab.
+    const m = /^\s*(`{3,}|~{3,})/.exec(line);
     if (m) {
-      fence = m[1]!;
+      fence = new RegExp(`^\\s*${m[1]![0]}{${m[1]!.length},}\\s*$`);
+      indented = false;
+      prevBlank = false;
       out.push("");
       continue;
     }
+    const blank = !line.trim();
+    const deep = /^(?: {4}|\t)/.test(line);
+    if (indented && (blank || deep)) {
+      out.push("");
+      continue;
+    }
+    indented = false;
+    if (deep && prevBlank && !inList) {
+      indented = true;
+      out.push("");
+      continue;
+    }
+    if (!blank) {
+      if (/^ {0,3}(?:[-*+]|\d+[.)])(?:\s|$)/.test(line)) inList = true;
+      // After a blank line, text back at the margin has left the list.
+      else if (prevBlank && !/^\s/.test(line)) inList = false;
+    }
+    prevBlank = blank;
     out.push(line);
   }
   return out.join("\n");
@@ -66,6 +99,17 @@ function isBoilerplate(s: string): boolean {
   return /^(all notable changes to this project|in the interest of fostering|this project adheres to|we as members and leaders|table of contents)\b/i.test(s);
 }
 
+// A setext underline, and the lines it can underline: text that is not already
+// a block of another kind. A `---` under a blank line, a list item or a quote
+// is a thematic break, not a heading.
+const SETEXT = /^ {0,3}(=+|-+)\s*$/;
+function isParagraphLine(line: string): boolean {
+  const t = line.trim();
+  return !!t && !/^ {4}|^\t/.test(line) && !/^([-*+]|\d+[.)])(\s|$)/.test(t) && !/^[>|<]/.test(t);
+}
+
+const ALERT = /^>\s*\[!(?:note|tip|important|warning|caution)\]\s*$/i;
+
 // Extract title, section headings, a one-line summary, and local doc-link refs
 // from a markdown document. Deterministic and dependency-free.
 export function extractMarkdown(content: string): MarkdownInfo {
@@ -80,7 +124,7 @@ export function extractMarkdown(content: string): MarkdownInfo {
     body = body.slice(fm[0].length);
   }
 
-  const scan = stripFences(body);
+  const scan = stripCode(body);
   const lines = scan.split(/\r?\n/);
 
   const headings: string[] = [];
@@ -89,17 +133,36 @@ export function extractMarkdown(content: string): MarkdownInfo {
   // The summary must come from the document's own intro — once a level-2+
   // section starts, a later paragraph belongs to that sub-section, not the doc.
   let summaryClosed = false;
-  for (const line of lines) {
-    const h = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+  const heading = (level: number, raw: string): void => {
+    const text = cleanProse(raw);
+    headings.push(text);
+    if (!title && level === 1) title = text;
+    if (!summary && level >= 2) summaryClosed = true;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const h = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (h) {
-      const text = cleanProse(h[2]!);
-      headings.push(text);
-      if (!title && h[1]!.length === 1) title = text;
-      if (!summary && h[1]!.length >= 2) summaryClosed = true;
+      heading(h[1]!.length, h[2]!);
+      continue;
+    }
+    // A setext heading: a line of text underlined with `=` (level 1) or `-`
+    // (level 2), the style of many older READMEs and of pandoc's output. The
+    // text line would otherwise be the summary, and the heading missing.
+    const under = SETEXT.exec(lines[i + 1] ?? "");
+    if (under && isParagraphLine(line)) {
+      heading(under[1]![0] === "=" ? 1 : 2, line.trim());
+      i++;
+      continue;
+    }
+    const t = line.trim();
+    // A GitHub alert (`> [!NOTE]`) is a call-out — a deprecation, a warning —
+    // never the document's description. Its whole quote is skipped.
+    if (ALERT.test(t)) {
+      while (i + 1 < lines.length && lines[i + 1]!.trim().startsWith(">")) i++;
       continue;
     }
     if (!summary && !summaryClosed) {
-      const t = line.trim();
       // First real prose paragraph: not a heading, list bullet, table, html or blank.
       if (t && !/^([-*+]|\d+\.)\s/.test(t) && !t.startsWith("|") && !t.startsWith("<")) {
         const cleaned = cleanProse(t);

@@ -90,13 +90,19 @@ trait HasHeaders {}`;
   end
   defmacro where(q) do
   end
+  defmacrop hidden(q), do: q
+  defguard is_query(q) when is_map(q)
+  defguardp is_empty(q) when q == %{}
 end`;
     const s = extractSymbols("a.ex", ".ex", src);
     const by = Object.fromEntries(s.map((x) => [x.name, x]));
     expect(by["Ecto.Query"]).toMatchObject({ kind: "module" });
     expect(by.from).toMatchObject({ kind: "function", exported: true });
     expect(by.build).toMatchObject({ kind: "function", exported: false });
-    expect(by.where).toMatchObject({ kind: "macro" });
+    expect(by.where).toMatchObject({ kind: "macro", exported: true });
+    expect(by.hidden).toMatchObject({ kind: "macro", exported: false });
+    expect(by.is_query).toMatchObject({ kind: "guard", exported: true });
+    expect(by.is_empty).toMatchObject({ kind: "guard", exported: false });
   });
 
   it("extracts shell functions (both syntaxes, incl. .zsh)", () => {
@@ -142,14 +148,29 @@ load_plugin() {
     expect(names).toEqual(expect.arrayContaining(["Api", "Client", "fetch"]));
   });
 
+  it("reads a Ruby definition's inline visibility (regex fallback)", () => {
+    const src = "class W\n  protected def weight; end\n  private_class_method def self.pcm; end\n  public def shown; end\nend\n";
+    const by = Object.fromEntries(extractSymbols("w.rb", ".rb", src).map((s) => [s.name, s.exported]));
+    expect(by).toEqual({ W: true, weight: false, pcm: false, shown: true });
+  });
+
   it("extracts C functions and structs (regex fallback)", () => {
     const names = extractSymbols("a.c", ".c", "typedef struct Node Node;\nint compute(int x) {\n  return x;\n}\n").map((s) => s.name);
     expect(names).toContain("compute");
   });
 
-  it("extracts Lua functions", () => {
-    const names = extractSymbols("a.lua", ".lua", "function M.setup()\nend\nlocal function helper()\nend\n").map((s) => s.name);
-    expect(names.length).toBeGreaterThan(0);
+  it("extracts Lua functions, a table function as the table's member", () => {
+    const syms = extractSymbols(
+      "a.lua",
+      ".lua",
+      "function M.setup()\nend\nfunction M.sub:start()\nend\nM.alias = function()\nend\nlocal function helper()\nend\n",
+    );
+    expect(syms.map((s) => [s.parent, s.name, s.exported])).toEqual([
+      ["M", "setup", true],
+      ["M.sub", "start", true],
+      ["M", "alias", true],
+      [undefined, "helper", false],
+    ]);
     expect(languageOf(".lua")).toBe("lua");
   });
 

@@ -45,6 +45,9 @@ extension (queue: String) {
   def shout: String = queue.toUpperCase
 }
 
+/** What a scheduler presents to the queue. */
+class Credentials(val user: String, private val secret: String)
+
 /** Factory helpers. */
 object SchedulerFactory {
 

@@ -2,7 +2,7 @@
 // response-size guard. Everything here is a pure function of its inputs — no
 // scan, no filesystem beyond checking whether a persisted artifact exists — so
 // it is unit-testable without standing up a server.
-import { existsSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { INDEX_DIR } from "../preload.js";
@@ -23,6 +23,7 @@ const LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1]!;
 // Feature floors, by the revision that introduced them.
 export const ANNOTATIONS_SINCE = "2025-03-26"; // tool behaviour hints
 export const RICH_TOOLS_SINCE = "2025-06-18"; // Tool.title, resource_link content
+export const PROGRESS_MESSAGE_SINCE = "2025-03-26"; // ProgressNotification.message
 
 // Validate `arguments` against the tool's declared inputSchema.
 //
@@ -33,15 +34,18 @@ export const RICH_TOOLS_SINCE = "2025-06-18"; // Tool.title, resource_link conte
 // with no way to tell why.
 //
 // Only the shapes these schemas actually use are checked (string / number /
-// boolean / array-of-string) — this is a guard against silent misreads, not a
-// JSON Schema implementation. The spec (2025-11-25) is explicit that input
+// boolean / array / array-of-string, and a string `enum`) — this is a guard
+// against silent misreads, not a JSON Schema implementation. The spec (2025-11-25) is explicit that input
 // validation failures belong in a Tool Execution Error, not a protocol error,
 // precisely so the model can read the message and retry.
-// Required-ness stays with callTool, which raises tool-specific messages
-// ("`rules` (or `configPath`) is required"); duplicating it here would only let
-// the two drift.
+//
+// The declared `required` list is checked here too, because this runs BEFORE
+// the call walks and scans the repo: a missing `namePath` used to be reported
+// only after a full walk (13.5 s for the first call on a 66k-file repo).
+// Requirements a schema cannot express — `rules` or `configPath`, `lsp` needing
+// `name` — stay with callTool and its tool-specific messages.
 export function validateArgs(
-  schema: { properties?: Record<string, unknown> },
+  schema: { properties?: Record<string, unknown>; required?: readonly string[] },
   args: Record<string, unknown>,
 ): string | undefined {
   const props = (schema.properties ?? {}) as Record<string, {
@@ -49,7 +53,14 @@ export function validateArgs(
     items?: { type?: string };
     minimum?: number;
     maximum?: number;
+    enum?: readonly unknown[];
+    description?: string;
   }>;
+  for (const key of schema.required ?? []) {
+    if (args[key] !== undefined && args[key] !== null) continue;
+    const description = props[key]?.description;
+    return description ? `\`${key}\` is required (${description})` : `\`${key}\` is required`;
+  }
   for (const [key, value] of Object.entries(args)) {
     if (value === undefined || value === null) continue;
     const spec = props[key];
@@ -70,13 +81,20 @@ export function validateArgs(
       continue;
     }
     if (spec.type === "array") {
-      if (actual !== "array") return `\`${key}\` must be an array of strings, got ${actual}`;
-      if (spec.items?.type === "string" && !(value as unknown[]).every((x) => typeof x === "string")) {
-        return `\`${key}\` must be an array of strings`;
-      }
+      // "of strings" only where the schema says so: check_rules' `rules` is an
+      // array of objects, and telling the caller otherwise sent it astray.
+      const strings = spec.items?.type === "string";
+      const expected = strings ? "an array of strings" : "an array";
+      if (actual !== "array") return `\`${key}\` must be ${expected}, got ${actual}`;
+      if (strings && !(value as unknown[]).every((x) => typeof x === "string")) return `\`${key}\` must be ${expected}`;
       continue;
     }
     if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
+    // `direction: "sideways"` used to become "both", and `rank: "pagerank"`
+    // lexical, with nothing in the answer to say the option was not understood.
+    if (spec.enum && !spec.enum.includes(value)) {
+      return `\`${key}\` must be one of ${spec.enum.map((v) => JSON.stringify(v)).join(", ")}, got ${JSON.stringify(value)}`;
+    }
   }
   return undefined;
 }
@@ -88,7 +106,8 @@ export function validateArgs(
 // outputSchema to be honoured by every structured result:
 //   * the tool declares an outputSchema (see OUTPUT_SCHEMAS),
 //   * the response was NOT replaced by the size guard — the truncation notice
-//     is a different shape and would not conform,
+//     is a different shape and would not conform (it is sent with isError,
+//     which is what exempts it from the schema),
 //   * the text parses to a JSON object (never an array: structuredContent is
 //     specified as an object).
 // The text block is left exactly as it was, so this is purely additive and
@@ -123,27 +142,79 @@ export function negotiateProtocol(requested: unknown): string {
 // consumed by any client anyway, so replacing it with something actionable
 // cannot regress a working call — it converts a hard failure into a usable
 // answer that says how big the payload is, where the artifact already sits on
-// disk, and which narrower tool answers the question.
+// disk, and which narrower tool answers the question. The server sends that
+// notice as a tool execution error (isError): the model reads it and retries
+// narrower, and a client validating against the tool's outputSchema skips it.
 export const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 
-// What to steer a caller toward when their whole-repo request is too large.
+// What to steer a caller toward when their request is too large, in the
+// arguments THAT tool takes: a generic "pass a `limit`" sent find_symbol
+// callers after an argument that does not exist (it takes `maxResults`).
+// tests/mcp.test.ts checks every backticked name here against the tool's own
+// inputSchema, so a hint cannot drift from the schema it points into.
 const NARROWER: Record<string, string> = {
-  graph: "pass `scope` to a subdirectory, or use repo_map / mermaid for an overview",
-  symbols: "pass `name` to look up one symbol, or use find_symbol / symbols_overview",
-  callers: "pass `name` to look up one symbol's call sites",
-  dead_code: "pass `scope` to a subdirectory",
-  find_references: "the symbol is referenced very widely — narrow with `scope` on a graph query",
+  graph: "pass `scope` to a subdirectory (or `include`/`exclude` globs), or use repo_map / mermaid for an overview",
+  symbols: "pass `name` to look up one symbol, or `concise` for locations only; find_symbol / symbols_overview answer narrower questions",
+  callers: "pass `name` to look up one symbol's call sites, or `concise` for locations only",
+  dead_code: "pass a `limit`, or `scope` to a subdirectory",
+  duplicated_literals: "pass a `limit`, raise `minFiles`/`minCount`, or pass `scope` to a subdirectory",
+  find_references: "the symbol is referenced very widely — pass `concise`, or ask callers for the call sites alone",
+  find_symbol: "lower `maxResults`, or drop `includeBody`/pass `concise`",
+  symbols_overview: "the file declares a great many symbols — pass `concise`",
+  grep: "lower `maxHits`, or restrict with `globs` or `scope`",
+  search: "lower `limit`, or pass `scope` to a subdirectory",
+  explain_search: "lower `limit`, or pass `scope` to a subdirectory",
+  complexity: "lower `top`, or pass one `file`",
+  call_graph: "lower `depth`, or follow one `direction`",
+  type_hierarchy: "pass `name` to look up one type",
+  mermaid: "lower `maxEdges`, or focus on one `module`",
+  repo_map: "lower `budgetTokens`",
+  onboard: "lower `budgetTokens`",
+  hotspots: "pass `since` to count recent history only",
+  churn: "pass `since` to count recent history only",
+  coupling: "pass `since` to mine recent history only",
   check_rules: "narrow the rule set, or pass `scope` to a subdirectory",
+  delta: 'pass `concise` (drops the hunks), a `limit` on modules, or `format` "text" for the panel',
 };
 
-// The persisted artifact backing a tool, when a `codeindex index` already wrote
-// one — far more useful to hand back than a truncated blob.
+// The persisted artifact that can BE a tool's answer, when `codeindex index`
+// wrote one — far more useful to hand back than a truncated blob.
 const ARTIFACT_FOR: Record<string, string> = { graph: "graph.json", symbols: "symbols.json" };
 
-export function capResponse(text: string, tool: string, repo: string, maxBytes: number): string {
+// Whether the artifact on disk holds exactly the withheld payload.
+//
+// It was offered whenever the file EXISTED: after an edit since the last
+// `codeindex index` the notice said "the full result is already on disk"
+// about a symbols.json that lacked the new symbol. Only byte equality proves
+// the claim (the persisted rendering may end in one extra newline). The size
+// check keeps a stale artifact to one stat; the read happens only on a size
+// match, and only for a response already too large to send.
+function artifactState(path: string, text: string, bytes: number): "identical" | "stale" | "absent" {
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return "absent";
+  }
+  if (size !== bytes && size !== bytes + 1) return "stale";
+  try {
+    const disk = readFileSync(path, "utf8");
+    return disk === text || disk === text + "\n" ? "identical" : "stale";
+  } catch {
+    return "absent";
+  }
+}
+
+// `wholeRepo` is false for a request the artifact cannot answer however
+// fresh it is — a `scope`d graph, one symbol's entry, a concise projection —
+// and then no artifact is mentioned at all.
+export function capResponse(text: string, tool: string, repo: string, maxBytes: number, wholeRepo = true): string {
   const bytes = Buffer.byteLength(text, "utf8");
   if (bytes <= maxBytes) return text;
-  const artifact = ARTIFACT_FOR[tool] ? join(repo, INDEX_DIR, ARTIFACT_FOR[tool]!) : undefined;
+  const artifactName = wholeRepo && Object.hasOwn(ARTIFACT_FOR, tool) ? ARTIFACT_FOR[tool] : undefined;
+  const artifact = artifactName ? join(repo, INDEX_DIR, artifactName) : undefined;
+  const state = artifact ? artifactState(artifact, text, bytes) : undefined;
+  const refresh = `codeindex index --repo ${repo} --out ${join(repo, INDEX_DIR)}`;
   return (
     JSON.stringify(
       {
@@ -153,12 +224,16 @@ export function capResponse(text: string, tool: string, repo: string, maxBytes: 
         maxBytes,
         reason:
           "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
-        narrower: NARROWER[tool] ?? "narrow the request with `scope`, `include`/`exclude`, or a `limit`",
-        ...(artifact && existsSync(artifact)
-          ? { artifact, artifactNote: "The full result is already on disk here — read it directly if you need all of it." }
-          : artifact
-            ? { artifactNote: `Run \`codeindex index --repo ${repo} --out ${join(repo, INDEX_DIR)}\` to get this as a file.` }
-            : {}),
+        narrower: Object.hasOwn(NARROWER, tool)
+          ? NARROWER[tool]
+          : "narrow the request with the arguments this tool's inputSchema offers",
+        ...(state === "identical"
+          ? { artifact, artifactNote: "The full result is on disk here, byte-for-byte what this call would have returned — read it directly if you need all of it." }
+          : state === "stale"
+            ? { artifactNote: `The artifact at ${artifact} does not match this answer (the repository changed since it was written, or it was indexed with other options). Run \`${refresh}\` to refresh it, then read it.` }
+            : state === "absent"
+              ? { artifactNote: `Run \`${refresh}\` to get this as a file.` }
+              : {}),
       },
       null,
       2,

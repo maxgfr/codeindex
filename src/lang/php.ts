@@ -1,5 +1,6 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { maskBraced } from "../extract/imports.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // PHP. Classes/interfaces/traits/enums and functions/methods. Methods marked
 // `private`/`protected` are treated as non-exported.
@@ -18,7 +19,13 @@ const RULES: Rule[] = [
 export const php = {
   lang: "php",
   exts: [".php"],
-  extract(rel: string, content: string): CodeSymbol[] {
-    return scan(rel, content, "php", RULES);
+  lexis: {
+    mask: (src: string) => maskBraced(src, { hash: true, squote: "string", multiline: true }),
+    comment: /^\s*(?:\/\/|#(?!\[))/,
+    block: true,
+    decoration: /^\s*#\[/,
+  } satisfies Lexis,
+  extract(rel: string, content: string, masked?: string): CodeSymbol[] {
+    return scan(rel, content, "php", RULES, masked);
   },
 };

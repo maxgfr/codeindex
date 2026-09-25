@@ -18,35 +18,122 @@ compares](#how-it-compares).
 
 - **Walk** a repo deterministically: ignore lists, `.gitignore` and
   `.git/info/exclude`, binary/lockfile skips, a size cap, symlink-cycle guard.
+  A symlink that stays inside the repo, file or directory, is an alias: its
+  target is indexed once, under its own path. `build`, `out`, `target` and
+  `tmp` are skipped as build output unless git tracks files in them — they
+  are ordinary package names too (a Go `build` package, `com.acme.build`).
   Nested repositories (a subdirectory with its own `.git` — linked worktrees,
-  vendored clones, submodules) are skipped like git does, and `.git` itself is
-  never walked even when `--ignore-dir` replaces the default ignore list. No
+  vendored clones, submodules) are skipped like git does, and `.git` itself —
+  like the engine's own `.codeindex` — is never walked even when
+  `--ignore-dir` replaces the default ignore list. No
   file-count cap unless you ask for one (`--max-files`), and asking sets the
   `capped` flag — never a silent truncation.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
   imports, headings, hashes — with an incremental cache fastpath. Extraction
   runs across worker threads by default (`--workers`, `CODEINDEX_WORKERS`);
   artifacts are byte-identical either way, and anything that would make a
-  worker's result differ falls back to the single-threaded path.
+  worker's result differ falls back to the single-threaded path. JS/TS and
+  Python imports are read from code only: comments, docstrings and
+  string/template-literal text are masked first, so example code quoted in a
+  JSDoc block, a docstring or a code generator's template never becomes an
+  edge (JSDoc `import("./x")` types and `@import` tags, which are real type
+  dependencies, are kept). The same scan runs with or without a grammar, so
+  `extractAst` and the index report the same imports. Python
+  `from pkg import name` also links `pkg/name.py` when `name` is a submodule
+  (and nothing when it is a function or class); PHP group (`use A\{B, C}`) and
+  comma `use` lists and `__DIR__`-anchored includes are followed, and a trait
+  `use` inside a class is not an import. Build output committed under an
+  ordinary name is recognised by its content: minified JavaScript (not only a
+  `.min.js` name) and bundles (esbuild's `// src/x.ts` module banners, webpack's
+  and ncc's module loader). It stays in the index with its summary and
+  imports, flagged `generated: "minified"` or `"bundle"` on its `FileRecord`
+  and graph node, but its symbols and call sites are not extracted: one-letter
+  noise for the first, copies of the sources' definitions for the second.
 - **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
   `grammars pull`) or per-language regex rules (16 languages, always available).
   Each symbol carries its **complete signature** (parameters and return type,
-  not the first physical line), its own **doc comment**, its qualified `parent`,
+  not the first physical line; one line, with no comment and no body — not an
+  arrow's expression body, a Go interface's method list or a macro's
+  expansion), its own **doc comment**, its qualified `parent`,
   and its line span — including the members a declaration-only walk misses:
   interface members, class fields, enum members, every `declare`/`.d.ts`
-  declaration, Rust trait method signatures, Go interface method sets, record
-  components and constructor `val` parameters.
-- **Resolve imports** across languages: tsconfig paths, package `exports`,
-  go.mod, Cargo, Java packages, PSR-4, C# namespaces.
+  declaration, Rust trait method signatures, Go interface method sets and type
+  aliases, record components, constructor `val` parameters and their
+  TypeScript (`private readonly dep: Dep`) and PHP 8 (promoted) twins, every
+  name of a multi-name declaration (`var a, b int`, `int x, y;`,
+  `a, b = 1, 2`), C `#define` macros and the members of a `typedef struct`,
+  Python declarations under `if TYPE_CHECKING:` / `try:` / `with` blocks, Ruby
+  `class << self` methods, `private def x` definitions and the block of
+  `Point = Struct.new(…) do`, Elixir clauses with a `when` guard and
+  `defguard`, and the members of a class bound by `module.exports =` or an
+  anonymous `export default class` (a default export with no name of its own
+  is named after the file stem). A doc comment is found across Rust
+  attributes and TypeScript decorators. Visibility is read from a
+  declaration's modifiers, never from its parameter names or default values;
+  an `export { … }` list marks only the bindings of its own scope; and a
+  Python module's `__all__` (when written as literals) decides which of its
+  top-level names are public, the names it imports and lists becoming
+  `reexport` symbols. An out-of-line C++ definition (`void Widget::draw()`)
+  belongs to its class, and a Lua `function M.go()` to its table; a `.h`
+  header is parsed as C++ when its content is (a namespace, class or
+  template), as C otherwise. Vue, Svelte and Astro
+  single-file components are extracted from their `<script>` blocks (and
+  Astro's frontmatter) as the JS/TS their `lang` names, at their real lines:
+  symbols, imports, and calls from both the script and the template, bound in
+  the JS/TS call family. A Svelte prop (`export let`) and an Astro frontmatter
+  export are not module exports, so they are never reported as dead code.
+  The regex tier (the only one for Swift and Dart, and for the extended
+  languages until a pull) reads code only: comments and strings are masked,
+  so an example in a doc comment or a code generator's template is not a
+  declaration. It takes each declaration's doc comment from the lines above
+  it and, in brace languages, its line span, but only where the body's
+  braces close as a formatter puts them; otherwise the span is left out
+  rather than guessed. Its signature is the declaration's first line, and it
+  reports no `parent`.
+  Each file's **summary** is the first leading comment that describes
+  something: license and copyright text (MIT, BSD, Apache, GPL, MPL, the Go
+  "governed by" line), linter and editor magic comments (`frozen_string_literal`,
+  `-*- coding -*-`, `go:build`), Xcode's file stamp and bundler region markers
+  are skipped, and `#` reads as a comment only in languages where it is one —
+  never a C `#include` or a Rust `#[attribute]`.
+  Docs get a title, section headings, a summary and `doc-link` refs: markdown
+  (ATX and setext headings, inline and reference links) and reStructuredText
+  (Sphinx section titles; `toctree` entries, `:doc:` roles and
+  `include`/`literalinclude` targets as links). Other prose (`.txt`, `.adoc`)
+  is indexed under its file name.
+- **Resolve imports** across languages: tsconfig `paths` (tsc's precedence:
+  exact alias, then longest prefix) and `baseUrl`, `extends` chains into
+  workspace packages and `${configDir}`, package `exports` and `imports`
+  (`#subpath`), bundler `?query` suffixes, Python import roots found the way
+  mypy finds them (the dir holding each top-level package, so src layouts
+  resolve and a package's own `typing.py` does not shadow the stdlib), go.mod
+  (a package's representative file is never a `_test.go` when it has other
+  files), Cargo (`[lib]` names, renamed dependencies, `#[path]` modules, and
+  `use` paths read the way the crate's edition reads them), PSR-4, C#
+  namespaces, and one JVM index for Java, Kotlin and Scala, so a Kotlin file
+  importing a Java class (or the reverse, through the `<File>Kt` facade)
+  links; Scala selector groups and package-relative imports resolve too. Dart
+  (relative and `package:` URIs of an in-repo `pubspec.yaml`), Lua `require`
+  (`a/b.lua`, `a/b/init.lua`), shell `source`/`.` of a literal path, and
+  Elixir `alias`/`import`/`use` of a module the repo defines resolve as well.
+  A markdown link starting with `/` is repo-root-relative, as GitHub renders
+  it.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
   `use` / `doc-link` / `mention` edges at file and module level, plus Louvain
-  communities, PageRank/betweenness centrality, a tests→code map, and
-  surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
+  communities, PageRank/betweenness centrality, a tests→code map (a test
+  covers what it imports, uses or calls, the file it is named after, and in Go
+  its whole package), and surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
   type extends and implements, and what extends and implements IT) and a
   **symbol-level graph** for bounded "what does this reach" neighborhoods.
+  Go states no implementations, so the hierarchy adds them: a
+  `var _ I = (*T)(nil)` assertion, or a type whose methods (its own, plus the
+  ones embedding promotes) match the interface's by name and parameter count.
+  The second kind is marked `structural: true`. These are answers to
+  `hierarchy` and `implementations` only, never graph.json edges.
 - **Render** byte-stable `graph.json` / `symbols.json` (two builds of an
   unchanged repo are byte-identical), plus a **SCIP** code-intelligence index
-  (`index.scip`) via a hand-rolled zero-dependency protobuf encoder — validated
+  (`index.scip`: nested symbols, package identity, implementation
+  relationships) via a hand-rolled zero-dependency protobuf encoder — validated
   by the official `scip` CLI (`stats`/`lint`).
 
 ## Measured against other indexers
@@ -61,7 +148,7 @@ vocabulary:
 | **TypeScript compiler index** (`scip-typescript` 0.4.0) | an index built by the real TypeScript compiler — authoritative where every other check here is syntactic | **100%** of its 93 named declarations, against ctags' 94.6% on the same files |
 | **universal-ctags differential** (Universal Ctags 6.2.1) | an independent, mature indexer covering ~40 languages | reports **2,014** declarations ctags does not over 6 real repositories, and reproduces **61.7%–98.8%** of ctags' names — what is left bucketed by kind, per repo below |
 | **Official `tags.scm` queries** | the code-navigation patterns each grammar's own authors publish, and GitHub uses | **1** adjudicated difference, over the 14 of 17 languages that publish one |
-| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **208** declaration-ish node types still unhandled |
+| **Grammar vocabulary** | each tree-sitter grammar's own declared node types, read at runtime from the parser | 21 grammars audited, **209** declaration-ish node types still unhandled |
 
 ### The one head-to-head
 
@@ -151,12 +238,12 @@ terms live only in prose.
 
 | what is scored | score | measured on |
 |---|---|---|
-| symbol precision / recall | **100% / 100%** | 265 labelled declarations in 18 files |
-| kind accuracy | **100%** | the same 265 declarations |
-| visibility accuracy | **100%** on 16 of 17 languages, 94.4% on Go | the same 265 declarations |
-| doc comment attached | **100%** | the 147 declarations labelled with a doc |
-| complete signature | **100%** | the 29 declarations labelled with a signature |
-| call edges / inheritance (F1) | **100% / 100%** | 47 labelled call sites, 21 relations |
+| symbol precision / recall | **100% / 100%** | 346 labelled declarations in 23 files |
+| kind accuracy | **100%** | the same 346 declarations |
+| visibility accuracy | **100%** on 16 of 17 languages, 95.8% on Go | the same 346 declarations |
+| doc comment attached | **100%** | the 188 declarations labelled with a doc |
+| complete signature | **100%** | the 32 declarations labelled with a signature |
+| call edges / inheritance (F1) | **100% / 100%** | 54 labelled call sites, 24 relations |
 | search MRR / nDCG@10 / recall@5 | **93.8% / 86.0% / 84.4%** | 16 relevance-judged queries |
 
 `pnpm quality:report` reproduces every number; `tests/quality.test.ts` enforces
@@ -188,8 +275,9 @@ also vendor `scripts/grammars/` (~17 MiB of wasm).
 ### Inventory consumers
 
 `walk(root, options)` also serves exhaustive inventories. The default source-indexing
-policy is unchanged. Opt into `includeBinary`, `includeLockfiles`, `includeOversize`
-and `includeMinified`, or replace `binaryExtensions` to keep textual SVG. These
+policy is unchanged. Opt into `includeBinary`, `includeLockfiles`, `includeOversize`,
+`includeMinified` and `includeFileSymlinks` (in-repo file links, skipped by default
+as aliases), or replace `binaryExtensions` to keep textual SVG. These
 controls are independent: a `.lock` extension still follows the binary policy.
 
 `filter({ rel, abs, directory })` prunes consumer output and out-of-scope trees
@@ -217,8 +305,9 @@ checkout for a benefit only some can use. It ships inside the per-release
 `grammars-<version>.tar.gz` asset instead. Without a pull those grammars are
 simply absent and the engine falls back to the regex tier, exactly as it does for
 a language it has no grammar for at all — `codeindex grammars status` reports
-resolved-vs-missing per tier so a Kotlin repo quietly indexed by regex is visible
-rather than guesswork.
+resolved-vs-missing per tier (and `extendedPullNeeded` while any extended
+grammar is missing) so a Kotlin repo quietly indexed by regex is visible rather
+than guesswork.
 
 *Not included, and why:* **Swift** publishes no prebuilt wasm at all, and
 **Dart**'s does not load under web-tree-sitter 0.26 — shipping it would be dead
@@ -235,9 +324,13 @@ codeindex grammars status   # active tier (adjacent/env/cache/none) + whether a 
 codeindex grammars pull     # fetch the per-release grammars asset, sha256-verified, into the cache
 ```
 
-Resolution is **adjacent > env > cache > regex**: a bundle-adjacent `grammars/`
-still wins if present (offline setups are untouched), then
-`CODEINDEX_GRAMMARS_DIR`, then the pulled cache. `pull` fetches the official
+Resolution is **adjacent > env > cache > regex**, per grammar: a
+bundle-adjacent `grammars/` still wins if present (offline setups are
+untouched), then `CODEINDEX_GRAMMARS_DIR`, then the pulled cache — and a
+grammar the winner lacks is looked up in the tiers below it. That is what lets
+the npm package (which ships only the core wasms) pick up the extended ones a
+pull put in the cache. The legacy `CODEINDEX_GRAMMAR_DIR` still pins one dir
+with nothing behind it. `pull` fetches the official
 `grammars-<version>.tar.gz` release asset (its `.sha256` sidecar is verified
 before anything is written) and extracts it atomically; the same wasm bytes
 produce **byte-identical** AST extraction from the cache as from a vendored dir.
@@ -368,15 +461,238 @@ public repository client-side ([source](site/playground/)).
 brew install maxgfr/tap/codeindex        # or: npm i -g @maxgfr/codeindex
 
 codeindex index   --repo . --out .codeindex   # graph + symbols + incremental cache
+codeindex status  --repo . --check            # is .codeindex still fresh? (exit 1 if not)
+codeindex scan    --repo . --why src/big.go   # why is this file (not) indexed?
 codeindex graph   --repo . > graph.json
 codeindex scip    --repo . --out index.scip   # SCIP index (--out - for stdout)
 codeindex callers --repo .                    # per-symbol caller index
 codeindex hierarchy       --repo .            # type hierarchy (both directions)
 codeindex implementations Runnable --repo .   # who implements it, transitively
 codeindex callgraph buildGraph --repo . --depth 2
+codeindex find    Client/send --repo .        # declarations: signature, doc, parent, span
+codeindex refs    backoff --repo .            # defs, bound call sites, referencing files
+codeindex outline src/client.ts --repo .      # one file's symbols, in declaration order
+codeindex symbol-at src/client.ts:42 --repo . # the symbol holding that line, and its id
+codeindex callpath main backoff --repo .      # how main reaches backoff, shortest chains first
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
+codeindex workspaces --repo . --check         # monorepo packages; undeclared sibling imports exit 1
+codeindex resolution --repo .                 # per-language import resolution health
+codeindex mermaid src/app --repo .            # module diagram around a module, dir or file
+codeindex hotspots --repo . --since "6 months ago"   # where work concentrates
 ```
+
+`index` keeps a `cache.json` next to the artifacts, and every read command
+reuses whatever sits in `--index` (default `.codeindex`; relative to the repo,
+or absolute): unchanged files skip extraction, and when nothing changed the
+artifacts load instead of being rebuilt — one file at a time: `graph` and
+`symbols` print the sha-verified bytes on disk as they are, and a command that
+needs only the graph never reads `symbols.json`. A new commit over an unchanged
+tree only restamps `graph.json`'s `commit`; `symbols.json` is kept as it is.
+The index dir itself is never scanned, and `--out .` at the repo root skips
+only the artifacts it writes. A record is reused only if it was extracted the
+way this run would extract it — the same `--no-ast`/`--max-calls` setting and
+the same grammar per language — so switching either, or pulling a grammar,
+re-extracts exactly the files it affects. Freshness is keyed on `(size,
+mtime)`; for an edit that preserves both, `--full-hash` re-hashes every file
+and `--no-index-cache` ignores the cache altogether (for `index` too).
+Artifacts are replaced atomically (a temp file renamed over the old one), so a
+concurrent reader never sees a torn file.
+
+Next to `cache.json`, `index` writes `freshness.json`: each file's `(hash,
+size, mtime)`, the artifact shas and versions, without the per-file records
+that make up nearly all of `cache.json` (10MB against 142MB on a 66k-file
+repo). It is enough to prove the artifacts fresh, so `graph`, `symbols`, the
+commands that need only the graph, `status`, and an `index` with nothing to
+write never parse `cache.json` (on that repo: `graph` 4.4s → 1.5s, `status`
+4.0s → 1.6s, an unchanged `index` 5.6s → 1.8s). It records `cache.json`'s own
+`(size, mtime)`, so one rewritten without it is ignored; a missing, stale or
+malformed `freshness.json` only sends the command the slower way, to the same
+answer.
+
+`codeindex status` says whether that index still describes the tree, without
+rebuilding anything: it reads `freshness.json` (else `cache.json`), walks and
+stats, and hashes only the files whose `(size, mtime)` changed. It reports whether `cache.json` is
+usable (or why not: `absent`, `unreadable`, `corrupt`, or written for another
+`schema` or `extractor` version), the indexed and HEAD commits, per-file drift
+(`unchanged`, `touched`, `modified`, `added`, `deleted`, and `reextract` for
+records built under another `--no-ast`/`--max-calls` setting or grammar set),
+and `artifactsFresh` with the reasons it is false (`engine-version`,
+`extraction`, `files`, `graph.json`, `symbols.json`). It judges the index under
+the flags it is given, as a read command would. `--check` exits 1 unless the
+artifacts are fresh: a CI gate for a committed index. A moved HEAD alone is not
+stale, since an index committed to the repo never matches the commit that
+contains it and read commands restamp the commit anyway; `embeddings.bin` is
+not checked. The MCP `index_status` tool gives the same answer.
+
+`--scope <dir|file>` restricts a command to one part of the repo (`./src`,
+`src/` and an absolute path inside the repo all name `src`), and combines with
+`--include`/`--exclude` as an intersection: `--scope src --include '**/*.md'`
+is the markdown under `src/`. Globs are rooted at the repo, so `*.md` is the
+top-level files only and `**/*.md` any depth. The filter runs inside the walk:
+`--max-files` counts only files it keeps, and a directory that cannot hold one
+is never listed (a `--scope` over 186 files of a 66k-file repo walks those
+186). `grep` takes the same intersection, applied to the files it searches
+(its ripgrep walk is not pruned by it). A `--scope`
+that does not exist, an `--ignore-dir` given a path rather than a directory
+name, and a filter that keeps no file at all each print a warning on stderr.
+
+`scan` also counts what the walk left out, by reason (`skipped`: `gitignored`,
+`ignore-dir`, `over-max-bytes`, `binary-ext`, `lockfile`, `minified`, `filter`,
+`nested-repo`, the symlink cases and `index-output`; a skipped directory counts
+once, since its contents are never listed). `scan --skipped` lists every skip,
+sorted by path, and `scan --why <path>` explains one path as `{path, indexed,
+reason, detail}`: the detail names the ignore file, line and pattern that
+decided it, its size against `--max-bytes`, the
+`--scope`/`--include`/`--exclude` that filtered it out, or the skipped
+directory above it.
+
+### Naming a symbol
+
+`callers`, `hierarchy`, `implementations`, `callgraph`, `callpath` and `refs`
+(and MCP `callers`, `find_references`, `type_hierarchy`, `implementations`,
+`call_graph`, `call_path`) read a symbol the same way, so an id copied out of one answer pastes into the next:
+
+| form | means |
+|---|---|
+| `greet` | the name. A single-answer command picks the first homonym; `find_references` covers them all, and then tags each call site with the declaring file it binds to (`def`) |
+| `greet@src/lib/greet.ts` | the declaration in that file — any homonym, the first included |
+| `src/lib/greet.ts#greet`, `src/a.ts#Greeter/hello` | a symbol id, as `callgraph` prints it |
+| `Greeter/hello` | a member of `Greeter` |
+
+An unknown symbol is an error (exit 2; MCP `isError`). A known one that no call
+site binds to is still an answer, and says why it is empty:
+
+```jsonc
+// codeindex callers register_blueprint --repo flask
+{
+  "name": "register_blueprint",
+  "error": "no tracked callers for \"register_blueprint\"",
+  "defs": [ /* src/flask/sansio/app.py:570, src/flask/sansio/blueprints.py:256 */ ],
+  "unresolvedSites": 74,   // sites naming it that bind to no single definition
+  "sample": [ /* the first five */ ],
+  "hint": "…"
+}
+```
+
+`find`, `refs` and `outline` print the same answers as MCP `find_symbol`,
+`find_references` and `symbols_overview`: each declaration's complete
+signature, doc comment, parent and line span, which `symbols` leaves out.
+`find` takes a name or `Parent/name` (`--substring`, `--include-body`,
+`--concise`, `--limit`, default 50) and answers `[]` when nothing matches;
+`refs` takes any symbol form above and, like MCP, still answers for a name the
+repo does not declare; `outline` exits 2 on a file the index does not hold.
+Like every read command they reuse a fresh persisted index (`--index`).
+
+`symbol-at <file:line>` (MCP `symbol_at`; `file:line:col` works too) turns a
+grep hit, a stack frame or a diagnostic into a symbol: the innermost
+declaration holding the line, with its id, which pastes into `callers`,
+`callgraph` and `callpath`, and the declarations around it, outermost first.
+`symbol` is `null` outside every declaration. The regex tier records an end
+line only where it can prove one (a brace body closed as a formatter puts it),
+so elsewhere the answer is the nearest declaration above, marked
+`"approximate": true`.
+
+`callpath <from> <to>` (MCP `call_path`) answers how one symbol reaches
+another: the shortest chains of calls, following dispatch like `callgraph`
+(a step onto an override says `"via": "dispatch"`). Ties are listed in id
+order and `pathCount` counts every equally short chain; `--limit` (default 5)
+caps how many are spelled out, with `truncated` set. `--depth` caps the hops
+(default 8, max 16). When there is no path, `hops` is `null`, and
+`reverseHops` says whether `<to>` reaches `<from>` instead. `--files` asks the
+same question of two files over import, use and call edges ("why does A
+depend on B"), with `impact`'s rules: a Go import reaches its whole package,
+and a call inferred from a name alone is a step only with
+`--include-inferred` (otherwise `inferredHops` says one would connect them).
+
+`callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
+any binding, with its receiver and enclosing symbol. `callers --with-caller`
+(MCP `withCaller: true`) keeps the binding and adds `caller` to each site: the
+id of the declaration the call sits in, the node `callgraph` draws that call
+from. `callgraph` walks at most 5
+hops and says `depthClamped` when asked for more. It also follows dispatch. An
+`overrides` edge links a method to the nearest supertype method of the same
+name (a Go method to the method of an interface its type implements). A call
+binds to the method its receiver's declared type names, so walking out through
+`Shape/area` also reaches `Square/area`, and walking in to `Square/area`
+reaches the callers of `Shape/area`. `neighbors` reports every edge
+kind linking each neighbour — an incoming import and an outgoing inferred call to
+the same file are two links, strongest evidence first — and rejects an unknown
+`--kind`. `impact` walks imports, uses and calls backwards; a Go import reaches
+every non-test file of the package it names, and a call inferred from a name
+alone is counted (`inferredDependents`) rather than followed unless
+`--include-inferred`. MCP `impact` and `neighbors` answer the same from the
+persisted graph (`target`, `depth`, `includeInferred`; `kinds` as an array),
+so an agent can ask who depends on a file without pulling the whole `graph`.
+File arguments (`complexity`, `outline`, `symbol-at`, `impact`, `neighbors`) may
+be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
+file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
+`{ total, shown, truncated, candidates }` like MCP `dead_code`.
+
+`complexity` counts branch keywords and operators in code only. Comments,
+docstrings and string literals are blanked first, per language, so a docstring
+full of "if" and "for" adds nothing. Python, Ruby and Lua `and`/`or` count like
+`&&`/`||`. Classes and other containers are not ranked beside functions, and
+a nested function counts toward its own score, not its parent's. `risk` uses
+the same code-only count per file.
+
+`deadcode` lists exported symbols no call site binds to, in two tiers:
+`unreferenced` when no other file of the same language names the symbol, and
+`uncalled` when one does (an import, a type position, a base-class list, a
+call of the same name that no binding could settle). It also checks the
+declaring file outside the declaration. The evidence comes from the AST's
+identifiers, call sites, imports and inheritance. When that evidence cannot
+see a name (the AST keeps only 5+ character identifiers, and a regex-tier file
+keeps none), deadcode reads the other files' text before it claims
+`unreferenced`. Only callables are candidates by default: functions, methods,
+classes and function-valued consts. `--kinds all` (MCP `kinds: "all"`) adds
+types, properties and constants, which are reported only when unreferenced,
+since they are never "called". Some symbols are roots and are never
+candidates:
+
+- test files, and tail files (examples, docs, fixtures, scripts, Go
+  `testdata`) unless `--include-tail` is passed;
+- names the language calls itself (Python `__dunder__`, Go `init`/`main`, JS
+  `constructor`);
+- a method that overrides a live one (called, or public API), since dispatch
+  runs it whenever the base method is called. The same goes for the top of an
+  override chain in a class whose base lies outside the repo, which the
+  framework may call;
+- the package's public API. That means what a manifest entry point declares or
+  re-exports: package.json `main`/`module`/`exports`/`bin`/`types`, with a
+  build path like `dist/index.js` or `scripts/cli.mjs` mapped back to its
+  `src/` file, pyproject `[project.scripts]`, a crate's `lib.rs`/`main.rs`, and
+  every Python package `__init__.py`. The members and base classes of the
+  public classes count too. When no manifest names an entry,
+  `index`/`main`/`cli`/`mod`/`lib`/`__main__` basenames stand in.
+
+### How a call binds
+
+`callers`, `callgraph`, graph.json's `call` edges and SCIP references share one
+binder, so they agree on every call site. It reads what the site states, with no
+type inference:
+
+- **the receiver.** `self.f()`, or a Go method's own receiver variable, reaches
+  a member of the enclosing type; `pkg.F()` / `ns.f()` the module that import
+  names, and nothing when it lives outside the repo (`errors.New`, `io.Copy`,
+  `_json.dumps`); any other `x.f()` never a same-file homonym (`this.map.get(k)`
+  is not `Store.get`, `c.ClientIP()` is not a `ClientIP` field), in Go and
+  Python only a method, and nothing when the enclosing signature types `x` with
+  a package from outside the repo (`t *testing.T`). In Go and Python a bare
+  `f()` reaches a function or a type, never a method.
+- **what imports rename and barrels re-export**: `import { a as b }`, a default
+  import, `import * as ns`, `from m import a as b`, then `export { a } from`,
+  `export *` and a Python package's `__init__.py`, up to three hops.
+- **visibility.** A Go package is its directory: an unexported helper binds from
+  every file of it, a `_test.go` file only from its own package's tests, and
+  another package only through an import. JS/TS and Go never bind on a name
+  alone; elsewhere a name-only guess (graph.json labels it `inferred`) never
+  lands in a test file, nor goes from the product into examples, docs or
+  scripts.
+
+`callers --recall` (MCP `recall: true`) adds the name-only matches back — a
+unique JS/TS name with no import, a same-file homonym whatever the receiver, a
+proximity guess anywhere — and labels each site `corroborated` or `unique-name`.
 
 ## Values with no single source of truth
 
@@ -395,7 +711,7 @@ flattening them into one confidence-free list:
 | `bypassed` | a constant holds it, other files rewrite it anyway | import the constant at those sites |
 | `uncentralized` | nothing holds it | decide whether it deserves an owner |
 
-Two things make the output readable rather than a wall of strings:
+Three things make the output readable rather than a wall of strings:
 
 - **Namespace families.** Path-like values are grouped by their root, so an app
   with forty route literals reports one `/checkout` finding, not forty.
@@ -404,6 +720,19 @@ Two things make the output readable rather than a wall of strings:
   cross a language boundary — a threshold declared in TypeScript and again in a
   rules JSON, a route called from a Kubernetes manifest. Nothing else compares
   those pairs.
+- **Only fixed values count.** A template with an interpolation (`${id}`,
+  `f"{id}"`, `#{id}`) is not a value another file could restate, and a string
+  standing alone as a statement — a Python docstring, a `"use client"`
+  directive — is documentation or a pragma. Wherever a grammar parsed the file,
+  neither is collected (the regex fallback reads lines, not syntax).
+- **Repetition with no possible owner is left out.** A value seen only across
+  GitHub Actions workflows (`ubuntu-latest`, `actions/checkout@v4`), or only
+  across one kind of package manifest that cannot inherit (`pyproject.toml`,
+  `package.json`, `composer.json`, `go.mod` in each example project), names no
+  fix. The same value in CI *and* in `pyproject.toml` is still reported. In Go,
+  one constant name declared in two files of a package is read as build-tag
+  variants of one holder (`binding.go` / `binding_nomsgpack.go`), not as two
+  competing ones.
 
 ```sh
 codeindex literals --repo . --min-files 3 --min-count 5   # tighten the floors
@@ -411,7 +740,10 @@ codeindex literals --repo . --include-tests               # count test files too
 ```
 
 As a CI gate, via the `literals` builtin rule (defaults to the two actionable
-tiers; `tiers` narrows it):
+tiers; `tiers` narrows it, and `minFiles`/`minCount`/`includeTests` take the
+command's thresholds). The rule computes the whole list, so it fails on exactly
+what `codeindex literals` reports, not only on the 24-entry headline that
+`graph.json` carries:
 
 ```json
 [{ "name": "no-uncentralized-routes", "builtin": "literals", "tiers": ["competing"] }]
@@ -421,10 +753,180 @@ tiers; `tiers` narrows it):
 codeindex rules --repo . --config codeindex.rules.json    # exit 1 on violations
 ```
 
+A rules config is validated strictly, because a gate that silently checks
+nothing is worse than none. A key the rule does not read (`sevrity`), an unknown
+tier, or an edge kind the graph does not emit fails with exit 2 and names the
+file. A forbidden-edge rule whose `from` or `to` globs match no indexed file
+can never fire, so it is reported as an `unmatched` warning. Over MCP,
+`check_rules` reads a `configPath` only when it resolves inside the repository.
+
+The `orphans` builtin lists code files nothing connects to. It leaves out tests,
+entrypoint-looking names (`index`, `main`, `cli`, `wsgi`, …), languages that no
+import, call or use edge in the repository reaches (SQL, shell scripts), and,
+in Go, Java, Kotlin and Scala, files whose package is connected: files in one
+directory see each other without imports, so an unexported helper called from
+a sibling file has no edge of its own.
+
 An arrow function returning a value (`export const getPath = () => "/a/b"`) is
 a *consumer*, not a source of truth, and is reported as a call site. A lookup
 table (`export const ROUTES = { … }`) genuinely is one, and is reported as a
 holder.
+
+## Monorepos and import resolution
+
+`codeindex workspaces` lists the packages of a monorepo with their declared
+dependency graph, one cycle if there is one, and a topological build order. It
+reads npm/yarn `workspaces`, `pnpm-workspace.yaml` (block or flow list), lerna,
+nx, Cargo `[workspace]`, `go.work` (without one, every nested `go.mod` outside
+`vendor`, `testdata` and `fixtures` dirs), Maven `<modules>` (recursing into
+nested aggregators), uv workspaces, Composer path repositories and Gradle
+`include` (multi-line forms too; `project(':x')` and `projects.x` type-safe
+accessors become edges). Manifests are read as JSONC, like the resolver reads
+them; one that still does not parse is named in `warnings` instead of being
+dropped silently.
+
+`--check` compares what each package declares with what its code imports,
+using the link-graph's resolved import edges:
+
+- `undeclared` — a package imports a sibling its manifest does not list. It
+  works in a hoisted checkout and breaks the isolated install, the publish or
+  `go mod tidy`. Any entry makes the command exit 1, a CI gate like `rules`.
+  Nx members are skipped: Nx infers project dependencies from imports.
+- `unusedDeclared` — a declared sibling no import uses (npm, pnpm, lerna,
+  Cargo and Go only; informational, never fails the check).
+
+`codeindex resolution` says whether the graph can be trusted for a language
+before you rely on `impact`, `callers` or `deadcode` there. Per importer
+language it counts imports that `resolved` to an in-repo file, went `external`
+(third-party or stdlib, by design no edge), `dangling` (a local target that
+does not exist, by reason) and `unsupported` (no resolver for that language),
+lists the top dangling specifiers with an example importer and the top
+external packages (`--limit`, default 10; `--lang` for one language), notes a
+language that yields no import edges at all, and repeats the config `warnings`
+(an unparseable `tsconfig.json` or `package.json`, a missing `extends` base)
+that silently turn resolvable imports external. `index` prints those warnings
+to stderr too. Nothing here changes an artifact.
+
+`codeindex mermaid [target]` focuses the diagram on a module slug, a module
+directory or a file (its module), and fails on anything else rather than
+printing an empty diagram.
+
+## SCIP export
+
+`codeindex scip` writes a [SCIP](https://github.com/sourcegraph/scip) index.
+Symbols are global: the package the file's nearest manifest names (npm
+`package.json`, `go.mod`, Cargo, `pyproject.toml`, Maven, Composer; `. . .`
+when there is none), one namespace per file, then the declaration chain with
+the suffix each kind calls for:
+
+```text
+codeindex python flask 3.1.0 `src/app.py`/create_app().index().     a function nested in a function
+codeindex python flask 3.1.0 `src/app.py`/create_app().Task#run().  a method of a class nested in one
+codeindex gomod example.com/svc . `context.go`/Context#BindWith().  a Go method declared in deprecated.go
+codeindex npm @acme/web 1.2.3 `shapes.ts`/Geo/area().               a function in a namespace
+codeindex npm @acme/web 1.2.3 `shapes.ts`/over(16).                 a repeated overload, told apart by its line
+```
+
+Every symbol kind maps to its SCIP `Kind` (property, field, enum member,
+constructor, getter, macro, namespace, package, …), and a Go method declared
+in another file of its package hangs off the type it belongs to. A re-export
+(`export { X } from`, `from .app import X as X`) is a reference to the
+declaration it forwards, not a second definition; `export * from` names nothing
+and emits nothing. A member whose owner is not in the index (a type from
+another crate) keeps a `Owner#` descriptor under its own file.
+
+The inheritance `hierarchy` resolves becomes `relationships`: a subtype is an
+implementation of each type it extends or implements, so "Find
+implementations" on a base lists its subclasses, and a method overriding a
+same-named supertype method is an implementation and a reference of it, so
+"Find references" on the contract's method reaches the overrides.
+
+Every occurrence and relationship names a symbol the index defines, and
+`scip lint` finds nothing else to report, with one caveat that is upstream's:
+its relationship pass only knows the documents it has already visited, in Go
+map order, so a relationship to a symbol of another document is reported as
+missing at random.
+## What git history says
+
+Four commands read the commit history rather than the code: `churn` (commits
+per file), `hotspots` (churn × size: where work and defects concentrate),
+`risk` (churn × complexity) and `coupling` (files that change together).
+
+```sh
+codeindex hotspots --repo . --since "6 months ago" --limit 10
+codeindex coupling --repo . --hidden        # co-change that no import explains
+codeindex churn    --repo packages/api      # one package of a monorepo
+```
+
+- **Paths are relative to `--repo`**, which may be any directory inside the git
+  repository: point it at one package of a monorepo and history is limited to
+  that package, keyed the way its index is.
+- **`--since` takes a ref or a date**: a tag, branch or sha (commits after it),
+  or `2024-01-01` / `"6 months ago"`. Anything else is an error (exit 2), never
+  an empty window that reads as "nothing changed".
+- **Every answer says what it could read.** Outside a repository, or before the
+  first commit, `ok`/`churnOk` is `false` and `error` says why. A **shallow
+  clone** answers with `shallow: true`: counts are lower bounds, and the clone's
+  boundary commit is left out, because git compares it with an empty tree and
+  it would count as a change to every file (a depth-1 CI checkout therefore has
+  no visible history at all).
+- **`hotspots` ranks only files that changed** in the window and labels test
+  files `test: true`.
+- **`coupling` works over the index**: pairs are limited to indexed files, so
+  deleted paths drop out and `--scope`/`--include`/`--exclude` apply. Each pair
+  says whether a graph edge (import, call, use, inheritance, doc link) already
+  `linked` the two files; `--hidden` keeps only the pairs with no such edge.
+  Pairs whose names already declare them (same directory, same name up to the
+  first dot: `x.po`/`x.mo`, `x.js`/`x.min.js`, `x.ts`/`x.test.ts`) are left
+  out. Pairs are ranked by `confidence`, the lower bound of the 95% Wilson
+  interval for `strength`: 12 shared commits out of 13 rank above a thinly
+  evidenced 3 out of 3. `--min-together` (default 3) and `--max-commit-files`
+  (default 30) tune the mining. The second one skips mass-refactor commits by
+  their whole size, including files outside `--repo`.
+- **Renames are not followed.** Rename detection is the expensive part of
+  `git log`, and on a blobless partial clone it downloads blobs. A file's
+  history before a rename stays under its old path.
+- The output does not depend on the user's git config (colour, diff prefixes,
+  signature display, external diff drivers). One `git log` pass is shared by
+  all four commands and reused while HEAD stays the same, so an MCP session
+  asking for `onboard`, `hotspots` and `risk` reads the history once.
+
+## Reviewing a diff
+
+`codeindex delta` maps the git diff onto the graph: changed files, the symbols
+enclosing each hunk, the blast radius, and a risk score per module in which
+every point comes with the reason that fired it.
+
+```sh
+codeindex delta --repo .                  # the branch vs its merge-base with the default branch
+codeindex delta --repo . --staged --json  # the staged changeset, as JSON
+codeindex delta --repo . --fail-on HIGH   # CI gate: exit 1 when a module scores HIGH
+```
+
+The MCP `delta` tool answers the same question for an agent that has just
+edited files: `{base?, staged?, depth?}` return the JSON result, `concise`
+drops the hunks and reduces each enclosing symbol to `name/kind/line`, `limit`
+keeps the highest-scoring modules (and says it truncated), and
+`format: "text"` returns the panel. It is in the `impact` and `risk` profiles.
+
+- **A removed file that is still imported is the highest-weighted signal**
+  (`brokenImport`, 40). The worktree's graph no longer holds a deleted or
+  renamed file, so delta puts the removed paths back and re-resolves the
+  graph's dangling imports: the ones that land on a removed path are listed
+  under `broken` with their importer (and `renamedTo` for a move), the module
+  the file was removed from is scored even when nothing else in it changed,
+  and the importers count as its direct dependents.
+- **The engine's own output is not part of a review.** Paths under the index
+  directory (`--index`, default `.codeindex`) are dropped from the diff, and so
+  are untracked files in directories the walker never indexes (`node_modules/`,
+  `dist/`, …). A tracked change in such a directory stays listed as
+  `unindexed`.
+- **Before the first commit** there is no merge-base: every file (staged,
+  with `--staged`) is reviewed as added, against the empty tree.
+- **The diff is read before the index.** A clean worktree answers
+  `no changes` without loading or walking anything (0.4 s instead of 15 s on a
+  66k-file repository), and symbol attribution reads only the changed files'
+  definitions.
 
 ## Docker
 
@@ -466,13 +968,50 @@ node scripts/test-docker.mjs codeindex:qa codeindex-embed:qa
 The [engine validation report](docs/engine-validation-2026-09-07.md) records the
 tested architecture and runtime checks.
 
+## Text search (`grep`)
+
+`codeindex grep '<regex>' --repo .` returns JSON hits sorted by file then line:
+`{file, line, col, text}`. It uses ripgrep when it is on `PATH` and a pure-JS
+scan otherwise, and both give the same answer:
+
+- **One dialect.** The pattern is a JavaScript regular expression on both
+  backends. Before it reaches ripgrep it is translated so that `\w`, `\b` and
+  `\d` stay ASCII and `.` still stops at `\r`, as they do in JavaScript.
+  Anything that cannot be translated exactly (lookaround, backreferences) runs
+  on the JS engine instead, and a note on stderr says so. Syntax that
+  JavaScript would read as a literal but you probably meant as an operator
+  (`\A`, `\z`, `[[:alpha:]]`, `\x{41}`) is rejected with an explanation.
+- **One file universe.** grep searches the files every other command indexes.
+  `--ignore-dir`, `--no-gitignore` and `--max-bytes` apply to it too. `--scope`
+  (a directory or a single file) is ANDed with `--include`/`--exclude`. Globs
+  are rooted at the repo: `*.ts` matches root-level files only, `**/*.ts`
+  matches at any depth.
+- **Bounded output.** Results stop at `--max-hits` (default 200). When the cap
+  cuts the list, stderr says so and gives the number of matching files. A line
+  longer than 300 characters comes back as a window around the match, and
+  `col` gives the match's position in the full line.
+- **Bounded time.** ripgrep's regex engine runs in linear time. JavaScript's
+  can backtrack exponentially (`(a+)+b`), so the JS scan runs in a worker thread
+  with a time limit (`--timeout-ms`, default 10000). When the limit is reached,
+  the hits from the files already scanned are returned, together with a note
+  naming the file where the scan stopped.
+
+The MCP `grep` tool returns the bare hit array by default. With
+`withMeta: true` it returns `{ hits, truncated, filesMatched, notes? }`. A
+result cut short by the time limit always comes back in that form, with
+`timedOut: true`.
+
 ## Search
 
 `codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six
-weighted fields: symbol names, path segments, markdown headings, the file
+weighted fields: symbol names, path segments, doc headings (markdown and
+reStructuredText), the file
 summary, per-symbol **doc comments**, and the **prose body** (words from comments
-and short string literals, captured at extraction time so they ride the
-incremental cache).
+and short string literals, a template's fixed text included, captured at
+extraction time so they ride the incremental cache). An all-lowercase compound
+file name (`tsconfigparsing.go`, `knownsymlinks.go`) is also indexed as the
+words it is made of, when the repo uses those words as names, so "parse
+tsconfig json" reaches it.
 
 The last two are the point. An index built only from names — what a tags file or
 a symbol-only search ships — is a perfectly scored index of the wrong text: the
@@ -485,7 +1024,16 @@ taste.
 Results carry `matchedFields` (was it the path or a doc comment?), a `line`
 anchor and `symbolHits` (name, kind, line), so a hit is a place to open rather
 than a file to re-read. A whole-identifier match outranks a subtoken match, and a
-test file ranks below the code it tests unless the query asks for tests. A query term that
+test file ranks below the code it tests unless the query asks for tests; fixture
+and snapshot trees (`testdata/`, `fixtures/`, `__snapshots__/`) rank lower
+still, unless the query says `fixture` or `testdata`. A
+barrel's re-exports (`export { x } from`, Python's `from .x import y as y`) are
+indexed as prose rather than as names, so the module that defines a name ranks
+above the `__init__.py` or `index.ts` that re-exports it. English
+stopwords are dropped from a sentence, but not from a name: a query that is only
+a stopword (`default`), or a capitalised stopword the repo declares as a symbol
+(`Use middleware`, `Context.Set` — gin's `Use` and `Set`), is searched as the
+name it is. A query term that
 matches nothing in the corpus (zero document frequency) gets two deterministic
 fallbacks, morphology first: a **stem match** ("caching" finds "cache",
 "retries" finds "retry") because an unmatched term is far more often an
@@ -498,6 +1046,14 @@ are never touched, so an existing query stays byte-identical. Enabled by
 default; disable with `--no-fuzzy` (CLI) or `fuzzy: false` (library/MCP
 `SearchOptions.fuzzy`); results carry an additive `fuzzyTerms` field when the
 fallback contributed.
+
+`--rank graph` (MCP `rank: "graph"`) multiplies each score by the file's
+PageRank over the resolved import graph, relative to an average file: a leaf is
+×0.95, a file with ten times the average PageRank ×1.16. Go files are left
+alone, because a Go import resolves to the package's alphabetically first file.
+It is opt-in because it does not win: on flask it lifts MRR from 0.807 to 0.824,
+on a second flask query set it drops it from 0.851 to 0.816, and gin,
+microsoft/TypeScript and the judged corpus do not move.
 
 ### When the query matched nothing
 
@@ -527,7 +1083,7 @@ diagnostics come from `explainQuery` (library), `--explain` (CLI) or the
 | `verdict` | `match` · `weak` (results rest on a near match, or the identifier has df 0) · `none` |
 | `wholeIdentifier` | the identifier you typed, with its document frequency — df 0 is the finding |
 | `unresolvedTerms` | terms that exist nowhere and bridged to nothing |
-| `droppedStopwords` | why an all-stopword query returned an empty array |
+| `droppedStopwords` | why an all-stopword query returned an empty array (a stopword searched as a name is not listed) |
 | `terms[].bridge` | what a zero-df term fell back to, and whether by stem or trigram |
 
 Individual results carry `bridgedOnly: true` when nothing matched verbatim —
@@ -560,8 +1116,14 @@ codeindex search "http client retry" --repo . --semantic
 ```
 
 `codeindex index` also writes `embeddings.bin` next to `graph.json` when a model
-is present. Fusion reuses the engine's `rrf` helper (k=60); `SCHEMA_VERSION` is
-untouched (a dedicated `EMBED_VERSION` keys the sidecar).
+is present, and `search --semantic` reads it back instead of re-encoding the
+corpus: a stored vector is reused only for the same unit text under the same
+model and `EMBED_VERSION`, so after an edit only the changed units are encoded,
+and a stale, foreign or corrupt file costs a re-encode, never a wrong ranking
+(microsoft/TypeScript, 244k units: 12.1 s to encode, 2.3 s to read and reuse).
+`index` and `embed build` reuse the previous file the same way and write the
+bytes a fresh build would. Fusion reuses the engine's `rrf` helper (k=60);
+`SCHEMA_VERSION` is untouched (a dedicated `EMBED_VERSION` keys the sidecar).
 
 #### Three embedding modes (precedence: endpoint > static > none)
 
@@ -593,20 +1155,35 @@ CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
 ```
 offset 0            "CIE1"      4-byte ASCII magic (a foreign file fails loudly)
 offset 4            uint32 LE   header length
-offset 8            UTF-8 JSON  { embedVersion, modelId, dim, count, records:[{file,symbol,line}] }
+offset 8            UTF-8 JSON  { embedVersion, modelId, dim, count, records:[{file,symbol,line,hash}] }
 offset 8+headerLen  int8 body   count × dim signed bytes, row-major
 ```
 
 No absolute path and no timestamp; records follow scan order, so two builds of
-an unchanged repo are byte-identical. `EMBED_VERSION` + `modelId` + `dim`
-invalidate a stale or foreign artifact. Granularity is per-symbol (name +
-signature + file summary + path segments), with a per-file fallback for
-symbol-less files so every file with content is represented.
+an unchanged repo are byte-identical. `hash` is 64 bits of the sha1 of the text
+the record encodes — what makes a vector reusable. `EMBED_VERSION` + `modelId` +
+`dim` invalidate a stale or foreign artifact. Granularity is per-symbol (name +
+signature + doc comment + file summary + path segments), with a per-file
+fallback for symbol-less files so every file with content is represented.
+Re-exports get no unit of their own: the defining file already has one, and a
+barrel of nothing but re-exports falls back to its file-level unit. With the
+doc comment in the unit, the fused ranking beats plain BM25 on every set we
+measured with the official model (MRR: flask 0.8307 vs 0.8232, gin 0.7862 vs
+0.7642, the judged corpus 0.9583 vs 0.9375).
 
 **Fusion is by RANK, never a score blend**: BM25 scores and integer dot products
 live on incomparable scales, so `searchSemantic` uses the shared `rrf` helper
 (k=60) and adds `semanticSymbol` — the corpus symbol whose embedding was closest
-for that file — additively to the lexical result.
+for that file, when that similarity is positive — additively to the lexical
+result. A file the lexical side
+ranked keeps every lexical field (`matchedFields`, `line`, `symbolHits`,
+`fuzzyTerms`, `bridgedOnly`); a file only the embedding side found has an empty
+`matchedTerms` and the `line` of its closest symbol. `--exact` and `--rank`
+apply to the lexical side, so `--exact` keeps bridged-only rows out of the fused
+list too. `--explain` (MCP: `explain: true`) reports the verdict for the rows
+actually returned, from the same scoring pass: an answer carried by embedding
+neighbours alone is `weak`, never "No file matches", and
+`semanticOnlyResults` counts those rows.
 
 To implement your own server, `CODEINDEX_EMBED_ENDPOINT` is the **base URL** and
 the client derives two routes:
@@ -619,9 +1196,16 @@ the client derives two routes:
 Any dimension is accepted and vectors need not be pre-normalized — the engine
 L2-normalizes and int8-quantizes whatever it receives, through the *same* tail
 as the static tier, so ranking stays a pure integer dot product. Requests time
-out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000). Endpoint corpus vectors
-are built at search time and **never serialized**: that tier is deterministic
-per image digest, not byte-golden, so pin the digest. The reference server is
+out after `CODEINDEX_EMBED_TIMEOUT_MS` (default 30 000); a corpus goes out in
+batches of 64, four in flight. Endpoint corpus vectors are **never written to
+`embeddings.bin`**: that tier is deterministic per image digest, not
+byte-golden, so pin the digest. When the repo has an index (`index` wrote
+`.codeindex/cache.json`), `search --semantic` keeps them in
+`.codeindex/embed-cache/endpoint-<url hash>.bin`, keyed by the unit text and by
+a fingerprint of the model (the vector of one fixed text, fetched each run), so
+the next search sends only new texts and a different model behind the same URL
+starts over. Without an index, nothing is written into the repo. The MCP server
+does the same in memory: after an edit it re-sends only the changed units. The reference server is
 `docker/embed/` (transformers.js + all-MiniLM-L6-v2, baked in at build, offline
 at run, non-root, `:8756`).
 
@@ -634,6 +1218,7 @@ at run, non-root, `:8756`).
 | + model asset | RRF-fused deterministic static semantic search |
 | + `CODEINDEX_EMBED_ENDPOINT` | rich tier — **wins over a static model** |
 | `--semantic`, nothing available | lexical + stderr note |
+| `model.json` present but broken (bad JSON or shape) | lexical + a stderr note naming the file; `embed status` reports `model: { present: true, error }`, `index` skips only `embeddings.bin` |
 | endpoint set but unreachable | lexical + stderr note — **never** falls back to the static model |
 
 </details>
@@ -664,8 +1249,16 @@ codeindex lsp status --repo .           # config, PATH resolution, files claimed
 codeindex lsp status --repo . --probe   # also start each server, read its real capabilities
 ```
 
-The TypeScript example disables its separate syntax server because codeindex
-opens short-lived query sessions. Otherwise an early reference request can be
+Each server may set `timeoutMs` (per request, default 5000) and
+`startupTimeoutMs` (the `initialize` handshake, default 15000). The environment
+variables `CODEINDEX_LSP_TIMEOUT_MS` and `CODEINDEX_LSP_STARTUP_TIMEOUT_MS`
+override both for every server and take precedence over `lsp.json`, so a CI
+job or a slow machine can retune them without editing a shared file.
+`CODEINDEX_LSP_CONFIG` points at a config elsewhere; set to `off`, `0` or an
+empty string, it disables the tier even when the repository has one.
+
+The TypeScript example disables its separate syntax server because a CLI
+query opens a short-lived session. Otherwise an early reference request can be
 answered before the semantic project is ready and return only the declaration.
 Other servers use their own initialization options; codeindex does not infer a
 server configuration from its binary name.
@@ -701,7 +1294,10 @@ Three deliberate constraints:
   `typescript-language-server` happened to be installed would make the same repo
   answer differently per machine.
 - **Every failure degrades to the static answer on exit 0**, with a stated
-  reason for unavailable configured servers. For compatibility, references
+  reason for unavailable configured servers. A server that exits or never
+  answers `initialize` is reported with the last line it wrote to stderr
+  (`language server exited (code 1): error: Unknown binary 'rust-analyzer'
+  …`), in `lsp status --probe` as in query answers. For compatibility, references
   without any configuration retain their original static-only shape; the new
   callers option explicitly reports missing configuration.
 
@@ -731,6 +1327,29 @@ reference occurrences alone are not classified as calls. Missing configuration,
 unsupported capabilities, process/pipe failures and timeouts keep the static
 answer. Results already received survive a later failure with `ok: false`.
 
+### Session lifetime and readiness
+
+A CLI query starts its servers, asks, and shuts them down. The MCP server
+keeps one session per (server config, repository) for its whole lifetime, so
+only the first `lsp: true` query pays for the spawn and `initialize`. On a
+flask copy with pyright, the first query took 2.4-4 s including the scan and
+later ones 50-150 ms, where every query used to take 1.2-3 s. A
+pooled session is dropped and restarted when the config changes or when any
+non-doc file changes, because codeindex never sends `didChange` and a server
+must not answer from text it read before an edit. It is shut down after 5
+idle minutes (`CODEINDEX_LSP_IDLE_MS`) and when the MCP server stops: on
+stdin EOF, and on SIGINT, SIGTERM or SIGHUP. Every server is also sent the
+host pid as `processId`, which servers use to exit if the host is killed
+outright.
+
+A server that is still indexing answers without an error: with only the
+declaration, or with no incoming calls. When the static tier did see uses, the
+question is asked again a few times within the server's request budget
+(pyright's full answer comes on the second request). If it is still thin, the
+block keeps `ok: true` and adds `partial: true` with a `reason`: the server may
+still be indexing, or the static sites are homonyms. A session that has already
+given a full answer is trusted and is not asked again.
+
 ## Use as an MCP server
 
 `codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio.
@@ -740,13 +1359,13 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**33 tools**, grouped by what they answer:
+**40 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
-| orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
-| find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
-| impact | `find_references`, `callers`, `call_graph`, `dead_code` |
+| orient | `scan_summary`, `index_status`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
+| find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview`, `symbol_at` |
+| impact | `find_references`, `callers`, `call_graph`, `call_path`, `impact`, `neighbors`, `dead_code`, `resolution_report`, `delta` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
@@ -758,19 +1377,68 @@ claude mcp add codeindex -- codeindex mcp
 and persists it as the `onboarding` memory, so the second session reads instead
 of rebuilding.
 
+Arguments are checked against each tool's schema before anything is walked or
+scanned: types, required arguments and enums (`call_graph`'s `direction`,
+`search`'s `rank`). A mistake comes back at once as a tool error that names the
+argument, never as a default applied in silence. `file` arguments accept
+`./src/a.ts`, an absolute path inside the repository or `src\a.ts`. A file the
+index does not hold is an error suggesting indexed files with the same name,
+not an empty answer.
+`repo_map` (and the brief's key-files section) ranks files by PageRank over the
+edges production code creates, so a test harness that thousands of tests
+import does not outrank the code it tests, and it leaves test files out. In each
+file it shows the public types and functions first, then their methods, then
+values, and counts what did not fit (`… 43 more`).
+
 ### Smaller read responses
 
 MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`
-accept `concise: true`. Declarations are reduced to `name/kind/file/line` while
+accept `concise: true` (and `delta`, where it drops each change's hunks).
+Declarations are reduced to `name/kind/file/line`, plus
+`parent` for a member so its `Parent/name` path stays formable, while
 result membership, order, reference groups, call-site locations, confidence
 labels and LSP metadata stay intact. Defaults retain their full existing shape.
 `symbols` keeps its name-keyed groups and references for full-index requests.
 The option is a query projection; it never changes persisted artifacts.
 
-Symbolic edits preserve supported source encodings (UTF-8/BOM, UTF-16 LE/BE,
-Latin-1) and line endings. Malformed UTF-16 and replacements that cannot be
-represented in a Latin-1 source fail before writing. Memory notes stay under
-`.codeindex/memories`; linked storage paths are refused rather than followed.
+### Symbolic edits
+
+`replace_symbol_body`, `insert_after_symbol` and `insert_before_symbol` resolve
+`namePath` over every matching declaration. `file` narrows the matches to one
+file (`./src/a.ts` and absolute paths inside the repo are accepted). `line`
+selects one of several same-file homonyms, such as a property getter and
+setter or TypeScript overloads. Pass the declaration's first line or any line
+inside it; the ambiguity error lists the lines to choose from.
+
+- **Spans.** A replacement covers the declaration's own line span. The doc
+  comment above it stays, and so do decorators that the grammar keeps outside
+  the declaration (TypeScript, Python, Rust). `insert_before_symbol` inserts
+  above the decorators, attributes and attached doc comment, so they stay with
+  their declaration. Regex-tier symbols record only a first line. For them,
+  the end is taken from brace matching only when it is unambiguous (Swift,
+  Dart, and Kotlin without its extended grammar). Otherwise replace and
+  insert-after are refused.
+- **Verification.** Nothing is written until the edited text has been
+  re-extracted in memory. The target must still be on its indexed line, so a
+  stale scan is refused. The result then carries `warnings` when a declaration
+  outside the edited lines changed (for example, an unindented Python body that
+  re-parents the methods after it), when the replaced lines no longer declare
+  the target (renamed or moved), or when the edit adds syntax errors. With
+  `strict: true`, such an edit is refused and nothing is written. A clean
+  edit's result has no `warnings` key. A file past the per-file symbol cap
+  (2,000 declarations) gets only the syntax check.
+- **Encodings.** Supported source encodings (UTF-8/BOM, UTF-16 LE/BE, Latin-1)
+  are preserved. A valid UTF-8 file that contains U+FFFD stays UTF-8. Every
+  untouched line keeps its own line ending, so a mixed CRLF/LF file stays
+  mixed. New lines copy the ending of the line they replace or sit next to, and
+  a missing final newline stays missing. Malformed UTF-16 and replacements that
+  cannot be represented in a Latin-1 source fail before writing.
+- **Cache.** After an edit, the server revokes only the edited file's cached
+  stat proof, so the next call re-reads that one file. Other files and other
+  repositories stay warm.
+
+Memory notes stay under `.codeindex/memories`; linked storage paths are refused
+rather than followed.
 
 ### Advertising fewer tools
 
@@ -779,11 +1447,12 @@ turn**, so a session that only ever searches is paying for the graph analytics
 all day. `--tools` advertises a named subset:
 
 ```sh
-codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview
+codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview, symbol_at, embed_status
 codeindex mcp --tools orient,impact # compose profiles with a comma
 ```
 
-Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`.
+Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`
+and `memory` (all four memory tools). Every tool belongs to at least one.
 The MCP initialization response names the available profiles and active selection
 in its `instructions`, so a client can discover this configuration in-session.
 It trims what is **advertised**, not what is answerable: a tool left out of the
@@ -804,14 +1473,21 @@ codeindex mcp --repo /path/to/workspace
 An explicit per-call `repo` still wins, so a pinned server can still answer
 about another checkout. `--server-name <name>` overrides the announced
 `serverInfo.name` for hosts that embed the server under their own identity.
-Add `--watch` to a pinned server for proactive recursive filesystem
-invalidation. Every request still verifies freshness with the normal stat walk
-because a request can arrive before its filesystem event; the watcher is a hint,
-not a correctness oracle. Directories excluded by the scanner (`.git`, build
-outputs, dependency caches, `.codeindex`, edit temporaries, etc.) are ignored by
-the watcher too. Git commit metadata is still refreshed by the per-request
-check. When the platform cannot provide recursive watching, the server warns
-and continues with those normal freshness scans.
+Add `--watch` to a pinned server to stop paying a whole-tree walk on every
+call. On Linux the server watches each directory the scan walks, one inotify
+watch per directory and never an ignored tree (`node_modules`, `.git`, build
+outputs, gitignored paths…), up to 8192 directories. Before a call it waits
+until every earlier filesystem event has been delivered (a barrier file in a
+private temp directory). When no watched directory changed since the last walk,
+the call reuses that walk and the scan behind it without a single stat: a warm
+`find_symbol` on the 66k-file TypeScript repo drops from about 2.3 s to under
+15 ms. Any change, including a deletion, a new directory or a `.gitignore`
+edit, makes the call walk and re-check exactly as without `--watch`, so answers
+never lag behind the disk. Git commit metadata is refreshed on every call. When
+the watcher cannot prove freshness (too many directories, the inotify budget
+exhausted, a barrier that never arrives), the server warns where relevant and
+each call walks as usual. On macOS and Windows the native recursive watcher only
+invalidates changed files eagerly, and every call still walks.
 
 **Prime the index first** and activation becomes a load, not a rebuild:
 `codeindex index --repo <dir> --out <dir>/.codeindex`. The first tool call
@@ -828,21 +1504,38 @@ introduced are only sent to clients that asked for it, so an older client sees
 exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
-the 27 read tools, `destructiveHint`/`idempotentHint` on the six that write —
+the 34 read tools, `destructiveHint`/`idempotentHint` on the six that write —
 which is what lets a host auto-approve reads and confirm only writes. From
-`2025-06-18`, the 20 tools whose result is always a JSON object also declare an
+`2025-06-18`, the 26 tools whose result is always a JSON object also declare an
 `outputSchema` and return `structuredContent`, so a client can validate and type
 the result instead of re-parsing a string. The remaining tools return arrays,
 argument-dependent shapes or plain text, which cannot yield a conforming
 structured result without diverging from the text block — they are left
-unschema'd rather than described inaccurately.
+unschema'd rather than described inaccurately. Every schema is rooted at
+`type: "object"`, as the official TypeScript SDK requires to list tools at all.
+A lookup miss (`call_graph`, `type_hierarchy` or `implementations` naming
+nothing in the repo) keeps its `{ "error": ... }` text but is flagged
+`isError`, so a client validating against the schema reads it as the tool
+error it is.
 
 Responses are capped (`--max-response-bytes`, default 1 MB). Under the cap
 nothing changes. Over it — where a whole-repo `graph` on a large monorepo runs
 to millions of tokens and no client can accept it — the response is replaced by
-a short notice naming the size, the artifact already on disk, and the narrower
-tool that answers the question. Most tools also take a `limit`/`maxResults`/
-`top`/`maxEdges` argument to stay well under it.
+a short notice naming the size, the arguments of that tool that narrow it, and
+the persisted artifact when one on disk holds exactly the withheld answer
+(checked byte for byte; a stale one gets the command that refreshes it). The
+notice is sent as a tool error (`isError: true`): the model reads it and
+narrows the call, and a client that validates `structuredContent` is not
+handed a result that cannot conform. Most tools also take a
+`limit`/`maxResults`/`top`/`maxEdges` argument to stay well under it.
+
+Tool calls run one at a time, in arrival order, so answers stay deterministic;
+`ping`, `initialize`, `tools/list` and argument errors are answered at once,
+even behind a long first scan. `notifications/cancelled` is honoured: a queued
+call is skipped, and a running one finishes (an edit is never left half-done)
+but gets no response. A call that carries a `progressToken` receives
+`notifications/progress` when its walk and its scan complete, which keeps an
+SDK client's request timeout from firing during a long first scan.
 
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
 into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.
@@ -855,15 +1548,35 @@ its indexed equivalent, for agent harnesses that intercept shell commands
 
 ```sh
 $ codeindex rewrite 'grep -rn TODO src'
-codeindex grep TODO --scope src
+codeindex grep TODO --scope src --ignore-dir .codeindex
+$ codeindex rewrite "rg -tpy -w 'def main'"
+codeindex grep '\bdef main\b' --include '**/*.py' --include '**/*.pyi' --ignore-dir .codeindex
 ```
 
-It prints the replacement and exits `0`, or exits `1` with empty stdout when it
-has no opinion — run the original. The parser is deliberately conservative: any
-shell metacharacter (pipe, redirect, substitution, chaining), any unrecognized
-flag, a non-recursive `grep`, or more than one search path all refuse the
-rewrite. A refusal costs nothing; a wrong rewrite silently changes what the
-agent asked for.
+It prints the replacement and exits `0`. When it has no opinion, it exits `1`
+with empty stdout, and the host should run the original command. It
+understands recursive `grep`/`egrep`, `rg` and `git grep`:
+
+- **The pattern.** POSIX BRE and ERE and Rust regex syntax, plus `-F`, `-w`
+  and `-i`/`-S`, are restated as the JavaScript regex `codeindex grep` runs.
+  In a BRE, `x+y` stays a literal `+`.
+- **The files.** A path becomes `--scope` (`./` stripped, a file allowed). An
+  `--include`/`-g` base-name glob becomes `**/<glob>`, and `-t` becomes the
+  globs of that ripgrep type. `--ignore-dir .codeindex` turns off the default
+  vendor/build/out/tmp skips, which none of these tools make. Gitignored files,
+  lockfiles and binaries are still left out, on purpose.
+- **The flags.** `-l` becomes `--files-with-matches`, and a pattern that starts
+  with `-` goes behind `--`.
+
+The parser is deliberately conservative. The rewrite is refused when the line
+contains shell syntax outside single quotes (pipe, redirect, substitution,
+chaining, braces, an unquoted glob in a path), an unrecognized or
+output-changing flag (`rg -r` is `--replace`), a non-recursive `grep`, a path
+outside the tree, more than one path, include/exclude rules whose order
+matters, or regex syntax that cannot be translated exactly. A refusal costs
+nothing, while a wrong rewrite would silently change what the agent asked for.
+The test suite runs each supported form through the real tool and through its
+rewrite, and checks that both find the same lines.
 
 ## Versioning
 
@@ -906,7 +1619,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **33 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **40 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

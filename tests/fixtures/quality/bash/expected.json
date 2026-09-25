@@ -15,7 +15,7 @@
           "name": "MIRRORS",
           "kind": "const",
           "doc": true,
-          "sig": "declare -a MIRRORS=( \"acme-releases-eu\" \"acme-releases-us\" )"
+          "sig": "declare -a MIRRORS=(\"acme-releases-eu\" \"acme-releases-us\")"
         },
         { "name": "upload", "kind": "function", "doc": true, "sig": "upload()" },
         { "name": "main", "kind": "function", "doc": true }

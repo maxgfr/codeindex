@@ -31,14 +31,20 @@ export type {
 export { walk, readText, DEFAULT_MAX_FILES, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
 export type { WalkOptions, WalkedFile, WalkResult, WalkSkip, WalkEntry } from "./walk.js";
 export { scanRepo, scanSummary } from "./scan.js";
-export type { RepoScan, ScanOptions, ScanSummary, ExtractedRecord } from "./scan.js";
+export type { RepoScan, ScanOptions, ScanSummary, ScanSkip, ExtractedRecord } from "./scan.js";
 export { keptCodeFiles, buildCodeRecord } from "./scan.js";
+// Why a path is, or is not, in a scan (`codeindex scan --why` / `--skipped`).
+export { whyPath, scanSkips, skipHistogram } from "./why.js";
+export type { PathVerdict, PathVerdictReason } from "./why.js";
 // Reusing a persisted `.codeindex/` index instead of rebuilding it. The MCP
 // server and every CLI read command go through this; a consumer that vendors
 // the engine gets the same shortcut. Every function degrades to undefined
 // (= "build it yourself") rather than throwing.
 export { preloadSession, preloadArtifacts, readPersistedIndex, toCacheMap, INDEX_DIR } from "./preload.js";
-export type { PersistedMeta, PersistedCacheEntry, PersistedCacheMap } from "./preload.js";
+export type { PersistedMeta, PersistedCacheEntry, PersistedCacheMap, UnusableIndex } from "./preload.js";
+// Whether that index still describes the tree, and why not (`codeindex status`).
+export { indexStatus } from "./status.js";
+export type { IndexStatus, IndexStatusOptions, IndexStaleness } from "./status.js";
 // Parallel extraction. scanRepoParallel is scanRepo with the code files
 // extracted across worker_threads; it returns the same RepoScan, byte-for-byte,
 // and degrades to the sequential path whenever workers are unavailable.
@@ -48,7 +54,7 @@ export type { PersistedMeta, PersistedCacheEntry, PersistedCacheMap } from "./pr
 // the engine" — the pool would silently run sequential forever.
 export { scanRepoParallel, extractInParallel, runExtractWorker, workerCount } from "./pool.js";
 export { compileGlobs } from "./glob.js";
-export { parseGitignore, isIgnored } from "./ignore.js";
+export { parseGitignore, isIgnored, decidingRule } from "./ignore.js";
 export type { IgnoreRule } from "./ignore.js";
 export { classify, isCode, isDoc, MARKDOWN_EXT } from "./classify.js";
 export { categorize } from "./categorize.js";
@@ -59,6 +65,7 @@ export { extractSymbols, languageOf, extToLang } from "./lang/registry.js";
 export { extractCode } from "./extract/code.js";
 export type { CodeInfo } from "./extract/code.js";
 export { extractMarkdown } from "./extract/markdown.js";
+export { extractRst } from "./extract/rst.js";
 export type { MarkdownInfo } from "./extract/markdown.js";
 
 // AST tier (optional — a no-op without the grammar wasm sidecar).
@@ -148,8 +155,10 @@ export {
 export type { DiffFile, DiffSpec, Hunk } from "./git.js";
 
 // Repo text search (ripgrep when available, pure-JS fallback otherwise).
-export { grepRepo } from "./grep.js";
-export type { SearchHit, GrepOptions } from "./grep.js";
+// grepRepoEx adds what the bare hit list cannot say: truncated, the matching
+// file count, a time-budget stop, and the notes a caller should surface.
+export { grepRepo, grepRepoEx } from "./grep.js";
+export type { SearchHit, GrepOptions, GrepResult } from "./grep.js";
 
 // Keyless BM25 lexical search over symbols/paths/headings/summaries (issue #4).
 export { searchIndex, explainQuery, subtokens } from "./bm25.js";
@@ -168,10 +177,10 @@ export {
 } from "./embed/model.js";
 export type { StaticEmbedModel, EmbedPullTarget } from "./embed/model.js";
 export { encode, quantize, tokenize, wordpiece, basicTokenize, roundHalfToEven, intDot } from "./embed/encode.js";
-export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits } from "./embed/index.js";
+export { buildEmbeddingIndex, serializeEmbeddings, deserializeEmbeddings, embeddingUnits, unitHash } from "./embed/index.js";
 export type { EmbeddingIndex, EmbeddingRecord, EmbeddingUnit } from "./embed/index.js";
-export { searchSemantic } from "./embed/search.js";
-export type { SemanticSearchOptions, SemanticSearchResult } from "./embed/search.js";
+export { searchSemantic, explainSemantic } from "./embed/search.js";
+export type { SemanticSearchOptions, SemanticSearchResult, SemanticQueryExplanation, ExplainedSemanticSearch } from "./embed/search.js";
 // HTTP endpoint tier (v2.11.0 — the "rich" tier). The engine is a fetch consumer
 // of a containerized embedding server (CODEINDEX_EMBED_ENDPOINT): float vectors
 // run through the SAME L2+int8 quantize pipeline, then the same integer ranking.
@@ -184,6 +193,7 @@ export {
   healthzUrl,
   probeEndpoint,
   encodeQueryViaEndpoint,
+  endpointModelId,
   buildEndpointIndex,
 } from "./embed/endpoint.js";
 export type { EmbedEndpointOptions } from "./embed/endpoint.js";
@@ -201,14 +211,14 @@ export type { OnboardOptions, OnboardBrief } from "./onboard.js";
 // this repo's own graph and checking the import closure. That is what makes
 // "the LSP tier cannot change graph.json/symbols.json bytes" a property of the
 // module graph rather than a promise in a comment.
-export { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
+export { lspStatus, referencesWithLsp, callersWithLsp, LspSessionPool } from "./lsp/index.js";
 export { loadLspConfig, parseLspConfig, resolveLspConfigPath, serverForLang } from "./lsp/config.js";
 export { openLspSession, LspTimeout } from "./lsp/client.js";
 export { spawnLspTransport } from "./lsp/spawn.js";
 export { createFramer, encodeMessage, fileUri, relFromUri, locationsToRefs, MAX_FRAME_BYTES } from "./lsp/protocol.js";
 export { agreementOf, columnOfSymbol, lspUnavailable } from "./lsp/refs.js";
 export type { LspConfig, LspServerConfig, LspConfigSource } from "./lsp/config.js";
-export type { LspStatus, LspServerStatus, LspCallers, LspCallersBlock, LspIncomingCall } from "./lsp/index.js";
+export type { LspStatus, LspServerStatus, LspCallers, LspCallersBlock, LspIncomingCall, LspQueryOptions } from "./lsp/index.js";
 export type { LspTransport, LspSession, LspSessionOptions, LspCapabilities } from "./lsp/client.js";
 export type { LspReferences, LspBlock, LspAgreement } from "./lsp/refs.js";
 export type { LspRef, LspMessage } from "./lsp/protocol.js";
@@ -229,7 +239,7 @@ export { changeCoupling, rankHotspots } from "./coupling.js";
 export type { ChangeCoupling, CouplingOptions, Hotspot } from "./coupling.js";
 export { renderRepoMap } from "./repomap.js";
 export { findDeadCode } from "./deadcode.js";
-export type { DeadSymbol } from "./deadcode.js";
+export type { DeadSymbol, DeadCodeOptions } from "./deadcode.js";
 export { findLiteralDuplications } from "./literals.js";
 export type {
   LiteralDuplication,
@@ -251,9 +261,22 @@ export type { ImpactResult, ImpactedFile, NeighborResult, NeighborLink } from ".
 
 // Diff review: git diff -> enclosing symbols -> blast radius -> risk-scored,
 // reasons-first panel. `computeDelta` is the pure core (no git, no fs);
-// `deltaFor` adds the git plumbing against a graph the caller supplies.
-export { computeDelta, deltaFor, formatDeltaPanel, symbolsInHunks, RISK_WEIGHTS, DEFAULT_DELTA_DEPTH } from "./delta.js";
-export type { DeltaOptions, DeltaResult, DeltaError, DeltaModule, DeltaChange, ChangedSymbol } from "./delta.js";
+// `deltaFor` adds the git plumbing against a graph the caller supplies;
+// `readDeltaDiff` + `deltaOfDiff` split it so a caller can skip loading the
+// index when the diff is empty (`emptyDelta`).
+export {
+  brokenImports,
+  computeDelta,
+  deltaFor,
+  deltaOfDiff,
+  emptyDelta,
+  formatDeltaPanel,
+  readDeltaDiff,
+  symbolsInHunks,
+  RISK_WEIGHTS,
+  DEFAULT_DELTA_DEPTH,
+} from "./delta.js";
+export type { BrokenImport, DeltaDiff, DeltaOptions, DeltaResult, DeltaError, DeltaModule, DeltaChange, ChangedSymbol } from "./delta.js";
 export type { RepoMapOptions } from "./repomap.js";
 
 // MCP server over stdio (also reachable as `engine.mjs mcp`).

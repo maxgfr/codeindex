@@ -20,6 +20,16 @@ export interface LspTransport {
   /** Fired when the far side goes away, however it went away. */
   onExit(cb: (code: number | null) => void): void;
   close(): void;
+  /** The last non-empty line the far side wrote to stderr, when there is one. */
+  lastError?(): string | undefined;
+  /** Kill the far side NOW, synchronously — for a host that is exiting. */
+  kill?(): void;
+}
+
+/** `message`, with the server's own last stderr line appended when it has one. */
+export function withServerError(message: string, transport: LspTransport): string {
+  const detail = transport.lastError?.();
+  return detail && !message.includes(detail) ? `${message}: ${detail}` : message;
 }
 
 export interface LspSessionOptions {
@@ -45,6 +55,8 @@ export interface LspSession {
   definition(rel: string, line: number, character: number): Promise<LspRef[]>;
   incomingCalls(rel: string, line: number, character: number): Promise<LspIncomingCall[]>;
   shutdown(): Promise<void>;
+  /** False once the server died or the session was shut down. */
+  alive(): boolean;
 }
 
 /** Thrown when a request outlives its budget. Named so callers can tell it apart. */
@@ -107,7 +119,7 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
     }
   });
 
-  transport.onExit((code) => failAll(new Error(`language server exited (code ${code ?? "unknown"})`)));
+  transport.onExit((code) => failAll(new Error(withServerError(`language server exited (code ${code ?? "unknown"})`, transport))));
 
   const notify = (method: string, params: unknown): void => {
     if (dead) return;
@@ -135,7 +147,9 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
   const initResult = (await request(
     "initialize",
     {
-      processId: null,
+      // The host's pid, not null: servers watch it and exit when the host dies
+      // without closing their stdin (SIGKILL, a crashed parent).
+      processId: typeof process !== "undefined" && typeof process.pid === "number" ? process.pid : null,
       rootUri: fileUri(options.root, ""),
       workspaceFolders: [{ uri: fileUri(options.root, ""), name: "repo" }],
       capabilities: {
@@ -215,6 +229,10 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
         throw new LspIncomingCallsError(error, uniqueIncomingCalls(calls));
       }
       return uniqueIncomingCalls(calls);
+    },
+
+    alive() {
+      return dead === undefined;
     },
 
     async shutdown() {

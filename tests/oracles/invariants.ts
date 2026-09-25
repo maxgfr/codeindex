@@ -107,18 +107,19 @@ function spanText(lines: readonly string[], line: number, endLine: number): stri
  * cannot appear in the span.
  *
  * WHY: src/ast/extract.ts names an anonymous `export default function/class/
- * arrow` after the file stem (`Button.tsx` → `Button`), so a module's default
- * export is a referencable symbol instead of nothing. The name is provably
- * absent from the file — it was taken from the path.
+ * arrow` — and its CommonJS twin, `module.exports = function () {…}` — after
+ * the file stem (`Button.tsx` → `Button`), so a module's default export is a
+ * referencable symbol instead of nothing. The name is provably absent from the
+ * file — it was taken from the path.
  *
  * Detected structurally, not by extension: the name must equal the file stem AND
- * the claimed span must actually contain `export default`. A `Button.tsx` that
- * really does declare `class Button` never reaches here (its name is in the span),
- * and a wrong span over unrelated code is still reported.
+ * the claimed span must actually contain `export default` or `module.exports =`.
+ * A `Button.tsx` that really does declare `class Button` never reaches here (its
+ * name is in the span), and a wrong span over unrelated code is still reported.
  */
 function isFileStemDefaultExport(rel: string, name: string, span: string): boolean {
   const stem = (rel.split("/").pop() ?? "").replace(/\.[^.]+$/, "");
-  return name === stem && /\bexport\s+default\b/.test(span);
+  return name === stem && /\bexport\s+default\b|\bmodule\.exports\s*=/.test(span);
 }
 
 /**
@@ -128,8 +129,7 @@ function isFileStemDefaultExport(rel: string, name: string, span: string): boole
  * WHY: a Terraform block's identity is its label list — `resource "aws_instance"
  * "worker"` is addressed as `aws_instance.worker`, which is how Terraform itself
  * names it (src/ast/specs.ts), and the two labels are separate `string_lit`
- * nodes with a quote and a space between them. Lua reaches the same shape from
- * the other direction: a table function is named `M.alias`.
+ * nodes with a quote and a space between them.
  *
  * This is not a loosened check — it is the SAME check applied at the granularity
  * at which the name was composed. Every segment must still be present in the
@@ -161,6 +161,23 @@ function isAnonymousMemberPlaceholder(name: string, span: string): boolean {
   if (name === "(construct)") return /\bnew\s*\(/.test(span);
   const index = /^\[(\w+)\]$/.exec(name);
   return index !== null && span.includes("[") && span.includes(index[1]!);
+}
+
+/**
+ * The name is an operator or an indexer whose spelling the extractor
+ * NORMALIZED, so the source may space it differently.
+ *
+ * WHY: `operator ==` and `operator==` are one C++/C# name, and an in-class
+ * declaration and its out-of-line definition must not split on formatting — so
+ * src/ast/node.ts drops the whitespace. A C# indexer has no name at all and is
+ * named `this[]` whatever its parameters. The same presence check still
+ * applies, only whitespace-insensitively, and an indexer's span must really
+ * open `this[`.
+ */
+function isNormalizedOperator(name: string, span: string): boolean {
+  if (name === "this[]") return /\bthis\s*\[/.test(span);
+  if (!name.startsWith("operator")) return false;
+  return span.replace(/\s+/g, "").includes(name.replace(/\s+/g, ""));
 }
 
 /**
@@ -209,7 +226,8 @@ export function checkSymbols(rel: string, content: string, symbols: readonly Cod
       !span.includes(s.name) &&
       !isFileStemDefaultExport(rel, s.name, span) &&
       !isComposedName(s.name, span) &&
-      !isAnonymousMemberPlaceholder(s.name, span)
+      !isAnonymousMemberPlaceholder(s.name, span) &&
+      !isNormalizedOperator(s.name, span)
     ) {
       out.push({
         kind: "span-missing-name",

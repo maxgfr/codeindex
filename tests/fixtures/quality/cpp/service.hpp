@@ -27,7 +27,7 @@ enum class Outcome {
 struct JobSpec {
   /// Identifies the job.
   std::string name;
-  int attempts;
+  int attempts, priority;
 };
 
 /// Anything the scheduler can drive.

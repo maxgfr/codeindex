@@ -100,8 +100,11 @@ const FAMILY_MIN_PREFIX = 4;
 // declaration header, so `const onStart = async () => { … }` arrives as
 // `onStart = async ()` with no `=>` to key on. Requiring the arrow missed every
 // multi-line handler and reported it as a source of truth for the paths in its
-// body.
-const FUNCTION_RHS = /^\s*(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*=>)/;
+// body. An arrow's EXPRESSION body is cut the same way, so a one-parameter
+// `const toHref = id => "/a/" + id` arrives as `toHref = id`: a lone identifier
+// ending the header is that parameter. (A true alias, `const A = B`, holds no
+// literal in its one-line span either way.)
+const FUNCTION_RHS = /^\s*(?:async\b|function\b|\(|[A-Za-z_$][\w$]*\s*(?:=>|$))/;
 
 function isFunctionValued(signature: string | undefined): boolean {
   if (!signature) return false;
@@ -131,12 +134,39 @@ function holderCandidates(symbols: CodeSymbol[]): CodeSymbol[] {
   return out;
 }
 
+// Go allows one name once per package, so the same holder name in two files
+// of one directory can only be build-tag variants (binding.go and
+// binding_nomsgpack.go, `//go:build !nomsgpack` / `nomsgpack`) that are never
+// compiled together: one source of truth, not two competing ones. Elsewhere a
+// holder is its file and name.
+function holderIdentity(site: LiteralSite): string {
+  const owner = site.file.endsWith(".go") && site.file.includes("/") ? site.file.slice(0, site.file.lastIndexOf("/")) : site.file;
+  return `${owner}\u0000${site.holder}`;
+}
+
+// Repetition the formats themselves give no way to centralize. GitHub Actions
+// workflows cannot import each other's values (`runs-on: ubuntu-latest`,
+// `actions/checkout@v4` in every file is the idiom, and Dependabot keeps it in
+// step), and a package manifest with no inheritance mechanism states its own
+// license, build backend and test tool in each example project. A value seen
+// ONLY in such files names no fix; one that also appears in code or in another
+// config (a Python version in CI and in pyproject.toml) is still reported.
+const CI_WORKFLOW = /(?:^|\/)\.github\/workflows\//;
+const MANIFESTS_WITHOUT_INHERITANCE = new Set(["package.json", "pyproject.toml", "composer.json", "go.mod"]);
+const baseName = (rel: string): string => rel.slice(rel.lastIndexOf("/") + 1);
+
+function onlyUncentralizable(sites: LiteralSite[]): boolean {
+  if (sites.every((s) => CI_WORKFLOW.test(s.file))) return true;
+  const base = baseName(sites[0]!.file);
+  return MANIFESTS_WITHOUT_INHERITANCE.has(base) && sites.every((s) => baseName(s.file) === base);
+}
+
 function holderFor(candidates: CodeSymbol[], line: number): CodeSymbol | undefined {
   // A literal sitting inside a constant's declaration span IS that constant's
   // value. This span join needs no new extraction: both tiers already report a
-  // symbol's line, and the AST tier reports endLine. It is also why the feature
-  // works without grammars — a regex-tier symbol with no endLine still matches
-  // its own declaration line.
+  // symbol's line, and the AST tier (and the regex tier, where it can prove a
+  // span) reports endLine. It is also why the feature works without grammars —
+  // a symbol with no endLine still matches its own declaration line.
   //
   // NOT limited to exported constants. A module-private constant that other
   // files rewrite by hand is the sharpest form of this defect, not a lesser
@@ -187,11 +217,12 @@ export function findLiteralDuplications(scan: RepoScan, opts: LiteralsOptions = 
   for (const g of groups.values()) {
     const files = new Set(g.sites.map((s) => s.file));
     if (files.size < minFiles || g.sites.length < minCount) continue;
+    if (onlyUncentralizable(g.sites)) continue;
 
     const holders = g.sites.filter((s) => s.holder);
     const literals = g.sites.filter((s) => !s.holder);
     const distinctHolderNames = new Set(holders.map((h) => h.holder!));
-    const distinctHolders = new Set(holders.map((h) => `${h.file}\u0000${h.holder}`));
+    const distinctHolders = new Set(holders.map(holderIdentity));
 
     // A value only ever written inside constants, in different files, is two
     // (or more) competing sources of truth — the "three centralization
