@@ -29,7 +29,10 @@ describe("regex-tier symbols (no AST end line)", () => {
   it("replaces the whole brace-matched declaration, not just its first line", () => {
     const root = repo({ "shapes.swift": swift });
     const scan = scanRepo(root);
-    expect(findSymbol(scan, "area")[0]!.endLine).toBeUndefined(); // the premise: regex tier
+    // The premise: a regex-tier symbol. That tier now bounds a formatted brace
+    // body itself, at the closing brace the edit's own matcher would find.
+    expect(findSymbol(scan, "area")[0]).toMatchObject({ lang: "swift", endLine: 7 });
+    expect(findSymbol(scan, "area")[0]!.signature).toBe("func area(width: Double, height: Double) -> Double {");
     const result = replaceSymbolBody(scan, "area", "func area(width: Double, height: Double) -> Double {\n    return width * height\n}");
     expect(result).toMatchObject({ startLine: 3, endLine: 5 });
     expect(result.warnings).toBeUndefined();
