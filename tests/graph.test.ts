@@ -139,8 +139,9 @@ describe("buildGraph", () => {
 
 describe("buildGraph — soft refs", () => {
   // The Python extractor turns `from . import util` into the firm ref "." plus a
-  // soft ".util" (util may be a submodule or just an attribute). The soft ones
-  // are injected by hand here so this pins the graph side of that contract.
+  // soft ".util" (util may be a submodule or just an attribute). The
+  // extractor's own soft refs are stripped and the soft ones injected by hand
+  // here, so this pins the graph side of that contract on its own.
   function softGraph(soft: Record<string, RawRef[]>) {
     const root = mkdtempSync(join(tmpdir(), "ui-soft-"));
     mkdirSync(join(root, "app"), { recursive: true });
@@ -150,6 +151,7 @@ describe("buildGraph — soft refs", () => {
     writeFileSync(join(root, "app", "views.py"), "from . import util\nfrom .core import Engine\n");
     const scan = scanRepo(root);
     for (const f of scan.files) {
+      f.refs = f.refs.filter((r) => !r.soft);
       const extra = soft[f.rel];
       if (extra) f.refs = [...extra, ...f.refs]; // soft BEFORE the firm refs: order must not matter
     }

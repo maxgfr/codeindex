@@ -323,12 +323,15 @@ describe.skipIf(!existsSync(join(EXTENDED, "kotlin.wasm")))("pulled EXTENDED gra
     expect(status.extended.missing).not.toContain("kotlin");
     expect(status.extendedPullNeeded).toBe(true); // the other five are still missing
 
-    // The AST tier finds the `items` property the regex tier does not, and
-    // agrees with the dev checkout, whose sibling grammars-extended/ has Kotlin.
+    // The AST tier nests `add` under its object, which the regex tier (it
+    // reports no `parent`) does not, and agrees with the dev checkout, whose
+    // sibling grammars-extended/ has Kotlin.
+    type Defs = Record<string, { parent?: string }[]>;
+    const parentOfAdd = (json: string): string | undefined => (JSON.parse(json) as { defs: Defs }).defs.add?.[0]?.parent;
     const symbols = run(["symbols", "--repo", repo, "--no-index-cache"]);
-    expect(Object.keys(JSON.parse(symbols).defs)).toContain("items");
+    expect(parentOfAdd(symbols)).toBe("Registry");
     expect(symbols).toBe(cli(["symbols", "--repo", repo, "--no-index-cache"]).stdout);
     rmSync(join(cache, "kotlin.wasm"));
-    expect(Object.keys(JSON.parse(run(["symbols", "--repo", repo, "--no-index-cache"])).defs)).not.toContain("items");
+    expect(parentOfAdd(run(["symbols", "--repo", repo, "--no-index-cache"]))).toBeUndefined();
   });
 });
