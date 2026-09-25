@@ -9,9 +9,9 @@ import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protoc
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
 const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line, plus parent for a member) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
-  scope: { type: "string", description: "Restrict to one directory (repo-relative)" },
-  include: { type: "array", items: { type: "string" }, description: "Include globs" },
-  exclude: { type: "array", items: { type: "string" }, description: "Exclude globs" },
+  scope: { type: "string", description: "Restrict to one directory or file (repo-relative); ANDed with include/exclude" },
+  include: { type: "array", items: { type: "string" }, description: "Include globs, rooted at the repo: '*.ts' is top-level only, '**/*.ts' any depth" },
+  exclude: { type: "array", items: { type: "string" }, description: "Exclude globs (rooted, like include)" },
 };
 
 export const TOOLS = [
@@ -468,6 +468,12 @@ export const TOOLS = [
       required: ["repo"],
     },
   },
+  {
+    name: "index_status",
+    description:
+      "Is the persisted index (<repo>/.codeindex, written by `codeindex index`) fresh for this tree? Returns whether its cache.json is usable (or why not: absent/unreadable/corrupt/schema/extractor), the indexed vs HEAD commit, per-file drift counts (unchanged, touched, modified, added, deleted, reextract), artifactsFresh and the reasons it is not. Cheap: reads cache.json, walks and stats, hashes only stat-changed files, never extracts. A fresh index is what makes the first graph-shaped call on a large repo fast; a stale one is rebuilt in memory, so answers stay correct either way.",
+    inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] },
+  },
 ] as const;
 
 
@@ -657,6 +663,21 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ["duplications", "families"],
   },
+  index_status: {
+    type: "object",
+    properties: {
+      indexDir: { type: "string" },
+      present: { type: "boolean" },
+      usable: { type: "boolean" },
+      reason: { type: "string", enum: ["absent", "unreadable", "corrupt", "schema", "extractor"] },
+      engineVersion: anyObj,
+      commit: anyObj,
+      files: { type: ["object", "null"] },
+      artifactsFresh: { type: "boolean" },
+      stale: strArr,
+    },
+    required: ["indexDir", "present", "usable", "engineVersion", "commit", "files", "artifactsFresh", "stale"],
+  },
   embed_status: {
     type: "object",
     properties: {
@@ -758,6 +779,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   call_graph: { title: "Call graph neighborhood" },
   check_rules: { title: "Check architecture rules" },
   resolution_report: { title: "Import resolution report" },
+  index_status: { title: "Index freshness" },
 };
 
 export function annotationsFor(name: string): Record<string, boolean> | undefined {
@@ -797,7 +819,8 @@ export function annotationsFor(name: string): Record<string, boolean> | undefine
 export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Land in an unfamiliar repository and get your bearings — and keep what
   // was learned: onboard persists its brief, write_memory anything else.
-  orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "graph", "read_memory", "list_memories", "write_memory"],
+  // index_status says whether a persisted index makes the first call fast.
+  orient: ["scan_summary", "index_status", "repo_map", "onboard", "workspaces", "mermaid", "graph", "read_memory", "list_memories", "write_memory"],
   // Locate a thing. embed_status says whether `search` semantic:true fuses.
   find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "embed_status"],
   // Decide whether changing it is safe.

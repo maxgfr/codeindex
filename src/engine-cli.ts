@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord, type Graph } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import {
   CORE_GRAMMARS,
   EXTENDED_GRAMMARS,
   ensureGrammars,
   grammarKeysForExts,
+  grammarReady,
   resolveGrammarsTier,
   sharedGrammarsCacheDir,
 } from "./ast/loader.js";
@@ -16,10 +17,27 @@ import { sha1 } from "./hash.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
-import { scanSummary, type RepoScan } from "./scan.js";
+import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan, type ScanSkip } from "./scan.js";
+import { skipHistogram, whyPath } from "./why.js";
+import { byKey } from "./sort.js";
 import { scanRepoParallel } from "./pool.js";
-import { preloadSessionLazy, INDEX_DIR } from "./preload.js";
-import { parseCacheEntries } from "./cache.js";
+import {
+  indexDirPath,
+  inspectPersistedIndex,
+  persistedArtifacts,
+  preloadSessionLazy,
+  readPersistedIndex,
+  INDEX_DIR,
+  type ArtifactName,
+  type PersistedMeta,
+  type PersistedArtifacts,
+  type PreloadedSession,
+  type UnusableIndex,
+} from "./preload.js";
+import { indexStatus } from "./status.js";
+import { freshArtifacts, proveFresh, renderFreshness, FRESHNESS_FILE, type FreshnessScanOptions } from "./freshness.js";
+import { classify } from "./classify.js";
+import { compatibleEntries, extractionProfile, sameExtractionProfile } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
 import { computeImportPairs } from "./callers.js";
@@ -58,9 +76,29 @@ const HELP = `codeindex engine v${ENGINE_VERSION} — deterministic repo indexin
 Usage: codeindex <command> [flags]
 
 Commands:
-  index       Build graph.json + symbols.json (+ incremental cache.json) into
-              --out <dir> in ONE pass — the fast path for repeated runs
-  scan        Scan summary: file count, language histogram, capped flag
+  index       Build graph.json + symbols.json (+ incremental cache.json, and
+              freshness.json: its stamps without the records) into --out
+              <dir> in ONE pass — the fast path for repeated runs. Each
+              artifact is replaced atomically (temp file + rename). An --out
+              inside the repo is excluded from the scan; at the repo root only
+              the artifacts are
+  scan        Scan summary: file count, language histogram, capped flag, the
+              files the walk rejected (excluded) and every skip by reason
+              (skipped; a skipped directory counts once). --why <path> says
+              why ONE path is or is not indexed ({path, indexed, reason,
+              detail}: the deciding .gitignore line, the size over --max-bytes,
+              the --scope/--include/--exclude glob, the skipped directory
+              above it…); --skipped lists every skip, sorted by path (JSON)
+  status      Is the persisted index (--index, default .codeindex) fresh for
+              this tree and these flags? JSON: whether cache.json is usable (or
+              why not: absent/unreadable/corrupt/schema/extractor), the indexed
+              vs HEAD commit, per-file drift (unchanged/touched/modified/added/
+              deleted/reextract), artifactsFresh and the reasons it is not.
+              Reads freshness.json (else cache.json), walks and stats; hashes
+              only stat-changed files, never extracts. --check exits 1 when
+              the artifacts are not fresh (a CI gate for a committed index).
+              A moved HEAD alone is not stale: read commands restamp
+              graph.json's commit
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
   scip        SCIP code-intelligence index (protobuf bytes) into --out
@@ -106,9 +144,13 @@ Commands:
   grammars    Tree-sitter wasm grammars (optional AST tier; regex without them).
               Two tiers: CORE ships with the bundle; EXTENDED (kotlin, elixir,
               zig, solidity, hcl/terraform) arrives only via \`grammars pull\`.
-              Precedence: bundle-adjacent > CODEINDEX_GRAMMARS_DIR > shared cache:
+              Precedence: bundle-adjacent > CODEINDEX_GRAMMARS_DIR > shared cache,
+              per grammar — a pulled EXTENDED wasm is found even when the
+              core ones ship next to the bundle:
                 grammars status  Active tier (adjacent/env/cache/none), resolved
-                                 dir, pinned ENGINE_VERSION, pull-needed (JSON)
+                                 dir, pinned ENGINE_VERSION, pull-needed, and
+                                 extendedPullNeeded when an EXTENDED grammar is
+                                 still missing (JSON)
                 grammars pull    Fetch the per-release grammars-<version>.tar.gz
                                  asset into the shared cache (sha256-verified,
                                  atomic). Override the source with
@@ -155,15 +197,16 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (34 tools: scan_summary, graph,
-              symbols, callers, workspaces, churn, symbols_overview,
-              find_symbol, find_references, lsp_status, onboard, repo_map,
-              hotspots, coupling, dead_code, complexity, mermaid, grep, search,
-              explain_search, embed_status, check_rules, resolution_report, the
-              memory quartet and the three symbolic-edit writes). Flags:
-              --repo <dir> pins ONE repository so the per-tool repo argument
-              becomes optional (an explicit per-call repo still wins);
-              --server-name <name> overrides
+  mcp         Run as an MCP server over stdio (35 tools: scan_summary,
+              index_status, graph, symbols, callers, workspaces, churn,
+              symbols_overview, find_symbol, find_references, lsp_status,
+              onboard, repo_map, hotspots, coupling, dead_code, complexity,
+              duplicated_literals, mermaid, grep, search, explain_search,
+              embed_status, check_rules, resolution_report, type_hierarchy,
+              implementations, call_graph, the memory quartet and the three
+              symbolic-edit writes). Flags: --repo <dir> pins ONE
+              repository so the per-tool repo argument becomes optional (an
+              explicit per-call repo still wins); --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
               tool response (default 1e6; a response under the cap is
               byte-identical, one over it is replaced by an actionable notice,
@@ -184,15 +227,25 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       writes the binary index to stdout)
   --project-root <uri> \`scip\`: override Metadata.project_root (default
                       file://<repo>); pin it for a byte-reproducible index
-  --include <glob>    Only include matching paths (repeatable)
+  --include <glob>    Only include matching paths (repeatable). Globs are rooted
+                      at the repo: '*.ts' is top-level files only, '**/*.ts'
+                      any depth
   --exclude <glob>    Exclude matching paths (repeatable)
-  --scope <dir>       Restrict to one directory (sugar for --include '<dir>/**')
+  --scope <path>      Restrict to one directory or file of the repo ('./src',
+                      'src/' and an absolute path inside the repo work too).
+                      Combined with --include/--exclude as an intersection
+                      (\`grep\`: added to its globs instead)
   --no-gitignore      Do not honor .gitignore files (default: honored)
   --ignore-dir <name> Directory names to skip (repeatable) — REPLACES the
                       default ignored-directory set, never merges with it
-                      (\`.git\` stays skipped regardless)
-  --max-files <n>     Cap walked files (default: none — the whole tree is
-                      indexed; a cap sets the \`capped\` flag)
+                      (\`.git\` and \`.codeindex\` stay skipped regardless).
+                      A name, not a path: use --exclude '<dir>/**' for a path.
+                      The default set skips build/out/target/tmp only where
+                      git tracks nothing in them; a listed name is skipped
+                      everywhere
+  --max-files <n>     Cap indexed files, counted after --scope/--include/
+                      --exclude (default: none — the whole tree is indexed;
+                      a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
   --max-calls <n>     Per-file call-site cap for extraction (default 512)
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
@@ -201,16 +254,28 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       Also settable with CODEINDEX_WORKERS. Artifacts are
                       byte-identical either way
   --index <dir>       Persisted index the READ commands reuse, relative to the
-                      repo (default .codeindex — i.e. what \`index --out\` wrote
-                      there). A fresh index turns the scan into a stat pass and,
-                      when it still matches the worktree, skips the pipeline
-                      entirely. Stale/absent/corrupt → a normal cold build
+                      repo or absolute (default .codeindex — i.e. what
+                      \`index --out\` wrote there). A fresh index turns the scan
+                      into a stat pass and, when it still matches the worktree,
+                      skips the pipeline entirely. Stale/absent/corrupt → a
+                      normal cold build (with a note on stderr when --index was
+                      given). The dir itself is never scanned. Records built
+                      with another --no-ast/--max-calls setting or grammar set
+                      are re-extracted, never reused
   --no-index-cache    Never reuse a persisted index; always build from scratch
+                      (\`index\` too: its cache.json is ignored, then rewritten)
+  --full-hash         Re-read and re-hash every file instead of trusting an
+                      unchanged (size, mtime) — for an edit that kept both.
+                      Unchanged content still reuses its extraction
+  --check             \`status\`: exit 1 unless the artifacts are fresh;
+                      \`workspaces\`: check declared vs imported dependencies
+  --why <path>        \`scan\`: explain why one path (repo-relative or absolute)
+                      is or is not indexed
+  --skipped           \`scan\`: list every path the scan leaves out, and why
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20); entries per top
                       list for \`resolution\` (default 10)
   --lang <name>       \`resolution\`: report one language (as \`scan\` names it)
-  --check             \`workspaces\`: check declared vs imported dependencies
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
   --exact             \`search\`: drop results that carry no verbatim term match
@@ -251,6 +316,10 @@ interface CliFlags {
   workers?: number; // extraction worker threads (0/1 = sequential)
   indexDir?: string; // persisted index to read (default .codeindex)
   noIndexCache?: boolean; // never reuse a persisted index
+  fullHash?: boolean; // re-read and re-hash every file (no (size, mtime) fastpath)
+  check?: boolean; // status: exit 1 unless fresh; workspaces: compare declared deps with real imports
+  why?: string; // scan: explain one path
+  skipped?: boolean; // scan: list every skip
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
@@ -276,7 +345,6 @@ interface CliFlags {
   direction?: "out" | "in" | "both"; // callgraph: which way to walk
   rank?: "graph" | "lexical"; // search: structural prior (default lexical)
   json?: boolean; // delta: emit JSON instead of the human panel
-  check?: boolean; // workspaces: compare declared deps with real imports (exit 1 on undeclared)
   lang?: string; // resolution: one language's row
   positional?: string; // e.g. the grep pattern or search query
 }
@@ -305,7 +373,9 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--exclude") flags.exclude.push(next());
     else if (a === "--scope") flags.scope = next();
     else if (a === "--no-gitignore") flags.gitignore = false;
-    else if (a === "--ignore-dir") flags.ignoreDirs.push(next());
+    // A trailing separator (`build/`, shell completion's spelling) still names
+    // the directory `build`; the walk compares bare names.
+    else if (a === "--ignore-dir") flags.ignoreDirs.push(next().replace(/(.)[\\/]+$/, "$1"));
     else if (a === "--max-files") flags.maxFiles = num();
     else if (a === "--max-bytes") flags.maxBytes = num();
     else if (a === "--max-calls") flags.maxCalls = num();
@@ -318,6 +388,10 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--no-ast") flags.noAst = true;
     else if (a === "--index") flags.indexDir = next();
     else if (a === "--no-index-cache") flags.noIndexCache = true;
+    else if (a === "--full-hash") flags.fullHash = true;
+    else if (a === "--check") flags.check = true;
+    else if (a === "--why") flags.why = next();
+    else if (a === "--skipped") flags.skipped = true;
     else if (a === "--workers") {
       // 0 is meaningful here (force sequential), so this cannot use num().
       const raw = next();
@@ -351,7 +425,6 @@ function parseFlags(args: string[]): CliFlags {
       flags.direction = v;
     }
     else if (a === "--json") flags.json = true;
-    else if (a === "--check") flags.check = true;
     else if (a === "--lang") flags.lang = next();
     else if (!a.startsWith("--") && flags.positional === undefined) flags.positional = a;
     else throw new Error(`unknown flag: ${a}`);
@@ -359,9 +432,62 @@ function parseFlags(args: string[]): CliFlags {
   return flags;
 }
 
-function emit(content: string, out?: string): void {
+function emit(content: string | Uint8Array, out?: string): void {
   if (out) writeFileSync(out, content);
   else process.stdout.write(content);
+}
+
+// Replace an index artifact in one step: write a sibling temp file, then
+// rename it over the target (atomic on POSIX). graph.json, symbols.json and
+// cache.json used to be truncated and rewritten in place, so a reader polling
+// them mid-index — CI, an editor plugin, the MCP server's artifact preload —
+// saw an empty or half-written file, and a crash mid-write left torn JSON until
+// the next index. The temp name is one the self-index guard skips (scan.ts), so
+// even an --out at the repo root never indexes a leftover. Where the temp file
+// or the rename is refused (a Windows reader holding the target open), fall
+// back to the historical in-place write rather than failing the index.
+function writeArtifact(path: string, data: string | Uint8Array): void {
+  const temp = `${path}.tmp-${process.pid}`;
+  try {
+    writeFileSync(temp, data);
+    renameSync(temp, path);
+    return;
+  } catch {
+    rmSync(temp, { force: true });
+  }
+  writeFileSync(path, data);
+}
+
+// Path flags that cannot mean what was typed, reported once on stderr (stdout
+// carries the command's output). Each used to be a silent empty or unfiltered
+// result: `--ignore-dir src/gen` compares directory NAMES and so skipped
+// nothing, while still replacing the default set; a mistyped --scope
+// answered for zero files with exit 0.
+function warnPathFlags(flags: CliFlags): void {
+  for (const name of flags.ignoreDirs) {
+    if (!/[\\/]/.test(name)) continue;
+    process.stderr.write(
+      `codeindex: warning: --ignore-dir takes a directory name, and "${name}" is a path that matches nothing — use --exclude '${name}/**' to leave that directory out\n`,
+    );
+  }
+  if (flags.scope === undefined) return;
+  const scope = normalizeScope(flags.repo, flags.scope);
+  if (scope === ".." || scope.startsWith("../") || isAbsolute(scope)) {
+    process.stderr.write(`codeindex: warning: --scope ${flags.scope} is outside --repo ${flags.repo} — nothing matches\n`);
+  } else if (scope && !/[*?[]/.test(scope) && !existsSync(join(flags.repo, scope))) {
+    process.stderr.write(`codeindex: warning: --scope ${flags.scope} does not exist under ${flags.repo} — nothing matches\n`);
+  }
+}
+
+// The warning for a scan that kept no file at all. Include globs are rooted at
+// the repo, which is the usual surprise: `*.py` is the top-level files only.
+function warnEmptyScan(flags: CliFlags): void {
+  const rooted = flags.include.find((g) => !g.includes("/"));
+  process.stderr.write(
+    `codeindex: warning: no file of ${flags.repo} was indexed — check --scope/--include/--exclude and the ignore rules` +
+      (rooted ? ` (globs are rooted at the repo: '${rooted}' matches top-level paths only, '**/${rooted}' any depth)` : "") +
+      "\n",
+  );
 }
 
 function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexOptions {
@@ -374,6 +500,15 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
     maxFiles: flags.maxFiles,
     maxBytes: flags.maxBytes,
     maxCallsPerFile: flags.maxCalls,
+    fullHash: flags.fullHash,
+    // The index the read commands consult is excluded from what they scan,
+    // exactly as `index` excludes its --out (which overrides this there). An
+    // in-repo custom dir (`index --out idx` + `--index idx`) was otherwise
+    // scanned as three config files: search answered "graph" with
+    // idx/graph.json, and the scan never matched the index that `index` built
+    // without them, so its artifacts were never reused. The default
+    // .codeindex is pruned by the walk already; this is a no-op there.
+    out: indexDirPath(flags.repo, flags.indexDir),
     // The walk performed once in runCli to warm the present-language grammars,
     // reused here so scanRepo does not traverse the tree a second time. Absent
     // for --no-ast / scan-less commands: scanRepo walks itself, unchanged.
@@ -389,6 +524,51 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
 // resolves/downloads the wasms itself and must not warm them.
 // version/help/mcp return before we get there.
 const SCANLESS_COMMANDS = new Set(["grep", "churn", "coupling", "workspaces", "grammars"]);
+// Commands that walk the tree but never extract a file: no grammar warm, and so
+// no warm-up walk either — they walk once, themselves.
+const WALK_ONLY_COMMANDS = new Set(["scan", "status"]);
+
+// The one-line reason a NAMED --index could not be used (see tryPreload).
+const UNUSABLE_INDEX: Record<UnusableIndex, string> = {
+  absent: "no cache.json there",
+  unreadable: "cache.json cannot be read",
+  corrupt: "cache.json is not a valid index",
+  schema: "written for another schema version",
+  extractor: "written by another extractor version",
+};
+
+// `index` over an index with nothing to write: every kept file at its recorded
+// (size, mtime), each code file extracted at the tier this run uses, the same
+// extraction profile and commit, and artifacts (embeddings included) that are
+// the recorded bytes. That is the fastpath with a clean cache — no cache.json
+// rewrite, no artifact written — proven from freshness.json alone, so the
+// 142MB cache.json of typescript-go is never parsed for it. Returns the proven
+// tree's size, or undefined to take the full path.
+function unchangedIndex(
+  repo: string,
+  opts: FreshnessScanOptions,
+  maxCalls: number | undefined,
+  outDir: string,
+  embedFresh: (embed: PersistedMeta["embed"]) => boolean,
+): { files: number; capped: boolean } | undefined {
+  // Grammars are warmed by now: the tier is known, not predicted.
+  const proof = proveFresh(repo, opts, grammarReady, outDir);
+  if (!proof) return undefined;
+  const { fresh, walked, drift } = proof;
+  const kinds = walked.map((f) => ({ kind: classify(f.rel, f.ext), ext: f.ext }));
+  if (
+    drift.unchanged !== walked.length ||
+    drift.indexed !== walked.length ||
+    fresh.meta.commit !== proof.commit ||
+    !sameExtractionProfile(fresh.meta.extraction, extractionProfile(kinds, maxCalls, grammarReady)) ||
+    !embedFresh(fresh.meta.embed)
+  ) {
+    return undefined;
+  }
+  const onDisk = persistedArtifacts(repo, { contentUnchanged: true, commit: proof.commit }, fresh.meta, outDir);
+  if (!onDisk?.bytes("symbols") || !onDisk.bytes("graph")) return undefined;
+  return { files: walked.length, capped: proof.capped };
+}
 
 // Flags for `codeindex mcp`. Kept separate from parseFlags on purpose (see the
 // dispatch site). `--repo` is resolved to an absolute path and must exist: a
@@ -471,6 +651,7 @@ const VALUE_FLAGS = new Set([
   "--rank",
   "--direction",
   "--lang",
+  "--why",
 ]);
 
 // Accept global flags BEFORE the subcommand as well as after, so
@@ -542,6 +723,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   const flags = parseFlags(rest);
   if (!existsSync(flags.repo)) throw new Error(`--repo path does not exist: ${flags.repo}`);
   if (!statSync(flags.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags.repo}`);
+  warnPathFlags(flags);
 
   // Warm ONLY the grammars for languages actually present, and only for commands
   // that scan the file tree. Scan-less commands (grep, churn, coupling,
@@ -555,13 +737,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     (!SCANLESS_COMMANDS.has(cmd) || (cmd === "workspaces" && flags.check === true)) &&
     !(cmd === "embed" && flags.positional !== "build");
   let precomputedWalk: WalkResult | undefined;
-  if (scans && !flags.noAst) {
-    precomputedWalk = walk(flags.repo, {
-      maxFileBytes: flags.maxBytes,
-      maxFiles: flags.maxFiles,
-      gitignore: flags.gitignore,
-      ignoreDirs: flags.ignoreDirs.length ? flags.ignoreDirs : undefined,
-    });
+  if (scans && !flags.noAst && !WALK_ONLY_COMMANDS.has(cmd)) {
+    // The scan's own walk options, path filter included, so the grammars
+    // warmed are those of the files in scope and the scan can reuse this walk.
+    precomputedWalk = walk(flags.repo, scanWalkOptions(flags.repo, scanOptions(flags)));
   }
   let grammarsWarmed = false;
   const warmPresentGrammars = async (): Promise<void> => {
@@ -584,13 +763,20 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   // output is unchanged either way. Resolved lazily and at most once: a command
   // uses either the scan or the artifacts, never both.
   const indexDir = flags.indexDir ?? INDEX_DIR;
+  type Preloaded = Pick<PreloadedSession, "scan" | "arts" | "loadArtifacts" | "artifacts">;
   let preloadTried = false;
-  let preloadPromise: Promise<{
-    scan: RepoScan;
-    arts?: IndexArtifacts;
-    loadArtifacts?: () => IndexArtifacts | undefined;
-  } | undefined> | undefined;
-  let preloaded: { scan: RepoScan; arts?: IndexArtifacts; loadArtifacts?: () => IndexArtifacts | undefined } | undefined;
+  let preloadPromise: Promise<Preloaded | undefined> | undefined;
+  let preloaded: Preloaded | undefined;
+  // A read command answering from a scan that kept no file says so once, as
+  // `index` and `scan` do: an empty answer otherwise looks like "no match".
+  let warnedEmpty = false;
+  const noteEmpty = (scan: RepoScan): RepoScan => {
+    if (scan.files.length === 0 && !warnedEmpty) {
+      warnedEmpty = true;
+      warnEmptyScan(flags);
+    }
+    return scan;
+  };
   const tryPreload = async (): Promise<typeof preloaded> => {
     if (preloadPromise) return preloadPromise;
     if (preloadTried) return preloaded;
@@ -598,11 +784,21 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (flags.noIndexCache) return undefined;
     preloadPromise = preloadSessionLazy(
       flags.repo,
-      { ...scanOptions(flags, precomputedWalk), workers: flags.workers },
+      { ...scanOptions(flags, precomputedWalk), workers: flags.workers, ast: !flags.noAst },
       warmPresentGrammars,
       indexDir,
     ).then((p) => {
-      if (p) preloaded = { scan: p.scan, arts: p.arts, loadArtifacts: p.loadArtifacts };
+      if (p) preloaded = { scan: noteEmpty(p.scan), arts: p.arts, loadArtifacts: p.loadArtifacts, artifacts: p.artifacts };
+      // The default location being empty is the normal first run; an index the
+      // user NAMED being unusable is a mistake worth one line (a typo'd path
+      // otherwise just looks like a slow command).
+      else if (flags.indexDir !== undefined) {
+        const read = inspectPersistedIndex(flags.repo, indexDir);
+        const why = UNUSABLE_INDEX["unusable" in read ? read.unusable : "unreadable"];
+        process.stderr.write(
+          `codeindex: no usable index at ${indexDirPath(flags.repo, indexDir)} (${why}) — building from scratch\n`,
+        );
+      }
       return preloaded;
     });
     return preloadPromise;
@@ -615,7 +811,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       scanRepoParallel(flags.repo, {
         ...scanOptions(flags, precomputedWalk),
         workers: flags.workers,
-      }),
+      }).then(noteEmpty),
     ));
   };
   let readArtifactsPromise: Promise<IndexArtifacts> | undefined;
@@ -625,6 +821,42 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (p) return (p.arts ??= p.loadArtifacts?.() ?? buildArtifactsFromScan(p.scan, scanOptions(flags, precomputedWalk)));
     return (readArtifactsPromise ??= readScan().then((scan) => buildArtifactsFromScan(scan, scanOptions(flags, precomputedWalk))));
   };
+  // The artifacts of an index that freshness.json alone proves fresh — no
+  // cache.json parse, no records (see freshness.ts). Tried first, at most once,
+  // by the commands that need nothing but artifacts; undefined sends them to
+  // the preload, which reaches the same verdict the slower way.
+  let freshTried = false;
+  let fresh: PersistedArtifacts | undefined;
+  const freshIndex = (): PersistedArtifacts | undefined => {
+    if (!freshTried) {
+      freshTried = true;
+      const proven = flags.noIndexCache
+        ? undefined
+        : freshArtifacts(flags.repo, { ...scanOptions(flags, precomputedWalk), ast: !flags.noAst }, indexDir);
+      if (proven?.fileCount === 0 && !warnedEmpty) {
+        warnedEmpty = true;
+        warnEmptyScan(flags);
+      }
+      fresh = proven?.artifacts;
+    }
+    return fresh;
+  };
+  // A command that needs ONE artifact reads only that file of a fresh index:
+  // readArtifacts loads both, so `rules` or `impact` parsed an 80MB
+  // symbols.json they never looked at. Anything the persisted index cannot
+  // vouch for falls back to readArtifacts, unchanged.
+  const readGraph = async (): Promise<Graph> => {
+    const graph = freshIndex()?.graph();
+    if (graph) return graph;
+    const p = await tryPreload();
+    return p?.arts?.graph ?? p?.artifacts?.graph() ?? (await readArtifacts()).graph;
+  };
+  // An artifact the command prints whole: the verified on-disk bytes ARE the
+  // render of a fresh build (see PersistedArtifacts.bytes), so they are written
+  // out as they are instead of being parsed and re-rendered: about a second
+  // each on typescript-go's 80MB symbols.json, plus the GC, for the same bytes.
+  const readArtifactBytes = async (name: ArtifactName): Promise<Buffer | undefined> =>
+    freshIndex()?.bytes(name) ?? (await tryPreload())?.artifacts?.bytes(name);
 
   if (cmd === "index") {
     if (!flags.out) throw new Error("index needs --out <dir>");
@@ -639,44 +871,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // old caches lacking them simply never take the fastpath below (their
     // per-file records are still reused). cache.json embeds mtimes, so it was
     // never cross-machine byte-reproducible — no determinism surface changes.
-    type CacheMeta = {
-      engineVersion?: string;
-      commit?: string;
-      graphSha1?: string;
-      symbolsSha1?: string;
-      embed?: { embedVersion?: number; modelId?: string; sha1?: string };
-    };
-    let cache: Map<string, CacheEntry> | undefined;
-    let meta: CacheMeta = {};
-    try {
-      const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as {
-        schemaVersion: number;
-        extractorVersion: number;
-        files: Record<string, CacheEntry>;
-      } & CacheMeta;
-      cache = parseCacheEntries(parsed);
-      if (cache) {
-        meta = {
-          engineVersion: parsed.engineVersion,
-          commit: parsed.commit,
-          graphSha1: parsed.graphSha1,
-          symbolsSha1: parsed.symbolsSha1,
-          embed: parsed.embed,
-        };
-      }
-    } catch {
-      // no cache yet (or unreadable) — cold build
-    }
+    type CacheMeta = Pick<PersistedMeta, "engineVersion" | "commit" | "graphSha1" | "symbolsSha1" | "embed">;
     await warmPresentGrammars();
-    const scan = await scanRepoParallel(flags.repo, {
-      ...scanOptions(flags, precomputedWalk),
-      cache,
-      out: outDir,
-      workers: flags.workers,
-    });
     const modelDir = resolveEmbedModelDir(flags.repo);
     const model = modelDir ? loadEmbedModel(modelDir) : undefined;
-
     const graphPath = join(outDir, "graph.json");
     const symbolsPath = join(outDir, "symbols.json");
     const embedPath = join(outDir, "embeddings.bin");
@@ -689,6 +887,72 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         return undefined;
       }
     };
+    // Whether embeddings.bin is what this run would write: no model, or the
+    // recorded sidecar of this model on disk.
+    const embedFresh = (embed: CacheMeta["embed"]): boolean =>
+      !model ||
+      (embed !== undefined &&
+        embed.embedVersion === EMBED_VERSION &&
+        embed.modelId === model.modelId &&
+        embed.sha1 !== undefined &&
+        artifactSha(embedPath) === embed.sha1);
+
+    // NOTHING TO WRITE, decided from freshness.json before cache.json is even
+    // parsed: 2.3s plus a second of GC on typescript-go, for a run that then
+    // wrote nothing. The fastpath below with a clean cache, exactly — see
+    // unchangedIndex — so anything short of it takes the full path.
+    const unchanged = flags.noIndexCache || flags.fullHash
+      ? undefined
+      : unchangedIndex(flags.repo, { ...scanOptions(flags, precomputedWalk), out: outDir }, flags.maxCalls, outDir, embedFresh);
+    if (unchanged) {
+      if (unchanged.files === 0) warnEmptyScan(flags);
+      process.stderr.write(
+        `codeindex: ${unchanged.files} files → ${outDir}/graph.json + symbols.json${unchanged.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
+      );
+      return;
+    }
+
+    // --no-index-cache is the documented "always build from scratch": it used
+    // to be read only by the query commands, so `index` kept trusting a
+    // cache.json whose (size, mtime) keys hid a same-size edit made under a
+    // restored mtime, with no escape hatch short of deleting the file by hand.
+    const persisted = flags.noIndexCache ? undefined : readPersistedIndex(flags.repo, outDir);
+    const meta: CacheMeta = persisted?.meta ?? {};
+    // Grammars are loaded (or deliberately not, under --no-ast), so the tier
+    // this run extracts each language at is known exactly: keep only records
+    // extracted the same way — see compatibleEntries.
+    const cache = persisted && compatibleEntries(persisted.cacheMap, persisted.meta.extraction, {
+      maxCallsPerFile: flags.maxCalls,
+      ast: grammarReady,
+    });
+    const scan = await scanRepoParallel(flags.repo, {
+      ...scanOptions(flags, precomputedWalk),
+      cache,
+      out: outDir,
+      workers: flags.workers,
+    });
+    const extraction = extractionProfile(scan.files, flags.maxCalls, grammarReady);
+    if (scan.files.length === 0) warnEmptyScan(flags);
+    const freshnessPath = join(outDir, FRESHNESS_FILE);
+    // freshness.json (see freshness.ts) for the cache.json now on disk: always
+    // written after it, and only when its bytes change — so a fastpath run on an
+    // index that predates it adds it, and an unchanged index rewrites nothing.
+    const writeFreshness = (out: Pick<CacheMeta, "graphSha1" | "symbolsSha1" | "embed">): void => {
+      let cacheStat: { size: number; mtimeMs: number };
+      try {
+        cacheStat = statSync(cachePath);
+      } catch {
+        return;
+      }
+      const text = renderFreshness(scan, out, extraction, { size: cacheStat.size, mtimeMs: cacheStat.mtimeMs });
+      let current: string | undefined;
+      try {
+        current = readFileSync(freshnessPath, "utf8");
+      } catch {
+        current = undefined;
+      }
+      if (current !== text) writeArtifact(freshnessPath, text);
+    };
     const writeCache = (out: Pick<CacheMeta, "graphSha1" | "symbolsSha1" | "embed">): void => {
       const files: Record<string, CacheEntry> = {};
       for (const f of scan.files) {
@@ -699,7 +963,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       }
       // Fixed key order; JSON.stringify drops the undefined-valued keys
       // (commit outside a git worktree, embed without a model) cleanly.
-      writeFileSync(
+      writeArtifact(
         cachePath,
         JSON.stringify({
           schemaVersion: SCHEMA_VERSION,
@@ -709,9 +973,11 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           graphSha1: out.graphSha1,
           symbolsSha1: out.symbolsSha1,
           embed: out.embed,
+          extraction,
           files,
         }) + "\n",
       );
+      writeFreshness(out);
     };
 
     // FASTPATH GUARD — skip the whole downstream pipeline only when this scan
@@ -719,43 +985,45 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // contentUnchanged means this scan's records are object-identical to that
     // run's; downstream is a pure function of (records, docText, commit,
     // meta-opts) and the CLI never sets meta/previousCommunities;
-    // engineVersion pins the version stamp; commit must match because
-    // graph.json embeds it (identical trees under a new HEAD must rebuild);
-    // the shas prove the on-disk bytes are that run's output. ANY failure —
-    // deleted or tampered artifacts included — falls through to the full
-    // build, which rewrites everything (self-healing).
-    const embedUnchanged =
-      !model ||
-      (meta.embed !== undefined &&
-        meta.embed.embedVersion === EMBED_VERSION &&
-        meta.embed.modelId === model.modelId &&
-        meta.embed.sha1 !== undefined &&
-        artifactSha(embedPath) === meta.embed.sha1);
-    const fastpath =
-      scan.contentUnchanged &&
-      meta.engineVersion === ENGINE_VERSION &&
-      meta.commit === scan.commit &&
-      meta.graphSha1 !== undefined &&
-      artifactSha(graphPath) === meta.graphSha1 &&
-      meta.symbolsSha1 !== undefined &&
-      artifactSha(symbolsPath) === meta.symbolsSha1 &&
-      embedUnchanged;
+    // engineVersion pins the version stamp; the shas prove the on-disk bytes
+    // are that run's output (persistedArtifacts, the guard the read commands
+    // use). graph.json also embeds the commit, so under a new HEAD over the
+    // same tree only its stamp changes: it is restamped from its own parse
+    // and symbols.json kept, where the whole pipeline used to rerun (4.5s on
+    // typescript-go, after every commit of already-indexed edits). ANY other
+    // failure — deleted or tampered artifacts included — falls through to the
+    // full build, which rewrites everything (self-healing).
+    const embedUnchanged = embedFresh(meta.embed);
+    const onDisk = embedUnchanged ? persistedArtifacts(flags.repo, scan, meta, outDir) : undefined;
+    const symbolsReused = onDisk?.bytes("symbols") !== undefined;
+    const fastpath = symbolsReused && onDisk!.bytes("graph") !== undefined;
+    const restampedGraph = symbolsReused && !fastpath && meta.commit !== scan.commit ? onDisk!.graph() : undefined;
 
     if (fastpath) {
       // Artifacts verified byte-identical to what this build would produce —
       // leave them untouched. Rewrite cache.json only when the scan says its
-      // bytes would change (e.g. an mtime drifted); the meta is carried
-      // forward verbatim since the guard just proved it describes the disk.
-      if (scan.cacheDirty) writeCache(meta);
+      // bytes would change (e.g. an mtime drifted) or its extraction profile
+      // would (a cache written before profiles existed, or a --max-calls switch
+      // on a tree with no code to re-extract); the meta is carried forward
+      // verbatim since the guard just proved it describes the disk.
+      if (scan.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction)) writeCache(meta);
+      else writeFreshness(meta);
       process.stderr.write(
         `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
+      );
+    } else if (restampedGraph) {
+      const graphJson = renderGraphJson(restampedGraph);
+      writeArtifact(graphPath, graphJson);
+      writeCache({ graphSha1: sha1(graphJson), symbolsSha1: meta.symbolsSha1, embed: meta.embed });
+      process.stderr.write(
+        `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged at a new commit — graph.json restamped, symbols.json reused)\n`,
       );
     } else {
       const { graph, symbols } = buildArtifactsFromScan(scan);
       const graphJson = renderGraphJson(graph);
       const symbolsJson = renderSymbolsJson(symbols);
-      writeFileSync(graphPath, graphJson);
-      writeFileSync(symbolsPath, symbolsJson);
+      writeArtifact(graphPath, graphJson);
+      writeArtifact(symbolsPath, symbolsJson);
       // Deterministic embeddings sidecar: written next to graph.json ONLY when a
       // model asset is present (opt-in). Silently skipped otherwise — no model, no
       // embeddings.bin, no impact on the graph/symbols consumers.
@@ -764,7 +1032,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       if (model) {
         const index = buildEmbeddingIndex(scan, model);
         const bytes = serializeEmbeddings(index);
-        writeFileSync(embedPath, bytes);
+        writeArtifact(embedPath, bytes);
         embedMeta = { embedVersion: EMBED_VERSION, modelId: model.modelId, sha1: sha1(bytes) };
         embedNote = ` + embeddings.bin (${index.records.length} records, model ${model.modelId})`;
       }
@@ -782,24 +1050,42 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       }
     }
   } else if (cmd === "scan") {
-    // Summary-only: a file count and a language histogram need the walk and the
-    // path-based classifiers, never a read or a parse. Same numbers as before by
-    // construction — scanSummary and scanRepo share the keptFiles loop.
-    const s = scanSummary(flags.repo, scanOptions(flags, precomputedWalk));
-    const summary = {
-      engineVersion: ENGINE_VERSION,
-      commit: s.commit,
-      fileCount: s.fileCount,
-      languages: s.languages,
-      capped: s.capped,
-    };
-    emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
+    if (flags.why !== undefined && flags.skipped) throw new Error("scan takes --why <path> or --skipped, not both");
+    if (flags.why !== undefined) {
+      emit(JSON.stringify(whyPath(flags.repo, flags.why, scanOptions(flags)), null, 2) + "\n", flags.out);
+    } else {
+      // Summary-only: a file count and a language histogram need the walk and
+      // the path-based classifiers, never a read or a parse. Same numbers as
+      // before by construction — scanSummary and scanRepo share the keptFiles
+      // loop. The skips are observed on the same walk.
+      const skips: ScanSkip[] = [];
+      const s = scanSummary(flags.repo, { ...scanOptions(flags), onSkip: (skip) => skips.push(skip) });
+      if (s.fileCount === 0) warnEmptyScan(flags);
+      if (flags.skipped) {
+        emit(JSON.stringify(skips.sort(byKey((skip) => skip.rel)), null, 2) + "\n", flags.out);
+      } else {
+        const summary = {
+          engineVersion: ENGINE_VERSION,
+          commit: s.commit,
+          fileCount: s.fileCount,
+          languages: s.languages,
+          capped: s.capped,
+          excluded: s.excluded,
+          skipped: skipHistogram(skips),
+        };
+        emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
+      }
+    }
+  } else if (cmd === "status") {
+    // The index the read commands would consult, judged under THIS run's scan
+    // flags: an index built with --scope src is stale for a whole-repo read.
+    const status = indexStatus(flags.repo, { ...scanOptions(flags), ast: !flags.noAst }, indexDir);
+    emit(JSON.stringify(status, null, 2) + "\n", flags.out);
+    if (flags.check && !status.artifactsFresh) process.exitCode = 1;
   } else if (cmd === "graph") {
-    const { graph } = await readArtifacts();
-    emit(renderGraphJson(graph), flags.out);
+    emit((await readArtifactBytes("graph")) ?? renderGraphJson(await readGraph()), flags.out);
   } else if (cmd === "symbols") {
-    const { symbols } = await readArtifacts();
-    emit(renderSymbolsJson(symbols), flags.out);
+    emit((await readArtifactBytes("symbols")) ?? renderSymbolsJson((await readArtifacts()).symbols), flags.out);
   } else if (cmd === "scip") {
     const scan = await readScan();
     const bytes = renderScip(scan, { projectRoot: flags.projectRoot });
@@ -982,7 +1268,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       mkdirSync(flags.out, { recursive: true });
       const scan = await readScan();
       const index = buildEmbeddingIndex(scan, model);
-      writeFileSync(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
+      writeArtifact(join(flags.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records → ${flags.out}/embeddings.bin (model ${model.modelId})\n`);
     } else if (sub === "pull") {
       // Default: the official published asset + its pinned sha256. A user-set
@@ -1049,6 +1335,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         cacheDir,
         runtimePresent,
         pullNeeded: !runtimePresent,
+        // The AST tier can be live (pullNeeded false) while the EXTENDED
+        // grammars are missing — the npm layout ships only the core ones — and
+        // those languages then run on the regex tier until a pull.
+        extendedPullNeeded: extended.length < EXTENDED_GRAMMARS.size,
         core: { resolved: core.length, of: CORE_GRAMMARS.size, missing: [...CORE_GRAMMARS].filter((k) => !core.includes(k)).sort() },
         extended: {
           resolved: extended.length,
@@ -1073,7 +1363,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));
-    const { graph } = await readArtifacts();
+    const graph = await readGraph();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
@@ -1089,8 +1379,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
   } else if (cmd === "repomap") {
-    const { scan, graph } = await readArtifacts();
-    emit(renderRepoMap(scan, graph, { budgetTokens: flags.budgetTokens }), flags.out);
+    const graph = await readGraph();
+    emit(renderRepoMap(await readScan(), graph, { budgetTokens: flags.budgetTokens }), flags.out);
   } else if (cmd === "hotspots") {
     const scan = await readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
@@ -1125,13 +1415,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);
   } else if (cmd === "impact") {
     if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
-    const { graph } = await readArtifacts();
+    const graph = await readGraph();
     const res = impactOf(graph, flags.positional, flags.depth ?? Infinity);
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "neighbors") {
     if (!flags.positional) throw new Error("neighbors needs a target: cli.mjs neighbors <file|module> --repo <dir>");
-    const { graph } = await readArtifacts();
+    const graph = await readGraph();
     const kinds = flags.kind ? new Set(flags.kind.split(",").map((k) => k.trim()).filter(Boolean)) : undefined;
     const res = neighborsOf(graph, flags.positional, flags.depth ?? 1, kinds);
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
@@ -1140,8 +1430,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const report = resolutionReport(await readScan(), { lang: flags.lang, limit: flags.limit });
     emit(JSON.stringify(report, null, 2) + "\n", flags.out);
   } else if (cmd === "mermaid") {
-    const { graph } = await readArtifacts();
-    emit(renderMermaid(graph, { module: flags.positional }), flags.out);
+    emit(renderMermaid(await readGraph(), { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
     // `--scope <dir>` is documented as global sugar for `--include '<dir>/**'`;

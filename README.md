@@ -18,9 +18,14 @@ compares](#how-it-compares).
 
 - **Walk** a repo deterministically: ignore lists, `.gitignore` and
   `.git/info/exclude`, binary/lockfile skips, a size cap, symlink-cycle guard.
+  A symlink that stays inside the repo, file or directory, is an alias: its
+  target is indexed once, under its own path. `build`, `out`, `target` and
+  `tmp` are skipped as build output unless git tracks files in them — they
+  are ordinary package names too (a Go `build` package, `com.acme.build`).
   Nested repositories (a subdirectory with its own `.git` — linked worktrees,
-  vendored clones, submodules) are skipped like git does, and `.git` itself is
-  never walked even when `--ignore-dir` replaces the default ignore list. No
+  vendored clones, submodules) are skipped like git does, and `.git` itself —
+  like the engine's own `.codeindex` — is never walked even when
+  `--ignore-dir` replaces the default ignore list. No
   file-count cap unless you ask for one (`--max-files`), and asking sets the
   `capped` flag — never a silent truncation.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
@@ -204,8 +209,9 @@ also vendor `scripts/grammars/` (~17 MiB of wasm).
 ### Inventory consumers
 
 `walk(root, options)` also serves exhaustive inventories. The default source-indexing
-policy is unchanged. Opt into `includeBinary`, `includeLockfiles`, `includeOversize`
-and `includeMinified`, or replace `binaryExtensions` to keep textual SVG. These
+policy is unchanged. Opt into `includeBinary`, `includeLockfiles`, `includeOversize`,
+`includeMinified` and `includeFileSymlinks` (in-repo file links, skipped by default
+as aliases), or replace `binaryExtensions` to keep textual SVG. These
 controls are independent: a `.lock` extension still follows the binary policy.
 
 `filter({ rel, abs, directory })` prunes consumer output and out-of-scope trees
@@ -233,8 +239,9 @@ checkout for a benefit only some can use. It ships inside the per-release
 `grammars-<version>.tar.gz` asset instead. Without a pull those grammars are
 simply absent and the engine falls back to the regex tier, exactly as it does for
 a language it has no grammar for at all — `codeindex grammars status` reports
-resolved-vs-missing per tier so a Kotlin repo quietly indexed by regex is visible
-rather than guesswork.
+resolved-vs-missing per tier (and `extendedPullNeeded` while any extended
+grammar is missing) so a Kotlin repo quietly indexed by regex is visible rather
+than guesswork.
 
 *Not included, and why:* **Swift** publishes no prebuilt wasm at all, and
 **Dart**'s does not load under web-tree-sitter 0.26 — shipping it would be dead
@@ -251,9 +258,13 @@ codeindex grammars status   # active tier (adjacent/env/cache/none) + whether a 
 codeindex grammars pull     # fetch the per-release grammars asset, sha256-verified, into the cache
 ```
 
-Resolution is **adjacent > env > cache > regex**: a bundle-adjacent `grammars/`
-still wins if present (offline setups are untouched), then
-`CODEINDEX_GRAMMARS_DIR`, then the pulled cache. `pull` fetches the official
+Resolution is **adjacent > env > cache > regex**, per grammar: a
+bundle-adjacent `grammars/` still wins if present (offline setups are
+untouched), then `CODEINDEX_GRAMMARS_DIR`, then the pulled cache — and a
+grammar the winner lacks is looked up in the tiers below it. That is what lets
+the npm package (which ships only the core wasms) pick up the extended ones a
+pull put in the cache. The legacy `CODEINDEX_GRAMMAR_DIR` still pins one dir
+with nothing behind it. `pull` fetches the official
 `grammars-<version>.tar.gz` release asset (its `.sha256` sidecar is verified
 before anything is written) and extracts it atomically; the same wasm bytes
 produce **byte-identical** AST extraction from the cache as from a vendored dir.
@@ -384,6 +395,8 @@ public repository client-side ([source](site/playground/)).
 brew install maxgfr/tap/codeindex        # or: npm i -g @maxgfr/codeindex
 
 codeindex index   --repo . --out .codeindex   # graph + symbols + incremental cache
+codeindex status  --repo . --check            # is .codeindex still fresh? (exit 1 if not)
+codeindex scan    --repo . --why src/big.go   # why is this file (not) indexed?
 codeindex graph   --repo . > graph.json
 codeindex scip    --repo . --out index.scip   # SCIP index (--out - for stdout)
 codeindex callers --repo .                    # per-symbol caller index
@@ -396,6 +409,70 @@ codeindex workspaces --repo . --check         # monorepo packages; undeclared si
 codeindex resolution --repo .                 # per-language import resolution health
 codeindex mermaid src/app --repo .            # module diagram around a module, dir or file
 ```
+
+`index` keeps a `cache.json` next to the artifacts, and every read command
+reuses whatever sits in `--index` (default `.codeindex`; relative to the repo,
+or absolute): unchanged files skip extraction, and when nothing changed the
+artifacts load instead of being rebuilt — one file at a time: `graph` and
+`symbols` print the sha-verified bytes on disk as they are, and a command that
+needs only the graph never reads `symbols.json`. A new commit over an unchanged
+tree only restamps `graph.json`'s `commit`; `symbols.json` is kept as it is.
+The index dir itself is never scanned, and `--out .` at the repo root skips
+only the artifacts it writes. A record is reused only if it was extracted the
+way this run would extract it — the same `--no-ast`/`--max-calls` setting and
+the same grammar per language — so switching either, or pulling a grammar,
+re-extracts exactly the files it affects. Freshness is keyed on `(size,
+mtime)`; for an edit that preserves both, `--full-hash` re-hashes every file
+and `--no-index-cache` ignores the cache altogether (for `index` too).
+Artifacts are replaced atomically (a temp file renamed over the old one), so a
+concurrent reader never sees a torn file.
+
+Next to `cache.json`, `index` writes `freshness.json`: each file's `(hash,
+size, mtime)`, the artifact shas and versions, without the per-file records
+that make up nearly all of `cache.json` (10MB against 142MB on a 66k-file
+repo). It is enough to prove the artifacts fresh, so `graph`, `symbols`, the
+commands that need only the graph, `status`, and an `index` with nothing to
+write never parse `cache.json` (on that repo: `graph` 4.4s → 1.5s, `status`
+4.0s → 1.6s, an unchanged `index` 5.6s → 1.8s). It records `cache.json`'s own
+`(size, mtime)`, so one rewritten without it is ignored; a missing, stale or
+malformed `freshness.json` only sends the command the slower way, to the same
+answer.
+
+`codeindex status` says whether that index still describes the tree, without
+rebuilding anything: it reads `freshness.json` (else `cache.json`), walks and
+stats, and hashes only the files whose `(size, mtime)` changed. It reports whether `cache.json` is
+usable (or why not: `absent`, `unreadable`, `corrupt`, or written for another
+`schema` or `extractor` version), the indexed and HEAD commits, per-file drift
+(`unchanged`, `touched`, `modified`, `added`, `deleted`, and `reextract` for
+records built under another `--no-ast`/`--max-calls` setting or grammar set),
+and `artifactsFresh` with the reasons it is false (`engine-version`,
+`extraction`, `files`, `graph.json`, `symbols.json`). It judges the index under
+the flags it is given, as a read command would. `--check` exits 1 unless the
+artifacts are fresh: a CI gate for a committed index. A moved HEAD alone is not
+stale, since an index committed to the repo never matches the commit that
+contains it and read commands restamp the commit anyway; `embeddings.bin` is
+not checked. The MCP `index_status` tool gives the same answer.
+
+`--scope <dir|file>` restricts a command to one part of the repo (`./src`,
+`src/` and an absolute path inside the repo all name `src`), and combines with
+`--include`/`--exclude` as an intersection: `--scope src --include '**/*.md'`
+is the markdown under `src/`. Globs are rooted at the repo, so `*.md` is the
+top-level files only and `**/*.md` any depth. The filter runs inside the walk:
+`--max-files` counts only files it keeps, and a directory that cannot hold one
+is never listed (a `--scope` over 186 files of a 66k-file repo walks those
+186). `grep` is the exception: it adds the scope to its globs. A `--scope`
+that does not exist, an `--ignore-dir` given a path rather than a directory
+name, and a filter that keeps no file at all each print a warning on stderr.
+
+`scan` also counts what the walk left out, by reason (`skipped`: `gitignored`,
+`ignore-dir`, `over-max-bytes`, `binary-ext`, `lockfile`, `minified`, `filter`,
+`nested-repo`, the symlink cases and `index-output`; a skipped directory counts
+once, since its contents are never listed). `scan --skipped` lists every skip,
+sorted by path, and `scan --why <path>` explains one path as `{path, indexed,
+reason, detail}`: the detail names the ignore file, line and pattern that
+decided it, its size against `--max-bytes`, the
+`--scope`/`--include`/`--exclude` that filtered it out, or the skipped
+directory above it.
 
 ## Values with no single source of truth
 
@@ -842,11 +919,11 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**34 tools**, grouped by what they answer:
+**35 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
-| orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
+| orient | `scan_summary`, `index_status`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
 | impact | `find_references`, `callers`, `call_graph`, `dead_code`, `resolution_report` |
 | types | `type_hierarchy`, `implementations` |
@@ -947,9 +1024,9 @@ introduced are only sent to clients that asked for it, so an older client sees
 exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
-the 28 read tools, `destructiveHint`/`idempotentHint` on the six that write —
+the 29 read tools, `destructiveHint`/`idempotentHint` on the six that write —
 which is what lets a host auto-approve reads and confirm only writes. From
-`2025-06-18`, the 21 tools whose result is always a JSON object also declare an
+`2025-06-18`, the 22 tools whose result is always a JSON object also declare an
 `outputSchema` and return `structuredContent`, so a client can validate and type
 the result instead of re-parsing a string. The remaining tools return arrays,
 argument-dependent shapes or plain text, which cannot yield a conforming
@@ -1042,7 +1119,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **34 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **35 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

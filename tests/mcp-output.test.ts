@@ -128,6 +128,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   duplicated_literals: {},
   embed_status: {},
   resolution_report: {},
+  index_status: {},
   write_memory: { name: "schema-probe", content: "x" },
   delete_memory: { name: "schema-probe" },
   // The three symbolic edits share a schema and would mutate the fixture, so
