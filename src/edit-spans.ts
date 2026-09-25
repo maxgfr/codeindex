@@ -222,7 +222,13 @@ const BRACKET_ATTRIBUTES = new Set(["csharp", "cpp"]); // [Attr] / [[attr]]
 // How far up a multi-line comment or attribute is followed before giving up.
 const MAX_BLOCK_LINES = 200;
 
+// Rust's inner docs and attributes (`//!`, `/*!`, `#![…]`) belong to the
+// enclosing module and must precede its items: code inserted above them would
+// not compile.
+const RUST_INNER = /^(?:\/\/!|\/\*!|#!\[)/;
+
 function isLineComment(t: string, lang: string, index: number): boolean {
+  if (lang === "rust" && RUST_INNER.test(t)) return false;
   if (SLASH_COMMENTS.has(lang) && (t.startsWith("//") || (t.startsWith("/*") && t.endsWith("*/")))) return true;
   if (HASH_COMMENTS.has(lang) && t.startsWith("#") && !(index === 0 && t.startsWith("#!"))) return true;
   return DASH_COMMENTS.has(lang) && t.startsWith("--");
@@ -230,7 +236,7 @@ function isLineComment(t: string, lang: string, index: number): boolean {
 
 function isAttributeStart(t: string, lang: string): boolean {
   if (AT_ATTRIBUTES.has(lang) && /^@[A-Za-z_]/.test(t)) return true;
-  if (HASH_ATTRIBUTES.has(lang) && /^#!?\[/.test(t)) return true;
+  if (HASH_ATTRIBUTES.has(lang) && /^#\[/.test(t)) return true;
   if (BRACKET_ATTRIBUTES.has(lang) && t.startsWith("[")) return true;
   return lang === "cpp" && /^template\b/.test(t);
 }
@@ -256,7 +262,8 @@ function blockStart(lines: readonly string[], end: number, lang: string): number
       const open = line.lastIndexOf("/*");
       if (open < 0) continue;
       // The opener must start its line: `x = 1; /* … */` is code, not a doc block.
-      return line.trim().startsWith("/*") ? j : undefined;
+      const opener = line.trim();
+      return opener.startsWith("/*") && !(lang === "rust" && RUST_INNER.test(opener)) ? j : undefined;
     }
     return undefined;
   }

@@ -95,6 +95,9 @@ describe("leadingBlockStart (decorators and doc comments above a declaration)", 
   it("knows Rust, C# and C++ attribute forms", () => {
     expect(lead("/// Doc.\n#[derive(\n    Debug,\n)]\n#[inline]\npub fn f() {}\n", 6, "rust")).toBe(1);
     expect(lead("/// <summary>x</summary>\n[Serializable]\npublic class C {}\n", 3, "csharp")).toBe(1);
+    // Inner docs and attributes belong to the module: nothing may precede them.
+    expect(lead("//! Crate docs.\n#![allow(dead_code)]\n/// Doc.\npub fn f() {}\n", 4, "rust")).toBe(3);
+    expect(lead("/*! Crate docs.\n */\npub fn f() {}\n", 3, "rust")).toBe(3);
     expect(lead("// Twice.\ntemplate <typename T,\n          typename U>\nT twice(T x) { return x; }\n", 4, "cpp")).toBe(1);
   });
 
