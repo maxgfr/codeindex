@@ -8,6 +8,9 @@ import { preloadSessionLazy, readPersistedIndex } from "../src/preload.js";
 import { ensureGrammars, grammarKeysForExts } from "../src/ast/loader.js";
 import { scanRepo } from "../src/scan.js";
 import { walk } from "../src/walk.js";
+import { sha1 } from "../src/hash.js";
+import { renderMermaid } from "../src/viz.js";
+import type { Graph } from "../src/types.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
@@ -170,6 +173,60 @@ describe("persisted-index reuse — output-identical", { timeout: 60_000 }, () =
       // The preloaded artifacts describe the WHOLE repo; a --scope read must
       // not serve them. Compare against the same scoped read built cold.
       expect(run(repo, ["symbols", "--scope", "src"])).toBe(run(repo, ["symbols", "--scope", "src", "--no-index-cache"]));
+    });
+  });
+});
+
+// Rewrite one artifact of the primed index and record its new sha in
+// cache.json, as `index` would have: the index still vouches for it. Bytes that
+// are NOT what a fresh render prints then show which path a command took —
+// passing the verified bytes through, or parsing and re-rendering them.
+function doctor(repo: string, name: "graph" | "symbols", bytes: string): void {
+  const dir = join(repo, ".codeindex");
+  writeFileSync(join(dir, `${name}.json`), bytes);
+  const cache = JSON.parse(readFileSync(join(dir, "cache.json"), "utf8")) as Record<string, unknown>;
+  cache[`${name}Sha1`] = sha1(bytes);
+  writeFileSync(join(dir, "cache.json"), JSON.stringify(cache) + "\n");
+}
+const artifact = (repo: string, name: string): string => readFileSync(join(repo, ".codeindex", `${name}.json`), "utf8");
+
+// graph/symbols parsed BOTH artifacts of a fresh index, then re-rendered the
+// one they print: 8.4s/7.6s on typescript-go for bytes already on disk (now
+// 5.0s/5.3s, the rest being cache.json and the walk).
+describe("a fresh index is read one artifact at a time", { timeout: 60_000 }, () => {
+  it("graph and symbols print the verified on-disk bytes as they are", () => {
+    withRepo((repo) => {
+      prime(repo);
+      for (const name of ["graph", "symbols"] as const) {
+        const compact = JSON.stringify(JSON.parse(artifact(repo, name))) + "\n";
+        doctor(repo, name, compact);
+        expect(run(repo, [name]), name).toBe(compact);
+      }
+    });
+  });
+
+  it("symbols never reads graph.json", () => {
+    withRepo((repo) => {
+      prime(repo);
+      rmSync(join(repo, ".codeindex", "graph.json"));
+      const compact = JSON.stringify(JSON.parse(artifact(repo, "symbols"))) + "\n";
+      doctor(repo, "symbols", compact);
+      expect(run(repo, ["symbols"])).toBe(compact);
+    });
+  });
+
+  it("graph-only commands never read symbols.json", () => {
+    withRepo((repo) => {
+      prime(repo);
+      rmSync(join(repo, ".codeindex", "symbols.json"));
+      // A graph the pipeline would not build here, so the answer shows where
+      // it came from.
+      const graph = JSON.parse(artifact(repo, "graph")) as Graph;
+      expect(graph.moduleEdges.length).toBeGreaterThan(0);
+      const doctored: Graph = { ...graph, moduleEdges: [] };
+      doctor(repo, "graph", JSON.stringify(doctored, null, 2) + "\n");
+      expect(run(repo, ["mermaid"])).toBe(renderMermaid(doctored));
+      expect(run(repo, ["mermaid"])).not.toBe(run(repo, ["mermaid", "--no-index-cache"]));
     });
   });
 });

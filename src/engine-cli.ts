@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord } from "./types.js";
+import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord, type Graph } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
 import {
   CORE_GRAMMARS,
@@ -19,7 +19,15 @@ import { renderSymbolsJson } from "./render/symbols-json.js";
 import { renderScip } from "./render/scip.js";
 import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan } from "./scan.js";
 import { scanRepoParallel } from "./pool.js";
-import { indexDirPath, preloadSessionLazy, readPersistedIndex, INDEX_DIR, type PersistedMeta } from "./preload.js";
+import {
+  indexDirPath,
+  preloadSessionLazy,
+  readPersistedIndex,
+  INDEX_DIR,
+  type ArtifactName,
+  type PersistedMeta,
+  type PreloadedSession,
+} from "./preload.js";
 import { compatibleEntries, extractionProfile, sameExtractionProfile } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
@@ -363,7 +371,7 @@ function parseFlags(args: string[]): CliFlags {
   return flags;
 }
 
-function emit(content: string, out?: string): void {
+function emit(content: string | Uint8Array, out?: string): void {
   if (out) writeFileSync(out, content);
   else process.stdout.write(content);
 }
@@ -644,13 +652,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   // output is unchanged either way. Resolved lazily and at most once: a command
   // uses either the scan or the artifacts, never both.
   const indexDir = flags.indexDir ?? INDEX_DIR;
+  type Preloaded = Pick<PreloadedSession, "scan" | "arts" | "loadArtifacts" | "artifacts">;
   let preloadTried = false;
-  let preloadPromise: Promise<{
-    scan: RepoScan;
-    arts?: IndexArtifacts;
-    loadArtifacts?: () => IndexArtifacts | undefined;
-  } | undefined> | undefined;
-  let preloaded: { scan: RepoScan; arts?: IndexArtifacts; loadArtifacts?: () => IndexArtifacts | undefined } | undefined;
+  let preloadPromise: Promise<Preloaded | undefined> | undefined;
+  let preloaded: Preloaded | undefined;
   // A read command answering from a scan that kept no file says so once, as
   // `index` and `scan` do: an empty answer otherwise looks like "no match".
   let warnedEmpty = false;
@@ -672,7 +677,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       warmPresentGrammars,
       indexDir,
     ).then((p) => {
-      if (p) preloaded = { scan: noteEmpty(p.scan), arts: p.arts, loadArtifacts: p.loadArtifacts };
+      if (p) preloaded = { scan: noteEmpty(p.scan), arts: p.arts, loadArtifacts: p.loadArtifacts, artifacts: p.artifacts };
       // The default location being empty is the normal first run; an index the
       // user NAMED being unusable is a mistake worth one line (a typo'd path
       // otherwise just looks like a slow command).
@@ -703,6 +708,20 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (p) return (p.arts ??= p.loadArtifacts?.() ?? buildArtifactsFromScan(p.scan, scanOptions(flags, precomputedWalk)));
     return (readArtifactsPromise ??= readScan().then((scan) => buildArtifactsFromScan(scan, scanOptions(flags, precomputedWalk))));
   };
+  // A command that needs ONE artifact reads only that file of a fresh index:
+  // readArtifacts loads both, so `rules` or `impact` parsed an 80MB
+  // symbols.json they never looked at. Anything the persisted index cannot
+  // vouch for falls back to readArtifacts, unchanged.
+  const readGraph = async (): Promise<Graph> => {
+    const p = await tryPreload();
+    return p?.arts?.graph ?? p?.artifacts?.graph() ?? (await readArtifacts()).graph;
+  };
+  // An artifact the command prints whole: the verified on-disk bytes ARE the
+  // render of a fresh build (see PersistedArtifacts.bytes), so they are written
+  // out as they are instead of being parsed and re-rendered: about a second
+  // each on typescript-go's 80MB symbols.json, plus the GC, for the same bytes.
+  const readArtifactBytes = async (name: ArtifactName): Promise<Buffer | undefined> =>
+    (await tryPreload())?.artifacts?.bytes(name);
 
   if (cmd === "index") {
     if (!flags.out) throw new Error("index needs --out <dir>");
@@ -858,11 +877,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
   } else if (cmd === "graph") {
-    const { graph } = await readArtifacts();
-    emit(renderGraphJson(graph), flags.out);
+    emit((await readArtifactBytes("graph")) ?? renderGraphJson(await readGraph()), flags.out);
   } else if (cmd === "symbols") {
-    const { symbols } = await readArtifacts();
-    emit(renderSymbolsJson(symbols), flags.out);
+    emit((await readArtifactBytes("symbols")) ?? renderSymbolsJson((await readArtifacts()).symbols), flags.out);
   } else if (cmd === "scip") {
     const scan = await readScan();
     const bytes = renderScip(scan, { projectRoot: flags.projectRoot });
@@ -1140,7 +1157,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));
-    const { graph } = await readArtifacts();
+    const graph = await readGraph();
     const violations = checkRules(graph, rules);
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
@@ -1161,8 +1178,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
     emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
   } else if (cmd === "repomap") {
-    const { scan, graph } = await readArtifacts();
-    emit(renderRepoMap(scan, graph, { budgetTokens: flags.budgetTokens }), flags.out);
+    const graph = await readGraph();
+    emit(renderRepoMap(await readScan(), graph, { budgetTokens: flags.budgetTokens }), flags.out);
   } else if (cmd === "hotspots") {
     const scan = await readScan();
     const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
@@ -1197,20 +1214,19 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);
   } else if (cmd === "impact") {
     if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
-    const { graph } = await readArtifacts();
+    const graph = await readGraph();
     const res = impactOf(graph, flags.positional, flags.depth ?? Infinity);
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "neighbors") {
     if (!flags.positional) throw new Error("neighbors needs a target: cli.mjs neighbors <file|module> --repo <dir>");
-    const { graph } = await readArtifacts();
+    const graph = await readGraph();
     const kinds = flags.kind ? new Set(flags.kind.split(",").map((k) => k.trim()).filter(Boolean)) : undefined;
     const res = neighborsOf(graph, flags.positional, flags.depth ?? 1, kinds);
     if (!res) throw new Error(`no such file or module in the index: ${flags.positional}`);
     emit(JSON.stringify(res, null, 2) + "\n", flags.out);
   } else if (cmd === "mermaid") {
-    const { graph } = await readArtifacts();
-    emit(renderMermaid(graph, { module: flags.positional }), flags.out);
+    emit(renderMermaid(await readGraph(), { module: flags.positional }), flags.out);
   } else if (cmd === "grep") {
     if (!flags.positional) throw new Error("grep needs a pattern: cli.mjs grep <pattern> --repo <dir>");
     // `--scope <dir>` is documented as global sugar for `--include '<dir>/**'`;

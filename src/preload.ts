@@ -73,6 +73,32 @@ export interface PreloadedSession {
   arts?: IndexArtifacts;
   /** Async preload callers defer the large graph/symbol JSON read until needed. */
   loadArtifacts?: () => IndexArtifacts | undefined;
+  /**
+   * The same on-disk artifacts one at a time, for a caller that needs only one
+   * of them (or only its bytes). Absent when the freshness guard fails.
+   */
+  artifacts?: PersistedArtifacts;
+}
+
+export type ArtifactName = "graph" | "symbols";
+
+// graph.json/symbols.json as far as the freshness guard vouches for them, read
+// one file at a time and only when asked.
+//
+// `loadArtifacts` reads, sha1s and JSON.parses BOTH files, which is what a
+// command using both needs. `codeindex symbols` on typescript-go (55MB graph,
+// 80MB symbols) paid for the graph it never used, then re-rendered a
+// byte-identical symbols.json out of the parse: 8.3s, where streaming the
+// verified bytes needs a read and a sha. Nothing is retained between calls, so
+// a long-lived holder (the MCP session) keeps no 100MB buffer alive.
+export interface PersistedArtifacts {
+  // The artifact's on-disk bytes, when they are EXACTLY what rendering a fresh
+  // build here prints (renderGraphJson / renderSymbolsJson): the guard proves
+  // the build equal, and the sha proves these bytes are its render. undefined
+  // otherwise.
+  bytes(name: ArtifactName): Buffer | undefined;
+  graph(): Graph | undefined;
+  symbols(): SymbolIndex | undefined;
 }
 
 // A scan re-expressed as the `ScanOptions.cache` shape (the exact map the CLI
@@ -135,24 +161,50 @@ export function readPersistedIndex(
   };
 }
 
+// One artifact's on-disk bytes, or undefined when it is missing or they are not
+// the bytes cache.json recorded (tampered, partial, rewritten since). sha over
+// the raw bytes; sha1(string) hashes the same UTF-8 bytes writeFileSync put on
+// disk, so this equals the meta sha the CLI computed over the render.
+function verifiedBytes(dir: string, name: ArtifactName, sha: string | undefined): Buffer | undefined {
+  if (sha === undefined) return undefined;
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(join(dir, `${name}.json`));
+  } catch {
+    return undefined; // a sha'd artifact went missing since cache.json — rebuild
+  }
+  return sha1(bytes) === sha ? bytes : undefined;
+}
+
+function parsed<T extends { schemaVersion: number }>(bytes: Buffer | undefined): T | undefined {
+  if (!bytes) return undefined;
+  try {
+    const value = JSON.parse(bytes.toString("utf8")) as T;
+    return value.schemaVersion === SCHEMA_VERSION ? value : undefined;
+  } catch {
+    // Unreachable once the sha matched (the bytes are valid JSON this engine
+    // wrote), but the contract is "never throw" — degrade to a rebuild.
+    return undefined;
+  }
+}
+
 // The freshness guard, applied to a scan seeded from cache.json:
 // contentUnchanged proves this scan's records are the ones that built the
 // on-disk artifacts; engineVersion pins the version stamp graph.json embeds and
 // commit the HEAD it embeds; the sha checks prove the on-disk bytes ARE that
 // build's output. All true ⇒ graph.json/symbols.json are byte-equal to
-// buildArtifactsFromScan(scan) run here, so deserialize them instead of
-// rebuilding. Graph/SymbolIndex are pure JSON POJOs (no Map/Set/typed fields),
-// so JSON.parse is a lossless round-trip — a schemaVersion assert is the only
-// reconstruction needed. ANY failure — a stale scan, a version/commit/sha
-// mismatch, a missing/corrupt/partial artifact, an unexpected schemaVersion —
-// returns undefined so the caller rebuilds. NEVER throws (a corrupt artifact
-// must degrade, not crash the caller).
-export function preloadArtifacts(
+// buildArtifactsFromScan(scan) run here and rendered. Graph/SymbolIndex are pure
+// JSON POJOs (no Map/Set/typed fields), so JSON.parse is a lossless round-trip
+// — a schemaVersion assert is the only reconstruction needed. undefined when
+// the guard fails; a missing/corrupt/partial artifact, or an unexpected
+// schemaVersion, makes that artifact's reads undefined. NEVER throws (a
+// corrupt artifact must degrade, not crash the caller).
+export function persistedArtifacts(
   repo: string,
   scan: RepoScan,
   meta: PersistedMeta,
   indexDir: string = INDEX_DIR,
-): IndexArtifacts | undefined {
+): PersistedArtifacts | undefined {
   if (
     !scan.contentUnchanged ||
     meta.engineVersion !== ENGINE_VERSION ||
@@ -163,29 +215,29 @@ export function preloadArtifacts(
     return undefined;
   }
   const dir = indexDirPath(repo, indexDir);
-  let graphBytes: Buffer;
-  let symbolsBytes: Buffer;
-  try {
-    graphBytes = readFileSync(join(dir, "graph.json"));
-    symbolsBytes = readFileSync(join(dir, "symbols.json"));
-  } catch {
-    return undefined; // a sha'd artifact went missing since cache.json — rebuild
-  }
-  // sha over the raw bytes; sha1(string) hashes the same UTF-8 bytes writeFileSync
-  // put on disk, so this equals the meta sha the CLI computed over the render.
-  if (sha1(graphBytes) !== meta.graphSha1 || sha1(symbolsBytes) !== meta.symbolsSha1) {
-    return undefined; // tampered / partial / corrupt on-disk bytes — rebuild
-  }
-  try {
-    const graph = JSON.parse(graphBytes.toString("utf8")) as Graph;
-    const symbols = JSON.parse(symbolsBytes.toString("utf8")) as SymbolIndex;
-    if (graph.schemaVersion !== SCHEMA_VERSION || symbols.schemaVersion !== SCHEMA_VERSION) return undefined;
-    return { scan, graph, symbols };
-  } catch {
-    // Unreachable once the shas matched (the bytes are valid JSON this engine
-    // wrote), but the contract is "never throw" — degrade to a rebuild.
-    return undefined;
-  }
+  const sha = (name: ArtifactName): string | undefined => (name === "graph" ? meta.graphSha1 : meta.symbolsSha1);
+  return {
+    bytes: (name) => verifiedBytes(dir, name, sha(name)),
+    graph: () => parsed<Graph>(verifiedBytes(dir, "graph", meta.graphSha1)),
+    symbols: () => parsed<SymbolIndex>(verifiedBytes(dir, "symbols", meta.symbolsSha1)),
+  };
+}
+
+// Both artifacts at once (see persistedArtifacts): value-equal to
+// buildArtifactsFromScan(scan) run here, or undefined so the caller rebuilds.
+export function preloadArtifacts(
+  repo: string,
+  scan: RepoScan,
+  meta: PersistedMeta,
+  indexDir: string = INDEX_DIR,
+): IndexArtifacts | undefined {
+  return bothArtifacts(scan, persistedArtifacts(repo, scan, meta, indexDir));
+}
+
+function bothArtifacts(scan: RepoScan, onDisk: PersistedArtifacts | undefined): IndexArtifacts | undefined {
+  const graph = onDisk?.graph();
+  const symbols = graph ? onDisk?.symbols() : undefined;
+  return graph && symbols ? { scan, graph, symbols } : undefined;
 }
 
 // Seed a scan from cache.json and, when the guard holds, the artifacts from
@@ -266,6 +318,7 @@ export async function preloadSessionLazy(
     cache = compatible(grammarReady);
   }
   const scan = await scanRepoParallel(repo, { ...scanOpts, workers, cache, precomputedWalk: walked });
+  const onDisk = persistedArtifacts(repo, scan, persisted.meta, indexDir);
   let artifactsTried = false;
   let artifacts: IndexArtifacts | undefined;
   return {
@@ -274,9 +327,10 @@ export async function preloadSessionLazy(
     loadArtifacts: () => {
       if (!artifactsTried) {
         artifactsTried = true;
-        artifacts = preloadArtifacts(repo, scan, persisted.meta, indexDir);
+        artifacts = bothArtifacts(scan, onDisk);
       }
       return artifacts;
     },
+    ...(onDisk ? { artifacts: onDisk } : {}),
   };
 }

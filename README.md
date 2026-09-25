@@ -392,11 +392,13 @@ codeindex literals --repo .                   # values with no single source of 
 `index` keeps a `cache.json` next to the artifacts, and every read command
 reuses whatever sits in `--index` (default `.codeindex`; relative to the repo,
 or absolute): unchanged files skip extraction, and when nothing changed the
-artifacts load instead of being rebuilt. The index dir itself is never scanned,
-and `--out .` at the repo root skips only the artifacts it writes. A record is
-reused only if it was extracted the way this run would extract it — the same
-`--no-ast`/`--max-calls` setting and the same grammar per language — so
-switching either, or pulling a grammar, re-extracts exactly the files it
+artifacts load instead of being rebuilt — one file at a time: `graph` and
+`symbols` print the sha-verified bytes on disk as they are, and a command that
+needs only the graph never reads `symbols.json`. The index dir itself is never
+scanned, and `--out .` at the repo root skips only the artifacts it writes. A
+record is reused only if it was extracted the way this run would extract it —
+the same `--no-ast`/`--max-calls` setting and the same grammar per language —
+so switching either, or pulling a grammar, re-extracts exactly the files it
 affects. Freshness is keyed on `(size, mtime)`; for an edit that preserves
 both, `--full-hash` re-hashes every file and `--no-index-cache` ignores the
 cache altogether (for `index` too). Artifacts are replaced atomically (a temp
