@@ -256,7 +256,7 @@ export function bm25StemsFor(scan: RepoScan): Map<string, string[]> {
 }
 
 // Whole-file branch counts for every code file (riskHotspots' per-file
-// complexity). The FIRST call still reads each code file from disk — accepted;
+// complexity), over code only (complexity.ts codeOnly). The FIRST call still reads each code file from disk — accepted;
 // repeat calls on the same scan become lookups.
 export function fileComplexityFor(scan: RepoScan): Map<string, number> {
   const c = cacheFor(scan);
@@ -264,7 +264,7 @@ export function fileComplexityFor(scan: RepoScan): Map<string, number> {
     const m = new Map<string, number>();
     for (const f of scan.files) {
       if (f.kind !== "code") continue;
-      m.set(f.rel, complexityOfSource(readText(join(scan.root, f.rel))));
+      m.set(f.rel, complexityOfSource(readText(join(scan.root, f.rel)), f.lang));
     }
     c.fileComplexity = m;
   }

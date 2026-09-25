@@ -13,10 +13,13 @@
 // the graph is built on demand from the scan, so no artifact or schema grows.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { familyOf, pickCandidate, type Cand } from "./calls.js";
+import { createCallBinder } from "./bind.js";
 import { enclosingAmong } from "./callers.js";
-import { resolveRelations } from "./relations.js";
+import { familyOf } from "./calls.js";
+import { goImplementations, resolveRelations } from "./relations.js";
 import { byStr } from "./sort.js";
+import { shortestPaths, type PathHop } from "./paths.js";
+import { symbolRefReadings } from "./symref.js";
 
 // Internal Map-key separator. Written as an ESCAPE, never as a literal NUL: a
 // literal one makes git, grep and file(1) treat this source as binary, and makes
@@ -30,7 +33,12 @@ const SEP = "\u0000";
 // re-exports. Same set the caller index and the graph builder use.
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
-export type SymbolEdgeKind = "calls" | "extends" | "implements";
+// `overrides`: a method to the supertype method of the same name it replaces
+// (or implements). A call site binds to the method its receiver's DECLARED
+// type names — `x.area()` on a `Shape` reaches `Shape/area` — while at run
+// time any override may answer; the walk below follows these edges so a
+// neighborhood shows what dispatch can reach.
+export type SymbolEdgeKind = "calls" | "extends" | "implements" | "overrides";
 
 export interface SymbolNode {
   /** Stable id: `file#Parent/name` for a member, `file#name` otherwise. */
@@ -49,7 +57,7 @@ export interface SymbolEdge {
   from: string; // node id
   to: string; // node id
   kind: SymbolEdgeKind;
-  /** How many distinct call sites back a `calls` edge. Always 1 for inheritance. */
+  /** How many distinct call sites back a `calls` edge. Always 1 for inheritance and overrides. */
   weight: number;
 }
 
@@ -94,9 +102,6 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   // Per-file symbol lists, filtered once and reused for every call site in that
   // file (the reason enclosingAmong is factored out of enclosingSymbol).
   const perFile = new Map<string, CodeSymbol[]>();
-  // Callable definitions by name, deduped per (name, file).
-  const defs = new Map<string, CodeSymbol[]>();
-  const defSeen = new Set<string>();
 
   for (const f of scan.files) {
     const usable: CodeSymbol[] = [];
@@ -104,13 +109,6 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
       if (REFERENCE_KINDS.has(s.kind)) continue;
       usable.push(s);
       nodes.set(symbolId(s), toNode(s));
-      if (!s.exported) continue;
-      const key = `${s.name} ${s.file}`;
-      if (defSeen.has(key)) continue;
-      defSeen.add(key);
-      let arr = defs.get(s.name);
-      if (!arr) defs.set(s.name, (arr = []));
-      arr.push(s);
     }
     perFile.set(f.rel, usable);
   }
@@ -125,45 +123,43 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   };
 
   // --- calls: enclosing declaration → resolved callee declaration -----------
+  // Bound by the shared call-site binder (src/bind.ts), so this graph, the
+  // caller index and graph.json's call edges agree on every site. The binder
+  // gets the enclosing declaration too: it tells `c.Next()` inside a Go
+  // method on `c` from `c.Next()` anywhere else.
+  const binder = createCallBinder(scan, importPairs);
   for (const f of scan.files) {
-    if (!f.calls?.length) continue;
-    const family = familyOf(f.lang);
+    const bind = binder.forFile(f);
+    if (!bind) continue;
     const own = perFile.get(f.rel) ?? [];
-    const localByName = new Map<string, CodeSymbol>();
-    for (const s of own) if (!localByName.has(s.name)) localByName.set(s.name, s);
-
-    for (const c of f.calls) {
+    for (const c of f.calls!) {
       const caller = enclosingAmong(own, c.line);
       if (!caller) continue; // a call at file scope has no symbol to attribute it to
-
-      // Same-file definition shadows anything elsewhere — mirrors buildCallerIndex.
-      const local = localByName.get(c.name);
-      if (local) {
-        if (local.line !== c.line) add(symbolId(caller), symbolId(local), "calls");
-        continue;
-      }
-      const cands = (defs.get(c.name) ?? []).filter((d) => familyOf(d.lang) === family && d.file !== f.rel);
-      if (!cands.length) continue;
-      const imported = cands.filter((d) => importPairs.has(`${f.rel}|${d.file}`));
-      // JS/TS keeps its import gate: a bare identifier is too ambiguous to bind
-      // on name alone, and a wrong edge here misleads an impact analysis.
-      const pool = imported.length ? imported : family === "js" ? [] : cands;
-      if (!pool.length) continue;
-      const chosen = pickCandidate(f.rel, pool.map((d): Cand => ({ file: d.file, lang: d.lang })));
-      if (!chosen) continue;
-      const target = pool.find((d) => d.file === chosen.file)!;
-      add(symbolId(caller), symbolId(target), "calls");
+      const hit = bind(c, caller);
+      if (hit) add(symbolId(caller), symbolId(hit.def), "calls");
     }
   }
 
   // --- inheritance: subtype declaration → supertype declaration -------------
+  // Go states no implementations; the type hierarchy's assertion and
+  // method-set matches (relations.ts goImplementations) stand in for them.
   const typeIdByNameFile = new Map<string, string>();
-  for (const node of nodes.values()) typeIdByNameFile.set(`${node.name} ${node.file}`, node.id);
-  for (const r of resolveRelations(scan, importPairs)) {
+  // A top-level declaration wins over a same-named member of the same file:
+  // Go's `Render` interface declares a `Render` method.
+  for (const node of nodes.values()) {
+    const key = `${node.name} ${node.file}`;
+    if (!typeIdByNameFile.has(key) || node.id === `${node.file}#${node.name}`) typeIdByNameFile.set(key, node.id);
+  }
+  const relations: TypeRelation[] = resolveRelations(scan, importPairs);
+  for (const r of goImplementations(scan)) relations.push({ ...r, kind: "implements" });
+  for (const r of relations) {
     const from = typeIdByNameFile.get(`${r.from} ${r.fromFile}`);
     const to = typeIdByNameFile.get(`${r.to} ${r.toFile}`);
     if (from && to) add(from, to, r.kind);
   }
+
+  // --- overrides: method → the supertype method it replaces -----------------
+  for (const { sub, sup } of overridePairs(scan, relations)) add(symbolId(sub), symbolId(sup), "overrides");
 
   const edges = [...agg.values()].sort(
     (a, b) => byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to),
@@ -185,6 +181,76 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   return { nodes, edges, out, in: inc, byName };
 }
 
+/** An inheritance link between two type declarations, by name and file. */
+export interface TypeRelation {
+  kind: "extends" | "implements";
+  from: string;
+  fromFile: string;
+  to: string;
+  toFile: string;
+}
+
+// Member kinds that can override: what a subtype redefines under the same name.
+const METHOD_KINDS = new Set(["method", "function", "def", "getter", "setter", "operator"]);
+
+/**
+ * Every method that overrides (or implements) a supertype's method: for each
+ * inheritance relation, each method of the subtype paired with the NEAREST
+ * declaration of the same name up the supertype chain — `Square/area` with
+ * `Base/area`, and `Base/area` with `Shape/area`, not `Square/area` with
+ * both. A Go type's methods may live in any file of its package, so Go types
+ * are keyed by directory. Sorted by (sub, sup) id.
+ */
+export function overridePairs(scan: RepoScan, relations: readonly TypeRelation[]): { sub: CodeSymbol; sup: CodeSymbol }[] {
+  const langOf = new Map(scan.files.map((f) => [f.rel, f.lang]));
+  const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+  const typeKey = (name: string, file: string): string =>
+    familyOf(langOf.get(file) ?? "") === "go" ? `go${SEP}${dirOf(file)}${SEP}${name}` : `${file}${SEP}${name}`;
+
+  const members = new Map<string, Map<string, CodeSymbol>>();
+  for (const f of scan.files) {
+    for (const s of f.symbols) {
+      if (!s.parent || !METHOD_KINDS.has(s.kind)) continue;
+      const key = typeKey(s.parent, s.file);
+      let own = members.get(key);
+      if (!own) members.set(key, (own = new Map()));
+      if (!own.has(s.name)) own.set(s.name, s);
+    }
+  }
+  const supers = new Map<string, string[]>();
+  for (const r of relations) {
+    const k = typeKey(r.from, r.fromFile);
+    const list = supers.get(k) ?? [];
+    const sup = typeKey(r.to, r.toFile);
+    if (sup !== k && !list.includes(sup)) list.push(sup);
+    supers.set(k, list);
+  }
+  for (const list of supers.values()) list.sort(byStr);
+
+  // The nearest declarations of `name` above type `key`, one per branch.
+  const nearest = (key: string, name: string, seen: Set<string>, out: CodeSymbol[]): void => {
+    for (const sup of supers.get(key) ?? []) {
+      if (seen.has(sup)) continue;
+      seen.add(sup);
+      const decl = members.get(sup)?.get(name);
+      if (decl) out.push(decl);
+      else nearest(sup, name, seen, out);
+    }
+  };
+
+  const out: { sub: CodeSymbol; sup: CodeSymbol }[] = [];
+  for (const key of [...supers.keys()].sort(byStr)) {
+    const own = members.get(key);
+    if (!own) continue;
+    for (const name of [...own.keys()].sort(byStr)) {
+      const found: CodeSymbol[] = [];
+      nearest(key, name, new Set([key]), found);
+      for (const sup of found) out.push({ sub: own.get(name)!, sup });
+    }
+  }
+  return out.sort((a, b) => byStr(symbolId(a.sub), symbolId(b.sub)) || byStr(symbolId(a.sup), symbolId(b.sup)));
+}
+
 export type Direction = "out" | "in" | "both";
 
 export interface Neighborhood {
@@ -195,10 +261,30 @@ export interface Neighborhood {
   edges: SymbolEdge[];
   /** True when the node cap stopped the walk short. */
   truncated?: true;
+  /** The hop limit actually walked, present when a deeper walk was asked for. */
+  depthClamped?: number;
 }
 
 const MAX_DEPTH = 5;
 const MAX_NODES = 400;
+
+// The nodes a symbol ref names (src/symref.ts): an exact id, else the first
+// reading that matches any node. Ids carry the IMMEDIATE parent only
+// (`file#Parent/name`), so a longer `Outer/Parent/name` path is checked on its
+// last segment.
+function rootIdsFor(graph: SymbolGraph, ref: string): string[] {
+  if (graph.nodes.has(ref)) return [ref];
+  for (const reading of symbolRefReadings(ref)) {
+    const parent = reading.parent?.slice(reading.parent.lastIndexOf("/") + 1);
+    const ids = (graph.byName.get(reading.name) ?? []).filter((id) => {
+      const n = graph.nodes.get(id)!;
+      if (reading.file !== undefined && n.file !== reading.file) return false;
+      return parent === undefined || id === `${n.file}#${parent}/${n.name}`;
+    });
+    if (ids.length) return ids;
+  }
+  return [];
+}
 
 /**
  * The bounded neighborhood of a symbol. Breadth-first, so `depth` is the true
@@ -210,16 +296,13 @@ export function neighborhood(
   name: string,
   opts: { depth?: number; direction?: Direction } = {},
 ): Neighborhood {
-  const depthLimit = Math.max(1, Math.min(opts.depth ?? 2, MAX_DEPTH));
+  const requested = opts.depth ?? 2;
+  const depthLimit = Math.max(1, Math.min(requested, MAX_DEPTH));
   const direction = opts.direction ?? "both";
 
-  // A bare name, a `Parent/name` path, or a full `file#Parent/name` id.
-  const rootIds =
-    graph.nodes.has(name)
-      ? [name]
-      : (graph.byName.get(name) ??
-        [...graph.nodes.keys()].filter((id) => id.endsWith(`#${name}`)));
-  const root = rootIds.map((id) => graph.nodes.get(id)!).filter(Boolean);
+  // A bare name, `name@file`, a `Parent/name` path, or a `file#Parent/name` id.
+  const rootIds = rootIdsFor(graph, name);
+  const root = rootIds.map((id) => graph.nodes.get(id)!);
   if (!root.length) return { root: [], nodes: [], edges: [] };
 
   const depthOf = new Map<string, number>();
@@ -244,8 +327,23 @@ export function neighborhood(
           next.push(o);
         }
       };
-      if (direction !== "in") step(graph.out.get(id), (e) => e.to);
-      if (direction !== "out") step(graph.in.get(id), (e) => e.from);
+      // Dispatch runs against the edge: walking out through a method reaches
+      // the methods overriding it (a call to `Shape/area` may run
+      // `Square/area`), and walking in to an override reaches the callers of
+      // the method it overrides. An override never reaches its base the other
+      // way round, so a one-way walk takes `overrides` edges backwards only.
+      const outs = graph.out.get(id);
+      const ins = graph.in.get(id);
+      if (direction === "both") {
+        step(outs, (e) => e.to);
+        step(ins, (e) => e.from);
+      } else if (direction === "out") {
+        step(outs?.filter((e) => e.kind !== "overrides"), (e) => e.to);
+        step(ins?.filter((e) => e.kind === "overrides"), (e) => e.from);
+      } else {
+        step(ins?.filter((e) => e.kind !== "overrides"), (e) => e.from);
+        step(outs?.filter((e) => e.kind === "overrides"), (e) => e.to);
+      }
     }
     frontier = next;
   }
@@ -259,5 +357,90 @@ export function neighborhood(
     .filter((e) => depthOf.has(e.from) && depthOf.has(e.to))
     .sort((a, b) => byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to));
 
-  return { root, nodes, edges, ...(truncated ? { truncated: true as const } : {}) };
+  return {
+    root,
+    nodes,
+    edges,
+    ...(truncated ? { truncated: true as const } : {}),
+    // Said out loud: `--depth 9` used to walk five hops without a word.
+    ...(requested > MAX_DEPTH ? { depthClamped: MAX_DEPTH } : {}),
+  };
+}
+
+export interface CallPathStep {
+  id: string;
+  name: string;
+  kind: string;
+  file: string;
+  line: number;
+  // How the previous step reaches this one: it calls it, or it is a method
+  // this one overrides, so a call to it may run this one. Absent on the first.
+  via?: "calls" | "dispatch";
+}
+
+export interface CallPath {
+  from: SymbolNode[]; // every declaration the `from` ref names
+  to: SymbolNode[];
+  hops: number | null; // null when no path within the hop limit
+  paths: CallPathStep[][]; // shortest paths, lexicographic by id, at most maxPaths
+  pathCount: number; // every shortest path, listed or not
+  truncated?: true; // paths lists fewer than pathCount
+  depthClamped?: number; // the hop limit walked, when more was asked for
+  // No path from → to, but `to` reaches `from` in this many hops: the question
+  // was probably asked the wrong way round.
+  reverseHops?: number;
+}
+
+const PATH_DEFAULT_DEPTH = 8;
+const PATH_MAX_DEPTH = 16;
+
+/**
+ * How does `from` reach `to`? The shortest chains of calls between them,
+ * following dispatch the way a `direction: out` neighborhood does: a call to a
+ * method may run any method overriding it. Inheritance edges are not steps — a
+ * class extending another does not "reach" it at run time.
+ *
+ * Both refs take every symbol-ref form (src/symref.ts); a bare name starts
+ * from, or ends at, every homonym. An unknown ref answers an empty `from` or
+ * `to`, which callers report as an error.
+ */
+export function callPath(
+  graph: SymbolGraph,
+  fromRef: string,
+  toRef: string,
+  opts: { depth?: number; maxPaths?: number } = {},
+): CallPath {
+  const requested = opts.depth ?? PATH_DEFAULT_DEPTH;
+  const maxHops = Math.max(1, Math.min(requested, PATH_MAX_DEPTH));
+  const maxPaths = Math.max(1, opts.maxPaths ?? 5);
+  const fromIds = rootIdsFor(graph, fromRef);
+  const toIds = rootIdsFor(graph, toRef);
+  const from = fromIds.map((id) => graph.nodes.get(id)!);
+  const to = toIds.map((id) => graph.nodes.get(id)!);
+  const clamped = requested > PATH_MAX_DEPTH ? { depthClamped: PATH_MAX_DEPTH } : {};
+  if (!from.length || !to.length) return { from, to, hops: null, paths: [], pathCount: 0, ...clamped };
+
+  const next = function* (id: string): Generator<readonly [string, string]> {
+    for (const e of graph.out.get(id) ?? []) if (e.kind === "calls") yield [e.to, "calls"];
+    for (const e of graph.in.get(id) ?? []) if (e.kind === "overrides") yield [e.from, "dispatch"];
+  };
+  const found = shortestPaths(fromIds, new Set(toIds), next, maxHops, maxPaths);
+  const step = (hop: PathHop): CallPathStep => {
+    const n = graph.nodes.get(hop.node)!;
+    return { id: n.id, name: n.name, kind: n.kind, file: n.file, line: n.line, ...(hop.via ? { via: hop.via as CallPathStep["via"] } : {}) };
+  };
+  const result: CallPath = {
+    from,
+    to,
+    hops: found.hops,
+    paths: found.paths.map((p) => p.map(step)),
+    pathCount: found.pathCount,
+    ...(found.paths.length < found.pathCount ? { truncated: true as const } : {}),
+    ...clamped,
+  };
+  if (found.hops === null) {
+    const back = shortestPaths(toIds, new Set(fromIds), next, maxHops, 0);
+    if (back.hops !== null) result.reverseHops = back.hops;
+  }
+  return result;
 }

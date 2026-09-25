@@ -193,3 +193,56 @@ describe("symbolId", () => {
     expect(symbolId({ file: "a.ts", name: "run" })).toBe("a.ts#run");
   });
 });
+
+describe("overrides and dispatch", () => {
+  // A call binds to the method its receiver's declared type names; the
+  // overrides living in other files are only reachable by dispatch.
+  const SHAPES = {
+    "shapes/base.py": "class Shape:\n    def area(self):\n        raise NotImplementedError\n\n    def name(self):\n        return 'shape'\n",
+    "shapes/square.py": "from shapes.base import Shape\n\n\nclass Square(Shape):\n    def area(self):\n        return 1\n\n    def side(self):\n        return 1\n",
+    "shapes/cube.py": "from shapes.square import Square\n\n\nclass Cube(Square):\n    def area(self):\n        return 6\n",
+    "shapes/total.py": "from shapes.base import Shape\n\n\ndef total(x: Shape):\n    return x.area()\n",
+  };
+
+  it("links each method to the NEAREST supertype method of the same name", () => {
+    const scan = scanRepo(repoWith(SHAPES));
+    const graph = buildSymbolGraph(scan, computeImportPairs(scan));
+    const overrides = graph.edges.filter((e) => e.kind === "overrides").map((e) => `${e.from} -> ${e.to}`);
+    expect(overrides).toEqual([
+      "shapes/cube.py#Cube/area -> shapes/square.py#Square/area",
+      "shapes/square.py#Square/area -> shapes/base.py#Shape/area",
+    ]);
+  });
+
+  it("walking out through a base method reaches its overrides; walking in to an override reaches the base's callers", () => {
+    const scan = scanRepo(repoWith(SHAPES));
+    const graph = buildSymbolGraph(scan, computeImportPairs(scan));
+    const out = neighborhood(graph, "total", { direction: "out", depth: 4 }).nodes.map((n) => `${n.depth} ${n.id}`);
+    expect(out).toEqual([
+      "0 shapes/total.py#total",
+      "1 shapes/base.py#Shape/area",
+      "2 shapes/square.py#Square/area",
+      "3 shapes/cube.py#Cube/area",
+    ]);
+    const into = neighborhood(graph, "Cube/area", { direction: "in", depth: 4 }).nodes.map((n) => n.id);
+    expect(into).toEqual(["shapes/cube.py#Cube/area", "shapes/square.py#Square/area", "shapes/base.py#Shape/area", "shapes/total.py#total"]);
+    // An override is not a caller: walking in to the base does not list them.
+    const callersOfBase = neighborhood(graph, "Shape/area", { direction: "in" }).nodes.map((n) => n.id);
+    expect(callersOfBase).toEqual(["shapes/base.py#Shape/area", "shapes/total.py#total"]);
+  });
+
+  it("a Go method implementing an interface method overrides it", () => {
+    const scan = scanRepo(
+      repoWith({
+        "go.mod": "module example.com/m\n\ngo 1.21\n",
+        "r/r.go": "package r\n\ntype Render interface {\n\tRender() error\n}\n",
+        "r/json.go": "package r\n\ntype JSON struct{}\n\nfunc (j JSON) Render() error { return nil }\n",
+      }),
+    );
+    const graph = buildSymbolGraph(scan, computeImportPairs(scan));
+    expect(graph.edges.filter((e) => e.kind !== "calls").map((e) => `${e.kind} ${e.from} -> ${e.to}`)).toEqual([
+      "overrides r/json.go#JSON/Render -> r/r.go#Render/Render",
+      "implements r/json.go#JSON -> r/r.go#Render",
+    ].sort());
+  });
+});

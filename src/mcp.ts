@@ -14,23 +14,26 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { buildCallerIndex, lookupCallerEntry } from "./callers.js";
+import { buildCallerIndex, lookupCallerEntry, rawCallerSitesFor, type CallerEntry } from "./callers.js";
 import { callerIndexFor, fileByRelFor, hierarchyFor, symbolGraphFor } from "./derived.js";
 import { byStr } from "./sort.js";
 import type { RepoScan } from "./scan.js";
-import { implementationsOf } from "./relations.js";
-import { neighborhood, type Direction } from "./symbolgraph.js";
+import { implementationsOf, typeEntry } from "./relations.js";
+import { callPath, neighborhood, type Direction } from "./symbolgraph.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
 import { gitChurn } from "./git.js";
 import { grepRepo } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
-import { findDeadCode } from "./deadcode.js";
+import { capDeadCode, findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { resolutionReport } from "./resolution.js";
-import { symbolsOverview, findSymbol, findReferences } from "./query.js";
+import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef, symbolAt, withCallerIds } from "./query.js";
+import { fileArgReadings, resolveFileArg } from "./patharg.js";
+import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
+import { formatSymbolRef } from "./symref.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
@@ -287,18 +290,41 @@ async function callTool(
     const lookup = str(args.name);
     if (args.lsp === true && !lookup) throw new Error("callers with lsp:true requires `name` (or name@file)");
     const scan = readScan();
+    if (args.raw === true) {
+      // Every site by callee name, before any binding. One name only: the whole
+      // raw index is the library's (buildRawCallerIndex), too big for a turn.
+      if (!lookup) throw new Error("callers with raw:true requires `name`");
+      if (args.lsp === true || args.recall === true) throw new Error("callers raw:true takes neither lsp nor recall");
+      if (args.withCaller === true) throw new Error("callers raw:true already names each site's enclosing symbol: it takes no withCaller");
+      return JSON.stringify(rawCallersOf(scan, lookup), null, 2);
+    }
     const index = args.recall === true ? buildCallerIndex(scan, undefined, { recall: true }) : callerIndexFor(scan);
+    const sited = <T extends CallerEntry>(e: T): T => (args.withCaller === true ? withCallerIds(scan, e) : e);
     if (lookup) {
-      const entry = lookupCallerEntry(index, lookup);
+      // The LSP tier parses `Parent/name@file`; hand it that spelling of
+      // whichever ref form was used.
+      const reading = resolveSymbolRef(scan, lookup)?.reading;
+      const lspRef = reading ? formatSymbolRef(reading) : lookup;
+      const found = lookupCallerEntry(index, lookup);
+      const entry = found && sited(found);
       if (entry) {
-        const result = args.lsp === true ? await callersWithLsp(scan, repo, lookup, entry) : entry;
+        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry) : entry;
         return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
       }
-      const absent = { error: `no tracked callers for "${lookup}"` };
-      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lookup, absent) : absent, null, 2);
+      // A symbol that exists but binds no site says how many sites name it
+      // anyway; one that does not exist at all is an error, as it is for
+      // type_hierarchy, implementations and call_graph.
+      const absent = explainNoCallers(scan, lookup, index);
+      if (!absent) {
+        const named = rawCallerSitesFor(scan, lookup).length;
+        throw new Error(
+          `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : ""),
+        );
+      }
+      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
-    for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(v) : v;
+    for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(sited(v)) : sited(v);
     return JSON.stringify(obj, null, 2);
   }
   if (name === "workspaces") {
@@ -338,8 +364,22 @@ async function callTool(
     // The static answer is computed FIRST and passed in, so the LSP tier is
     // structurally incapable of removing anything from it — it can only append
     // a labelled `lsp` block. Absent config → no block at all, byte-compat.
-    const result = args.lsp === true ? await referencesWithLsp(scan, repo, symName, statik) : statik;
+    // The tier locates the declared NAME on its line: pass the name a
+    // qualified ref (`name@file`, `file#Parent/name`) resolved to.
+    const leaf = resolveSymbolRef(scan, symName)?.reading.name ?? symName;
+    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik) : statik;
     return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
+  }
+  if (name === "symbol_at") {
+    const file = str(args.file);
+    const line = num(args.line);
+    if (!file) throw new Error("`file` is required");
+    if (line === undefined || !Number.isInteger(line) || line < 1) throw new Error("`line` must be a positive integer");
+    const scan = readScan();
+    const files = new Set(scan.files.map((f) => f.rel));
+    const rel = resolveFileArg(repo, file, (r) => files.has(r));
+    if (rel === undefined) throw new Error(`no such file in the index: ${file}`);
+    return JSON.stringify(symbolAt(scan, rel, line), null, 2);
   }
   if (name === "lsp_status") {
     return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true), null, 2);
@@ -383,11 +423,9 @@ async function callTool(
     return JSON.stringify({ deleted: deleteMemory(repo, memName) }, null, 2);
   }
   if (name === "dead_code") {
-    const all = findDeadCode(readScan());
-    const limit = num(args.limit);
     // Additive: without `limit` the payload is exactly what it always was.
-    if (limit === undefined || all.length <= limit) return JSON.stringify(all, null, 2);
-    return JSON.stringify({ total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) }, null, 2);
+    const dead = findDeadCode(readScan(), { kinds: args.kinds === "all" ? "all" : "callable", includeTail: args.includeTail === true });
+    return JSON.stringify(capDeadCode(dead, num(args.limit)), null, 2);
   }
   if (name === "duplicated_literals") {
     const report = findLiteralDuplications(readScan(), {
@@ -561,24 +599,30 @@ async function callTool(
     if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
     return JSON.stringify(status, null, 2);
   }
+  // An unknown symbol is an ERROR (isError: true) in the navigation tools, as
+  // it is on the CLI (exit 2) — no longer an `{error}` object in a successful
+  // result, which a client cannot tell from an answer without parsing it.
   if (name === "type_hierarchy") {
-    const hierarchy = hierarchyFor(readScan());
+    const scan = readScan();
+    const hierarchy = hierarchyFor(scan);
     const wanted = str(args.name);
     if (!wanted) {
       const obj: Record<string, unknown> = {};
       for (const [key, entry] of hierarchy) obj[key] = entry;
       return JSON.stringify(obj, null, 2);
     }
-    const entry = hierarchy.get(wanted);
+    const entry = typeEntry(hierarchy, wanted, resolveSymbolRef(scan, wanted)?.defs);
     if (!entry) throw new NotFound(`no type named ${wanted}`);
     return JSON.stringify(entry, null, 2);
   }
   if (name === "implementations") {
     const wanted = str(args.name);
     if (!wanted) throw new Error("`name` is required");
-    const hierarchy = hierarchyFor(readScan());
-    if (!hierarchy.has(wanted)) throw new NotFound(`no type named ${wanted}`);
-    return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted) }, null, 2);
+    const scan = readScan();
+    const hierarchy = hierarchyFor(scan);
+    const declarations = resolveSymbolRef(scan, wanted)?.defs;
+    if (!typeEntry(hierarchy, wanted, declarations)) throw new NotFound(`no type named ${wanted}`);
+    return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted, declarations) }, null, 2);
   }
   if (name === "call_graph") {
     const symbol = str(args.symbol);
@@ -591,6 +635,51 @@ async function callTool(
     });
     if (!result.root.length) throw new NotFound(`no symbol named ${symbol}`);
     return JSON.stringify(result, null, 2);
+  }
+  if (name === "call_path") {
+    const from = str(args.from);
+    const to = str(args.to);
+    if (!from || !to) throw new Error("`from` and `to` are required");
+    const opts = { depth: positiveNum(args.depth), maxPaths: positiveNum(args.maxPaths) };
+    if (args.files === true) {
+      const { graph } = readArtifacts();
+      const known = new Set(graph.files.map((f) => f.rel));
+      const [a, b] = [from, to].map((arg) => {
+        const rel = resolveFileArg(repo, arg, (r) => known.has(r));
+        if (rel === undefined) throw new Error(`no such file in the index: ${arg}`);
+        return rel;
+      });
+      return JSON.stringify(dependencyPath(graph, a!, b!, { ...opts, includeInferred: args.includeInferred === true }), null, 2);
+    }
+    if (args.includeInferred === true) throw new Error("includeInferred applies to files: true only");
+    const path = callPath(symbolGraphFor(readScan()), from, to, opts);
+    if (!path.from.length) throw new Error(`no symbol named ${from}`);
+    if (!path.to.length) throw new Error(`no symbol named ${to}`);
+    return JSON.stringify(path, null, 2);
+  }
+  if (name === "impact" || name === "neighbors") {
+    // Pure functions of the link-graph, so the persisted artifacts answer
+    // them; an agent's only file-level "what depends on X" used to be the
+    // whole `graph` blob.
+    const target = str(args.target);
+    if (!target) throw new Error("`target` is required");
+    const depth = positiveNum(args.depth);
+    let kinds: Set<string> | undefined;
+    if (name === "neighbors" && args.kinds !== undefined) {
+      const list = strArray(args.kinds) ?? [];
+      const bad = list.filter((k) => !(EDGE_KINDS as readonly string[]).includes(k));
+      if (!list.length || bad.length) throw new Error(`\`kinds\` expects edge kinds among ${EDGE_KINDS.join("|")}, got ${JSON.stringify(bad.length ? bad : args.kinds)}`);
+      kinds = new Set(list);
+    }
+    const { graph } = readArtifacts();
+    for (const t of fileArgReadings(repo, target)) {
+      const res =
+        name === "impact"
+          ? impactOf(graph, t, depth ?? Infinity, { includeInferred: args.includeInferred === true })
+          : neighborsOf(graph, t, depth ?? 1, kinds);
+      if (res) return JSON.stringify(res, null, 2);
+    }
+    throw new Error(`no such file or module in the index: ${target}`);
   }
   if (name === "check_rules") {
     // Inline `rules` stays the primary form; `configPath` is the CLI's --config,

@@ -82,9 +82,17 @@ describe("concise MCP read answers", () => {
     expect(rejected.result.content[0].text).toMatch(/requires.*name/);
   });
   it("keeps empty results and LSP failure metadata intact", async () => {
-    for (const tool of ["symbols", "callers", "find_references"]) {
+    for (const tool of ["symbols", "find_references"]) {
       expect(await call(tool, { name: "doesNotExist", concise: true })).toEqual(await call(tool, { name: "doesNotExist" }));
     }
+    // An unknown symbol is an error for callers (as for type_hierarchy and
+    // call_graph), concise or not; a known one nothing calls is an answer.
+    for (const concise of [false, true]) {
+      const unknown = await client.request("tools/call", { name: "callers", arguments: { name: "doesNotExist", concise } });
+      expect(unknown.result.isError).toBe(true);
+      expect(unknown.result.content[0].text).toMatch(/no symbol named "doesNotExist"/);
+    }
+    expect(await call("callers", { name: "unused", concise: true })).toEqual(await call("callers", { name: "unused" }));
     const full = await call("find_references", { name: "greet", lsp: true });
     expect(await call("find_references", { name: "greet", lsp: true, concise: true })).toEqual({ ...full, defs: full.defs.map(location) });
   });

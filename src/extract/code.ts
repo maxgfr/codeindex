@@ -1,4 +1,4 @@
-import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
+import type { CodeLiteral, CodeSymbol, ImportAlias, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector } from "./literals.js";
 import { extractSymbols } from "../lang/registry.js";
 import { capCallSites, extractAst } from "../ast/extract.js";
@@ -30,6 +30,7 @@ export interface CodeInfo {
   // call edges and receiver-gated sink catalogs.
   calls?: { name: string; line: number; receiver?: string }[];
   importedNames?: string[]; // JS/TS named-import bindings (AST path) — feeds the call gate
+  importAliases?: ImportAlias[]; // renaming import bindings (AST path) — feed the call binder
   // Prose vocabulary — comment and short-string-literal words, subtokenized,
   // deduped, capped and sorted. Feeds search's `body` field.
   terms?: string[];
@@ -320,6 +321,7 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
     idents: ast?.idents,
     calls,
     importedNames: ast?.importedNames,
+    importAliases: ast?.importAliases.length ? ast.importAliases : undefined,
     relations: ast?.relations?.length ? ast.relations : undefined,
     // The AST tier reads comments and literals structurally; without a grammar
     // the line scanner above still supplies a vocabulary, so search quality does

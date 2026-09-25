@@ -120,10 +120,16 @@ compares](#how-it-compares).
   it.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
   `use` / `doc-link` / `mention` edges at file and module level, plus Louvain
-  communities, PageRank/betweenness centrality, a tests→code map, and
-  surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
+  communities, PageRank/betweenness centrality, a tests→code map (a test
+  covers what it imports, uses or calls, the file it is named after, and in Go
+  its whole package), and surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
   type extends and implements, and what extends and implements IT) and a
   **symbol-level graph** for bounded "what does this reach" neighborhoods.
+  Go states no implementations, so the hierarchy adds them: a
+  `var _ I = (*T)(nil)` assertion, or a type whose methods (its own, plus the
+  ones embedding promotes) match the interface's by name and parameter count.
+  The second kind is marked `structural: true`. These are answers to
+  `hierarchy` and `implementations` only, never graph.json edges.
 - **Render** byte-stable `graph.json` / `symbols.json` (two builds of an
   unchanged repo are byte-identical), plus a **SCIP** code-intelligence index
   (`index.scip`: nested symbols, package identity, implementation
@@ -463,6 +469,11 @@ codeindex callers --repo .                    # per-symbol caller index
 codeindex hierarchy       --repo .            # type hierarchy (both directions)
 codeindex implementations Runnable --repo .   # who implements it, transitively
 codeindex callgraph buildGraph --repo . --depth 2
+codeindex find    Client/send --repo .        # declarations: signature, doc, parent, span
+codeindex refs    backoff --repo .            # defs, bound call sites, referencing files
+codeindex outline src/client.ts --repo .      # one file's symbols, in declaration order
+codeindex symbol-at src/client.ts:42 --repo . # the symbol holding that line, and its id
+codeindex callpath main backoff --repo .      # how main reaches backoff, shortest chains first
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
 codeindex workspaces --repo . --check         # monorepo packages; undeclared sibling imports exit 1
@@ -533,6 +544,152 @@ reason, detail}`: the detail names the ignore file, line and pattern that
 decided it, its size against `--max-bytes`, the
 `--scope`/`--include`/`--exclude` that filtered it out, or the skipped
 directory above it.
+
+### Naming a symbol
+
+`callers`, `hierarchy`, `implementations`, `callgraph`, `callpath` and `refs`
+(and MCP `callers`, `find_references`, `type_hierarchy`, `implementations`,
+`call_graph`, `call_path`) read a symbol the same way, so an id copied out of one answer pastes into the next:
+
+| form | means |
+|---|---|
+| `greet` | the name. A single-answer command picks the first homonym; `find_references` covers them all, and then tags each call site with the declaring file it binds to (`def`) |
+| `greet@src/lib/greet.ts` | the declaration in that file — any homonym, the first included |
+| `src/lib/greet.ts#greet`, `src/a.ts#Greeter/hello` | a symbol id, as `callgraph` prints it |
+| `Greeter/hello` | a member of `Greeter` |
+
+An unknown symbol is an error (exit 2; MCP `isError`). A known one that no call
+site binds to is still an answer, and says why it is empty:
+
+```jsonc
+// codeindex callers register_blueprint --repo flask
+{
+  "name": "register_blueprint",
+  "error": "no tracked callers for \"register_blueprint\"",
+  "defs": [ /* src/flask/sansio/app.py:570, src/flask/sansio/blueprints.py:256 */ ],
+  "unresolvedSites": 74,   // sites naming it that bind to no single definition
+  "sample": [ /* the first five */ ],
+  "hint": "…"
+}
+```
+
+`find`, `refs` and `outline` print the same answers as MCP `find_symbol`,
+`find_references` and `symbols_overview`: each declaration's complete
+signature, doc comment, parent and line span, which `symbols` leaves out.
+`find` takes a name or `Parent/name` (`--substring`, `--include-body`,
+`--concise`, `--limit`, default 50) and answers `[]` when nothing matches;
+`refs` takes any symbol form above and, like MCP, still answers for a name the
+repo does not declare; `outline` exits 2 on a file the index does not hold.
+Like every read command they reuse a fresh persisted index (`--index`).
+
+`symbol-at <file:line>` (MCP `symbol_at`; `file:line:col` works too) turns a
+grep hit, a stack frame or a diagnostic into a symbol: the innermost
+declaration holding the line, with its id, which pastes into `callers`,
+`callgraph` and `callpath`, and the declarations around it, outermost first.
+`symbol` is `null` outside every declaration. Regex-tier files record no end
+lines, so there the answer is the nearest declaration above, marked
+`"approximate": true`.
+
+`callpath <from> <to>` (MCP `call_path`) answers how one symbol reaches
+another: the shortest chains of calls, following dispatch like `callgraph`
+(a step onto an override says `"via": "dispatch"`). Ties are listed in id
+order and `pathCount` counts every equally short chain; `--limit` (default 5)
+caps how many are spelled out, with `truncated` set. `--depth` caps the hops
+(default 8, max 16). When there is no path, `hops` is `null`, and
+`reverseHops` says whether `<to>` reaches `<from>` instead. `--files` asks the
+same question of two files over import, use and call edges ("why does A
+depend on B"), with `impact`'s rules: a Go import reaches its whole package,
+and a call inferred from a name alone is a step only with
+`--include-inferred` (otherwise `inferredHops` says one would connect them).
+
+`callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
+any binding, with its receiver and enclosing symbol. `callers --with-caller`
+(MCP `withCaller: true`) keeps the binding and adds `caller` to each site: the
+id of the declaration the call sits in, the node `callgraph` draws that call
+from. `callgraph` walks at most 5
+hops and says `depthClamped` when asked for more. It also follows dispatch. An
+`overrides` edge links a method to the nearest supertype method of the same
+name (a Go method to the method of an interface its type implements). A call
+binds to the method its receiver's declared type names, so walking out through
+`Shape/area` also reaches `Square/area`, and walking in to `Square/area`
+reaches the callers of `Shape/area`. `neighbors` reports every edge
+kind linking each neighbour — an incoming import and an outgoing inferred call to
+the same file are two links, strongest evidence first — and rejects an unknown
+`--kind`. `impact` walks imports, uses and calls backwards; a Go import reaches
+every non-test file of the package it names, and a call inferred from a name
+alone is counted (`inferredDependents`) rather than followed unless
+`--include-inferred`. MCP `impact` and `neighbors` answer the same from the
+persisted graph (`target`, `depth`, `includeInferred`; `kinds` as an array),
+so an agent can ask who depends on a file without pulling the whole `graph`.
+File arguments (`complexity`, `outline`, `symbol-at`, `impact`, `neighbors`) may
+be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
+file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
+`{ total, shown, truncated, candidates }` like MCP `dead_code`.
+
+`complexity` counts branch keywords and operators in code only. Comments,
+docstrings and string literals are blanked first, per language, so a docstring
+full of "if" and "for" adds nothing. Python, Ruby and Lua `and`/`or` count like
+`&&`/`||`. Classes and other containers are not ranked beside functions, and
+a nested function counts toward its own score, not its parent's. `risk` uses
+the same code-only count per file.
+
+`deadcode` lists exported symbols no call site binds to, in two tiers:
+`unreferenced` when no other file of the same language names the symbol, and
+`uncalled` when one does (an import, a type position, a base-class list, a
+call of the same name that no binding could settle). It also checks the
+declaring file outside the declaration. The evidence comes from the AST's
+identifiers, call sites, imports and inheritance. When that evidence cannot
+see a name (the AST keeps only 5+ character identifiers, and a regex-tier file
+keeps none), deadcode reads the other files' text before it claims
+`unreferenced`. Only callables are candidates by default: functions, methods,
+classes and function-valued consts. `--kinds all` (MCP `kinds: "all"`) adds
+types, properties and constants, which are reported only when unreferenced,
+since they are never "called". Some symbols are roots and are never
+candidates:
+
+- test files, and tail files (examples, docs, fixtures, scripts, Go
+  `testdata`) unless `--include-tail` is passed;
+- names the language calls itself (Python `__dunder__`, Go `init`/`main`, JS
+  `constructor`);
+- a method that overrides a live one (called, or public API), since dispatch
+  runs it whenever the base method is called. The same goes for the top of an
+  override chain in a class whose base lies outside the repo, which the
+  framework may call;
+- the package's public API. That means what a manifest entry point declares or
+  re-exports: package.json `main`/`module`/`exports`/`bin`/`types`, with a
+  build path like `dist/index.js` or `scripts/cli.mjs` mapped back to its
+  `src/` file, pyproject `[project.scripts]`, a crate's `lib.rs`/`main.rs`, and
+  every Python package `__init__.py`. The members and base classes of the
+  public classes count too. When no manifest names an entry,
+  `index`/`main`/`cli`/`mod`/`lib`/`__main__` basenames stand in.
+
+### How a call binds
+
+`callers`, `callgraph`, graph.json's `call` edges and SCIP references share one
+binder, so they agree on every call site. It reads what the site states, with no
+type inference:
+
+- **the receiver.** `self.f()`, or a Go method's own receiver variable, reaches
+  a member of the enclosing type; `pkg.F()` / `ns.f()` the module that import
+  names, and nothing when it lives outside the repo (`errors.New`, `io.Copy`,
+  `_json.dumps`); any other `x.f()` never a same-file homonym (`this.map.get(k)`
+  is not `Store.get`, `c.ClientIP()` is not a `ClientIP` field), in Go and
+  Python only a method, and nothing when the enclosing signature types `x` with
+  a package from outside the repo (`t *testing.T`). In Go and Python a bare
+  `f()` reaches a function or a type, never a method.
+- **what imports rename and barrels re-export**: `import { a as b }`, a default
+  import, `import * as ns`, `from m import a as b`, then `export { a } from`,
+  `export *` and a Python package's `__init__.py`, up to three hops.
+- **visibility.** A Go package is its directory: an unexported helper binds from
+  every file of it, a `_test.go` file only from its own package's tests, and
+  another package only through an import. JS/TS and Go never bind on a name
+  alone; elsewhere a name-only guess (graph.json labels it `inferred`) never
+  lands in a test file, nor goes from the product into examples, docs or
+  scripts.
+
+`callers --recall` (MCP `recall: true`) adds the name-only matches back — a
+unique JS/TS name with no import, a same-file homonym whatever the receiver, a
+proximity guess anywhere — and labels each site `corroborated` or `unique-name`.
 
 ## Values with no single source of truth
 
@@ -985,13 +1142,13 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**35 tools**, grouped by what they answer:
+**39 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `index_status`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
-| find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
-| impact | `find_references`, `callers`, `call_graph`, `dead_code`, `resolution_report` |
+| find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview`, `symbol_at` |
+| impact | `find_references`, `callers`, `call_graph`, `call_path`, `impact`, `neighbors`, `dead_code`, `resolution_report` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
@@ -1033,7 +1190,7 @@ turn**, so a session that only ever searches is paying for the graph analytics
 all day. `--tools` advertises a named subset:
 
 ```sh
-codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview, embed_status
+codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview, symbol_at, embed_status
 codeindex mcp --tools orient,impact # compose profiles with a comma
 ```
 
@@ -1090,9 +1247,9 @@ introduced are only sent to clients that asked for it, so an older client sees
 exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
-the 29 read tools, `destructiveHint`/`idempotentHint` on the six that write —
+the 33 read tools, `destructiveHint`/`idempotentHint` on the six that write —
 which is what lets a host auto-approve reads and confirm only writes. From
-`2025-06-18`, the 22 tools whose result is always a JSON object also declare an
+`2025-06-18`, the 26 tools whose result is always a JSON object also declare an
 `outputSchema` and return `structuredContent`, so a client can validate and type
 the result instead of re-parsing a string. The remaining tools return arrays,
 argument-dependent shapes or plain text, which cannot yield a conforming
@@ -1185,7 +1342,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **35 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **39 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

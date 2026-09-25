@@ -19,6 +19,7 @@ import type { CodeSymbol, FileRecord } from "../types.js";
 import type { RepoScan } from "../scan.js";
 import { readText } from "../walk.js";
 import { byStr } from "../sort.js";
+import { createCallBinder } from "../bind.js";
 import { importPairsFor } from "../derived.js";
 import { resolveRelations } from "../relations.js";
 import { manifestCoordinates } from "../workspaces.js";
@@ -515,9 +516,12 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
   // Index the exported defs by name so references can be resolved against
   // globally-unique names.
   const defByName = new Map<string, { symbolString: string; family: string }[]>();
+  // The same strings keyed by declaration, for the call-site binder's answer.
+  const symbolOfDecl = new Map<CodeSymbol, string>();
   for (const f of docs) {
     for (const d of docDefs.get(f.rel)!.defs) {
       const symbolString = symbolOf(d);
+      symbolOfDecl.set(d.sym, symbolString);
       if (!d.sym.exported) continue;
       let arr = defByName.get(d.sym.name);
       if (!arr) defByName.set(d.sym.name, (arr = []));
@@ -563,14 +567,18 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
   }
 
   // A call resolves to a reference only when the name is defined exactly once in
-  // the whole index and in the caller's language family (conservative, like
-  // resolveCallEdges — ambiguous names are skipped).
+  // the whole index and in the caller's language family (conservative —
+  // ambiguous names are skipped), AND the call-site binder the call graph uses
+  // (src/bind.ts) binds the site to that very definition: a unique `Done`
+  // method is still not what `wg.Done()` on a sync.WaitGroup calls, nor is a
+  // unique `New` what `errors.New(…)` calls.
   const resolveRef = (name: string, callerFamily: string): string | undefined => {
     const cands = defByName.get(name);
     if (!cands || cands.length !== 1) return undefined;
     const only = cands[0]!;
     return only.family === callerFamily ? only.symbolString : undefined;
   };
+  const binder = createCallBinder(scan, importPairsFor(scan));
 
   // Pass 2 — encode each Document.
   const documents: Bytes[] = [];
@@ -590,9 +598,12 @@ export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8A
       occs.push({ range: locate(d.sym.line, d.sym.name), symbol: d.symbol!, roles: ROLE_DEFINITION });
     }
     const callerFamily = familyOf(f.lang);
+    const bind = binder.forFile(f);
     for (const c of f.calls ?? []) {
       const target = resolveRef(c.name, callerFamily);
       if (!target) continue;
+      const hit = bind?.(c);
+      if (!hit || symbolOfDecl.get(hit.def) !== target) continue;
       occs.push({ range: locate(c.line, c.name), symbol: target, roles: 0 });
     }
     // A re-export names what it forwards: a reference to that declaration, but

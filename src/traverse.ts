@@ -6,8 +6,9 @@
 // Both share one hub gate. A hyper-connected node (a barrel, a types module)
 // otherwise drags the entire graph into any depth-≥2 neighbourhood, which is
 // the difference between an answer and a dump.
-import type { Edge, Graph } from "./types.js";
+import type { Edge, EdgeKind, Graph } from "./types.js";
 import { byStr } from "./sort.js";
+import { shortestPaths } from "./paths.js";
 
 // Only these edge kinds carry a real "depends on" relation. A doc-link or a
 // mention says something references the name, not that it would break.
@@ -131,7 +132,27 @@ export interface ImpactResult {
   seeds: string[]; // the files whose dependents we traced
   files: ImpactedFile[]; // transitive dependents, nearest first
   modules: string[]; // distinct modules touched
+  // How many more dependents a call edge inferred from a name alone would add
+  // (impactOf's `includeInferred`); present only when they are left out and
+  // there are some.
+  inferredDependents?: number;
 }
+
+export interface ClosureOptions {
+  /** Leave out `call` edges inferred from a name alone (Edge.confidence "inferred"). */
+  skipInferred?: boolean;
+  /**
+   * Read a Go import as an import of the whole package. Go imports a
+   * directory, and the resolver lands it on ONE representative file of it, so
+   * without this the other files of a package have no importers at all: gin's
+   * render/render.go (the Render interface) showed no dependents while
+   * `render` had 61.
+   */
+  goPackages?: boolean;
+}
+
+const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+const isGoSource = (rel: string): boolean => rel.endsWith(".go") && !rel.endsWith("_test.go");
 
 // Reverse dependency closure: every file that transitively IMPORTS, USES, or
 // CALLS one of `seeds`, out to `depth` hops (default: the full closure).
@@ -142,13 +163,19 @@ export interface ImpactResult {
 // a cached map still matches its edge list costs about as much as rebuilding
 // it. adjacencyOf below is the opposite trade — two maps, two sorts and a
 // degree distribution per call — and does earn its cache.
-export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity): Map<string, number> {
+export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity, opts: ClosureOptions = {}): Map<string, number> {
   const dependents = new Map<string, Edge[]>(); // target file → incoming depends-on edges
+  const packageImports = new Map<string, Edge[]>(); // Go package dir → imports of it (goPackages)
+  const push = (m: Map<string, Edge[]>, key: string, e: Edge): void => {
+    const arr = m.get(key);
+    if (arr) arr.push(e);
+    else m.set(key, [e]);
+  };
   for (const e of edges) {
     if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
-    let arr = dependents.get(e.to);
-    if (!arr) dependents.set(e.to, (arr = []));
-    arr.push(e);
+    if (opts.skipInferred && e.confidence === "inferred") continue;
+    push(dependents, e.to, e);
+    if (opts.goPackages && e.kind === "import" && e.to.endsWith(".go")) push(packageImports, dirOf(e.to), e);
   }
   const depthOf = new Map<string, number>();
   const seen = new Set<string>(seeds);
@@ -156,7 +183,10 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity)
   for (let d = 1; d <= depth && frontier.length; d++) {
     const next: string[] = [];
     for (const node of frontier) {
-      for (const e of (dependents.get(node) ?? []).slice().sort((a, b) => byStr(a.from, b.from))) {
+      let incoming = dependents.get(node) ?? [];
+      // A package's importers depend on each of its non-test files.
+      if (opts.goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf(node)) ?? []);
+      for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);
         depthOf.set(e.from, d);
@@ -168,21 +198,37 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity)
   return depthOf;
 }
 
-// "What breaks if I change this." Accepts a module slug or a file rel.
-export function impactOf(graph: Graph, target: string, depth = Infinity): ImpactResult | undefined {
+export interface ImpactOptions {
+  /** Also follow `call` edges inferred from a name alone (default false: they are counted, not walked). */
+  includeInferred?: boolean;
+}
+
+// "What breaks if I change this." Accepts a module slug or a file rel. A call
+// edge inferred from a name alone is a guess, not a dependency, so by default
+// it is only counted (inferredDependents); a Go import reaches every file of
+// the package it names.
+export function impactOf(graph: Graph, target: string, depth = Infinity, opts: ImpactOptions = {}): ImpactResult | undefined {
   const moduleOf = new Map(graph.files.map((f) => [f.rel, f.module]));
   const mod = graph.modules.find((m) => m.slug === target);
   const file = mod ? undefined : graph.files.find((f) => f.rel === target);
   if (!mod && !file) return undefined;
 
   const seeds = mod ? mod.members : [file!.rel];
-  const depthOf = reverseClosure(graph.fileEdges, seeds, depth);
+  const includeInferred = opts.includeInferred === true;
+  const depthOf = reverseClosure(graph.fileEdges, seeds, depth, { skipInferred: !includeInferred, goPackages: true });
   const files: ImpactedFile[] = [...depthOf.entries()]
     .map(([rel, d]) => ({ rel, module: moduleOf.get(rel) ?? "root", depth: d }))
     .sort((a, b) => a.depth - b.depth || byStr(a.rel, b.rel));
   const modules = [...new Set(files.map((f) => f.module).filter((m) => m !== target))].sort(byStr);
 
-  return { target, scope: mod ? "module" : "file", seeds, files, modules };
+  const result: ImpactResult = { target, scope: mod ? "module" : "file", seeds, files, modules };
+  if (!includeInferred) {
+    // With more edges the closure only grows, so the difference is exactly
+    // the files inference alone would add.
+    const extra = reverseClosure(graph.fileEdges, seeds, depth, { goPackages: true }).size - depthOf.size;
+    if (extra > 0) result.inferredDependents = extra;
+  }
+  return result;
 }
 
 export interface NeighborLink {
@@ -201,10 +247,33 @@ export interface NeighborResult {
   members?: string[]; // for a module target
 }
 
+// Every edge kind a link-graph can carry: what `neighbors --kind` accepts. A
+// misspelt kind used to filter the walk down to nothing and answer an empty
+// list with exit 0, indistinguishable from "no neighbours".
+export const EDGE_KINDS: readonly EdgeKind[] = ["import", "call", "use", "extends", "implements", "doc-link", "mention", "contains"];
+
+// How much a link says about the dependency, strongest first: what a file
+// states (import, inheritance, an import-corroborated call), then name-based
+// evidence, then a call inferred from a unique name alone.
+function linkRank(l: NeighborLink): number {
+  if (l.kind === "call") return l.confidence === "inferred" ? 4 : 1;
+  if (l.kind === "import" || l.kind === "extends" || l.kind === "implements") return 0;
+  if (l.kind === "use") return 2;
+  return 3;
+}
+
 // Breadth-first walk from `start`, out to `depth` hops, in BOTH directions.
 // With `kinds` set, only those edge kinds are traversed — and the degree
 // distribution feeding the hub gate is measured over that same filtered
 // subgraph, so the gate reflects the view the caller asked for.
+//
+// EVERY edge between the frontier and a node first reached at this depth is a
+// link, one per (node, direction, kind), not just the first edge found. The
+// walk used to keep only that first one, and out-edges come first, so gin's
+// `render` showed `root` as an (inferred, and wrong) outgoing call and hid the
+// real incoming import behind it. A node's links are listed together, in the
+// order its node was reached, strongest evidence first — a consumer reading
+// only a node's first link gets the relation that matters.
 function bfs(edges: Edge[], start: string, depth: number, kinds?: Set<string>): NeighborLink[] {
   // A non-start node at or above the threshold is EMITTED as a link but never
   // expanded THROUGH. Only bites at depth ≥ 2 — depth-1 links all come from
@@ -214,23 +283,32 @@ function bfs(edges: Edge[], start: string, depth: number, kinds?: Set<string>): 
   const links: NeighborLink[] = [];
   let frontier = [start];
   for (let d = 1; d <= depth; d++) {
-    const next: string[] = [];
+    // node → its links at this depth. Map order is the order nodes were first
+    // reached: deterministic, since the adjacency lists are pre-sorted.
+    const reached = new Map<string, NeighborLink[]>();
+    const link = (node: string, direction: "out" | "in", e: Edge): void => {
+      let own = reached.get(node);
+      if (!own) {
+        if (seen.has(node)) return; // reached at an earlier depth (or the start)
+        seen.add(node);
+        reached.set(node, (own = []));
+      }
+      // Several frontier nodes may reach one node the same way: the first wins.
+      if (own.some((l) => l.direction === direction && l.kind === e.kind)) return;
+      own.push({ node, direction, kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
+    };
     for (const node of frontier) {
       if (node !== start && (degree.get(node) ?? 0) >= threshold) continue;
-      for (const e of out.get(node) ?? []) {
-        if (seen.has(e.to)) continue;
-        links.push({ node: e.to, direction: "out", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
-        seen.add(e.to);
-        next.push(e.to);
-      }
-      for (const e of inn.get(node) ?? []) {
-        if (seen.has(e.from)) continue;
-        links.push({ node: e.from, direction: "in", kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
-        seen.add(e.from);
-        next.push(e.from);
-      }
+      for (const e of out.get(node) ?? []) link(e.to, "out", e);
+      for (const e of inn.get(node) ?? []) link(e.from, "in", e);
     }
-    frontier = next;
+    for (const own of reached.values()) {
+      own.sort(
+        (a, b) => linkRank(a) - linkRank(b) || Number(a.direction === "in") - Number(b.direction === "in") || byStr(a.kind, b.kind),
+      );
+      links.push(...own);
+    }
+    frontier = [...reached.keys()];
   }
   return links;
 }
@@ -246,4 +324,91 @@ export function neighborsOf(graph: Graph, target: string, depth = 1, kinds?: Set
     return { target, scope: "file", links: bfs(graph.fileEdges, target, depth, kinds) };
   }
   return undefined;
+}
+
+export interface DependencyPathStep {
+  file: string;
+  via?: string; // the edge kind from the previous file: import | use | call
+}
+
+export interface DependencyPath {
+  from: string;
+  to: string;
+  hops: number | null; // null when no path within the hop limit
+  paths: DependencyPathStep[][]; // shortest paths, lexicographic by file, at most maxPaths
+  pathCount: number;
+  truncated?: true;
+  depthClamped?: number;
+  // No path from → to, but `to` depends on `from` in this many hops.
+  reverseHops?: number;
+  // No path without them, but one this long through name-inferred calls.
+  inferredHops?: number;
+}
+
+const DEP_PATH_DEFAULT_DEPTH = 8;
+const DEP_PATH_MAX_DEPTH = 16;
+
+// "Why does A depend on B": the shortest chains of import/use/call edges from
+// file `from` to file `to` — impactOf's relation, walked forwards. The same
+// two rules hold: a Go import reaches every non-test file of the package it
+// names, and a call inferred from a name alone is not a step unless
+// includeInferred (a path it alone would open is reported as inferredHops).
+// undefined when either file is not in the graph.
+export function dependencyPath(
+  graph: Graph,
+  from: string,
+  to: string,
+  opts: { depth?: number; maxPaths?: number; includeInferred?: boolean } = {},
+): DependencyPath | undefined {
+  const files = new Set(graph.files.map((f) => f.rel));
+  if (!files.has(from) || !files.has(to)) return undefined;
+  const requested = opts.depth ?? DEP_PATH_DEFAULT_DEPTH;
+  const maxHops = Math.max(1, Math.min(requested, DEP_PATH_MAX_DEPTH));
+  const maxPaths = Math.max(1, opts.maxPaths ?? 5);
+
+  const goPackage = new Map<string, string[]>(); // dir → its non-test Go files
+  for (const rel of [...files].sort(byStr)) {
+    if (!isGoSource(rel)) continue;
+    const dir = dirOf(rel);
+    const members = goPackage.get(dir);
+    if (members) members.push(rel);
+    else goPackage.set(dir, [rel]);
+  }
+  const successors = (withInferred: boolean): ((node: string) => [string, string][]) => {
+    const out = new Map<string, [string, string][]>();
+    for (const e of graph.fileEdges) {
+      if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
+      if (!withInferred && e.confidence === "inferred") continue;
+      const targets = (e.kind === "import" && isGoSource(e.to) && goPackage.get(dirOf(e.to))) || [e.to];
+      const list = out.get(e.from) ?? out.set(e.from, []).get(e.from)!;
+      for (const t of targets) list.push([t, e.kind]);
+    }
+    // Strongest kind first per target, so the step kind kept is the one
+    // that states the dependency (an import over a call to the same file).
+    const rank = (k: string): number => (k === "import" ? 0 : k === "use" ? 1 : 2);
+    for (const list of out.values()) list.sort((a, b) => byStr(a[0], b[0]) || rank(a[1]) - rank(b[1]));
+    return (node) => out.get(node) ?? [];
+  };
+
+  const includeInferred = opts.includeInferred === true;
+  const next = successors(includeInferred);
+  const found = shortestPaths([from], new Set([to]), next, maxHops, maxPaths);
+  const result: DependencyPath = {
+    from,
+    to,
+    hops: found.hops,
+    paths: found.paths.map((p) => p.map((h) => (h.via ? { file: h.node, via: h.via } : { file: h.node }))),
+    pathCount: found.pathCount,
+    ...(found.paths.length < found.pathCount ? { truncated: true as const } : {}),
+    ...(requested > DEP_PATH_MAX_DEPTH ? { depthClamped: DEP_PATH_MAX_DEPTH } : {}),
+  };
+  if (found.hops === null) {
+    const back = shortestPaths([to], new Set([from]), next, maxHops, 0);
+    if (back.hops !== null) result.reverseHops = back.hops;
+    if (!includeInferred) {
+      const inferred = shortestPaths([from], new Set([to]), successors(true), maxHops, 0);
+      if (inferred.hops !== null) result.inferredHops = inferred.hops;
+    }
+  }
+  return result;
 }

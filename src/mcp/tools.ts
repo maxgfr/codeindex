@@ -7,6 +7,8 @@
 import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protocol.js";
 
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
+// One symbol syntax for every navigation tool (src/symref.ts).
+const symbolRefDescription = "name, name@file, file#name, file#Parent/name (a call_graph id) or Parent/name";
 const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line, plus parent for a member) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory or file (repo-relative); ANDed with include/exclude" },
@@ -40,18 +42,27 @@ export const TOOLS = [
   {
     name: "callers",
     description:
-      "Who calls a function? Per-symbol caller index: each defined symbol with the exact (file, line) call sites that bind to it. Omit `name` for the full index.",
+      "Who calls a function? Per-symbol caller index: each defined symbol with the exact (file, line) call sites that bind to it. Omit `name` for the full index. An unknown symbol is an error; a known one no site binds to answers with its defs and how many call sites name it anyway (`unresolvedSites`, `sample`).",
     inputSchema: {
       type: "object",
       properties: {
         ...repoProp,
         ...conciseProp,
-        name: { type: "string", description: "Symbol name to look up" },
+        name: { type: "string", description: symbolRefDescription },
         lsp: { type: "boolean", description: "Append incoming calls from configured language servers and agreement with static callers. Requires name; name@file disambiguates. Unsupported servers and failures keep the static answer with a stated reason (default false)." },
         recall: {
           type: "boolean",
           description:
-            "Recall-oriented binding: relax the JS/TS import gate to unique repo-wide names, labelling each site corroborated|unique-name (default false = precision)",
+            "Recall-oriented binding: add the name-only matches precision mode rejects (a unique JS/TS name with no import, a same-file homonym whatever the receiver, a proximity guess in Go or into tests), labelling each site corroborated|unique-name (default false = precision)",
+        },
+        raw: {
+          type: "boolean",
+          description:
+            "Every call site of `name` as written, before any binding: {name, sites:[{file, line, receiver?, enclosingSymbol?}]}. Requires name (default false)",
+        },
+        withCaller: {
+          type: "boolean",
+          description: "Add `caller` to each site: the symbol id of the declaration the call sits in (a call_graph node id), so the answer names functions, not just lines (default false)",
         },
       },
       required: ["repo"],
@@ -121,7 +132,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         ...repoProp,
-        name: { type: "string", description: "Symbol name" },
+        name: { type: "string", description: `${symbolRefDescription}; a bare name covers every homonym` },
         ...conciseProp,
         lsp: {
           type: "boolean",
@@ -130,6 +141,20 @@ export const TOOLS = [
         },
       },
       required: ["repo", "name"],
+    },
+  },
+  {
+    name: "symbol_at",
+    description:
+      "Which symbol is at file:line? The innermost declaration holding the line (full metadata plus its symbol `id`, the form callers/call_graph/call_path read) and the declarations around it, outermost first. Turns a grep hit, a stack frame or a diagnostic into something the navigation tools accept. `symbol` is null outside every declaration; `approximate: true` means the file has no AST spans, so it is only the nearest declaration above.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        file: { type: "string", description: "Repo-relative file path" },
+        line: { type: "number", minimum: 1, description: "1-based line number" },
+      },
+      required: ["repo", "file", "line"],
     },
   },
   {
@@ -260,13 +285,15 @@ export const TOOLS = [
   {
     name: "dead_code",
     description:
-      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND nothing references the name) and 'uncalled' (referenced somewhere — re-export, type position — but never called). Exported symbols only; test files and entrypoint-looking files excluded as roots. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
+      "Dead-code candidates in two labeled tiers: 'unreferenced' (no call site binds AND no other file names it) and 'uncalled' (named elsewhere — import, type position, base-class list, a same-name call site — but no call binds). Exported callables only unless `kinds: \"all\"`; test and tail files (examples, docs, fixtures, scripts — `includeTail` to include them), the package's public API (manifest entry points and what they re-export), language protocol names and overrides of live methods are never candidates. On a large repo this list runs to thousands of entries — pass `limit`, or `scope` to one subdirectory.",
     inputSchema: {
       type: "object",
       properties: {
         ...repoProp,
         ...scopeProps,
         limit: { type: "number", minimum: 0, description: "Cap entries (default: all)" },
+        kinds: { type: "string", enum: ["callable", "all"], description: "Candidate kinds (default callable; all adds types, properties and constants, unreferenced only)" },
+        includeTail: { type: "boolean", description: "Also report examples, docs, fixtures and scripts" },
       },
       required: ["repo"],
     },
@@ -291,7 +318,7 @@ export const TOOLS = [
   {
     name: "complexity",
     description:
-      "Cyclomatic-complexity estimates (branch-token counting over AST line spans), most-complex first. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
+      "Cyclomatic-complexity estimates (branch-token counting over AST line spans, comments and string literals aside), most-complex first; functions and methods only — containers are not ranked, and nested functions score on their own. Pass `file` for one file's symbols, omit for the repo-wide top. Combine with hotspots: the `risk` field of this tool's sibling ranks complexity × churn.",
     inputSchema: {
       type: "object",
       properties: {
@@ -405,33 +432,81 @@ export const TOOLS = [
       "How do types relate? For one type: the base classes it extends, the interfaces/traits it implements, and — the reverse direction, which no other tool answers — what extends or implements IT, plus any declared supertype with no definition in this repo. Omit `name` for the whole hierarchy.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Type name to look up" } },
+      properties: { ...repoProp, name: { type: "string", description: `Type to look up — ${symbolRefDescription}` } },
       required: ["repo"],
     },
   },
   {
     name: "implementations",
     description:
-      "Who implements this interface (or extends this class)? Walks the hierarchy TRANSITIVELY, so a class implementing a sub-interface of the one asked about is included. The tool to reach for before changing an interface.",
+      "Who implements this interface (or extends this class)? Walks the hierarchy TRANSITIVELY, so a class implementing a sub-interface of the one asked about is included. Go states no implementations: a Go type counts when a `var _ I = (*T)(nil)` assertion says so, or when its methods (own and promoted by embedding) cover the interface's by name and parameter count — those are marked `structural: true`. The tool to reach for before changing an interface.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, name: { type: "string", description: "Interface/trait/class name" } },
+      properties: { ...repoProp, name: { type: "string", description: `Interface/trait/class — ${symbolRefDescription}` } },
       required: ["repo", "name"],
     },
   },
   {
     name: "call_graph",
     description:
-      "What does this symbol reach, and what reaches it? A bounded symbol-to-symbol neighborhood around `symbol` — `depth` hops (default 2) following `calls`/`extends`/`implements` edges, `direction` out (callees) | in (callers) | both. Answers impact questions the one-hop `callers` tool cannot.",
+      "What does this symbol reach, and what reaches it? A bounded symbol-to-symbol neighborhood around `symbol` — `depth` hops (default 2) following `calls`/`extends`/`implements`/`overrides` edges, `direction` out (callees) | in (callers) | both. Dispatch is followed: walking out through a method also reaches the methods overriding it, and walking in to an override reaches the callers of the method it overrides. Answers impact questions the one-hop `callers` tool cannot.",
     inputSchema: {
       type: "object",
       properties: {
         ...repoProp,
-        symbol: { type: "string", description: "Symbol name to centre on" },
+        symbol: { type: "string", description: `Symbol to centre on — ${symbolRefDescription}` },
         depth: { type: "number", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
         direction: { type: "string", enum: ["out", "in", "both"], description: "out | in | both (default both)" },
       },
       required: ["repo", "symbol"],
+    },
+  },
+  {
+    name: "call_path",
+    description:
+      "How does `from` reach `to`? The shortest chains of calls between two symbols (a call to a method may dispatch to an override: `via: \"dispatch\"`), listed in id order with the total count of equally short ones. No path within `depth` hops answers hops: null, plus `reverseHops` when `to` reaches `from` instead. With files: true, `from` and `to` are file paths and the steps are import/use/call edges of the link-graph — why does A depend on B (a path only name-inferred calls would open is reported as `inferredHops` unless includeInferred).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        from: { type: "string", description: `Start — ${symbolRefDescription}; a file path with files: true` },
+        to: { type: "string", description: `End — ${symbolRefDescription}; a file path with files: true` },
+        depth: { type: "number", minimum: 1, description: "Longest path to look for, in hops (default 8, max 16)" },
+        maxPaths: { type: "number", minimum: 1, description: "Shortest paths to list (default 5)" },
+        files: { type: "boolean", description: "Walk the file link-graph instead of the symbol graph (default false)" },
+        includeInferred: { type: "boolean", description: "files: true only — also step through calls inferred from a name alone (default false)" },
+      },
+      required: ["repo", "from", "to"],
+    },
+  },
+  {
+    name: "impact",
+    description:
+      "What breaks if I change this file or module? The reverse dependency closure over the link-graph: every file that transitively imports, uses or calls `target`, nearest first, with the modules touched. A Go import reaches every non-test file of the package it names. A call inferred from a name alone is counted (`inferredDependents`) but not followed unless includeInferred. Answers from the persisted graph — no need to pull the whole `graph`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        target: { type: "string", description: "Repo-relative file path or module slug" },
+        depth: { type: "number", minimum: 1, description: "Hops to follow (default: the full closure)" },
+        includeInferred: { type: "boolean", description: "Also follow call edges inferred from a name alone (default false)" },
+      },
+      required: ["repo", "target"],
+    },
+  },
+  {
+    name: "neighbors",
+    description:
+      "What sits next to this file or module in the link-graph, both directions: every edge kind linking each neighbour (import, call, use, extends, implements, doc-link, mention, contains), strongest evidence first, out to `depth` hops. Hubs are listed but not expanded through, so depth 2 stays an answer rather than a dump.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        target: { type: "string", description: "Repo-relative file path or module slug" },
+        depth: { type: "number", minimum: 1, description: "Hops to follow (default 1)" },
+        kinds: { type: "array", items: { type: "string" }, description: "Edge kinds to traverse (default all)" },
+      },
+      required: ["repo", "target"],
     },
   },
   {
@@ -519,8 +594,47 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       nodes: { type: "array", items: anyObj },
       edges: { type: "array", items: anyObj },
       truncated: { type: "boolean" },
+      depthClamped: { type: "integer" },
     },
     required: ["root", "nodes", "edges"],
+  },
+  // Symbol or file endpoints: `from`/`to` are node lists or file paths.
+  call_path: {
+    type: "object",
+    properties: {
+      from: {},
+      to: {},
+      hops: { type: ["integer", "null"] },
+      paths: { type: "array", items: { type: "array", items: anyObj } },
+      pathCount: { type: "integer" },
+      truncated: { type: "boolean" },
+      depthClamped: { type: "integer" },
+      reverseHops: { type: "integer" },
+      inferredHops: { type: "integer" },
+    },
+    required: ["from", "to", "hops", "paths", "pathCount"],
+  },
+  impact: {
+    type: "object",
+    properties: {
+      target: { type: "string" },
+      scope: { type: "string", enum: ["module", "file"] },
+      seeds: strArr,
+      files: { type: "array", items: anyObj },
+      modules: strArr,
+      inferredDependents: { type: "integer" },
+    },
+    required: ["target", "scope", "seeds", "files", "modules"],
+  },
+  neighbors: {
+    type: "object",
+    properties: {
+      target: { type: "string" },
+      scope: { type: "string", enum: ["module", "file"] },
+      links: { type: "array", items: anyObj },
+      members: strArr,
+    },
+    required: ["target", "scope", "links"],
   },
   scan_summary: {
     type: "object",
@@ -564,13 +678,24 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       },
     ],
   },
-  // The whole index (symbol name -> entry), one entry, or the not-found notice.
+  // The whole index (symbol name -> entry), one entry, the no-callers notice,
+  // or (raw:true) one name's unresolved sites.
   callers: {
     type: "object",
     oneOf: [
       { type: "object", additionalProperties: anyObj },
       { type: "object", properties: { def: anyObj, callers: { type: "array", items: anyObj }, lsp: anyObj }, required: ["def", "callers"] },
-      { type: "object", properties: { error: { type: "string" } }, required: ["error"] },
+      {
+        type: "object",
+        properties: {
+          error: { type: "string" },
+          defs: { type: "array", items: anyObj },
+          unresolvedSites: { type: "integer" },
+          sample: { type: "array", items: anyObj },
+        },
+        required: ["error"],
+      },
+      { type: "object", properties: { name: { type: "string" }, sites: { type: "array", items: anyObj } }, required: ["name", "sites"] },
     ],
   },
   workspaces: {
@@ -605,6 +730,17 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       referencingFiles: strArr,
     },
     required: ["defs", "callSites", "referencingFiles"],
+  },
+  symbol_at: {
+    type: "object",
+    properties: {
+      file: { type: "string" },
+      line: { type: "integer" },
+      symbol: { type: ["object", "null"] },
+      enclosing: strArr,
+      approximate: { type: "boolean" },
+    },
+    required: ["file", "line", "symbol", "enclosing"],
   },
   lsp_status: {
     type: "object",
@@ -751,6 +887,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   symbols_overview: { title: "File symbol overview" },
   find_symbol: { title: "Find symbol" },
   find_references: { title: "Find references" },
+  symbol_at: { title: "Symbol at a line" },
   repo_map: { title: "Repository map" },
   onboard: { title: "Project brief", write: true, destructive: false, idempotent: true },
   hotspots: { title: "Hotspots" },
@@ -777,6 +914,9 @@ export const TOOL_META: Record<string, ToolMeta> = {
   type_hierarchy: { title: "Type hierarchy" },
   implementations: { title: "Implementations" },
   call_graph: { title: "Call graph neighborhood" },
+  call_path: { title: "Shortest call path" },
+  impact: { title: "Reverse dependency closure" },
+  neighbors: { title: "Link-graph neighbours" },
   check_rules: { title: "Check architecture rules" },
   resolution_report: { title: "Import resolution report" },
   index_status: { title: "Index freshness" },
@@ -822,11 +962,11 @@ export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // index_status says whether a persisted index makes the first call fast.
   orient: ["scan_summary", "index_status", "repo_map", "onboard", "workspaces", "mermaid", "graph", "read_memory", "list_memories", "write_memory"],
   // Locate a thing. embed_status says whether `search` semantic:true fuses.
-  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "embed_status"],
+  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "symbol_at", "embed_status"],
   // Decide whether changing it is safe.
-  impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status", "resolution_report"],
+  impact: ["find_references", "callers", "call_graph", "call_path", "impact", "neighbors", "dead_code", "type_hierarchy", "implementations", "lsp_status", "resolution_report"],
   // Change it.
-  edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
+  edit: ["find_symbol", "symbols_overview", "symbol_at", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.
   risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"],
   // The project notes, whole: write, read, list, delete.

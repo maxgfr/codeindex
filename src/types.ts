@@ -186,6 +186,19 @@ export interface RawRelation {
   line: number; // 1-based line of the declaration stating it
 }
 
+// A name a file's imports bind to something declared elsewhere under ANOTHER
+// name — what makes `salute("a")` (after `import { greet as salute }`) a call
+// to `greet`. `name` is the imported name, `"*"` for the module itself (a JS
+// namespace import, Python `import a.b as c`, a Go package alias) or
+// `"default"` for a JS default import. `from` is the specifier as written;
+// absent only on the entry `{ local: "default", name: X }` that records a JS
+// module's own `export default X`.
+export interface ImportAlias {
+  local: string;
+  name: string;
+  from?: string;
+}
+
 // Everything extracted from one file in a single pass. The unit the graph and
 // renderers consume; nothing here requires the model.
 export interface FileRecord {
@@ -216,6 +229,11 @@ export interface FileRecord {
   // JS/TS named-import bindings (cap 256, deduped, sorted) — feeds the JS/TS
   // import-evidence gate in call resolution.
   importedNames?: string[];
+  // Import bindings that rename (cap 256, deduped, sorted by local, name,
+  // from): JS `{ a as b }` / default / namespace imports and the module's own
+  // `export default X`, Python module imports and `from m import a as b`, Go
+  // package aliases. AST tier only; absent when the file has none.
+  importAliases?: ImportAlias[];
   // A per-file extraction cap truncated this record's symbols. Same doctrine as
   // the walk's `capped`: a bounded result says so instead of looking complete.
   truncated?: true;

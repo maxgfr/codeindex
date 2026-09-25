@@ -186,7 +186,7 @@ const BUILD_DIRS = new Set(["dist", "build", "lib", "out", "output", "esm", "cjs
 // "./dist/esm/index.js" → ["src/esm/index.js", "esm/index.js", "src/index.js",
 // "index.js"] — peel leading build dirs one at a time, trying both a `src/`
 // substitute and a plain drop at each step.
-function distToSrcCandidates(target: string): string[] {
+export function distToSrcCandidates(target: string): string[] {
   const segs = norm(target).split("/").filter((s) => s !== ".");
   const out: string[] = [];
   let i = 0;
