@@ -174,6 +174,7 @@ const NARROWER: Record<string, string> = {
   churn: "pass `since` to count recent history only",
   coupling: "pass `since` to mine recent history only",
   check_rules: "narrow the rule set, or pass `scope` to a subdirectory",
+  delta: 'pass `concise: true` (no hunks), a `limit` on modules, or `format: "text"` for the panel',
 };
 
 // The persisted artifact that can BE a tool's answer, when `codeindex index`

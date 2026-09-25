@@ -479,6 +479,7 @@ codeindex literals --repo .                   # values with no single source of 
 codeindex workspaces --repo . --check         # monorepo packages; undeclared sibling imports exit 1
 codeindex resolution --repo .                 # per-language import resolution health
 codeindex mermaid src/app --repo .            # module diagram around a module, dir or file
+codeindex hotspots --repo . --since "6 months ago"   # where work concentrates
 ```
 
 `index` keeps a `cache.json` next to the artifacts, and every read command
@@ -723,6 +724,14 @@ Three things make the output readable rather than a wall of strings:
   standing alone as a statement — a Python docstring, a `"use client"`
   directive — is documentation or a pragma. Wherever a grammar parsed the file,
   neither is collected (the regex fallback reads lines, not syntax).
+- **Repetition with no possible owner is left out.** A value seen only across
+  GitHub Actions workflows (`ubuntu-latest`, `actions/checkout@v4`), or only
+  across one kind of package manifest that cannot inherit (`pyproject.toml`,
+  `package.json`, `composer.json`, `go.mod` in each example project), names no
+  fix. The same value in CI *and* in `pyproject.toml` is still reported. In Go,
+  one constant name declared in two files of a package is read as build-tag
+  variants of one holder (`binding.go` / `binding_nomsgpack.go`), not as two
+  competing ones.
 
 ```sh
 codeindex literals --repo . --min-files 3 --min-count 5   # tighten the floors
@@ -730,7 +739,10 @@ codeindex literals --repo . --include-tests               # count test files too
 ```
 
 As a CI gate, via the `literals` builtin rule (defaults to the two actionable
-tiers; `tiers` narrows it):
+tiers; `tiers` narrows it, and `minFiles`/`minCount`/`includeTests` take the
+command's thresholds). The rule computes the whole list, so it fails on exactly
+what `codeindex literals` reports, not only on the 24-entry headline that
+`graph.json` carries:
 
 ```json
 [{ "name": "no-uncentralized-routes", "builtin": "literals", "tiers": ["competing"] }]
@@ -739,6 +751,20 @@ tiers; `tiers` narrows it):
 ```sh
 codeindex rules --repo . --config codeindex.rules.json    # exit 1 on violations
 ```
+
+A rules config is validated strictly, because a gate that silently checks
+nothing is worse than none. A key the rule does not read (`sevrity`), an unknown
+tier, or an edge kind the graph does not emit fails with exit 2 and names the
+file. A forbidden-edge rule whose `from` or `to` globs match no indexed file
+can never fire, so it is reported as an `unmatched` warning. Over MCP,
+`check_rules` reads a `configPath` only when it resolves inside the repository.
+
+The `orphans` builtin lists code files nothing connects to. It leaves out tests,
+entrypoint-looking names (`index`, `main`, `cli`, `wsgi`, …), languages that no
+import, call or use edge in the repository reaches (SQL, shell scripts), and,
+in Go, Java, Kotlin and Scala, files whose package is connected: files in one
+directory see each other without imports, so an unexported helper called from
+a sibling file has no edge of its own.
 
 An arrow function returning a value (`export const getPath = () => "/a/b"`) is
 a *consumer*, not a source of truth, and is reported as a call site. A lookup
@@ -819,6 +845,87 @@ Every occurrence and relationship names a symbol the index defines, and
 its relationship pass only knows the documents it has already visited, in Go
 map order, so a relationship to a symbol of another document is reported as
 missing at random.
+## What git history says
+
+Four commands read the commit history rather than the code: `churn` (commits
+per file), `hotspots` (churn × size: where work and defects concentrate),
+`risk` (churn × complexity) and `coupling` (files that change together).
+
+```sh
+codeindex hotspots --repo . --since "6 months ago" --limit 10
+codeindex coupling --repo . --hidden        # co-change that no import explains
+codeindex churn    --repo packages/api      # one package of a monorepo
+```
+
+- **Paths are relative to `--repo`**, which may be any directory inside the git
+  repository: point it at one package of a monorepo and history is limited to
+  that package, keyed the way its index is.
+- **`--since` takes a ref or a date**: a tag, branch or sha (commits after it),
+  or `2024-01-01` / `"6 months ago"`. Anything else is an error (exit 2), never
+  an empty window that reads as "nothing changed".
+- **Every answer says what it could read.** Outside a repository, or before the
+  first commit, `ok`/`churnOk` is `false` and `error` says why. A **shallow
+  clone** answers with `shallow: true`: counts are lower bounds, and the clone's
+  boundary commit is left out, because git compares it with an empty tree and
+  it would count as a change to every file (a depth-1 CI checkout therefore has
+  no visible history at all).
+- **`hotspots` ranks only files that changed** in the window and labels test
+  files `test: true`.
+- **`coupling` works over the index**: pairs are limited to indexed files, so
+  deleted paths drop out and `--scope`/`--include`/`--exclude` apply. Each pair
+  says whether a graph edge (import, call, use, inheritance, doc link) already
+  `linked` the two files; `--hidden` keeps only the pairs with no such edge.
+  Pairs whose names already declare them (same directory, same name up to the
+  first dot: `x.po`/`x.mo`, `x.js`/`x.min.js`, `x.ts`/`x.test.ts`) are left
+  out. Pairs are ranked by `confidence`, the lower bound of the 95% Wilson
+  interval for `strength`: 12 shared commits out of 13 rank above a thinly
+  evidenced 3 out of 3. `--min-together` (default 3) and `--max-commit-files`
+  (default 30) tune the mining. The second one skips mass-refactor commits by
+  their whole size, including files outside `--repo`.
+- **Renames are not followed.** Rename detection is the expensive part of
+  `git log`, and on a blobless partial clone it downloads blobs. A file's
+  history before a rename stays under its old path.
+- The output does not depend on the user's git config (colour, diff prefixes,
+  signature display, external diff drivers). One `git log` pass is shared by
+  all four commands and reused while HEAD stays the same, so an MCP session
+  asking for `onboard`, `hotspots` and `risk` reads the history once.
+
+## Reviewing a diff
+
+`codeindex delta` maps the git diff onto the graph: changed files, the symbols
+enclosing each hunk, the blast radius, and a risk score per module in which
+every point comes with the reason that fired it.
+
+```sh
+codeindex delta --repo .                  # the branch vs its merge-base with the default branch
+codeindex delta --repo . --staged --json  # the staged changeset, as JSON
+codeindex delta --repo . --fail-on HIGH   # CI gate: exit 1 when a module scores HIGH
+```
+
+The MCP `delta` tool answers the same question for an agent that has just
+edited files: `{base?, staged?, depth?}` return the JSON result, `concise`
+drops the hunks and reduces each enclosing symbol to `name/kind/line`, `limit`
+keeps the highest-scoring modules (and says it truncated), and
+`format: "text"` returns the panel. It is in the `impact` and `risk` profiles.
+
+- **A removed file that is still imported is the highest-weighted signal**
+  (`brokenImport`, 40). The worktree's graph no longer holds a deleted or
+  renamed file, so delta puts the removed paths back and re-resolves the
+  graph's dangling imports: the ones that land on a removed path are listed
+  under `broken` with their importer (and `renamedTo` for a move), the module
+  the file was removed from is scored even when nothing else in it changed,
+  and the importers count as its direct dependents.
+- **The engine's own output is not part of a review.** Paths under the index
+  directory (`--index`, default `.codeindex`) are dropped from the diff, and so
+  are untracked files in directories the walker never indexes (`node_modules/`,
+  `dist/`, …). A tracked change in such a directory stays listed as
+  `unindexed`.
+- **Before the first commit** there is no merge-base: every file (staged,
+  with `--staged`) is reviewed as added, against the empty tree.
+- **The diff is read before the index.** A clean worktree answers
+  `no changes` without loading or walking anything (0.4 s instead of 15 s on a
+  66k-file repository), and symbol attribution reads only the changed files'
+  definitions.
 
 ## Docker
 
@@ -1225,13 +1332,13 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**39 tools**, grouped by what they answer:
+**40 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `index_status`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview`, `symbol_at` |
-| impact | `find_references`, `callers`, `call_graph`, `call_path`, `impact`, `neighbors`, `dead_code`, `resolution_report` |
+| impact | `find_references`, `callers`, `call_graph`, `call_path`, `impact`, `neighbors`, `dead_code`, `resolution_report`, `delta` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
@@ -1250,11 +1357,17 @@ argument, never as a default applied in silence. `file` arguments accept
 `./src/a.ts`, an absolute path inside the repository or `src\a.ts`. A file the
 index does not hold is an error suggesting indexed files with the same name,
 not an empty answer.
+`repo_map` (and the brief's key-files section) ranks files by PageRank over the
+edges production code creates, so a test harness that thousands of tests
+import does not outrank the code it tests, and it leaves test files out. In each
+file it shows the public types and functions first, then their methods, then
+values, and counts what did not fit (`… 43 more`).
 
 ### Smaller read responses
 
 MCP `find_symbol`, `find_references`, `callers`, `symbols_overview` and `symbols`
-accept `concise: true`. Declarations are reduced to `name/kind/file/line`, plus
+accept `concise: true` (and `delta`, where it drops each change's hunks).
+Declarations are reduced to `name/kind/file/line`, plus
 `parent` for a member so its `Parent/name` path stays formable, while
 result membership, order, reference groups, call-site locations, confidence
 labels and LSP metadata stay intact. Defaults retain their full existing shape.
@@ -1330,7 +1443,7 @@ introduced are only sent to clients that asked for it, so an older client sees
 exactly what it saw before.
 
 From `2025-03-26` every tool carries behaviour annotations — `readOnlyHint` on
-the 33 read tools, `destructiveHint`/`idempotentHint` on the six that write —
+the 34 read tools, `destructiveHint`/`idempotentHint` on the six that write —
 which is what lets a host auto-approve reads and confirm only writes. From
 `2025-06-18`, the 26 tools whose result is always a JSON object also declare an
 `outputSchema` and return `structuredContent`, so a client can validate and type
@@ -1445,7 +1558,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **39 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **40 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

@@ -325,6 +325,7 @@ describe("computeDelta", () => {
       testGap: 20,
       surprise: 10,
       dangling: 15,
+      brokenImport: 40,
     });
   });
 

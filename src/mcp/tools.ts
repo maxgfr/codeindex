@@ -9,6 +9,10 @@ import { ANNOTATIONS_SINCE, PROTOCOL_VERSIONS, RICH_TOOLS_SINCE } from "./protoc
 const repoProp = { repo: { type: "string", description: "Absolute path to the repository root" } };
 // One symbol syntax for every navigation tool (src/symref.ts).
 const symbolRefDescription = "name, name@file, file#name, file#Parent/name (a call_graph id) or Parent/name";
+const sinceProp = {
+  type: "string",
+  description: 'Only count commits after this ref (tag, branch, sha) or since this date ("2024-01-01", "6 months ago"); anything else is an error',
+};
 const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line, plus parent for a member) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory or file (repo-relative); ANDed with include/exclude" },
@@ -86,10 +90,11 @@ export const TOOLS = [
   },
   {
     name: "churn",
-    description: "Per-file git commit counts (whole history, or since a ref) — the churn half of hotspot analysis.",
+    description:
+      "Per-file git commit counts (whole history, or a since window) — the churn half of hotspot analysis. Paths are relative to repo; `shallow: true` means a shallow clone (counts are lower bounds), `error` says why `ok` is false.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+      properties: { ...repoProp, since: sinceProp },
       required: ["repo"],
     },
   },
@@ -187,7 +192,7 @@ export const TOOLS = [
   {
     name: "repo_map",
     description:
-      "Token-budgeted map of the repository: the highest-PageRank files with their key exported signatures, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
+      "Token-budgeted map of the repository: the most central production files (PageRank over the edges production code creates; tests left out) with their public types, functions and methods first, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
     inputSchema: {
       type: "object",
       properties: { ...repoProp, budgetTokens: { type: "number", minimum: 1, description: "Approximate token budget (default 1024)" } },
@@ -197,20 +202,31 @@ export const TOOLS = [
   {
     name: "hotspots",
     description:
-      "Where does work concentrate? Files ranked by git churn × size (commits × log2 lines). High-scoring files are where changes and defects cluster.",
+      "Where does work concentrate? Files changed in the window, ranked by git churn × size (commits × log2 lines); test files carry `test: true`. High-scoring files are where changes and defects cluster.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only count commits after this ref" } },
+      properties: {
+        ...repoProp,
+        since: sinceProp,
+        limit: { type: "number", minimum: 1, description: "Max files (default 20)" },
+      },
       required: ["repo"],
     },
   },
   {
     name: "coupling",
     description:
-      "Change coupling: pairs of files that repeatedly change in the same commits — hidden dependencies no import shows. strength 1.0 = every change to one touched the other.",
+      "Change coupling: pairs of indexed files that repeatedly change in the same commits. strength 1.0 = every change to one touched the other; ranked by `confidence` (the strength a pair's history supports); `linked: false` = no graph edge joins them — a hidden dependency.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, since: { type: "string", description: "Only mine commits after this ref" } },
+      properties: {
+        ...repoProp,
+        since: sinceProp,
+        hidden: { type: "boolean", description: "Only pairs no graph edge links (default false)" },
+        minTogether: { type: "number", minimum: 1, description: "Commits a pair must share (default 3)" },
+        maxCommitFiles: { type: "number", minimum: 1, description: "Skip commits touching more files, as mass refactors (default 30)" },
+        limit: { type: "number", minimum: 1, description: "Max pairs (default 100)" },
+      },
       required: ["repo"],
     },
   },
@@ -325,7 +341,7 @@ export const TOOLS = [
         ...repoProp,
         file: { type: "string" },
         risk: { type: "boolean", description: "Return complexity × git-churn risk ranking instead" },
-        since: { type: "string", description: "Only count risk churn after this ref" },
+        since: { ...sinceProp, description: "Only count risk churn after this ref (tag, branch, sha) or since this date" },
         top: { type: "number", minimum: 1, description: "Cap ranked symbols" },
       },
       required: ["repo"],
@@ -529,7 +545,7 @@ export const TOOLS = [
   {
     name: "check_rules",
     description:
-      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"} (module-level import cycles; edge-less code files). Returns deterministic violations with severity error|warn — a CI gate.',
+      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"|"literals"} (module-level import cycles; code files nothing connects to; values with no single source of truth, narrowed by tiers?/minFiles?/minCount?/includeTests?). Unknown keys are rejected; a forbidden rule whose globs match no indexed file comes back as an `unmatched` warning. Returns deterministic violations with severity error|warn — a CI gate.',
     inputSchema: {
       type: "object",
       properties: {
@@ -539,7 +555,7 @@ export const TOOLS = [
         configPath: {
           type: "string",
           description:
-            "Read the rules from this JSON file instead (repo-relative or absolute) — the CLI's --config. Ignored when `rules` is given.",
+            "Read the rules from this JSON file instead — the CLI's --config. Repo-relative, or absolute; either way it must resolve inside the repository. Ignored when `rules` is given.",
         },
       },
       required: ["repo"],
@@ -566,6 +582,24 @@ export const TOOLS = [
       "Is the persisted index (<repo>/.codeindex, written by `codeindex index`) fresh for this tree? Returns whether its cache.json is usable (or why not: absent/unreadable/corrupt/schema/extractor), the indexed vs HEAD commit, per-file drift counts (unchanged, touched, modified, added, deleted, reextract), artifactsFresh and the reasons it is not. Cheap: reads cache.json, walks and stats, hashes only stat-changed files, never extracts. A fresh index is what makes the first graph-shaped call on a large repo fast; a stale one is rebuilt in memory, so answers stay correct either way.",
     inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] },
   },
+  {
+    name: "delta",
+    description:
+      "What does my change break? Maps the git diff (the branch against its merge-base with the default branch, uncommitted and untracked work included; or the staged changeset) onto the graph: each changed file with the symbols enclosing its hunks, and per module a 0-100 risk score (HIGH/MEDIUM/LOW) in which every point comes with its reason — exported API changed, hub, blast radius, test gap, a deleted or renamed file that is still imported (`broken`, with its importers), dangling imports. `open` names the files to read first. Call it after editing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        ...conciseProp,
+        base: { type: "string", description: "Branch or ref to review against (default: origin/HEAD, origin/main, origin/master, main, master; else HEAD)" },
+        staged: { type: "boolean", description: "Review the staged changeset against HEAD instead (default false)" },
+        depth: { type: "number", minimum: 1, description: "Blast-radius hops (default 2)" },
+        limit: { type: "number", minimum: 1, description: "Max modules, highest score first (default: all)" },
+        format: { type: "string", enum: ["json", "text"], description: '"text" returns the compact human panel instead of JSON (default "json")' },
+      },
+      required: ["repo"],
+    },
+  },
 ] as const;
 
 
@@ -585,7 +619,7 @@ export const TOOLS = [
 //     option that breaks neither.
 //   * argument-dependent shapes — dead_code (array, object with `limit`),
 //     complexity (array, object with `risk`), search (array, object with
-//     `semantic` or `explain`). A schema that cannot describe every response is
+//     `semantic` or `explain`), delta (object, text with `format: "text"`). A schema that cannot describe every response is
 //     worse than none: it would make a conforming client reject valid output.
 //     `explain_search` exists precisely because of this rule — it is the same
 //     answer with ONE shape, so it can carry a schema where `search` cannot.
@@ -602,6 +636,9 @@ export const TOOLS = [
 // declared schema, including ones added later.
 const strArr = { type: "array", items: { type: "string" } };
 const anyObj = { type: "object" };
+// git-history answers (churn, hotspots, coupling): why `ok` is false, and
+// whether a shallow clone truncated the history. Present only when they apply.
+const historyProps = { error: { type: "string" }, shallow: { type: "boolean" }, note: { type: "string" } };
 
 export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   call_graph: {
@@ -736,7 +773,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   churn: {
     type: "object",
-    properties: { ok: { type: "boolean" }, churn: { type: "object", additionalProperties: { type: "integer" } } },
+    properties: { ok: { type: "boolean" }, ...historyProps, churn: { type: "object", additionalProperties: { type: "integer" } } },
     required: ["ok", "churn"],
   },
   find_references: {
@@ -800,12 +837,12 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   hotspots: {
     type: "object",
-    properties: { churnOk: { type: "boolean" }, hotspots: { type: "array", items: anyObj } },
+    properties: { churnOk: { type: "boolean" }, ...historyProps, hotspots: { type: "array", items: anyObj } },
     required: ["churnOk", "hotspots"],
   },
   coupling: {
     type: "object",
-    properties: { ok: { type: "boolean" }, couplings: { type: "array", items: anyObj } },
+    properties: { ok: { type: "boolean" }, ...historyProps, couplings: { type: "array", items: anyObj } },
     required: ["ok", "couplings"],
   },
   duplicated_literals: {
@@ -937,6 +974,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   check_rules: { title: "Check architecture rules" },
   resolution_report: { title: "Import resolution report" },
   index_status: { title: "Index freshness" },
+  delta: { title: "Review the diff" },
 };
 
 export function annotationsFor(name: string): Record<string, boolean> | undefined {
@@ -981,11 +1019,11 @@ export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Locate a thing. embed_status says whether `search` semantic:true fuses.
   find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "symbol_at", "embed_status"],
   // Decide whether changing it is safe.
-  impact: ["find_references", "callers", "call_graph", "call_path", "impact", "neighbors", "dead_code", "type_hierarchy", "implementations", "lsp_status", "resolution_report"],
+  impact: ["find_references", "callers", "call_graph", "call_path", "impact", "neighbors", "dead_code", "type_hierarchy", "implementations", "lsp_status", "resolution_report", "delta"],
   // Change it.
   edit: ["find_symbol", "symbols_overview", "symbol_at", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.
-  risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"],
+  risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code", "delta"],
   // The project notes, whole: write, read, list, delete.
   memory: ["write_memory", "read_memory", "list_memories", "delete_memory"],
 };

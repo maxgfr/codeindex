@@ -134,6 +134,33 @@ function holderCandidates(symbols: CodeSymbol[]): CodeSymbol[] {
   return out;
 }
 
+// Go allows one name once per package, so the same holder name in two files
+// of one directory can only be build-tag variants (binding.go and
+// binding_nomsgpack.go, `//go:build !nomsgpack` / `nomsgpack`) that are never
+// compiled together: one source of truth, not two competing ones. Elsewhere a
+// holder is its file and name.
+function holderIdentity(site: LiteralSite): string {
+  const owner = site.file.endsWith(".go") && site.file.includes("/") ? site.file.slice(0, site.file.lastIndexOf("/")) : site.file;
+  return `${owner}\u0000${site.holder}`;
+}
+
+// Repetition the formats themselves give no way to centralize. GitHub Actions
+// workflows cannot import each other's values (`runs-on: ubuntu-latest`,
+// `actions/checkout@v4` in every file is the idiom, and Dependabot keeps it in
+// step), and a package manifest with no inheritance mechanism states its own
+// license, build backend and test tool in each example project. A value seen
+// ONLY in such files names no fix; one that also appears in code or in another
+// config (a Python version in CI and in pyproject.toml) is still reported.
+const CI_WORKFLOW = /(?:^|\/)\.github\/workflows\//;
+const MANIFESTS_WITHOUT_INHERITANCE = new Set(["package.json", "pyproject.toml", "composer.json", "go.mod"]);
+const baseName = (rel: string): string => rel.slice(rel.lastIndexOf("/") + 1);
+
+function onlyUncentralizable(sites: LiteralSite[]): boolean {
+  if (sites.every((s) => CI_WORKFLOW.test(s.file))) return true;
+  const base = baseName(sites[0]!.file);
+  return MANIFESTS_WITHOUT_INHERITANCE.has(base) && sites.every((s) => baseName(s.file) === base);
+}
+
 function holderFor(candidates: CodeSymbol[], line: number): CodeSymbol | undefined {
   // A literal sitting inside a constant's declaration span IS that constant's
   // value. This span join needs no new extraction: both tiers already report a
@@ -190,11 +217,12 @@ export function findLiteralDuplications(scan: RepoScan, opts: LiteralsOptions = 
   for (const g of groups.values()) {
     const files = new Set(g.sites.map((s) => s.file));
     if (files.size < minFiles || g.sites.length < minCount) continue;
+    if (onlyUncentralizable(g.sites)) continue;
 
     const holders = g.sites.filter((s) => s.holder);
     const literals = g.sites.filter((s) => !s.holder);
     const distinctHolderNames = new Set(holders.map((h) => h.holder!));
-    const distinctHolders = new Set(holders.map((h) => `${h.file}\u0000${h.holder}`));
+    const distinctHolders = new Set(holders.map(holderIdentity));
 
     // A value only ever written inside constants, in different files, is two
     // (or more) competing sources of truth — the "three centralization

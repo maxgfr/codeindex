@@ -18,7 +18,7 @@ export interface MermaidOptions {
 // `src-a-b`, `src-a_b`) both became `src_a_b`, silently merging two modules
 // into one node. Ids are assigned over EVERY slug of the graph in sorted
 // order, so they never depend on which subset a diagram shows: a slug whose
-// readable id is unique keeps it (existing diagrams stay byte-identical), and
+// readable id is unique keeps it, and
 // within a colliding group the first keeps it and the rest take the first free
 // `_2`, `_3`, ….
 function mermaidIds(graph: Graph, prefix: string): Map<string, string> {
@@ -51,12 +51,20 @@ export function moduleSlugFor(graph: Graph, target: string): string | undefined 
   if (byPath) return byPath.slug;
   return graph.files.find((f) => f.rel === target)?.module;
 }
+// The label is the directory as written: a slug is lossy (`données` →
+// `donn-es`). Mermaid ends a quoted label at `"`, so it is swapped for `'`.
+const nodeLabel = (m: ModuleNode): string => `${m.path.replace(/"/g, "'")}${m.tier === 0 ? " (core)" : ""}`;
 
 export function renderMermaid(graph: Graph, opts: MermaidOptions = {}): string {
   const maxEdges = opts.maxEdges ?? 80;
   const focus = opts.module ? moduleSlugFor(graph, opts.module) : undefined;
   if (opts.module && !focus) throw new Error(`no such file or module in the index: ${opts.module}`);
-  const idOf = mermaidIds(graph, "");
+  // Every node id carries a prefix, whatever the id scheme under it: a bare
+  // module named \`end\`, \`style\`, \`class\`, \`click\`, \`graph\`, \`subgraph\`,
+  // \`call\`, \`href\`… is a flowchart keyword, and mermaid rejects the whole
+  // diagram ("Parse error … got 'end'"). A prefixed id can never be one, and
+  // prefixing keeps mermaidIds' injective scheme injective.
+  const idOf = mermaidIds(graph, "m_");
   let edges = [...graph.moduleEdges].filter((e) => !e.dangling);
   if (focus) {
     edges = edges.filter((e) => e.from === focus || e.to === focus);
@@ -75,7 +83,7 @@ export function renderMermaid(graph: Graph, opts: MermaidOptions = {}): string {
   const lines: string[] = ["graph LR"];
   for (const m of [...graph.modules].sort((a, b) => byStr(a.slug, b.slug))) {
     if (!shown.has(m.slug)) continue;
-    lines.push(`  ${idOf.get(m.slug)}["${m.slug}${m.tier === 0 ? " (core)" : ""}"]`);
+    lines.push(`  ${idOf.get(m.slug)}["${nodeLabel(m)}"]`);
   }
   for (const e of edges) {
     const label = e.kind === "import" ? "" : `|${e.kind}|`;

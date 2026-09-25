@@ -12,7 +12,7 @@
 // breaks kept so symbol spans still line up), and a keyword read as a member
 // (`re.match(…)`, `.catch(…)`) is not a branch. Python, Ruby, Lua, Perl and
 // Elixir spell their boolean operators `and`/`or`; those count like && and ||.
-import { join } from "node:path";
+import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { familyOf } from "./calls.js";
@@ -155,6 +155,17 @@ function branches(code: string, lang?: string): number {
 /** Branch count + 1 over the code of `source`, its comments and strings aside. */
 export function complexityOfSource(source: string, lang?: string): number {
   return 1 + branches(codeOnly(source, lang), lang);
+}
+
+// A file argument as the index keys it — `./gin.go`, `gin.go` and the
+// absolute path all name gin.go — or an error saying it is not indexed. An
+// unknown file used to answer [] with exit 0, which reads exactly like a file
+// with no symbols.
+export function indexedFile(scan: RepoScan, target: string): string {
+  const path = isAbsolute(target) ? relative(resolve(scan.root), target) : target;
+  const rel = posix.normalize(path.replace(/\\/g, "/")).replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  if (!scan.files.some((f) => f.rel === rel)) throw new Error(`no such file in the index: ${target}`);
+  return rel;
 }
 
 export interface SymbolComplexity {

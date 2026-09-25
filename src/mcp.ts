@@ -9,7 +9,7 @@
 // (NOT `node scripts/engine.mjs mcp`: engine.mjs is a side-effect-free library
 // with no main-module guard — see src/engine.ts — so that command does nothing.
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
@@ -21,7 +21,7 @@ import type { RepoScan } from "./scan.js";
 import { implementationsOf, typeEntry } from "./relations.js";
 import { callPath, neighborhood, type Direction } from "./symbolgraph.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
-import { gitChurn } from "./git.js";
+import { gitChurn, historyStatus } from "./git.js";
 import { grepRepoEx } from "./grep.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
@@ -35,13 +35,14 @@ import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
-import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
+import { conciseCaller, conciseDelta, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
 import { indexStatus } from "./status.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
-import { explainQuery, type RankMode } from "./bm25.js";
-import { checkRules, parseRules } from "./rules.js";
+import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
+import { checkRules, parseRules, parseRulesText, type ArchRule } from "./rules.js";
+import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
 import { readEmbeddingsFile } from "./embed/persist.js";
@@ -189,7 +190,7 @@ class NotFound extends Error {}
 // the repo's grammars first; defaulting to "warm" keeps a newly added scan tool
 // correct without having to be listed here.
 const SCANLESS_TOOLS = new Set([
-  "workspaces", "churn", "coupling", "grep",
+  "workspaces", "churn", "grep",
   "write_memory", "read_memory", "list_memories", "delete_memory",
   "embed_status",
   // scan_summary counts and classifies by path only — it never parses, so the
@@ -342,10 +343,10 @@ async function callTool(
     return JSON.stringify(workspaceReport(info, check), null, 2);
   }
   if (name === "churn") {
-    const { churn, ok } = gitChurn(repo, { since: str(args.since) });
+    const res = gitChurn(repo, { since: str(args.since) });
     const sorted: Record<string, number> = {};
-    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
-    return JSON.stringify({ ok, churn: sorted }, null, 2);
+    for (const k of [...res.churn.keys()].sort()) sorted[k] = res.churn.get(k)!;
+    return JSON.stringify({ ok: res.ok, ...historyStatus(res), churn: sorted }, null, 2);
   }
   if (name === "symbols_overview") {
     const file = str(args.file);
@@ -462,8 +463,9 @@ async function callTool(
     const scan = readScan();
     if (args.risk === true) {
       // `since` was accepted by the CLI's `risk` but silently dropped here.
-      const { churn, ok } = gitChurn(repo, { since: str(args.since) });
-      return JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, positiveNum(args.top)) }, null, 2);
+      const res = gitChurn(repo, { since: str(args.since) });
+      const risks = riskHotspots(scan, res.churn, positiveNum(args.top));
+      return JSON.stringify({ churnOk: res.ok, ...historyStatus(res), risks }, null, 2);
     }
     const file = str(args.file);
     const rel = file === undefined ? undefined : indexedFile(scan, repo, file);
@@ -494,12 +496,21 @@ async function callTool(
   }
   if (name === "hotspots") {
     const scan = readScan();
-    const { churn, ok } = gitChurn(repo, { since: str(args.since) });
-    return JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2);
+    const res = gitChurn(repo, { since: str(args.since) });
+    const hotspots = rankHotspots(scan, res.churn, positiveNum(args.limit));
+    return JSON.stringify({ churnOk: res.ok, ...historyStatus(res), hotspots }, null, 2);
   }
   if (name === "coupling") {
-    const { ok, couplings } = changeCoupling(repo, { since: str(args.since) });
-    return JSON.stringify({ ok, couplings }, null, 2);
+    const { graph } = readArtifacts();
+    const res = changeCoupling(repo, {
+      since: str(args.since),
+      graph,
+      hidden: args.hidden === true,
+      minTogether: positiveNum(args.minTogether),
+      maxCommitFiles: positiveNum(args.maxCommitFiles),
+      maxPairs: positiveNum(args.limit),
+    });
+    return JSON.stringify({ ok: res.ok, ...historyStatus(res), couplings: res.couplings }, null, 2);
   }
   if (name === "grep") {
     const pattern = str(args.pattern);
@@ -714,19 +725,54 @@ async function callTool(
     // which had no MCP equivalent, so a repo with a committed rules file had to
     // have it re-pasted into every call.
     const configPath = str(args.configPath);
-    let payload: unknown = args.rules;
-    if (payload === undefined && configPath) {
-      const abs = isAbsolute(configPath) ? configPath : join(repo, configPath);
+    let rules: ArchRule[];
+    if (args.rules !== undefined) rules = parseRules(args.rules); // throws a descriptive error on a malformed payload
+    else if (configPath) {
+      // The path comes from the client, and the error below used to echo the
+      // start of whatever it named (`/etc/passwd` included): only a file
+      // inside the repository is read, symlinks resolved first.
+      const unreadable = new Error(`cannot read rules config ${configPath}`);
+      let abs: string;
       try {
-        payload = JSON.parse(readFileSync(abs, "utf8"));
-      } catch (e) {
-        throw new Error(`cannot read rules from ${abs}: ${errMessage(e)}`);
+        abs = realpathSync(isAbsolute(configPath) ? configPath : join(repo, configPath));
+      } catch {
+        throw unreadable;
       }
+      const root = realpathSync(repo);
+      if (!abs.startsWith(root.endsWith(sep) ? root : root + sep)) {
+        throw new Error(`rules config must be a file inside the repository: ${configPath}`);
+      }
+      let text: string;
+      try {
+        text = readFileSync(abs, "utf8");
+      } catch {
+        throw unreadable;
+      }
+      rules = parseRulesText(text, configPath);
+    } else throw new Error("`rules` (or `configPath`) is required");
+    const { scan, graph } = readArtifacts();
+    return JSON.stringify(checkRules(graph, rules, { scan }), null, 2);
+  }
+  if (name === "delta") {
+    // The CLI's review panel, for an agent that just edited files over this
+    // server. The session scan is re-proven fresh on every call, so the graph
+    // is the worktree's as it sits now. The diff is read first: when it is
+    // empty the artifacts are not needed.
+    const diff = readDeltaDiff(repo, { base: str(args.base), staged: args.staged === true });
+    if ("error" in diff) throw new Error(diff.error);
+    const depth = positiveNum(args.depth);
+    let res = emptyDelta(diff, depth);
+    if (diff.files.length) {
+      const { scan, graph, symbols } = readArtifacts();
+      res = deltaOfDiff(diff, graph, symbols, { depth, scan });
     }
-    if (payload === undefined) throw new Error("`rules` (or `configPath`) is required");
-    const rules = parseRules(payload); // throws a descriptive error on a malformed payload
-    const { graph } = readArtifacts();
-    return JSON.stringify(checkRules(graph, rules), null, 2);
+    if (str(args.format) === "text") return formatDeltaPanel(res);
+    const out = args.concise === true ? conciseDelta(res) : res;
+    const limit = positiveNum(args.limit);
+    // Modules are ranked highest score first, so a cap keeps the riskiest; it
+    // says so, same doctrine as dead_code.
+    if (limit === undefined || out.modules.length <= limit) return JSON.stringify(out, null, 2);
+    return JSON.stringify({ ...out, modules: out.modules.slice(0, limit), totalModules: out.modules.length, truncated: true }, null, 2);
   }
   if (name === "resolution_report") {
     return JSON.stringify(resolutionReport(readScan(), { lang: str(args.lang), limit: positiveNum(args.limit) }), null, 2);

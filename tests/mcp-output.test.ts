@@ -152,7 +152,7 @@ describe("outputSchema / structuredContent", () => {
     // The tools deliberately left out: array responses, argument-dependent
     // shapes, and plain text. Pinned so a future "just add a schema" does not
     // silently start emitting a structuredContent that cannot conform.
-    for (const name of ["symbols_overview", "find_symbol", "grep", "check_rules", "list_memories", "dead_code", "complexity", "search", "repo_map", "mermaid", "read_memory"]) {
+    for (const name of ["symbols_overview", "find_symbol", "grep", "check_rules", "list_memories", "dead_code", "complexity", "search", "repo_map", "mermaid", "read_memory", "delta"]) {
       expect(OUTPUT_SCHEMAS[name], name).toBeUndefined();
     }
   }, 60_000);

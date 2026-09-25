@@ -261,9 +261,22 @@ export type { ImpactResult, ImpactedFile, NeighborResult, NeighborLink } from ".
 
 // Diff review: git diff -> enclosing symbols -> blast radius -> risk-scored,
 // reasons-first panel. `computeDelta` is the pure core (no git, no fs);
-// `deltaFor` adds the git plumbing against a graph the caller supplies.
-export { computeDelta, deltaFor, formatDeltaPanel, symbolsInHunks, RISK_WEIGHTS, DEFAULT_DELTA_DEPTH } from "./delta.js";
-export type { DeltaOptions, DeltaResult, DeltaError, DeltaModule, DeltaChange, ChangedSymbol } from "./delta.js";
+// `deltaFor` adds the git plumbing against a graph the caller supplies;
+// `readDeltaDiff` + `deltaOfDiff` split it so a caller can skip loading the
+// index when the diff is empty (`emptyDelta`).
+export {
+  brokenImports,
+  computeDelta,
+  deltaFor,
+  deltaOfDiff,
+  emptyDelta,
+  formatDeltaPanel,
+  readDeltaDiff,
+  symbolsInHunks,
+  RISK_WEIGHTS,
+  DEFAULT_DELTA_DEPTH,
+} from "./delta.js";
+export type { BrokenImport, DeltaDiff, DeltaOptions, DeltaResult, DeltaError, DeltaModule, DeltaChange, ChangedSymbol } from "./delta.js";
 export type { RepoMapOptions } from "./repomap.js";
 
 // MCP server over stdio (also reachable as `engine.mjs mcp`).

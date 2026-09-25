@@ -47,8 +47,9 @@ import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymb
 import { conciseReferences, symbolLocation } from "./mcp/concise.js";
 import { formatSymbolRef } from "./symref.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
-import { gitChurn } from "./git.js";
+import { gitChurn, historyStatus } from "./git.js";
 import { grepRepoEx } from "./grep.js";
+import { compileGlobFilter } from "./glob.js";
 import { changeCoupling, rankHotspots } from "./coupling.js";
 import { renderRepoMap } from "./repomap.js";
 import { capDeadCode, findDeadCode } from "./deadcode.js";
@@ -58,9 +59,9 @@ import { renderMermaid } from "./viz.js";
 import { resolutionReport } from "./resolution.js";
 import { hierarchyFor, resolveContextFor, symbolGraphFor } from "./derived.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
-import { deltaFor, formatDeltaPanel } from "./delta.js";
+import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
-import { checkRules, parseRules } from "./rules.js";
+import { checkRules, parseRulesText } from "./rules.js";
 import {
   EMBED_VERSION,
   resolveEmbedModelDir,
@@ -166,7 +167,8 @@ Commands:
               malformed manifests. --check compares each package's declared
               sibling dependencies with the imports it really makes
               (undeclared / unusedDeclared) and exits 1 on an undeclared one
-  churn       Per-file git commit counts (JSON; --since <ref> to bound)
+  churn       Per-file git commit counts (JSON; --since to bound; honours
+              --scope/--include/--exclude)
   grep        Search: cli.mjs grep <pattern> --repo <dir> (JSON hits sorted by
               file, line: {file, line, col, text}; a line over 300 chars is
               cut to a window around the match). JavaScript regex dialect on
@@ -214,10 +216,18 @@ Commands:
                                  CODEINDEX_GRAMMARS_URL
   rules       Architecture rules (forbidden edges, cycles, orphans, literals)
               validated against the link-graph: --config <codeindex.rules.json>;
-              exits 1 on any error-severity violation (a CI gate)
-  repomap     Token-budgeted map of the highest-PageRank files (--budget-tokens)
-  hotspots    Churn × size ranking of the files where work concentrates (JSON)
-  coupling    Change coupling: files that change together (JSON; --since <ref>)
+              exits 1 on any error-severity violation (a CI gate), 2 on an
+              invalid config (unknown key, tier or edge kind); a forbidden
+              rule matching no file is an \`unmatched\` warning
+  repomap     Token-budgeted map of the most central production files (PageRank
+              without the edges tests add; tests left out) with their public
+              types, functions and methods first (--budget-tokens)
+  hotspots    Churn × size ranking of the files where work concentrates: only
+              files changed in the window, tests labelled (JSON; --since, --limit)
+  coupling    Change coupling: indexed files that change together, ranked by
+              confidence, each marked linked when a graph edge already joins
+              them (JSON; --since, --limit, --min-together, --max-commit-files,
+              --hidden)
   literals    Values with no single source of truth: one literal written out
               across many files, in three labeled tiers — 'competing' (two or
               more exported constants hold it), 'bypassed' (a constant holds
@@ -237,16 +247,21 @@ Commands:
               and overrides of live methods are never candidates. --limit <n> caps the list as
               {total, shown, truncated, candidates}
   complexity  Cyclomatic-complexity estimates, most-complex first. Pass a file
-              positional for one file; omit for the repo-wide top (--limit,
-              default 50). Counts code only (comments, docstrings and strings
-              aside; Python/Ruby/Lua and/or count like && and ||); classes and
-              other containers are not ranked, and a nested function scores on
-              its own, not inside its parent
-  risk        Complexity × git-churn ranking (JSON; --since <ref> to bound),
+              positional for one file (./ and absolute paths accepted; a file
+              the index does not hold is an error); omit for the repo-wide top
+              (--limit, default 50). Counts code only (comments, docstrings and
+              strings aside; Python/Ruby/Lua and/or count like && and ||);
+              classes and other containers are not ranked, and a nested
+              function scores on its own, not inside its parent
+  risk        Complexity × git-churn ranking (JSON; --since to bound, --limit),
               with the same code-only branch counts per file
   delta       Review panel for the git diff: changed files -> enclosing symbols ->
-              blast radius -> risk score with explained reasons
-              (--base <ref> | --staged, --depth <n>, --json)
+              blast radius -> risk score with explained reasons; a deleted or
+              renamed file that is still imported is listed under \`broken\`
+              with its importers (--base <ref> | --staged, --depth <n>, --json,
+              --fail-on HIGH|MEDIUM|LOW to exit 1 as a CI gate). Paths under
+              the --index directory are not part of the review; before the
+              first commit every file is reviewed against the empty tree
   impact      Reverse dependency closure of a file or module: everything that
               transitively imports/uses/calls it; a Go import reaches every
               file of its package. Calls inferred from a name alone are
@@ -274,15 +289,15 @@ Commands:
               patterns restated as JS; -F -w -i -S -l -t -g --include).
               Deliberately conservative — shell syntax outside single quotes,
               an unknown flag or an untranslatable pattern refuses the rewrite
-  mcp         Run as an MCP server over stdio (39 tools: scan_summary,
+  mcp         Run as an MCP server over stdio (40 tools: scan_summary,
               index_status, graph, symbols, callers, workspaces, churn,
               symbols_overview, find_symbol, find_references, symbol_at,
               lsp_status, onboard, repo_map, hotspots, coupling, dead_code,
               complexity, duplicated_literals, mermaid, grep, search,
               explain_search, embed_status, check_rules, resolution_report,
               type_hierarchy, implementations, call_graph, call_path, impact,
-              neighbors, the memory quartet and the three symbolic-edit
-              writes). Flags: --repo <dir> pins ONE
+              neighbors, delta, the memory quartet and the three
+              symbolic-edit writes). Flags: --repo <dir> pins ONE
               repository so the per-tool repo argument becomes optional (an
               explicit per-call repo still wins); --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
@@ -353,10 +368,22 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --skipped           \`scan\`: list every path the scan leaves out, and why
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results: \`search\` (default 20), \`complexity\` (50),
-                      \`risk\` (20), \`deadcode\` (default all), \`find\` (50),
-                      \`callpath\` (5 paths listed); entries per top list for
-                      \`resolution\` (default 10)
+                      \`risk\` (20), \`hotspots\` (20), \`coupling\` (100),
+                      \`deadcode\` (default all), \`find\` (50), \`callpath\` (5
+                      paths listed); entries per top list for \`resolution\`
+                      (default 10)
   --lang <name>       \`resolution\`: report one language (as \`scan\` names it)
+  --since <ref|date>  \`churn\`, \`hotspots\`, \`risk\`, \`coupling\`: only commits
+                      after a ref (tag, branch, sha) or since a date
+                      (2024-01-01, "6 months ago"); anything else is an error.
+                      Paths are relative to --repo, which may be a subdirectory
+                      of the git repository; a shallow clone is reported as
+                      \`shallow: true\` (counts are lower bounds)
+  --min-together <n>  \`coupling\`: commits a pair must share (default 3)
+  --max-commit-files <n>  \`coupling\`: skip commits touching more files, as mass
+                      refactors (default 30)
+  --hidden            \`coupling\`: only pairs no graph edge links — the hidden
+                      dependencies
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
                       with zero document frequency (default: enabled)
   --exact             \`search\`: drop results that carry no verbatim term match
@@ -439,14 +466,17 @@ interface CliFlags {
   check?: boolean; // status: exit 1 unless fresh; workspaces: compare declared deps with real imports
   why?: string; // scan: explain one path
   skipped?: boolean; // scan: list every skip
-  since?: string;
+  since?: string; // churn/hotspots/risk/coupling: a ref or a date
+  minTogether?: number; // coupling: commits a pair must share
+  maxCommitFiles?: number; // coupling: mass-refactor cut
+  hidden?: boolean; // coupling: only pairs no graph edge links
   ignoreCase?: boolean;
   maxHits?: number;
   timeoutMs?: number; // grep: JS regex engine wall-clock budget
   filesWithMatches?: boolean; // grep: one hit (the first) per matching file
   budgetTokens?: number;
   config?: string; // rules config path
-  limit?: number; // search result cap
+  limit?: number; // search/hotspots/risk/coupling result cap
   minFiles?: number; // literals: distinct-file floor for a duplication
   minCount?: number; // literals: total-occurrence floor for a duplication
   includeTests?: boolean; // literals: count test files too (off by default)
@@ -471,6 +501,7 @@ interface CliFlags {
   rank?: "graph" | "lexical"; // search: structural prior (default lexical)
   json?: boolean; // delta: emit JSON instead of the human panel
   lang?: string; // resolution: one language's row
+  failOn?: "HIGH" | "MEDIUM" | "LOW"; // delta: exit 1 when a module reaches this bucket
   positional?: string; // e.g. the grep pattern or search query
   positionals: string[]; // every positional; only `callpath` takes two
   substring?: boolean; // find: match the name by inclusion
@@ -547,6 +578,9 @@ function parseFlags(args: string[]): CliFlags {
       flags.workers = n;
     }
     else if (a === "--since") flags.since = next();
+    else if (a === "--min-together") flags.minTogether = num();
+    else if (a === "--max-commit-files") flags.maxCommitFiles = num();
+    else if (a === "--hidden") flags.hidden = true;
     else if (a === "--config") flags.config = resolve(next());
     else if (a === "--limit") flags.limit = count();
     else if (a === "--no-fuzzy") flags.fuzzy = false;
@@ -581,6 +615,11 @@ function parseFlags(args: string[]): CliFlags {
       flags.direction = v;
     }
     else if (a === "--json") flags.json = true;
+    else if (a === "--fail-on") {
+      const v = next().toUpperCase();
+      if (v !== "HIGH" && v !== "MEDIUM" && v !== "LOW") throw new Error(`--fail-on expects HIGH, MEDIUM or LOW, got "${v}"`);
+      flags.failOn = v;
+    }
     else if (a === "--lang") flags.lang = next();
     else if (a === "--substring") flags.substring = true;
     else if (a === "--include-body") flags.includeBody = true;
@@ -697,7 +736,9 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
 // excluded by the positional check at the warm site. `grammars` (status/pull)
 // resolves/downloads the wasms itself and must not warm them.
 // version/help/mcp return before we get there.
-const SCANLESS_COMMANDS = new Set(["grep", "churn", "coupling", "workspaces", "grammars"]);
+const bucketRank = (b: "HIGH" | "MEDIUM" | "LOW"): number => (b === "HIGH" ? 2 : b === "MEDIUM" ? 1 : 0);
+
+const SCANLESS_COMMANDS = new Set(["grep", "churn", "workspaces", "grammars"]);
 // Commands that walk the tree but never extract a file: no grammar warm, and so
 // no warm-up walk either — they walk once, themselves.
 const WALK_ONLY_COMMANDS = new Set(["scan", "status"]);
@@ -813,6 +854,8 @@ const VALUE_FLAGS = new Set([
   "--min-files",
   "--min-count",
   "--since",
+  "--min-together",
+  "--max-commit-files",
   "--config",
   "--limit",
   "--server-name",
@@ -821,6 +864,7 @@ const VALUE_FLAGS = new Set([
   "--index",
   "--max-response-bytes",
   "--base",
+  "--fail-on",
   "--depth",
   "--kind",
   "--rank",
@@ -902,22 +946,23 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   warnPathFlags(flags);
 
   // Warm ONLY the grammars for languages actually present, and only for commands
-  // that scan the file tree. Scan-less commands (grep, churn, coupling,
-  // workspaces, embed status|pull|serve) load no grammar at all; version/help/mcp
+  // that scan the file tree. Scan-less commands (grep, churn, workspaces,
+  // embed status|pull|serve) load no grammar at all; version/help/mcp
   // already returned above. The walk is done ONCE here to derive the present
   // extensions, then handed to the scan via precomputedWalk so the tree is
   // traversed a single time. --no-ast keeps the regex tier: no walk, no warm —
-  // scanRepo walks itself, exactly as before.
-  // `workspaces --check` reads the link-graph, so it scans like any graph command.
+  // scanRepo walks itself, exactly as before. \`delta\` walks only once it knows
+  // the diff is not empty (see there): the walk alone is seconds on a large
+  // repo, and a clean worktree needs no index at all.
+  // \`workspaces --check\` reads the link-graph, so it scans like any graph command.
   const scans =
     (!SCANLESS_COMMANDS.has(cmd) || (cmd === "workspaces" && flags.check === true)) &&
     !(cmd === "embed" && flags.positional !== "build");
+  // The scan's own walk options, path filter included, so the grammars
+  // warmed are those of the files in scope and the scan can reuse this walk.
+  const walkRepo = (): WalkResult => walk(flags.repo, scanWalkOptions(flags.repo, scanOptions(flags)));
   let precomputedWalk: WalkResult | undefined;
-  if (scans && !flags.noAst && !WALK_ONLY_COMMANDS.has(cmd)) {
-    // The scan's own walk options, path filter included, so the grammars
-    // warmed are those of the files in scope and the scan can reuse this walk.
-    precomputedWalk = walk(flags.repo, scanWalkOptions(flags.repo, scanOptions(flags)));
-  }
+  if (scans && !flags.noAst && !WALK_ONLY_COMMANDS.has(cmd) && cmd !== "delta") precomputedWalk = walkRepo();
   let grammarsWarmed = false;
   const warmPresentGrammars = async (): Promise<void> => {
     if (grammarsWarmed || flags.noAst || !precomputedWalk) return;
@@ -1661,9 +1706,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     }
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRules(JSON.parse(readFileSync(flags.config, "utf8")));
-    const graph = await readGraph();
-    const violations = checkRules(graph, rules);
+    const rules = parseRulesText(readFileSync(flags.config, "utf8"), flags.config);
+    const { scan, graph } = await readArtifacts();
+    const violations = checkRules(graph, rules, { scan });
     const errors = violations.filter((v) => v.severity === "error").length;
     emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
     if (errors > 0) process.exitCode = 1; // the CI gate
@@ -1673,20 +1718,36 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(JSON.stringify(workspaceReport(info, check), null, 2) + "\n", flags.out);
     if (check && !check.ok) process.exitCode = 1; // the CI gate, like `rules`
   } else if (cmd === "churn") {
-    const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
+    const res = gitChurn(flags.repo, { since: flags.since });
+    // churn reads git, not the walk, so the global --scope/--include/--exclude
+    // are applied to its keys here — the same predicate the scan uses.
+    const scopeGlobs = flags.scope ? [`${flags.scope.replace(/\/+$/, "")}/**`] : [];
+    const globs = [...scopeGlobs, ...flags.include, ...flags.exclude.map((g) => `!${g}`)];
+    const keep = compileGlobFilter(globs.length ? globs : undefined);
     const sorted: Record<string, number> = {};
-    for (const k of [...churn.keys()].sort()) sorted[k] = churn.get(k)!;
-    emit(JSON.stringify({ ok, churn: sorted }, null, 2) + "\n", flags.out);
+    for (const k of [...res.churn.keys()].sort()) if (!keep || keep(k)) sorted[k] = res.churn.get(k)!;
+    emit(JSON.stringify({ ok: res.ok, ...historyStatus(res), churn: sorted }, null, 2) + "\n", flags.out);
   } else if (cmd === "repomap") {
     const graph = await readGraph();
     emit(renderRepoMap(await readScan(), graph, { budgetTokens: flags.budgetTokens }), flags.out);
   } else if (cmd === "hotspots") {
     const scan = await readScan();
-    const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
-    emit(JSON.stringify({ churnOk: ok, hotspots: rankHotspots(scan, churn) }, null, 2) + "\n", flags.out);
+    const res = gitChurn(flags.repo, { since: flags.since });
+    const hotspots = rankHotspots(scan, res.churn, flags.limit);
+    emit(JSON.stringify({ churnOk: res.ok, ...historyStatus(res), hotspots }, null, 2) + "\n", flags.out);
   } else if (cmd === "coupling") {
-    const { ok, couplings } = changeCoupling(flags.repo, { since: flags.since });
-    emit(JSON.stringify({ ok, couplings }, null, 2) + "\n", flags.out);
+    // The graph restricts pairs to indexed files (no deleted paths; the scope
+    // flags apply) and says which pairs an edge already explains.
+    const { graph } = await readArtifacts();
+    const res = changeCoupling(flags.repo, {
+      since: flags.since,
+      graph,
+      hidden: flags.hidden,
+      minTogether: flags.minTogether,
+      maxCommitFiles: flags.maxCommitFiles,
+      maxPairs: flags.limit,
+    });
+    emit(JSON.stringify({ ok: res.ok, ...historyStatus(res), couplings: res.couplings }, null, 2) + "\n", flags.out);
   } else if (cmd === "deadcode") {
     const dead = findDeadCode(await readScan(), { kinds: flags.kinds, includeTail: flags.includeTail });
     emit(JSON.stringify(capDeadCode(dead, flags.limit), null, 2) + "\n", flags.out);
@@ -1711,17 +1772,25 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     emit(JSON.stringify(symbolComplexity(scan, rel, flags.limit), null, 2) + "\n", flags.out);
   } else if (cmd === "risk") {
     const scan = await readScan();
-    const { churn, ok } = gitChurn(flags.repo, { since: flags.since });
-    emit(JSON.stringify({ churnOk: ok, risks: riskHotspots(scan, churn, flags.limit) }, null, 2) + "\n", flags.out);
+    const res = gitChurn(flags.repo, { since: flags.since });
+    const risks = riskHotspots(scan, res.churn, flags.limit);
+    emit(JSON.stringify({ churnOk: res.ok, ...historyStatus(res), risks }, null, 2) + "\n", flags.out);
   } else if (cmd === "delta") {
-    const { graph, symbols } = await readArtifacts();
-    const res = deltaFor(flags.repo, graph, symbols, {
-      base: flags.base,
-      staged: flags.staged,
-      depth: flags.depth,
-    });
-    if ("error" in res) throw new Error(res.error);
+    // The git side first: it needs no index, and on a clean worktree it is the
+    // whole answer. Loading the artifacts to report "no changes" cost 8 s on a
+    // 66k-file repo.
+    const opts = { base: flags.base, staged: flags.staged, depth: flags.depth, indexDir };
+    const diff = readDeltaDiff(flags.repo, opts);
+    if ("error" in diff) throw new Error(diff.error);
+    let res = emptyDelta(diff, flags.depth);
+    if (diff.files.length) {
+      if (!flags.noAst) precomputedWalk = walkRepo();
+      const { scan, graph, symbols } = await readArtifacts();
+      res = deltaOfDiff(diff, graph, symbols, { ...opts, scan });
+    }
     emit(flags.json ? JSON.stringify(res, null, 2) + "\n" : formatDeltaPanel(res), flags.out);
+    // The CI gate, like `rules`: the output is written either way.
+    if (flags.failOn && res.modules.some((m) => bucketRank(m.bucket) >= bucketRank(flags.failOn!))) process.exitCode = 1;
   } else if (cmd === "impact") {
     if (!flags.positional) throw new Error("impact needs a target: cli.mjs impact <file|module> --repo <dir>");
     const graph = await readGraph();
