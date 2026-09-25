@@ -33,7 +33,12 @@ export interface LspAgreement {
 export interface LspBlock {
   server: string;
   ok: boolean;
-  /** Why it could not answer. Present only when `ok` is false. */
+  /**
+   * The server kept answering with declarations only although the static tier
+   * found call sites: it may still be indexing, or those sites are homonyms.
+   */
+  partial?: true;
+  /** Why it could not answer (`ok` false), or why the answer looks partial. */
   reason?: string;
   refs: LspRef[];
   agreement: LspAgreement;

@@ -664,8 +664,8 @@ codeindex lsp status --repo .           # config, PATH resolution, files claimed
 codeindex lsp status --repo . --probe   # also start each server, read its real capabilities
 ```
 
-The TypeScript example disables its separate syntax server because codeindex
-opens short-lived query sessions. Otherwise an early reference request can be
+The TypeScript example disables its separate syntax server because a CLI
+query opens a short-lived session. Otherwise an early reference request can be
 answered before the semantic project is ready and return only the declaration.
 Other servers use their own initialization options; codeindex does not infer a
 server configuration from its binary name.
@@ -733,6 +733,29 @@ TypeScript server. Calls require `prepareCallHierarchy` and `incomingCalls`;
 reference occurrences alone are not classified as calls. Missing configuration,
 unsupported capabilities, process/pipe failures and timeouts keep the static
 answer. Results already received survive a later failure with `ok: false`.
+
+### Session lifetime and readiness
+
+A CLI query starts its servers, asks, and shuts them down. The MCP server
+keeps one session per (server config, repository) for its whole lifetime, so
+only the first `lsp: true` query pays for the spawn and `initialize`. On a
+flask copy with pyright, the first query took 2.4-4 s including the scan and
+later ones 50-150 ms, where every query used to take 1.2-3 s. A
+pooled session is dropped and restarted when the config changes or when any
+non-doc file changes, because codeindex never sends `didChange` and a server
+must not answer from text it read before an edit. It is shut down after 5
+idle minutes (`CODEINDEX_LSP_IDLE_MS`) and when the MCP server stops: on
+stdin EOF, and on SIGINT, SIGTERM or SIGHUP. Every server is also sent the
+host pid as `processId`, which servers use to exit if the host is killed
+outright.
+
+A server that is still indexing answers without an error: with only the
+declaration, or with no incoming calls. When the static tier did see uses, the
+question is asked again a few times within the server's request budget
+(pyright's full answer comes on the second request). If it is still thin, the
+block keeps `ok: true` and adds `partial: true` with a `reason`: the server may
+still be indexing, or the static sites are homonyms. A session that has already
+given a full answer is trusted and is not asked again.
 
 ## Use as an MCP server
 

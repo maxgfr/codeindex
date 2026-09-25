@@ -90,6 +90,14 @@ export function spawnLspTransport(server: LspServerConfig, cwd: string): LspTran
       if (exited) cb(null);
       else exitListeners.push(cb);
     },
+    kill() {
+      if (exited) return;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already reaped */
+      }
+    },
     close() {
       try {
         child.stdin?.end();

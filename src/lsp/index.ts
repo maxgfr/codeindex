@@ -9,27 +9,36 @@
 import type { RepoScan } from "../scan.js";
 import { findSymbol, type SymbolReferences } from "../query.js";
 import { have } from "../util.js";
-import { openLspSession, withServerError, type LspCapabilities, type LspSession } from "./client.js";
+import type { LspCapabilities } from "./client.js";
 import {
   loadLspConfig,
   resolveLspConfigPath,
   serverForLang,
-  startupTimeoutFor,
   timeoutFor,
   type LspConfig,
   type LspConfigSource,
   type LspServerConfig,
 } from "./config.js";
 import { agreementOf, annotateWithLsp, lspUnavailable, type LspReferences } from "./refs.js";
-import { spawnLspTransport } from "./spawn.js";
 import { callersAgreement, callersUnavailable, collectIncomingCalls, type LspCallers } from "./callers.js";
 import { uniqueIncomingCalls, type LspIncomingCall, type LspRef } from "./protocol.js";
+import { openServer, withLspSession, type LspLease, type LspSessionPool } from "./pool.js";
 import type { CodeSymbol } from "../types.js";
 
 export type { LspConfig, LspServerConfig } from "./config.js";
 export type { LspReferences, LspBlock, LspAgreement } from "./refs.js";
 export type { LspRef, LspIncomingCall } from "./protocol.js";
 export type { LspCallers, LspCallersBlock } from "./callers.js";
+export { LspSessionPool } from "./pool.js";
+
+/** How a query reaches its servers. */
+export interface LspQueryOptions {
+  /**
+   * Reuse sessions across queries (the MCP server passes its own). Without
+   * one, each query opens a fresh session and shuts it down before returning.
+   */
+  pool?: LspSessionPool;
+}
 
 export interface LspServerStatus {
   id: string;
@@ -81,7 +90,8 @@ export async function lspStatus(scan: RepoScan, repo: string, probe = false): Pr
       filesInRepo: server.languages.reduce((sum, lang) => sum + (counts.get(lang) ?? 0), 0),
     };
     if (probe) {
-      const session = await tryOpen(server, scan.root);
+      // Always a fresh session: `--probe` means "start it now and see".
+      const session = await openServer(server, scan.root);
       if (session.ok) {
         status.reachable = true;
         status.capabilities = session.session.capabilities;
@@ -100,27 +110,6 @@ export async function lspStatus(scan: RepoScan, repo: string, probe = false): Pr
   return { lspVersion: 1, mode: "configured", configPath: path ?? null, source, servers, unmappedLanguages };
 }
 
-type OpenResult = { ok: true; session: LspSession } | { ok: false; reason: string };
-
-async function tryOpen(server: LspServerConfig, root: string): Promise<OpenResult> {
-  if (!have(server.command)) return { ok: false, reason: `${server.command} is not on PATH` };
-  const transport = spawnLspTransport(server, root);
-  if (!transport) return { ok: false, reason: `could not start ${server.command}` };
-  try {
-    const session = await openLspSession(transport, {
-      root,
-      timeoutMs: timeoutFor(server),
-      startupTimeoutMs: startupTimeoutFor(server),
-      ...(server.initializationOptions !== undefined ? { initializationOptions: server.initializationOptions } : {}),
-    });
-    return { ok: true, session };
-  } catch (e) {
-    transport.close();
-    // An `initialize` timeout says nothing about why; the server's stderr may.
-    return { ok: false, reason: withServerError(e instanceof Error ? e.message : String(e), transport) };
-  }
-}
-
 /**
  * `findReferences`, annotated by a language server when one can answer.
  *
@@ -135,6 +124,7 @@ export async function referencesWithLsp(
   repo: string,
   name: string,
   statik: SymbolReferences,
+  options: LspQueryOptions = {},
 ): Promise<LspReferences> {
   let config: LspConfig | undefined;
   try {
@@ -148,22 +138,31 @@ export async function referencesWithLsp(
 
   if (!statik.defs.length) return { ...statik, lsp: lspUnavailable("(none)", `no declaration of ${name} to anchor a request on`) };
   const { groups, reasons } = declarationServers(config, statik.defs);
+  const notes: string[] = [];
   const refs: LspRef[] = [];
+  // A static call site that is not itself a declaration line: evidence that a
+  // complete answer would hold more than the declarations.
+  const staticUses = statik.callSites.some((site) => !atDeclaration(site, statik.defs));
   for (const [server, defs] of groups) {
-    const opened = await tryOpen(server, scan.root);
-    if (!opened.ok) {
-      reasons.push(`${server.id}: ${opened.reason}`);
+    const asked = await withLspSession(server, scan, options.pool, (lease) =>
+      settle(
+        lease,
+        server,
+        () => annotateWithLsp(scan, name, { ...statik, defs }, lease.session, server.id, server.languageId),
+        (answer) => !answer.lsp?.ok ? "failed" : answer.lsp.refs.some((ref) => !atDeclaration(ref, defs)) ? "full" : "thin",
+        staticUses,
+      ),
+    );
+    if (!asked.ok) {
+      reasons.push(`${server.id}: ${asked.reason}`);
       continue;
     }
-    try {
-      const answer = await annotateWithLsp(scan, name, { ...statik, defs }, opened.session, server.id, server.languageId);
-      if (answer.lsp) {
-        refs.push(...answer.lsp.refs);
-        if (!answer.lsp.ok) reasons.push(`${server.id}: ${answer.lsp.reason ?? "request failed"}`);
-      }
-    } finally {
-      await opened.session.shutdown();
+    const { answer, partial } = asked.value;
+    if (answer.lsp) {
+      refs.push(...answer.lsp.refs);
+      if (!answer.lsp.ok) reasons.push(`${server.id}: ${answer.lsp.reason ?? "request failed"}`);
     }
+    if (partial) notes.push(`${server.id}: ${PARTIAL_NOTE}`);
   }
   const seen = new Set<string>();
   const normalized = refs.filter((ref) => {
@@ -177,7 +176,7 @@ export async function referencesWithLsp(
     lsp: {
       server: [...groups.keys()].map((server) => server.id).sort().join(", ") || "(none)",
       ok: reasons.length === 0,
-      ...(reasons.length ? { reason: [...new Set(reasons)].sort().join("; ") } : {}),
+      ...outcome(reasons, notes),
       refs: normalized,
       agreement: agreementOf(normalized, statik),
     },
@@ -190,6 +189,7 @@ export async function callersWithLsp<T extends object>(
   repo: string,
   name: string,
   statik: T,
+  options: LspQueryOptions = {},
 ): Promise<LspCallers<T>> {
   let config: LspConfig | undefined;
   try {
@@ -206,20 +206,28 @@ export async function callersWithLsp<T extends object>(
   if (!defs.length) return { ...statik, lsp: callersUnavailable("(none)", `no declaration of ${name} to anchor a request on`) };
 
   const { groups, reasons } = declarationServers(config, defs);
+  const notes: string[] = [];
   const calls: LspIncomingCall[] = [];
+  const sites: unknown = "callers" in statik ? statik.callers : undefined;
+  const staticUses = Array.isArray(sites) && sites.length > 0;
   for (const [server, declarations] of groups) {
-    const opened = await tryOpen(server, scan.root);
-    if (!opened.ok) {
-      reasons.push(`${server.id}: ${opened.reason}`);
+    const asked = await withLspSession(server, scan, options.pool, (lease) =>
+      settle(
+        lease,
+        server,
+        () => collectIncomingCalls(scan, declarations, lease.session, server.languageId),
+        (result) => result.reason ? "failed" : result.calls.length ? "full" : "thin",
+        staticUses,
+      ),
+    );
+    if (!asked.ok) {
+      reasons.push(`${server.id}: ${asked.reason}`);
       continue;
     }
-    try {
-      const result = await collectIncomingCalls(scan, declarations, opened.session, server.languageId);
-      calls.push(...result.calls);
-      if (result.reason) reasons.push(`${server.id}: ${result.reason}`);
-    } finally {
-      await opened.session.shutdown();
-    }
+    const { answer: result, partial } = asked.value;
+    calls.push(...result.calls);
+    if (result.reason) reasons.push(`${server.id}: ${result.reason}`);
+    if (partial) notes.push(`${server.id}: ${PARTIAL_NOTE}`);
   }
   const normalized = uniqueIncomingCalls(calls);
   return {
@@ -227,11 +235,66 @@ export async function callersWithLsp<T extends object>(
     lsp: {
       server: [...groups.keys()].map((server) => server.id).sort().join(", ") || "(none)",
       ok: reasons.length === 0,
-      ...(reasons.length ? { reason: [...new Set(reasons)].sort().join("; ") } : {}),
+      ...outcome(reasons, notes),
       calls: normalized,
       agreement: callersAgreement(normalized, statik),
     },
   };
+}
+
+const PARTIAL_NOTE =
+  "answered with declarations only while the static tier found call sites; the server may still be indexing, or those sites are homonyms";
+
+/** `reason` joins failures and partial-answer notes; `partial` flags the latter. */
+function outcome(reasons: string[], notes: string[]): { partial?: true; reason?: string } {
+  const all = [...new Set([...reasons, ...notes])].sort();
+  return { ...(notes.length ? { partial: true as const } : {}), ...(all.length ? { reason: all.join("; ") } : {}) };
+}
+
+function atDeclaration(site: { file: string; line: number }, defs: CodeSymbol[]): boolean {
+  return defs.some((def) => def.file === site.file && def.line === site.line);
+}
+
+// Waits between re-asks of a server whose answer looks unfinished. Pyright's
+// full answer arrives on the very next request, so the first wait is short;
+// the rest cover slower indexers. Their sum is also capped by the server's own
+// per-request budget.
+const SETTLE_DELAYS_MS = [100, 250, 500, 1000];
+
+/**
+ * Ask, and re-ask while the answer looks like a server still indexing.
+ *
+ * A language server that has not finished indexing answers with no error and
+ * no flag: declarations only, or no calls at all. That is indistinguishable
+ * from a symbol nobody uses, EXCEPT when the static tier saw uses: then the
+ * question is asked again after a short wait, a few times, within the server's
+ * request budget. A session that has already given a substantive answer is
+ * past indexing, so its thin answer is believed (the static sites are then
+ * more likely homonyms) and costs no wait. Still thin after the retries means
+ * `partial: true` rather than a silent, confident `ok`.
+ */
+async function settle<T>(
+  lease: LspLease,
+  server: LspServerConfig,
+  ask: () => Promise<T>,
+  classify: (answer: T) => "full" | "thin" | "failed",
+  staticUses: boolean,
+): Promise<{ answer: T; partial: boolean }> {
+  let answer = await ask();
+  let budget = timeoutFor(server);
+  for (const delay of [...SETTLE_DELAYS_MS, Infinity]) {
+    const kind = classify(answer);
+    if (kind === "full") lease.markWarm();
+    // A failure already carries its own reason; asking again would only
+    // double a timeout.
+    if (kind !== "thin") return { answer, partial: false };
+    if (!staticUses || lease.warm) return { answer, partial: false };
+    if (delay > budget) break;
+    budget -= delay;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    answer = await ask();
+  }
+  return { answer, partial: true };
 }
 
 /** Group before opening a server: a homonym may belong to several languages. */

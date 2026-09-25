@@ -122,7 +122,7 @@ export const TOOLS = [
         lsp: {
           type: "boolean",
           description:
-            "Also ask a configured language server (see lsp_status) and append an `lsp` block: its references plus an `agreement` matrix (both / lspOnly / staticOnly). The three static tiers are unchanged either way. `staticOnly` can indicate homonyms or an incomplete language-server answer. No config, no binary, a crash or a timeout all degrade to the static answer with a stated reason (default false).",
+            "Also ask a configured language server (see lsp_status) and append an `lsp` block: its references plus an `agreement` matrix (both / lspOnly / staticOnly). The three static tiers are unchanged either way. `staticOnly` can indicate homonyms or an incomplete language-server answer; `partial: true` flags a declaration-only answer while static uses exist. Servers stay up for the session. No config, no binary, a crash or a timeout all degrade to the static answer with a stated reason (default false).",
         },
       },
       required: ["repo", "name"],

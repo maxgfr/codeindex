@@ -28,7 +28,7 @@ import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences } from "./query.js";
-import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
+import { lspStatus, referencesWithLsp, callersWithLsp, LspSessionPool } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
@@ -146,7 +146,7 @@ const SCANLESS_TOOLS = new Set([
   "scan_summary",
 ]);
 
-async function callTool(name: string, args: Record<string, unknown>, defaultRepo?: string): Promise<string> {
+async function callTool(name: string, args: Record<string, unknown>, defaultRepo?: string, lspPool?: LspSessionPool): Promise<string> {
   // An explicit per-call `repo` always wins; `defaultRepo` is the server-level
   // pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
   // to one workspace, so agents need not know — or restate — the absolute path.
@@ -214,11 +214,11 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     if (lookup) {
       const entry = lookupCallerEntry(index, lookup);
       if (entry) {
-        const result = args.lsp === true ? await callersWithLsp(scan, repo, lookup, entry) : entry;
+        const result = args.lsp === true ? await callersWithLsp(scan, repo, lookup, entry, { pool: lspPool }) : entry;
         return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
       }
       const absent = { error: `no tracked callers for "${lookup}"` };
-      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lookup, absent) : absent, null, 2);
+      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lookup, absent, { pool: lspPool }) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
     for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(v) : v;
@@ -259,7 +259,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     // The static answer is computed FIRST and passed in, so the LSP tier is
     // structurally incapable of removing anything from it — it can only append
     // a labelled `lsp` block. Absent config → no block at all, byte-compat.
-    const result = args.lsp === true ? await referencesWithLsp(scan, repo, symName, statik) : statik;
+    const result = args.lsp === true ? await referencesWithLsp(scan, repo, symName, statik, { pool: lspPool }) : statik;
     return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
   }
   if (name === "lsp_status") {
@@ -575,6 +575,10 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   // fields we are allowed to advertise depend on the version.
   let tools = toolsFor(opts.defaultRepo, protocolVersion, opts.profile);
   let watcher: FSWatcher | undefined;
+  // Language servers live as long as this session, not as long as one call:
+  // spawning one per `lsp: true` query cost seconds and got pyright's
+  // pre-indexing answer every time. Closed when stdin ends (src/lsp/pool.ts).
+  const lspPool = new LspSessionPool();
   if (opts.watch && opts.defaultRepo) {
     try {
       watcher = watchFs(opts.defaultRepo, { recursive: true }, (_event, filename) => {
@@ -650,6 +654,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     }
   } finally {
     watcher?.close();
+    await lspPool.close();
   }
 
   async function handle(req: RpcRequest): Promise<Record<string, unknown> | undefined> {
@@ -685,7 +690,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
           );
           const invalid = decl ? validateArgs(decl.inputSchema, args) : undefined;
           if (invalid) throw new Error(invalid);
-          const raw = await callTool(name, args, opts.defaultRepo);
+          const raw = await callTool(name, args, opts.defaultRepo, lspPool);
           const repo = str(args.repo) ?? opts.defaultRepo ?? "";
           const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
           // A capped whole-repo response points at an artifact already on disk.
