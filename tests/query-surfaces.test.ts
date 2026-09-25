@@ -111,7 +111,7 @@ describe("CLI find / refs / outline", () => {
     expect(hit).toEqual(JSON.parse(JSON.stringify(findSymbol(scan, "Client/retry"))));
     expect(hit).toMatchObject([{ name: "retry", parent: "Client", file: "src/client.ts", line: 6, endLine: 8, signature: "retry(): number" }]);
     expect(cli("find", "backoff").json()[0].doc).toMatch(/Exponential backoff/);
-    expect(cli("find", "RETR", "--substring", "--concise").json()).toEqual([{ name: "retry", kind: "method", file: "src/client.ts", line: 6 }]);
+    expect(cli("find", "RETR", "--substring", "--concise").json()).toEqual([{ name: "retry", kind: "method", file: "src/client.ts", line: 6, parent: "Client" }]);
     expect(cli("find", "backoff", "--include-body").json()[0].body).toContain("Math.min(1000");
     expect(cli("find", "e", "--substring", "--limit", "1").json()).toHaveLength(1);
     const none = cli("find", "nothingLikeThis");
@@ -201,8 +201,15 @@ describe("symbol at file:line", () => {
   });
 
   it("says when the answer is only the nearest declaration above (regex tier)", () => {
-    const at = cli("symbol-at", "src/nested.ts:4", "--no-ast").json();
-    expect(at.symbol.name).toBe("inner");
+    // The regex tier bounds a brace-language declaration whose braces close
+    // where a formatter puts them, so that answer is exact...
+    const bounded = cli("symbol-at", "src/nested.ts:4", "--no-ast").json();
+    expect(bounded.symbol).toMatchObject({ name: "inner", endLine: 5 });
+    expect(bounded.approximate).toBeUndefined();
+    // ...but records no span for Python: the nearest declaration above.
+    const at = cli("symbol-at", "shapes/cube.py:10", "--no-ast").json();
+    expect(at.symbol.name).toBe("area");
+    expect(at.symbol.endLine).toBeUndefined();
     expect(at.approximate).toBe(true);
   });
 });

@@ -54,8 +54,8 @@ const FILES: Record<string, string> = {
     "",
   ].join("\n"),
   "reset.go": "package app\n\nfunc resetAll(x interface{ Reset() }) { x.Reset() }\n",
-  // Sorts first in the directory, so it is the file the package's import
-  // resolves to — a non-test importer must still never see it.
+  // Sorts first in the directory, yet the package's import resolves to its
+  // first non-test file (context.go) — a non-test importer must never see it.
   "app_test.go": [
     "package app",
     "",
@@ -82,6 +82,8 @@ const FILES: Record<string, string> = {
     "}",
     "",
     "var _ app.ResponseWriter",
+    "",
+    "var _ app.LogParams",
     "",
   ].join("\n"),
   // Names gin's unique `ResponseWriter` — as net/http's, since it imports no
@@ -347,8 +349,13 @@ describe("the call-site binder", () => {
 
 describe("Go use edges", () => {
   it("never link a Go file to a package it does not import", () => {
-    const uses = buildArtifactsFromScan(scan).graph.fileEdges.filter((e) => e.kind === "use").map((e) => `${e.from}->${e.to}`);
-    expect(uses).toContain("use/use.go->context.go");
+    const edges = buildArtifactsFromScan(scan).graph.fileEdges;
+    const uses = edges.filter((e) => e.kind === "use").map((e) => `${e.from}->${e.to}`);
+    // The package import resolves to its first non-test file, context.go, so
+    // that pair is already linked by the import (no `use` on top of it)...
+    expect(edges.filter((e) => e.from === "use/use.go" && e.to === "context.go").map((e) => e.kind)).toEqual(["import"]);
+    // ...and another file of the imported package is reached by a `use` edge.
+    expect(uses).toContain("use/use.go->logger.go");
     expect(uses.filter((u) => u.startsWith("sub/"))).toEqual([]);
   });
 });
