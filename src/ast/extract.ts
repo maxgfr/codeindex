@@ -1,5 +1,5 @@
 import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
-import { LiteralCollector } from "../extract/literals.js";
+import { LiteralCollector, unquote } from "../extract/literals.js";
 import { byStr } from "../sort.js";
 import { grammarKeyFor, grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
 import { COMMENT_NODE, IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
@@ -105,8 +105,12 @@ const REGEX_NODE = /(^|_)(regex|regular_expression)(_pattern|_literal)?$/;
 // Children a string node may have and still be one fixed value. An
 // interpolation (`${x}`, `#{x}`, `{}`) makes the text a TEMPLATE, whose
 // concatenated source is not a value anything else can equal — storing it
-// would invent duplications that do not exist.
-const STRING_PART = /(^|_)(fragment|content|escape_sequence|character)$/;
+// would invent duplications that do not exist. `start`/`end` are delimiter
+// nodes: Python's string_start/string_end (which EVERY Python string has, so
+// without them no Python string was ever plain) and C#'s raw_string_start/end.
+const STRING_PART = /(^|_)(fragment|content|escape_sequence|character|start|end)$/;
+// The parts of a string that carry its words (not delimiters or escapes).
+const PROSE_PART = /(^|_)(fragment|content)$/;
 
 // Type-class bits for collectAll's visitor, memoized per node type (see
 // typeFlagsOf). The regexes above stay the single source of truth.
@@ -131,6 +135,15 @@ function typeFlagsOf(type: string): number {
 }
 function isPlainString(node: TSNode): boolean {
   return node.namedChildren.every((c) => STRING_PART.test(c.type));
+}
+// A string that IS a statement — a Python docstring, a `"use strict"` /
+// `"use client"` directive — is documentation or a pragma, not a value anyone
+// could centralize. Kept out of `literals`, or every module restating
+// """Tests for the CLI.""" or "use client" reads as a duplicated constant; its
+// words still reach the prose terms.
+function isStatementString(node: TSNode): boolean {
+  const parent = node.parent;
+  return parent !== null && parent.type === "expression_statement" && parent.namedChildCount === 1;
 }
 
 // The call sites a file keeps, sorted by name then line; `sites` is in source
@@ -233,21 +246,27 @@ function collectAll(
       if (REF_IDENT_TEXT.test(text) && !defNames.has(text)) identsFound.add(text);
     }
 
+    // A string node is rarely a leaf: TypeScript's `string` holds
+    // string_fragment children, Go's its _content, every Python string its
+    // string_start/string_end. So both passes below ask "is this one fixed
+    // value" of its children — a leaf-only guard here once kept every string
+    // word out of `body` for TypeScript, Python and Go.
+    const plain = flags & T_STRING ? isPlainString(node) : false;
+
     // --- prose: comments and short string literals ---
     if (flags & T_COMMENT) {
       for (const line of node.text.split(/\r?\n/)) addTerms(stripCommentMarkers(line));
-    } else if (kids.length === 0 && flags & T_STRING && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
-      addTerms(node.text.replace(/^['"`]+|['"`]+$/g, ""));
+    } else if (flags & T_STRING && node.endIndex - node.startIndex <= MAX_LITERAL_LEN) {
+      // A template is no VALUE, but its fixed text is still prose:
+      // `Unknown command: ${cmd}` is where "unknown command" is handled.
+      if (plain) addTerms(unquote(node.text));
+      else for (const k of kids) if (PROSE_PART.test(k.type)) addTerms(k.text);
     }
 
     // --- literal values (kept verbatim, unlike the prose pass above) ---
-    // NOT gated on `kids.length === 0`, unlike the prose pass: in several
-    // grammars (TypeScript among them) a `string` node is a PARENT whose text
-    // lives in a `string_fragment` child, so a leaf-only guard sees no strings
-    // at all in the very languages this analysis is most needed for.
     if (!literals.full) {
       if (flags & T_STRING) {
-        if (isPlainString(node)) literals.addString(node.text, node.startPosition.row + 1);
+        if (plain && !isStatementString(node)) literals.addString(node.text, node.startPosition.row + 1);
       } else if (kids.length === 0 && flags & T_NUMBER) literals.add("number", node.text.trim(), node.startPosition.row + 1);
       else if (flags & T_REGEX) literals.add("regex", node.text, node.startPosition.row + 1);
     }

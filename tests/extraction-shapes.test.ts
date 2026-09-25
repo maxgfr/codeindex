@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCallerIndex } from "../src/callers.js";
 import { findDeadCode } from "../src/deadcode.js";
+import { searchIndex } from "../src/bm25.js";
+import { collectTermsRegex } from "../src/extract/code.js";
 import { scanRepo } from "../src/scan.js";
 import { extractAst } from "../src/ast/extract.js";
 import { grammarKeyFor, grammarKeysForExts, grammarReady } from "../src/ast/loader.js";
@@ -767,6 +769,47 @@ describe("a one-letter function", () => {
       expect(index.get("a")?.callers).toEqual([expect.objectContaining({ file: "b.ts", line: 3 })]);
       expect(index.get("b")?.callers).toEqual([expect.objectContaining({ file: "a.ts", line: 3 })]);
       expect(findDeadCode(scan).map((d) => d.name)).not.toContain("a");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("string literals in the prose vocabulary", () => {
+  // The prose pass admitted only LEAF string nodes, and TypeScript's `string`
+  // (string_fragment children), Go's interpreted_string_literal (_content) and
+  // every Python string (string_start/string_end) are parents: flask's
+  // `search SESSION_COOKIE_SAMESITE` found no file, though app.py and
+  // sessions.py both spell it out.
+  const files: Record<string, string> = {
+    "a.py": '# about widgets\nKEY = "SESSION_COOKIE_SAMESITE"\nNOTE = """short phrase here"""\n',
+    "b.ts": "// about widgets\nconst key = 'SESSION_COOKIE_SAMESITE';\nconst note = \"short phrase here\";\n",
+    "c.go": 'package c\n\n// about widgets\nvar key = "SESSION_COOKIE_SAMESITE"\nvar note = `short phrase here`\n',
+  };
+  const termsOf = (rel: string): string[] => extractAst(rel, rel.slice(rel.lastIndexOf(".")), files[rel]!)?.terms ?? [];
+
+  it("carries a plain string's words, as the regex tier does", () => {
+    for (const rel of Object.keys(files)) {
+      expect(termsOf(rel), rel).toEqual(collectTermsRegex(files[rel]!));
+      expect(termsOf(rel), rel).toEqual(expect.arrayContaining(["session_cookie_samesite", "samesite", "phrase"]));
+    }
+  });
+
+  it("carries a template's fixed text, but not its interpolated code", () => {
+    const terms = extractAst("t.ts", ".ts", "const m = `Unknown command: ${commandName}`;\n")?.terms ?? [];
+    expect(terms).toEqual(["command", "unknown"]);
+    const py = extractAst("t.py", ".py", 'm = f"Unknown command: {command_name}"\n')?.terms ?? [];
+    expect(py).toEqual(["command", "unknown"]);
+  });
+
+  it("makes a file findable by a key it only spells as a string", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-strterms-"));
+    try {
+      writeFileSync(join(dir, "sessions.py"), 'def cookie_policy(app):\n    return app.config["SESSION_COOKIE_SAMESITE"]\n');
+      writeFileSync(join(dir, "other.py"), "def unrelated():\n    return 1\n");
+      const [hit] = searchIndex(scanRepo(dir), "SESSION_COOKIE_SAMESITE");
+      expect(hit?.file).toBe("sessions.py");
+      expect(hit?.matchedFields).toContain("body");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -415,7 +415,7 @@ flattening them into one confidence-free list:
 | `bypassed` | a constant holds it, other files rewrite it anyway | import the constant at those sites |
 | `uncentralized` | nothing holds it | decide whether it deserves an owner |
 
-Two things make the output readable rather than a wall of strings:
+Three things make the output readable rather than a wall of strings:
 
 - **Namespace families.** Path-like values are grouped by their root, so an app
   with forty route literals reports one `/checkout` finding, not forty.
@@ -424,6 +424,11 @@ Two things make the output readable rather than a wall of strings:
   cross a language boundary — a threshold declared in TypeScript and again in a
   rules JSON, a route called from a Kubernetes manifest. Nothing else compares
   those pairs.
+- **Only fixed values count.** A template with an interpolation (`${id}`,
+  `f"{id}"`, `#{id}`) is not a value another file could restate, and a string
+  standing alone as a statement — a Python docstring, a `"use client"`
+  directive — is documentation or a pragma. Wherever a grammar parsed the file,
+  neither is collected (the regex fallback reads lines, not syntax).
 
 ```sh
 codeindex literals --repo . --min-files 3 --min-count 5   # tighten the floors
@@ -491,8 +496,8 @@ tested architecture and runtime checks.
 `codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six
 weighted fields: symbol names, path segments, markdown headings, the file
 summary, per-symbol **doc comments**, and the **prose body** (words from comments
-and short string literals, captured at extraction time so they ride the
-incremental cache).
+and short string literals, a template's fixed text included, captured at
+extraction time so they ride the incremental cache).
 
 The last two are the point. An index built only from names — what a tags file or
 a symbol-only search ships — is a perfectly scored index of the wrong text: the
