@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { renderRepoMap } from "../src/repomap.js";
+import { onboardBrief, taglineFromReadme } from "../src/onboard.js";
 
 const roots: string[] = [];
 afterAll(() => {
@@ -83,5 +84,54 @@ describe("repo map", () => {
     const bare = renderRepoMap(scan, graph, { budgetTokens: 2000, bare: true });
     expect(bare.startsWith("\nsrc/engine.ts:")).toBe(true);
     expect(body(bare)).toBe(body(map));
+  });
+});
+
+describe("onboard tagline", () => {
+  it("skips a release banner under an H2 and takes the description after the rule", () => {
+    // gin's README, abridged.
+    const readme = [
+      "# Gin Web Framework",
+      '<img align="right" src="logo.png">',
+      "[![Build](https://x/badge.svg)](https://x)\n[![Go Report](https://y/badge.svg)](https://y)",
+      "## 📰 Gin 1.12.0 is now available!",
+      "We're excited to announce the release of **[Gin 1.12.0](https://gin-gonic.com/blog)**! This release brings new features.",
+      "---",
+      "Gin is a high-performance HTTP web framework written in [Go](https://go.dev/). It provides a Martini-like API.",
+      "## Getting started",
+      "Install it with go get.",
+    ].join("\n\n");
+    expect(taglineFromReadme(readme)).toBe("Gin is a high-performance HTTP web framework written in Go. It provides a Martini-like API.");
+  });
+
+  it("takes the paragraph under the H1, resolving reference links, and never a code block", () => {
+    const readme = [
+      '<div align="center"><img src="flask.svg"></div>',
+      "# Flask",
+      "```sh\n# install it\n\npip install flask and then read the long documentation\n```",
+      "Flask is a lightweight [WSGI] web application framework.\nIt is designed to make getting started quick.",
+      "[WSGI]: https://wsgi.readthedocs.io/",
+    ].join("\n\n");
+    expect(taglineFromReadme(readme)).toBe("Flask is a lightweight WSGI web application framework. It is designed to make getting started quick.");
+  });
+
+  it("falls back to the first paragraph when every one sits under a section", () => {
+    expect(taglineFromReadme("# tool\n\n## Overview\n\ntool turns YAML into JSON without a runtime.\n\n## Usage\n\nRun it on a file, any file.")).toBe(
+      "tool turns YAML into JSON without a runtime.",
+    );
+    expect(taglineFromReadme("Project\n=======\n\nA reStructuredText project described in one line.\n")).toBe(
+      "A reStructuredText project described in one line.",
+    );
+  });
+});
+
+describe("onboard brief", () => {
+  it("embeds the repo map under Key files without its own H1", () => {
+    const root = repo({ ...FILES, "README.md": "# engine\n\nAn engine that runs things, and harnesses that test it.\n" });
+    const { scan, graph } = buildIndexArtifacts(root);
+    const { brief } = onboardBrief(scan, graph, { remember: false });
+    expect(brief).toContain("\nAn engine that runs things, and harnesses that test it.\n");
+    expect(brief).toMatch(/## Key files\n\nsrc\/engine\.ts:\n/);
+    expect(brief).not.toContain("# repo map");
   });
 });
