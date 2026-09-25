@@ -116,6 +116,12 @@ describe("literal duplication tiers", () => {
         literals: [{ value: PATH, line: 4, kind: "string" }],
         symbols: [{ ...holder("onStart", 1, "onStart = async ()"), endLine: 9, exported: false }],
       }),
+      // An expression body is cut too, so a one-parameter arrow keeps only its
+      // parameter: `const toHref = id => "…"` arrives as `toHref = id`.
+      rec("fn4.ts", {
+        literals: [{ value: PATH, line: 1, kind: "string" }],
+        symbols: [holder("toHref", 1, "toHref = id")],
+      }),
     ]);
     const [dup] = findLiteralDuplications(scan).duplications;
     expect(dup).toMatchObject({ tier: "bypassed" });

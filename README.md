@@ -31,7 +31,9 @@ compares](#how-it-compares).
 - **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
   `grammars pull`) or per-language regex rules (16 languages, always available).
   Each symbol carries its **complete signature** (parameters and return type,
-  not the first physical line), its own **doc comment**, its qualified `parent`,
+  not the first physical line; one line, with no comment and no body — not an
+  arrow's expression body, a Go interface's method list or a macro's
+  expansion), its own **doc comment**, its qualified `parent`,
   and its line span — including the members a declaration-only walk misses:
   interface members, class fields, enum members, every `declare`/`.d.ts`
   declaration, Rust trait method signatures, Go interface method sets and type

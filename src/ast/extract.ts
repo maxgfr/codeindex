@@ -2,7 +2,7 @@ import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector } from "../extract/literals.js";
 import { byStr } from "../sort.js";
 import { grammarKeyFor, grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
-import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
+import { COMMENT_NODE, IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } from "./node.js";
 import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, luaMember, type LangSpec } from "./specs.js";
 import { declHeader } from "./signature.js";
 import { docCommentFor, docstringFor } from "./doc.js";
@@ -96,7 +96,6 @@ interface Collected {
   literals: CodeLiteral[];
 }
 
-const COMMENT_NODE = /(^|_)comment$/;
 const STRING_NODE = /(^|_)string(_literal)?$/;
 // Numeric and regex leaves, named consistently enough across the grammars to
 // match structurally: `integer`/`float`/`number`/`*_literal` for numbers,

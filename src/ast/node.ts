@@ -38,6 +38,11 @@ export interface TSNode {
 // keyword_* node types (keyword_argument, keyword_pattern, …) never match.
 export const IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
 
+// A comment node in any grammar: `comment`, `line_comment`, `block_comment`,
+// `doc_comment`. Comments are extras, so a grammar hangs them on whichever node
+// encloses them — in a parameter list as readily as between statements.
+export const COMMENT_NODE = /(^|_)comment$/;
+
 export function findFirst(node: TSNode, pred: (n: TSNode) => boolean): TSNode | undefined {
   for (const c of node.namedChildren) {
     if (pred(c)) return c;
