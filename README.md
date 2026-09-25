@@ -71,6 +71,11 @@ compares](#how-it-compares).
   `-*- coding -*-`, `go:build`), Xcode's file stamp and bundler region markers
   are skipped, and `#` reads as a comment only in languages where it is one —
   never a C `#include` or a Rust `#[attribute]`.
+  Docs get a title, section headings, a summary and `doc-link` refs: markdown
+  (ATX and setext headings, inline and reference links) and reStructuredText
+  (Sphinx section titles; `toctree` entries, `:doc:` roles and
+  `include`/`literalinclude` targets as links). Other prose (`.txt`, `.adoc`)
+  is indexed under its file name.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
@@ -504,7 +509,8 @@ tested architecture and runtime checks.
 ## Search
 
 `codeindex search "<query>" --repo .` ranks files with keyless **BM25F** over six
-weighted fields: symbol names, path segments, markdown headings, the file
+weighted fields: symbol names, path segments, doc headings (markdown and
+reStructuredText), the file
 summary, per-symbol **doc comments**, and the **prose body** (words from comments
 and short string literals, captured at extraction time so they ride the
 incremental cache).
