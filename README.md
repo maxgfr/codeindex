@@ -862,6 +862,12 @@ validates `structuredContent` is not handed a result that cannot conform. Most
 tools also take a `limit`/`maxResults`/`top`/`maxEdges` argument to stay well
 under it.
 
+Tool calls run one at a time, in arrival order, so answers stay deterministic;
+`ping`, `initialize`, `tools/list` and argument errors are answered at once,
+even behind a long first scan. `notifications/cancelled` is honoured: a queued
+call is skipped, and a running one finishes (an edit is never left half-done)
+but gets no response.
+
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
 into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.
 

@@ -93,6 +93,40 @@ function mcpSession(
   });
 }
 
+// Every response line in the order the server wrote it, collected until the
+// response with id `until` arrives. For tests about ORDER and about requests
+// that must never be answered, which mcpSession (keyed by id, waiting for
+// every id) cannot express.
+function mcpLines(requests: Record<string, unknown>[], until: number, argv: string[] = [CLI, "mcp"]): Promise<RpcMsg[]> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, argv, { stdio: ["pipe", "pipe", "inherit"] });
+    const lines: RpcMsg[] = [];
+    let buf = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`mcp timeout — got ids ${lines.map((m) => m.id).join(",")}`));
+    }, 15_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const msg = JSON.parse(line) as RpcMsg;
+        lines.push(msg);
+        if (msg.id === until) {
+          clearTimeout(timer);
+          child.kill();
+          resolvePromise(lines);
+        }
+      }
+    });
+    child.on("error", reject);
+    child.stdin.write(requests.map((r) => JSON.stringify({ jsonrpc: "2.0", ...r }) + "\n").join(""));
+  });
+}
+
 // Same harness but the requests go out as ONE JSON-RPC batch array line.
 function mcpBatch(requests: Record<string, unknown>[]): Promise<RpcMsg[]> {
   return new Promise((resolvePromise, reject) => {
@@ -306,6 +340,68 @@ describe("MCP server", () => {
     expect(replies).toHaveLength(1);
     expect(replies[0]!.id).toBe(1);
   });
+
+  // The read loop awaited each message before reading the next, so a ping
+  // sent during a cold scan waited for the scan, and a cancellation was read
+  // only after the call it cancelled had been answered.
+  it("answers a ping while a tool call is still running", async () => {
+    const lines = await mcpLines(
+      [
+        { id: 1, method: "tools/call", params: { name: "graph", arguments: { repo: REPO } } },
+        { id: 2, method: "ping" },
+      ],
+      1,
+    );
+    expect(lines.map((m) => m.id)).toEqual([2, 1]);
+    expect(lines[0]!.result).toEqual({});
+    expect(lines[1]!.result!.isError).toBeUndefined();
+  }, 20_000);
+
+  it("never answers a cancelled call, queued or already running", async () => {
+    const graph = (id: number) => ({ id, method: "tools/call", params: { name: "graph", arguments: { repo: REPO } } });
+    const lines = await mcpLines(
+      [
+        graph(1), // running when its cancellation is read: finishes, answer dropped
+        graph(2), // still queued behind 1: skipped
+        { method: "notifications/cancelled", params: { requestId: 1, reason: "test" } },
+        { method: "notifications/cancelled", params: { requestId: 2 } },
+        // Unknown ids are ignored, and nothing is remembered for them.
+        { method: "notifications/cancelled", params: { requestId: 99 } },
+        { id: 3, method: "tools/call", params: { name: "scan_summary", arguments: { repo: REPO } } },
+      ],
+      3,
+    );
+    // Calls run in order, so 1 and 2 would have been answered before 3.
+    expect(lines.map((m) => m.id)).toEqual([3]);
+    expect(JSON.parse(lines[0]!.result!.content![0]!.text).fileCount).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("keeps a batch holding a tool call in one reply array, and answers what follows first", async () => {
+    const child = spawn(process.execPath, [CLI, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
+    const replies: unknown[] = [];
+    let buf = "";
+    const done = new Promise<void>((resolve) => {
+      child.stdout.on("data", (chunk: Buffer) => {
+        buf += chunk.toString();
+        let nl;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          replies.push(JSON.parse(buf.slice(0, nl)));
+          buf = buf.slice(nl + 1);
+        }
+        if (replies.length === 2) resolve();
+      });
+    });
+    child.stdin.write(
+      JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "ping" },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "scan_summary", arguments: { repo: REPO } } },
+      ]) + "\n" + JSON.stringify({ jsonrpc: "2.0", id: 3, method: "ping" }) + "\n",
+    );
+    await done;
+    child.kill();
+    expect(replies[0]).toEqual({ jsonrpc: "2.0", id: 3, result: {} });
+    expect((replies[1] as RpcMsg[]).map((m) => m.id)).toEqual([1, 2]);
+  }, 20_000);
 
   it("answers a request whose explicit id is null", () => {
     const proc = spawnSync(process.execPath, [CLI, "mcp"], {

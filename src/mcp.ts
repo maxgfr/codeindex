@@ -101,6 +101,9 @@ interface RpcRequest {
   params?: Record<string, unknown>;
 }
 
+// A JSON-RPC response to send, or undefined for none (a notification).
+type Reply = Record<string, unknown> | undefined;
+
 function isRpcRequest(value: unknown): value is RpcRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const req = value as Record<string, unknown>;
@@ -658,6 +661,28 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     process.stdout.write(JSON.stringify(wire) + "\n");
   };
 
+  // Tool calls run ONE AT A TIME, in arrival order: results stay deterministic,
+  // and a call never observes a half-applied edit or a session cache another
+  // call is refilling. Everything else is answered the moment it is read. The
+  // loop used to await each message before reading the next, so a `ping` sent
+  // during a cold scan was answered only when the scan finished (7.6 s in the
+  // audit) and a `notifications/cancelled` could not be seen until the call
+  // it cancelled had already been answered.
+  let callQueue: Promise<unknown> = Promise.resolve();
+  // Ids of tool calls queued or running, and those the client has cancelled.
+  // A cancelled call gets no response (the spec's rule): one still queued is
+  // skipped, one already running finishes — an edit cannot be half-undone —
+  // and its answer is dropped.
+  const pendingCalls = new Set<string | number>();
+  const cancelledCalls = new Set<string | number>();
+  // Replies still being computed; drained before the server returns, so
+  // closing stdin never loses an answer.
+  const outstanding = new Set<Promise<void>>();
+  const track = (reply: Promise<void>): void => {
+    const settled = reply.finally(() => outstanding.delete(settled));
+    outstanding.add(settled);
+  };
+
   const rl = createInterface({ input: process.stdin, terminal: false });
   try {
     for await (const line of rl) {
@@ -674,39 +699,45 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
         send({ id: null, error: { code: -32600, message: "invalid request" } });
         continue;
       }
-      const dispatch = async (req: unknown): Promise<Record<string, unknown> | undefined> => {
-        // The server currently initiates no requests, but a peer response is
-        // still a response — JSON-RPC forbids replying to it with -32600.
-        if (isRpcResponse(req)) return undefined;
-        if (!isRpcRequest(req)) {
-          return { id: null, error: { code: -32600, message: "invalid request" } };
-        }
-        return handle(req);
-      };
       if (Array.isArray(parsed)) {
-        const replies: Record<string, unknown>[] = [];
-        for (const req of parsed) {
-          const reply = await dispatch(req);
-          if (reply) replies.push(reply);
-        }
+        const replies = parsed.map(dispatch);
         // A notification-only batch has no response. Any actual responses must
-        // share one JSON array, as required by JSON-RPC 2.0.
-        if (replies.length > 0) send(replies);
+        // share one JSON array, as required by JSON-RPC 2.0 — so a batch that
+        // holds a tool call is answered when its last member is.
+        const sendBatch = (settled: Reply[]): void => {
+          const answered = settled.filter((r): r is Record<string, unknown> => r !== undefined);
+          if (answered.length > 0) send(answered);
+        };
+        if (replies.some((r) => r instanceof Promise)) track(Promise.all(replies).then(sendBatch));
+        else sendBatch(replies as Reply[]);
       } else {
-        const reply = await dispatch(parsed);
-        if (reply) send(reply);
+        const reply = dispatch(parsed);
+        if (reply instanceof Promise) track(reply.then((r) => (r ? send(r) : undefined)));
+        else if (reply) send(reply);
       }
     }
+    while (outstanding.size > 0) await Promise.all(outstanding);
   } finally {
     watcher?.close();
   }
 
-  async function handle(req: RpcRequest): Promise<Record<string, unknown> | undefined> {
+  function dispatch(req: unknown): Reply | Promise<Reply> {
+    // The server currently initiates no requests, but a peer response is
+    // still a response — JSON-RPC forbids replying to it with -32600.
+    if (isRpcResponse(req)) return undefined;
+    if (!isRpcRequest(req)) {
+      return { id: null, error: { code: -32600, message: "invalid request" } };
+    }
+    return handle(req);
+  }
+
+  // Synchronous for everything but a valid tool call, which is what keeps the
+  // immediate replies in the order their requests arrived.
+  function handle(req: RpcRequest): Reply | Promise<Reply> {
     // Only an ABSENT id denotes a notification. Explicit null is discouraged
     // by JSON-RPC but remains a request and must receive an id:null response.
     const notification = !("id" in req);
-    const respond = (body: Record<string, unknown>): Record<string, unknown> | undefined =>
-      notification ? undefined : { id: req.id ?? null, ...body };
+    const respond = (body: Record<string, unknown>): Reply => (notification ? undefined : { id: req.id ?? null, ...body });
 
     try {
       if (req.method === "initialize") {
@@ -725,70 +756,96 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
       } else if (req.method === "tools/list") {
         return respond({ result: { tools } });
       } else if (req.method === "tools/call") {
-        const params = req.params ?? {};
-        // A call whose params do not have the CallToolRequest shape is a
-        // malformed request — a protocol error, as the SDK server answers it.
-        // `arguments: "xyz"` used to run the tool with no arguments at all.
-        const rawArgs = params.arguments;
-        if (typeof params.name !== "string") {
-          return respond({ error: { code: -32602, message: "invalid params: tools/call requires a string `name`" } });
+        return toolsCall(req, respond);
+      } else if (req.method === "notifications/cancelled") {
+        const cancelled = req.params?.requestId;
+        if ((typeof cancelled === "string" || typeof cancelled === "number") && pendingCalls.has(cancelled)) {
+          cancelledCalls.add(cancelled);
         }
-        if (rawArgs !== undefined && rawArgs !== null && (typeof rawArgs !== "object" || Array.isArray(rawArgs))) {
-          return respond({ error: { code: -32602, message: "invalid params: tools/call `arguments` must be an object" } });
-        }
-        const name = params.name;
-        const args = (rawArgs ?? {}) as Record<string, unknown>;
-        try {
-          // Everything checkable from the request alone is checked BEFORE
-          // callTool, which walks and scans the repo first: an unknown tool or
-          // a missing argument used to cost a full walk to report. An unknown
-          // tool stays a tool error rather than -32602 — what the reference
-          // SDK server puts on the wire, and what clients already handle.
-          const schema = callable.get(name);
-          if (!schema) throw new Error(`unknown tool: ${name}`);
-          const invalid = validateArgs(schema, args);
-          if (invalid) throw new Error(invalid);
-          const raw = await callTool(name, args, opts.defaultRepo);
-          const repo = str(args.repo) ?? opts.defaultRepo ?? "";
-          const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-          // A capped whole-repo response points at an artifact already on disk.
-          // From 2025-06-18 the protocol has a content type that says exactly
-          // that, so the client can fetch the bytes instead of re-asking.
-          //
-          // Gated on `text !== raw` — i.e. capResponse actually replaced the
-          // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
-          // every single call just to discover it was not truncated.
-          const capped = text !== raw;
-          const link = capped && protocolVersion >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
-          // Typed, validatable result alongside the text block — for the tools
-          // that declare an outputSchema, and never when the guard replaced the
-          // payload (see structuredContentFor).
-          const structured =
-            protocolVersion >= RICH_TOOLS_SINCE
-              ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined)
-              : undefined;
-          return respond({
-            result: {
-              content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
-              ...(structured ? { structuredContent: structured } : {}),
-              // The withheld-payload notice is a tool execution error: the call
-              // did not deliver what was asked, and the notice is exactly the
-              // actionable text such an error exists to carry. It is also the
-              // only honest option for a tool with an outputSchema — the notice
-              // cannot conform to it, and SDK clients reject a non-error result
-              // that lacks conforming structuredContent.
-              ...(capped ? { isError: true } : {}),
-            },
-          });
-        } catch (e) {
-          const text = e instanceof NotFound ? JSON.stringify({ error: e.message }, null, 2) : errMessage(e);
-          return respond({ result: { content: [{ type: "text", text }], isError: true } });
-        }
+        return undefined;
       } else {
         return respond({ error: { code: -32601, message: `method not found: ${req.method}` } });
       }
     } catch (e) {
-      return respond({ error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+      return respond({ error: { code: -32603, message: errMessage(e) } });
+    }
+  }
+
+  function toolsCall(req: RpcRequest, respond: (body: Record<string, unknown>) => Reply): Reply | Promise<Reply> {
+    const params = req.params ?? {};
+    // A call whose params do not have the CallToolRequest shape is a
+    // malformed request — a protocol error, as the SDK server answers it.
+    // `arguments: "xyz"` used to run the tool with no arguments at all.
+    const rawArgs = params.arguments;
+    if (typeof params.name !== "string") {
+      return respond({ error: { code: -32602, message: "invalid params: tools/call requires a string `name`" } });
+    }
+    if (rawArgs !== undefined && rawArgs !== null && (typeof rawArgs !== "object" || Array.isArray(rawArgs))) {
+      return respond({ error: { code: -32602, message: "invalid params: tools/call `arguments` must be an object" } });
+    }
+    const name = params.name;
+    const args = (rawArgs ?? {}) as Record<string, unknown>;
+    // Everything checkable from the request alone is checked BEFORE callTool,
+    // which walks and scans the repo first — and before the queue, so a
+    // mistake is answered at once even behind a slow call. An unknown tool
+    // stays a tool error rather than -32602: that is what the reference SDK
+    // server puts on the wire, and what clients already handle.
+    const schema = callable.get(name);
+    const invalid = schema ? validateArgs(schema, args) : `unknown tool: ${name}`;
+    if (invalid) return respond({ result: { content: [{ type: "text", text: invalid }], isError: true } });
+
+    // The version in force when the call ARRIVED shapes its answer, however
+    // long it waits in the queue.
+    const version = protocolVersion;
+    const id = typeof req.id === "string" || typeof req.id === "number" ? req.id : undefined;
+    if (id !== undefined) pendingCalls.add(id);
+    const run = callQueue.then(async (): Promise<Reply> => {
+      if (id !== undefined && cancelledCalls.has(id)) return undefined;
+      return respond(await callResult(name, args, version));
+    });
+    callQueue = run.catch(() => undefined);
+    return run.then((reply) => {
+      if (id === undefined) return reply;
+      pendingCalls.delete(id);
+      return cancelledCalls.delete(id) ? undefined : reply;
+    });
+  }
+
+  async function callResult(name: string, args: Record<string, unknown>, version: string): Promise<Record<string, unknown>> {
+    try {
+      const raw = await callTool(name, args, opts.defaultRepo);
+      const repo = str(args.repo) ?? opts.defaultRepo ?? "";
+      const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
+      // A capped whole-repo response points at an artifact already on disk.
+      // From 2025-06-18 the protocol has a content type that says exactly
+      // that, so the client can fetch the bytes instead of re-asking.
+      //
+      // Gated on `text !== raw` — i.e. capResponse actually replaced the
+      // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
+      // every single call just to discover it was not truncated.
+      const capped = text !== raw;
+      const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+      // Typed, validatable result alongside the text block — for the tools
+      // that declare an outputSchema, and never when the guard replaced the
+      // payload (see structuredContentFor).
+      const structured =
+        version >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined) : undefined;
+      return {
+        result: {
+          content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
+          ...(structured ? { structuredContent: structured } : {}),
+          // The withheld-payload notice is a tool execution error: the call
+          // did not deliver what was asked, and the notice is exactly the
+          // actionable text such an error exists to carry. It is also the
+          // only honest option for a tool with an outputSchema — the notice
+          // cannot conform to it, and SDK clients reject a non-error result
+          // that lacks conforming structuredContent.
+          ...(capped ? { isError: true } : {}),
+        },
+      };
+    } catch (e) {
+      const text = e instanceof NotFound ? JSON.stringify({ error: e.message }, null, 2) : errMessage(e);
+      return { result: { content: [{ type: "text", text }], isError: true } };
     }
   }
 }
