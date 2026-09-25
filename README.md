@@ -789,9 +789,10 @@ inside it; the ambiguity error lists the lines to choose from.
   stale scan is refused. The result then carries `warnings` when a declaration
   outside the edited lines changed (for example, an unindented Python body that
   re-parents the methods after it), when the replaced lines no longer declare
-  the target (renamed or moved), or when the edit adds syntax errors. With `strict: true`, such an
-  edit is refused and nothing is written. A clean edit's result has no
-  `warnings` key.
+  the target (renamed or moved), or when the edit adds syntax errors. With
+  `strict: true`, such an edit is refused and nothing is written. A clean
+  edit's result has no `warnings` key. A file past the per-file symbol cap
+  (2,000 declarations) gets only the syntax check.
 - **Encodings.** Supported source encodings (UTF-8/BOM, UTF-16 LE/BE, Latin-1)
   are preserved. A valid UTF-8 file that contains U+FFFD stays UTF-8. Every
   untouched line keeps its own line ending, so a mixed CRLF/LF file stays
