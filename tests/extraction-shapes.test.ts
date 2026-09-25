@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCallerIndex } from "../src/callers.js";
+import { findDeadCode } from "../src/deadcode.js";
 import { scanRepo } from "../src/scan.js";
 import { extractAst } from "../src/ast/extract.js";
 import { grammarKeyFor, grammarKeysForExts, grammarReady } from "../src/ast/loader.js";
@@ -749,5 +750,25 @@ describe("a declaration that binds several names", () => {
       "field K.lo=1",
       "field K.hi=1",
     ]);
+  });
+});
+
+describe("a one-letter function", () => {
+  // `a` and `b` calling each other were invisible: the AST tier dropped every
+  // callee shorter than two characters, so `callers a` found nothing and dead
+  // code called both unreferenced although each file imports the other.
+  it("has its callers bound, so a cycle between two of them is seen", () => {
+    const dir = mkdtempSync(join(tmpdir(), "one-letter-"));
+    try {
+      writeFileSync(join(dir, "a.ts"), 'import { b } from "./b.js";\nexport function a(n: number): number {\n  return n <= 0 ? 0 : b(n - 1);\n}\n');
+      writeFileSync(join(dir, "b.ts"), 'import { a } from "./a.js";\nexport function b(n: number): number {\n  return a(n - 1);\n}\n');
+      const scan = scanRepo(dir, { gitignore: false });
+      const index = buildCallerIndex(scan);
+      expect(index.get("a")?.callers).toEqual([expect.objectContaining({ file: "b.ts", line: 3 })]);
+      expect(index.get("b")?.callers).toEqual([expect.objectContaining({ file: "a.ts", line: 3 })]);
+      expect(findDeadCode(scan).map((d) => d.name)).not.toContain("a");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

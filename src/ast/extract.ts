@@ -177,8 +177,13 @@ function collectAll(
   const wantCalls = spec.calls !== undefined;
   const calls: { name: string; line: number; receiver?: string }[] = [];
   const callSeen = new Set<string>();
+  // A one-letter callee is a name like any other: `a()` and `b()` calling each
+  // other is a cycle, and i18n's `t()` and hyperscript's `h()` are real APIs. A
+  // name nothing in the repo defines is discarded by the binder, which is the
+  // noise a length floor used to guard against here. A bare `_` stays out: a
+  // discard, or gettext's and lodash's alias — never a definition to reach.
   const addCall = (name: string | undefined, node: TSNode, receiver?: string): void => {
-    if (!name || name.length < 2 || !/^[A-Za-z_]\w*$/.test(name)) return;
+    if (!name || name === "_" || !/^[A-Za-z_]\w*$/.test(name)) return;
     const line = node.startPosition.row + 1;
     const key = `${name} ${line}`;
     if (callSeen.has(key)) return;

@@ -169,11 +169,12 @@ describe("AST call-site + imported-name collection", () => {
     expect(names).toContain("render");
   });
 
-  it("drops single-character and computed callees, and has no calls for a regex-fallback language", () => {
-    // `x()` is below the length-2 floor; a bracket/computed call has no static name.
-    const names = callNames("a.ts", ".ts", "export function r() {\n  x();\n  tbl['k']();\n  ok();\n}\n");
-    expect(names).not.toContain("x");
-    expect(names).toContain("ok");
+  it("keeps one-letter callees, drops `_` and computed callees, and has no calls for a regex-fallback language", () => {
+    // `x()` is a name like any other (the binder discards what nothing
+    // defines); `_` is a discard or gettext's alias; a bracket/computed call has
+    // no static name.
+    const names = callNames("a.ts", ".ts", "export function r() {\n  x();\n  _('msg');\n  tbl['k']();\n  ok();\n}\n");
+    expect(names).toEqual(["ok", "x"]);
     // Swift has no committed grammar → extractAst is undefined, so no calls.
     expect(extractAst("s.swift", ".swift", "f()")).toBeUndefined();
   });
