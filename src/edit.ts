@@ -299,9 +299,11 @@ function verifyEdit(
   const oldEnd = index + count; // last replaced line (index itself when inserting)
   const newEnd = index + len;
   const delta = len - count;
-  const after = outlineOf(rel, ext, newText);
+  // A file past the per-file symbol cap has no complete outline to compare —
+  // and it is exactly the size where a second extraction costs seconds.
+  const after = before.truncated ? undefined : outlineOf(rel, ext, newText);
 
-  if (!before.truncated && !after.truncated) {
+  if (after && !after.truncated) {
     // Each declaration outside the edit is keyed by kind, qualified name and
     // (shifted) span. An end line inside the edited region is left out: it is
     // the edit's to change. So is, for an insertion, an end on the line right
