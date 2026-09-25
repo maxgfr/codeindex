@@ -822,14 +822,21 @@ codeindex mcp --repo /path/to/workspace
 An explicit per-call `repo` still wins, so a pinned server can still answer
 about another checkout. `--server-name <name>` overrides the announced
 `serverInfo.name` for hosts that embed the server under their own identity.
-Add `--watch` to a pinned server for proactive recursive filesystem
-invalidation. Every request still verifies freshness with the normal stat walk
-because a request can arrive before its filesystem event; the watcher is a hint,
-not a correctness oracle. Directories excluded by the scanner (`.git`, build
-outputs, dependency caches, `.codeindex`, edit temporaries, etc.) are ignored by
-the watcher too. Git commit metadata is still refreshed by the per-request
-check. When the platform cannot provide recursive watching, the server warns
-and continues with those normal freshness scans.
+Add `--watch` to a pinned server to stop paying a whole-tree walk on every
+call. On Linux the server watches each directory the scan walks, one inotify
+watch per directory and never an ignored tree (`node_modules`, `.git`, build
+outputs, gitignored paths…), up to 8192 directories. Before a call it waits
+until every earlier filesystem event has been delivered (a barrier file in a
+private temp directory). When no watched directory changed since the last walk,
+the call reuses that walk and the scan behind it without a single stat: a warm
+`find_symbol` on the 66k-file TypeScript repo drops from about 2.3 s to under
+15 ms. Any change, including a deletion, a new directory or a `.gitignore`
+edit, makes the call walk and re-check exactly as without `--watch`, so answers
+never lag behind the disk. Git commit metadata is refreshed on every call. When
+the watcher cannot prove freshness (too many directories, the inotify budget
+exhausted, a barrier that never arrives), the server warns where relevant and
+each call walks as usual. On macOS and Windows the native recursive watcher only
+invalidates changed files eagerly, and every call still walks.
 
 **Prime the index first** and activation becomes a load, not a rebuild:
 `codeindex index --repo <dir> --out <dir>/.codeindex`. The first tool call

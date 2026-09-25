@@ -157,8 +157,9 @@ Commands:
               advertises a named subset (all | orient | find | impact | edit |
               risk | memory, default all) — every advertised tool's schema costs an agent
               context on EVERY turn, and a tool left out is still answerable
-              when called by name; --watch enables proactive invalidation for a
-              pinned repo while retaining per-request freshness verification
+              when called by name; --watch watches the pinned repo so a call
+              skips the whole-tree walk when nothing changed since the last one
+              (Linux; elsewhere it only invalidates eagerly)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and

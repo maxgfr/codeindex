@@ -22,7 +22,8 @@ import {
   validateArgs,
 } from "../src/mcp.js";
 import { parseMcpFlags } from "../src/engine-cli.js";
-import { sessionInvalidate } from "../src/mcp/session.js";
+import { getScanParallel, sessionInvalidate } from "../src/mcp/session.js";
+import { walk } from "../src/walk.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -1505,6 +1506,33 @@ describe("getScan — bounded LRU, not a single entry", () => {
     sessionInvalidate(repo, "gopkg/sub/sub.go");
     sessionInvalidate(repo, "gopkg");
     expect(getScan(repo, {}).files.some((f) => f.rel.startsWith("gopkg/"))).toBe(false);
+  });
+
+  it("trusts a walk handed back unchanged until the watcher invalidates it", async () => {
+    // The --watch oracle hands the SAME walk object back only when no watched
+    // directory changed since it was taken; the scan proven against it is then
+    // returned without a single stat or read.
+    const repo = tmpFixtureCopy("ci-scan-proven-walk-");
+    const file = join(repo, "src", "util.ts");
+    // A whole-second mtime, so restoring it below is exact.
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const walked = walk(repo, {});
+    const scan = await getScanParallel(repo, {}, walked);
+    expect(await getScanParallel(repo, {}, walked)).toBe(scan);
+    expect(getScan(repo, {}, walked)).toBe(scan);
+    // A fresh walk object is checked as usual (and proves the scan unchanged).
+    expect(getScan(repo, {}, walk(repo, {}))).toBe(scan);
+    // An invalidated repo is re-checked even against the same walk object:
+    // the poisoned entry forces the read that sees the new bytes.
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replaceAll("function backoff(", "function backofx("));
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const proven = walk(repo, {});
+    expect(await getScanParallel(repo, {}, proven)).toBe(scan);
+    sessionInvalidate(repo, "src/util.ts");
+    const after = await getScanParallel(repo, {}, proven);
+    expect(after).not.toBe(scan);
+    expect(after.files.find((f) => f.rel === "src/util.ts")!.symbols.map((s) => s.name)).toContain("backofx");
   });
 
   it("re-reads an invalidated file without re-extracting identical bytes", () => {

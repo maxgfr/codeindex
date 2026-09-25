@@ -9,7 +9,7 @@
 // (NOT `node scripts/engine.mjs mcp`: engine.mjs is a side-effect-free library
 // with no main-module guard — see src/engine.ts — so that command does nothing.
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
-import { readFileSync, statSync, watch as watchFs, type FSWatcher } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
@@ -41,7 +41,8 @@ import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
-import { IGNORE_DIRS, walk, type WalkResult } from "./walk.js";
+import { walk, type WalkResult } from "./walk.js";
+import { watchRepo, type RepoWatch } from "./mcp/watch.js";
 import { toolsFor, OUTPUT_SCHEMAS, profileNames } from "./mcp/tools.js";
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
@@ -206,11 +207,14 @@ function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
 }
 
 // `progress` reports phase boundaries of a scan-needing call (see toolsCall).
+// `walkRepo` supplies the call's walk: the --watch oracle's for the pinned
+// repository, a plain walk otherwise.
 async function callTool(
   name: string,
   args: Record<string, unknown>,
   repo: string,
   progress?: (message: string) => void,
+  walkRepo: (repo: string) => Promise<{ walked: WalkResult; reused: boolean }> = async (r) => ({ walked: walk(r, {}), reused: false }),
 ): Promise<string> {
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // `search`'s optional structural prior. The schema's enum has already
@@ -223,11 +227,12 @@ async function callTool(
   let walked: WalkResult | undefined;
   let preparedScan: ReturnType<typeof getScan> | undefined;
   if (!SCANLESS_TOOLS.has(name)) {
-    // fs.watch is an eager invalidation hint, never a freshness oracle: an
-    // immediate request can beat event delivery. Always perform the normal
-    // walk/stat proof before trusting a warm scan.
-    walked = walk(repo, {});
-    progress?.(`walked ${walked.files.length} files`);
+    // An event can arrive after the request that should see it, so a warm
+    // scan is trusted only against a walk: a fresh one, or the one the
+    // --watch oracle proves still current (see src/mcp/watch.ts).
+    const fresh = await walkRepo(repo);
+    walked = fresh.walked;
+    progress?.(fresh.reused ? `unchanged since the last call: ${walked.files.length} files` : `walked ${walked.files.length} files`);
     preparedScan = await getScanParallel(
       repo,
       scanOpts,
@@ -617,10 +622,10 @@ export interface McpServerOptions {
   // what is ADVERTISED, not what is answerable: a tool left out of the profile
   // still works when called. Undefined = all tools, so no existing setup moves.
   profile?: string;
-  // Opt into proactive event-driven invalidation for a pinned repository.
-  // Every request still performs the normal freshness proof because event
-  // delivery can lag behind a request. Unsupported platforms warn and retain
-  // the same per-call freshness scan.
+  // Watch the pinned repository (see src/mcp/watch.ts). On Linux the watcher
+  // proves when nothing changed, so a call skips the walk and the stat pass;
+  // elsewhere it only invalidates eagerly. Whenever it cannot prove freshness
+  // a call walks exactly as without it.
   watch?: boolean;
 }
 
@@ -652,29 +657,10 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
       t.inputSchema,
     ]),
   );
-  let watcher: FSWatcher | undefined;
-  if (opts.watch && defaultRepo) {
-    try {
-      watcher = watchFs(defaultRepo, { recursive: true }, (_event, filename) => {
-        const rel = filename?.toString().replaceAll("\\", "/") ?? "";
-        const ignored = rel.split("/").some((segment) =>
-          IGNORE_DIRS.has(segment) || segment.startsWith(".codeindex-edit-"),
-        );
-        if (ignored) return;
-        sessionInvalidate(defaultRepo, rel || undefined);
-      });
-      watcher.on("error", (error) => {
-        process.stderr.write(`codeindex: MCP watcher disabled (${error.message}); using freshness scans\n`);
-        watcher?.close();
-        watcher = undefined;
-        sessionInvalidate(defaultRepo);
-      });
-    } catch (error) {
-      process.stderr.write(
-        `codeindex: MCP watcher unavailable (${error instanceof Error ? error.message : String(error)}); using freshness scans\n`,
-      );
-    }
-  }
+  const watcher: RepoWatch | undefined =
+    opts.watch && defaultRepo ? watchRepo(defaultRepo, (message) => process.stderr.write(`codeindex: ${message}\n`)) : undefined;
+  const walkRepo = async (repo: string): Promise<{ walked: WalkResult; reused: boolean }> =>
+    watcher && repo === defaultRepo ? watcher.walk() : { walked: walk(repo, {}), reused: false };
   // No startup warm: each scan-needing tool warms the present-language grammars
   // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
@@ -859,7 +845,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   ): Promise<Record<string, unknown>> {
     try {
       const repo = repoRoot(args, defaultRepo);
-      const raw = await callTool(name, args, repo, progress);
+      const raw = await callTool(name, args, repo, progress, walkRepo);
       // Narrowed or projected, the answer is not what a whole-repo artifact
       // holds, so the size guard must not point at one.
       const narrowed =

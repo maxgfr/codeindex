@@ -16,6 +16,7 @@ import { ensureGrammars, grammarKeysForExts } from "../ast/loader.js";
 import { resolveEmbedModelDir, loadEmbedModel, type StaticEmbedModel } from "../embed/model.js";
 import { type EmbeddingIndex } from "../embed/index.js";
 import { sha1 } from "../hash.js";
+import { headCommit } from "../git.js";
 
 // --- embedding index memoization --------------------------------------------
 // The MCP server process is long-lived, but every `search` call used to redo
@@ -117,6 +118,25 @@ interface SessionEntry {
   cacheMap: SessionCacheMap;
   arts?: IndexArtifacts;
   loadArtifacts?: () => IndexArtifacts | undefined;
+  // The walk `scan` was last proven against. The same walk object comes back
+  // only from the --watch oracle (src/mcp/watch.ts), which hands it out again
+  // exactly when no watched directory changed since it was taken: the scan is
+  // then still current without re-checking a single file.
+  walked?: WalkResult;
+}
+
+// `commit` (headCommit(root)) is NOT part of the stat/hash freshness oracle: a
+// git HEAD move that leaves the worktree untouched — commit / commit --amend /
+// reset --soft / checkout to an identical-tree branch — changes headCommit
+// without altering any file's size or mtime. Every reuse path recomputes it
+// (exactly what a cold process reports) and syncs it onto the SAME scan object,
+// preserving derived indexes, but drops the artifacts because Graph itself
+// carries `commit`.
+function syncCommit(entry: SessionEntry, commit: string | undefined): void {
+  if (entry.scan.commit === commit) return;
+  entry.scan.commit = commit;
+  entry.arts = undefined;
+  entry.loadArtifacts = undefined;
 }
 
 // A SMALL bounded LRU — never an unbounded map.
@@ -173,6 +193,7 @@ export function sessionInvalidate(repo: string, rel?: string): void {
   };
   for (const entry of sessionCaches) {
     if (!entry.key.startsWith(prefix)) continue;
+    entry.walked = undefined;
     if (rel === undefined) {
       for (const [key, cached] of entry.cacheMap) poison(entry.cacheMap, key, cached);
     } else {
@@ -212,6 +233,10 @@ export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: Wa
   const key = sessionKey(repo, opts);
   const hit = sessionGet(key);
   if (hit) {
+    if (walked && hit.walked === walked) {
+      syncCommit(hit, headCommit(repo));
+      return hit.scan;
+    }
     const fresh = scanRepo(repo, { ...opts, cache: hit.cacheMap, precomputedWalk: walked });
     if (fresh.contentUnchanged) {
       // Content proven identical → return the SAME object (object identity is
@@ -219,23 +244,11 @@ export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: Wa
       // stat-only drift (e.g. a bare touch) still refreshes the cache map so
       // the next call's stat fastpath keys on the new (size, mtimeMs).
       if (fresh.cacheDirty) hit.cacheMap = toCacheMap(fresh);
-      // `commit` (headCommit(root)) is NOT part of the stat/hash freshness
-      // oracle: a git HEAD move that leaves the worktree untouched — commit /
-      // commit --amend / reset --soft / checkout to an identical-tree branch —
-      // changes headCommit without altering any file's size or mtime, so
-      // contentUnchanged stays true while the cached scan's commit went stale.
-      // `fresh` recomputed it just now (exactly what a cold process reports), so
-      // sync it onto the returned object; otherwise graph/scan metadata would
-      // expose the old HEAD. Mutate the SAME scan object to preserve derived
-      // indexes, but rebuild artifacts because Graph itself carries `commit`.
-      if (hit.scan.commit !== fresh.commit) {
-        hit.scan.commit = fresh.commit;
-        hit.arts = undefined;
-        hit.loadArtifacts = undefined;
-      }
+      syncCommit(hit, fresh.commit);
+      hit.walked = walked;
       return hit.scan;
     }
-    sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
+    sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh), walked });
     return fresh;
   }
   // First touch of this (repo, opts): try the persisted-index preload before a
@@ -249,11 +262,12 @@ export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: Wa
       scan: preloaded.scan,
       cacheMap: preloaded.cacheMap,
       arts: preloaded.arts,
+      walked,
     });
     return preloaded.scan;
   }
   const scan = scanRepo(repo, { ...opts, precomputedWalk: walked });
-  sessionPut({ key, scan, cacheMap: toCacheMap(scan) });
+  sessionPut({ key, scan, cacheMap: toCacheMap(scan), walked });
   return scan;
 }
 
@@ -271,14 +285,16 @@ export async function getScanParallel(
   const key = sessionKey(repo, opts);
   const existing = sessionCaches.find((entry) => entry.key === key);
   if (existing) {
+    if (walked && existing.walked === walked) {
+      syncCommit(existing, headCommit(repo));
+      sessionGet(key);
+      return existing.scan;
+    }
     const originalCache = existing.cacheMap;
     const reuseUnchanged = (fresh: RepoScan): RepoScan => {
       if (fresh.cacheDirty) existing.cacheMap = toCacheMap(fresh);
-      if (existing.scan.commit !== fresh.commit) {
-        existing.scan.commit = fresh.commit;
-        existing.arts = undefined;
-        existing.loadArtifacts = undefined;
-      }
+      syncCommit(existing, fresh.commit);
+      existing.walked = walked;
       sessionGet(key);
       return existing.scan;
     };
@@ -289,7 +305,7 @@ export async function getScanParallel(
       await warm();
       const fresh = await scanRepoParallel(repo, { ...opts, cache: originalCache, precomputedWalk: walked });
       if (fresh.contentUnchanged) return reuseUnchanged(fresh);
-      sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh) });
+      sessionPut({ key, scan: fresh, cacheMap: toCacheMap(fresh), walked });
       return fresh;
     }
 
@@ -301,7 +317,7 @@ export async function getScanParallel(
     // deletions or scope changed; the provisional scan is already final. The
     // no-walk fallback retains the conservative warm + rescan contract.
     if (walked) {
-      sessionPut({ key, scan: provisional, cacheMap: toCacheMap(provisional) });
+      sessionPut({ key, scan: provisional, cacheMap: toCacheMap(provisional), walked });
       return provisional;
     }
     await warm();
@@ -318,13 +334,14 @@ export async function getScanParallel(
       cacheMap: preloaded.cacheMap,
       arts: preloaded.arts,
       loadArtifacts: preloaded.loadArtifacts,
+      walked,
     });
     return preloaded.scan;
   }
 
   await warm();
   const scan = await scanRepoParallel(repo, { ...opts, precomputedWalk: walked });
-  sessionPut({ key, scan, cacheMap: toCacheMap(scan) });
+  sessionPut({ key, scan, cacheMap: toCacheMap(scan), walked });
   return scan;
 }
 
