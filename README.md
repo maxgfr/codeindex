@@ -505,7 +505,9 @@ result cut short by the time limit always comes back in that form, with
 weighted fields: symbol names, path segments, markdown headings, the file
 summary, per-symbol **doc comments**, and the **prose body** (words from comments
 and short string literals, captured at extraction time so they ride the
-incremental cache).
+incremental cache). An all-lowercase compound file name (`tsconfigparsing.go`,
+`knownsymlinks.go`) is also indexed as the words it is made of, when the repo
+uses those words as names, so "parse tsconfig json" reaches it.
 
 The last two are the point. An index built only from names — what a tags file or
 a symbol-only search ships — is a perfectly scored index of the wrong text: the

@@ -318,7 +318,74 @@ export function buildDocs(scan: RepoScan): Doc[] {
     }
     docs.push(doc);
   }
+  splitCompoundPaths(docs);
   return docs;
+}
+
+// All-lowercase compound file names — tsconfigparsing.go, knownsymlinks.go,
+// commandlineparser.go — have no case or punctuation boundary for `subtokens`
+// to split on, so each stayed ONE path token and "parse tsconfig json" or
+// "symlink cache" could not reach the file that is named for exactly that.
+//
+// Such a token is split into words the corpus itself uses as names: a word
+// break over the name-field vocabulary (pieces of 3+ letters), fewest pieces
+// first, then the lexicographically smallest piece list — so the split is a
+// function of the scan alone and deterministic. The pieces are ADDED to the
+// path field next to the whole token, which stays. Skipped:
+//   - a token that is itself a name (nothing to split), or shorter than 7 or
+//     longer than 32 letters (too short to be compound; not worth the search);
+//   - test and fixture paths: demoted anyway, and on microsoft/TypeScript they
+//     are 60k long generated baseline names out of 66k files.
+// Each distinct token is split once per docs build, not per query.
+const COMPOUND_MIN = 7;
+const COMPOUND_MAX = 32;
+const PIECE_MIN = 3;
+
+function splitCompoundPaths(docs: Doc[]): void {
+  const vocab = new Set<string>();
+  for (const d of docs) {
+    for (const t of d.fields.name.tf.keys()) if (t.length >= PIECE_MIN && /^[a-z]+$/.test(t)) vocab.add(t);
+  }
+  const memo = new Map<string, string[] | undefined>();
+  for (const d of docs) {
+    if (d.isTest || d.isFixture) continue;
+    const path = d.fields.path;
+    // Snapshot the keys: the pieces go into this same map.
+    for (const t of [...path.tf.keys()]) {
+      if (t.length < COMPOUND_MIN || t.length > COMPOUND_MAX || !/^[a-z]+$/.test(t)) continue;
+      let pieces = memo.get(t);
+      if (!memo.has(t)) memo.set(t, (pieces = wordBreak(t, vocab)));
+      if (!pieces) continue;
+      const tf = path.tf.get(t)!;
+      for (const p of pieces) {
+        path.tf.set(p, (path.tf.get(p) ?? 0) + tf);
+        path.len += tf;
+        d.all.add(p);
+      }
+    }
+  }
+}
+
+// The fewest vocabulary words that spell `word` exactly, ties broken by the
+// smallest piece list; undefined when no split exists or the word needs none.
+// Exported for tests — not in the public barrel.
+export function wordBreak(word: string, vocab: ReadonlySet<string>): string[] | undefined {
+  const n = word.length;
+  // best[i] = the best split of word.slice(i), or undefined when there is none.
+  const best: (string[] | undefined)[] = new Array(n + 1);
+  best[n] = [];
+  for (let i = n - PIECE_MIN; i >= 0; i--) {
+    for (let j = i + PIECE_MIN; j <= n; j++) {
+      const rest = best[j];
+      const piece = word.slice(i, j);
+      if (!rest || !vocab.has(piece)) continue;
+      const cand = [piece, ...rest];
+      const cur = best[i];
+      if (!cur || cand.length < cur.length || (cand.length === cur.length && cand.join(" ") < cur.join(" "))) best[i] = cand;
+    }
+  }
+  const split = best[0];
+  return split && split.length >= 2 ? split : undefined;
 }
 
 // The strings `subtokens` maps to exactly [themselves]: no case boundary to

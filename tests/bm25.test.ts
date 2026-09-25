@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildDocs, charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens } from "../src/bm25.js";
+import { buildDocs, charTrigrams, diceCoefficient, explainQuery, searchIndex, subtokens, wordBreak } from "../src/bm25.js";
 import { stemOf } from "../src/util.js";
 import { isTestPath } from "../src/tests-map.js";
 import { scanRepo, type RepoScan } from "../src/scan.js";
@@ -457,6 +457,40 @@ describe("searchIndex: BM25F fields", () => {
       "part.ts": "export function payloadEncoderRegistryFactory(): void {}\n",
     });
     expect(searchIndex(scanRepo(repo), "payload")[0]!.file).toBe("whole.ts");
+  });
+});
+
+describe("searchIndex: compound file names", () => {
+  // tsconfigparsing.go, knownsymlinks.go, commandlineparser.go: no case or
+  // punctuation boundary, so the name was one path token no query could hit.
+  it("finds a file by the words its all-lowercase name is made of", () => {
+    const repo = repoWith({
+      "tsoptions/tsconfigparsing.go": "package tsoptions\n\nfunc ParseJsonConfigFile() {}\n",
+      "tsoptions/tsconfig.go": "package tsoptions\n\ntype Tsconfig struct{}\n",
+      "parser/parsing.go": "package parser\n\ntype ParsingContext struct{}\n",
+      "tests/tsconfigparsing_test.go": "package tests\n\nfunc TestIt() {}\n",
+    });
+    const scan = scanRepo(repo);
+    const hit = searchIndex(scan, "tsconfig parsing").find((r) => r.file === "tsoptions/tsconfigparsing.go")!;
+    expect(hit.matchedTerms).toEqual(["parsing", "tsconfig"]);
+    expect(hit.matchedFields).toEqual(["path"]);
+    // The whole token stays: the literal name still matches too.
+    expect(searchIndex(scan, "tsconfigparsing")[0]!.file).toBe("tsoptions/tsconfigparsing.go");
+    // Test paths are not split — they are demoted anyway, and on a large tree
+    // they are most of the (generated, long) names.
+    const test = explainQuery(scan, "tsconfig parsing").results.find((r) => r.file === "tests/tsconfigparsing_test.go");
+    expect(test).toBeUndefined();
+  });
+
+  it("splits into the fewest corpus words, ties broken by the smallest list", () => {
+    const vocab = new Set(["command", "line", "commandline", "parser", "known", "symlinks", "sym", "links"]);
+    expect(wordBreak("commandlineparser", vocab)).toEqual(["commandline", "parser"]);
+    expect(wordBreak("knownsymlinks", vocab)).toEqual(["known", "symlinks"]);
+    // Two 2-piece splits of one word: the lexicographically smaller wins.
+    expect(wordBreak("abcdefgh", new Set(["abcde", "fgh", "abc", "defgh"]))).toEqual(["abc", "defgh"]);
+    // Already a word, or not spellable from the vocabulary: no split.
+    expect(wordBreak("commandline", vocab)).toBeUndefined();
+    expect(wordBreak("parserzzz", vocab)).toBeUndefined();
   });
 });
 
