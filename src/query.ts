@@ -8,10 +8,11 @@ import { join } from "node:path";
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { readText } from "./walk.js";
-import { rawCallerSitesFor, type CallerIndex, type CallerSite, type RawCallerSite } from "./callers.js";
+import { enclosingAmong, rawCallerSitesFor, type CallerIndex, type CallerSite, type RawCallerSite } from "./callers.js";
 import { callerIndexFor, fileByRelFor, identSetsFor, symbolsByNameFor, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 import { refMatches, symbolRefReadings, type SymbolRef } from "./symref.js";
+import { symbolId } from "./symbolgraph.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -25,6 +26,45 @@ export function symbolsOverview(scan: RepoScan, rel: string): CodeSymbol[] {
   const f = fileByRelFor(scan).get(rel);
   if (!f) return [];
   return [...f.symbols].filter((s) => !REFERENCE_KINDS.has(s.kind)).sort((a, b) => a.line - b.line || byStr(a.name, b.name));
+}
+
+export interface SymbolAt {
+  file: string;
+  line: number;
+  // The innermost declaration holding the line, with its symbol id — the form
+  // callers, callgraph and call_path read — or null outside every one.
+  symbol: (CodeSymbol & { id: string }) | null;
+  // The declarations around it, outermost first (ids).
+  enclosing: string[];
+  // A regex-tier record has no end line, so `symbol` is only the nearest
+  // declaration above the line: it may have ended before it.
+  approximate?: true;
+}
+
+// Which symbol is at file:line? A grep hit, a stack frame or a compiler
+// diagnostic names a line; every navigation query wants a symbol. undefined
+// when the index holds no such file.
+export function symbolAt(scan: RepoScan, rel: string, line: number): SymbolAt | undefined {
+  const f = fileByRelFor(scan).get(rel);
+  if (!f) return undefined;
+  const inner = enclosingAmong(f.symbols, line);
+  if (!inner) return { file: rel, line, symbol: null, enclosing: [] };
+  // Every other declaration whose span holds both the line and the innermost
+  // one. Only AST records bound a span, so a regex-tier answer has no chain.
+  const reach = Math.max(line, inner.endLine ?? line);
+  const enclosing = f.symbols
+    .filter((s) => s !== inner && !REFERENCE_KINDS.has(s.kind) && s.endLine !== undefined && s.line <= inner.line && s.endLine >= reach)
+    .sort((a, b) => a.line - b.line || b.endLine! - a.endLine! || byStr(a.name, b.name))
+    .map(symbolId);
+  const id = symbolId(inner);
+  return {
+    file: rel,
+    line,
+    symbol: { ...inner, id },
+    // An overload repeats its id; a container is listed once.
+    enclosing: [...new Set(enclosing)].filter((e) => e !== id),
+    ...(inner.endLine === undefined ? { approximate: true as const } : {}),
+  };
 }
 
 export interface SymbolMatch extends CodeSymbol {

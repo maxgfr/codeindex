@@ -27,7 +27,8 @@ import { capDeadCode, findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
-import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef } from "./query.js";
+import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef, symbolAt } from "./query.js";
+import { resolveFileArg } from "./patharg.js";
 import { formatSymbolRef } from "./symref.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
@@ -285,6 +286,17 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const leaf = resolveSymbolRef(scan, symName)?.reading.name ?? symName;
     const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik) : statik;
     return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
+  }
+  if (name === "symbol_at") {
+    const file = str(args.file);
+    const line = num(args.line);
+    if (!file) throw new Error("`file` is required");
+    if (line === undefined || !Number.isInteger(line) || line < 1) throw new Error("`line` must be a positive integer");
+    const scan = readScan();
+    const files = new Set(scan.files.map((f) => f.rel));
+    const rel = resolveFileArg(repo, file, (r) => files.has(r));
+    if (rel === undefined) throw new Error(`no such file in the index: ${file}`);
+    return JSON.stringify(symbolAt(scan, rel, line), null, 2);
   }
   if (name === "lsp_status") {
     return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true), null, 2);

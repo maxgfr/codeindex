@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanRepo, type RepoScan } from "../src/scan.js";
-import { findReferences, findSymbol, symbolsOverview } from "../src/query.js";
+import { findReferences, findSymbol, symbolAt, symbolsOverview } from "../src/query.js";
 
 // The navigation queries each surface used to have only on one side: the CLI
 // had no find / refs / outline (MCP-only), and MCP had no impact / neighbors
@@ -43,6 +43,17 @@ const FILES: Record<string, string> = {
     "",
   ].join("\n"),
   "src/empty.ts": "// nothing declared here\n",
+  "src/nested.ts": [
+    "export class Outer {",
+    "  run(): number {",
+    "    const inner = () => {",
+    "      return 1;",
+    "    };",
+    "    return inner();",
+    "  }",
+    "}",
+    "",
+  ].join("\n"),
 };
 
 let repo: string;
@@ -128,6 +139,65 @@ describe("CLI find / refs / outline", () => {
       expect(JSON.parse(run("find", "retry", "--no-index-cache").stdout)[0].signature).toBe("retry(): number");
     } finally {
       rmSync(copy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("symbol at file:line", () => {
+  it("answers the innermost declaration, its id and the chain around it", () => {
+    const at = symbolAt(scan, "src/nested.ts", 4)!;
+    expect(at.symbol).toMatchObject({ name: "inner", line: 3, endLine: 5, id: "src/nested.ts#run/inner" });
+    expect(at.enclosing).toEqual(["src/nested.ts#Outer", "src/nested.ts#Outer/run"]);
+    expect(at.approximate).toBeUndefined();
+    // A line of the method outside the closure is the method's.
+    expect(symbolAt(scan, "src/nested.ts", 6)!.symbol!.id).toBe("src/nested.ts#Outer/run");
+    // Outside every declaration: null, not an error; no such file: undefined.
+    expect(symbolAt(scan, "src/client.ts", 1)).toEqual({ file: "src/client.ts", line: 1, symbol: null, enclosing: [] });
+    expect(symbolAt(scan, "nope.ts", 1)).toBeUndefined();
+  });
+
+  it("CLI symbol-at reads file:line and file:line:col, in any path spelling", () => {
+    const want = JSON.parse(JSON.stringify(symbolAt(scan, "src/client.ts", 7)));
+    expect(want.symbol.id).toBe("src/client.ts#Client/retry");
+    for (const arg of ["src/client.ts:7", "./src/client.ts:7:12", `${join(repo, "src/client.ts")}:7`]) {
+      expect(cli("symbol-at", arg).json(), arg).toEqual(want);
+    }
+    // The id pastes straight into the symbol-ref commands.
+    expect(cli("callgraph", want.symbol.id, "--depth", "1").json().root[0].id).toBe(want.symbol.id);
+    expect(cli("symbol-at", "src/client.ts").status).toBe(2);
+    expect(cli("symbol-at", "src/client.ts:0").status).toBe(2);
+    expect(cli("symbol-at", "nope.ts:3").err).toMatch(/no such file in the index: nope\.ts/);
+  });
+
+  it("says when the answer is only the nearest declaration above (regex tier)", () => {
+    const at = cli("symbol-at", "src/nested.ts:4", "--no-ast").json();
+    expect(at.symbol.name).toBe("inner");
+    expect(at.approximate).toBe(true);
+  });
+});
+
+describe("MCP query surfaces", () => {
+  let client: any;
+  beforeAll(async () => {
+    const { startMcpClient } = await import(/* @vite-ignore */ new URL("../scripts/bench/mcp-client.mjs", import.meta.url).href);
+    client = startMcpClient(process.execPath, [CLI, "mcp", "--repo", repo], { timeoutMs: 30_000 });
+    expect((await client.handshake()).ok).toBe(true);
+  });
+  afterAll(async () => {
+    await client?.close();
+  });
+  const call = async (name: string, args: Record<string, unknown>) => (await client.request("tools/call", { name, arguments: args })).result;
+  const answer = async (name: string, args: Record<string, unknown>) => {
+    const res = await call(name, args);
+    expect(res.isError, `${name}: ${res.content?.[0]?.text}`).not.toBe(true);
+    return JSON.parse(res.content[0].text);
+  };
+
+  it("symbol_at answers what the CLI answers, and errors on a bad file or line", async () => {
+    expect(await answer("symbol_at", { file: "./src/nested.ts", line: 4 })).toEqual(cli("symbol-at", "src/nested.ts:4").json());
+    expect(await answer("symbol_at", { file: "src/client.ts", line: "7" })).toMatchObject({ symbol: { id: "src/client.ts#Client/retry" } });
+    for (const args of [{ file: "nope.ts", line: 1 }, { file: "src/client.ts", line: 1.5 }, { file: "src/client.ts" }]) {
+      expect((await call("symbol_at", args)).isError, JSON.stringify(args)).toBe(true);
     }
   });
 });

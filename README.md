@@ -383,6 +383,7 @@ codeindex callgraph buildGraph --repo . --depth 2
 codeindex find    Client/send --repo .        # declarations: signature, doc, parent, span
 codeindex refs    backoff --repo .            # defs, bound call sites, referencing files
 codeindex outline src/client.ts --repo .      # one file's symbols, in declaration order
+codeindex symbol-at src/client.ts:42 --repo . # the symbol holding that line, and its id
 codeindex grep    'pattern' --repo .
 codeindex literals --repo .                   # values with no single source of truth
 ```
@@ -424,6 +425,14 @@ signature, doc comment, parent and line span, which `symbols` leaves out.
 repo does not declare; `outline` exits 2 on a file the index does not hold.
 Like every read command they reuse a fresh persisted index (`--index`).
 
+`symbol-at <file:line>` (MCP `symbol_at`; `file:line:col` works too) turns a
+grep hit, a stack frame or a diagnostic into a symbol: the innermost
+declaration holding the line, with its id, which pastes into `callers`,
+`callgraph` and `callpath`, and the declarations around it, outermost first.
+`symbol` is `null` outside every declaration. Regex-tier files record no end
+lines, so there the answer is the nearest declaration above, marked
+`"approximate": true`.
+
 `callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
 any binding, with its receiver and enclosing symbol. `callgraph` walks at most 5
 hops and says `depthClamped` when asked for more. It also follows dispatch. An
@@ -437,7 +446,7 @@ the same file are two links, strongest evidence first — and rejects an unknown
 `--kind`. `impact` walks imports, uses and calls backwards; a Go import reaches
 every non-test file of the package it names, and a call inferred from a name
 alone is counted (`inferredDependents`) rather than followed unless
-`--include-inferred`. File arguments (`complexity`, `outline`, `impact`, `neighbors`) may
+`--include-inferred`. File arguments (`complexity`, `outline`, `symbol-at`, `impact`, `neighbors`) may
 be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
 file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
 `{ total, shown, truncated, candidates }` like MCP `dead_code`.
@@ -869,12 +878,12 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**33 tools**, grouped by what they answer:
+**34 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
-| find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
+| find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview`, `symbol_at` |
 | impact | `find_references`, `callers`, `call_graph`, `dead_code` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
@@ -908,7 +917,7 @@ turn**, so a session that only ever searches is paying for the graph analytics
 all day. `--tools` advertises a named subset:
 
 ```sh
-codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview
+codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview, symbol_at
 codeindex mcp --tools orient,impact # compose profiles with a comma
 ```
 
@@ -1035,7 +1044,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **33 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **34 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

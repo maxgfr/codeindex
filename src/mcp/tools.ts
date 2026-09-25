@@ -1,4 +1,4 @@
-// The MCP tool catalogue: the 29 tool definitions, their display metadata, and
+// The MCP tool catalogue: the tool definitions, their display metadata, and
 // the per-protocol-version view of the list a client actually receives.
 //
 // Split out of mcp.ts because it is pure data plus one projection function —
@@ -127,6 +127,20 @@ export const TOOLS = [
         },
       },
       required: ["repo", "name"],
+    },
+  },
+  {
+    name: "symbol_at",
+    description:
+      "Which symbol is at file:line? The innermost declaration holding the line (full metadata plus its symbol `id`, the form callers/call_graph/call_path read) and the declarations around it, outermost first. Turns a grep hit, a stack frame or a diagnostic into something the navigation tools accept. `symbol` is null outside every declaration; `approximate: true` means the file has no AST spans, so it is only the nearest declaration above.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        file: { type: "string", description: "Repo-relative file path" },
+        line: { type: "number", minimum: 1, description: "1-based line number" },
+      },
+      required: ["repo", "file", "line"],
     },
   },
   {
@@ -576,6 +590,17 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ["defs", "callSites", "referencingFiles"],
   },
+  symbol_at: {
+    type: "object",
+    properties: {
+      file: { type: "string" },
+      line: { type: "integer" },
+      symbol: { type: ["object", "null"] },
+      enclosing: strArr,
+      approximate: { type: "boolean" },
+    },
+    required: ["file", "line", "symbol", "enclosing"],
+  },
   lsp_status: {
     type: "object",
     properties: {
@@ -672,8 +697,8 @@ for (const name of ["replace_symbol_body", "insert_after_symbol", "insert_before
 
 // Per-tool display title and behaviour hints.
 //
-// The hints matter operationally: they are what lets a host auto-approve the 23
-// read-only tools and hold a confirmation for the 5 that write. Without them a
+// The hints matter operationally: they are what lets a host auto-approve the
+// read-only tools and hold a confirmation for the ones that write. Without them a
 // client must treat `scan_summary` and `replace_symbol_body` alike.
 //
 // openWorldHint is true only where a call can leave this machine — `search`
@@ -697,6 +722,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   symbols_overview: { title: "File symbol overview" },
   find_symbol: { title: "Find symbol" },
   find_references: { title: "Find references" },
+  symbol_at: { title: "Symbol at a line" },
   repo_map: { title: "Repository map" },
   onboard: { title: "Project brief", write: true, destructive: false, idempotent: true },
   hotspots: { title: "Hotspots" },
@@ -747,7 +773,7 @@ export function annotationsFor(name: string): Record<string, boolean> | undefine
  * Named subsets of the tool list, by the question they answer.
  *
  * Every advertised tool's full JSON Schema sits in an agent's context on EVERY
- * turn, so 32 of them is a standing cost paid whether or not the session ever
+ * turn, so the whole list is a standing cost paid whether or not the session ever
  * touches a graph. A profile trims what is advertised, not what exists: the
  * server still answers a tool that was not advertised, so nothing breaks for a
  * client that knows a name from elsewhere.
@@ -759,11 +785,11 @@ export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Land in an unfamiliar repository and get your bearings.
   orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "read_memory", "list_memories"],
   // Locate a thing.
-  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
+  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "symbol_at"],
   // Decide whether changing it is safe.
   impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
   // Change it.
-  edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
+  edit: ["find_symbol", "symbols_overview", "symbol_at", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.
   risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"],
 };

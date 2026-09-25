@@ -113,6 +113,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   workspaces: {},
   churn: {},
   find_references: { name: "HttpClient" },
+  symbol_at: { file: "src/client.ts", line: 7 },
   explain_search: { query: "http client retry" },
   lsp_status: {},
   onboard: { remember: false },

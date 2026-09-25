@@ -26,7 +26,7 @@ import { implementationsOf, typeEntry } from "./relations.js";
 import { neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex, buildRawCallerIndex, callerIndexForNames, lookupCallerEntry, rawCallerSitesFor, refNames } from "./callers.js";
 import { hierarchyFor, symbolGraphFor } from "./derived.js";
-import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymbolRef, symbolsOverview } from "./query.js";
+import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymbolRef, symbolAt, symbolsOverview } from "./query.js";
 import { conciseReferences, symbolLocation } from "./mcp/concise.js";
 import { formatSymbolRef } from "./symref.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -92,6 +92,12 @@ Commands:
   outline     Every symbol declared in one file, in declaration order, with
               kind, span, signature, doc and parent (MCP symbols_overview):
               cli.mjs outline <file>; --concise. Unknown file: exit 2
+  symbol-at   Which symbol is at <file:line> (or file:line:col): the
+              innermost declaration holding the line, its symbol id (what
+              callers/callgraph/callpath read) and the declarations around
+              it, outermost first; symbol null outside all of them;
+              "approximate": true when the file has no AST spans (MCP
+              symbol_at)
               A <symbol> above is any of: name, name@file, file#name,
               file#Parent/name (a callgraph id), Parent/name
   workspaces  Monorepo packages + dependency graph (JSON)
@@ -174,7 +180,7 @@ Commands:
               edge kind linking each neighbour, strongest evidence first
               (--depth <n>, --kind import,call,use,extends,implements,
               doc-link,mention; JSON)
-              File arguments (complexity, outline, impact, neighbors) may be
+              File arguments (complexity, outline, symbol-at, impact, neighbors) may be
               written ./path, repo-absolute or with backslashes
   mermaid     Mermaid diagram of the module graph; pass a module positional to
               focus on one neighborhood
@@ -183,9 +189,9 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (33 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (34 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
-              find_symbol, find_references, lsp_status, onboard, repo_map,
+              find_symbol, find_references, symbol_at, lsp_status, onboard, repo_map,
               hotspots, coupling, dead_code, complexity, mermaid, grep, search,
               explain_search, embed_status, check_rules, the memory quartet and
               the three symbolic-edit writes). Flags: --repo <dir> pins ONE
@@ -976,6 +982,16 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       result = flags.concise ? overview.map((s) => symbolLocation(s, s.name)) : overview;
     }
     emit(JSON.stringify(result, null, 2) + "\n", flags.out);
+  } else if (cmd === "symbol-at") {
+    // `file:line`, or `file:line:col` as compilers and `grep -n` print it (the
+    // column is ignored). The file part may itself hold a colon (`C:\x.ts`).
+    const m = flags.positional ? /^(.+?):(\d+)(?::\d+)?$/.exec(flags.positional) : null;
+    if (!m || Number(m[2]) < 1) throw new Error("symbol-at needs <file:line>: cli.mjs symbol-at src/a.ts:42 --repo <dir>");
+    const scan = await readScan();
+    const files = new Set(scan.files.map((f) => f.rel));
+    const rel = resolveFileArg(flags.repo, m[1]!, (r) => files.has(r));
+    if (rel === undefined) throw new Error(`no such file in the index: ${m[1]}`);
+    emit(JSON.stringify(symbolAt(scan, rel, Number(m[2])), null, 2) + "\n", flags.out);
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
     const scan = await readScan();
