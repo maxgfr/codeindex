@@ -446,7 +446,10 @@ the same file are two links, strongest evidence first — and rejects an unknown
 `--kind`. `impact` walks imports, uses and calls backwards; a Go import reaches
 every non-test file of the package it names, and a call inferred from a name
 alone is counted (`inferredDependents`) rather than followed unless
-`--include-inferred`. File arguments (`complexity`, `outline`, `symbol-at`, `impact`, `neighbors`) may
+`--include-inferred`. MCP `impact` and `neighbors` answer the same from the
+persisted graph (`target`, `depth`, `includeInferred`; `kinds` as an array),
+so an agent can ask who depends on a file without pulling the whole `graph`.
+File arguments (`complexity`, `outline`, `symbol-at`, `impact`, `neighbors`) may
 be written `./path`, absolute or with backslashes; `complexity` exits 2 on a
 file the index does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
 `{ total, shown, truncated, candidates }` like MCP `dead_code`.
@@ -878,13 +881,13 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**34 tools**, grouped by what they answer:
+**36 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
 | orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview`, `symbol_at` |
-| impact | `find_references`, `callers`, `call_graph`, `dead_code` |
+| impact | `find_references`, `callers`, `call_graph`, `impact`, `neighbors`, `dead_code` |
 | types | `type_hierarchy`, `implementations` |
 | risk | `hotspots`, `churn`, `coupling`, `complexity`, `check_rules`, `duplicated_literals` |
 | edit *(write)* | `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol` |
@@ -1044,7 +1047,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **34 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **36 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

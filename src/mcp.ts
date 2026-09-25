@@ -28,7 +28,8 @@ import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef, symbolAt } from "./query.js";
-import { resolveFileArg } from "./patharg.js";
+import { fileArgReadings, resolveFileArg } from "./patharg.js";
+import { EDGE_KINDS, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
@@ -549,6 +550,30 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     });
     if (!result.root.length) throw new Error(`no symbol named ${symbol}`);
     return JSON.stringify(result, null, 2);
+  }
+  if (name === "impact" || name === "neighbors") {
+    // Pure functions of the link-graph, so the persisted artifacts answer
+    // them; an agent's only file-level "what depends on X" used to be the
+    // whole `graph` blob.
+    const target = str(args.target);
+    if (!target) throw new Error("`target` is required");
+    const depth = positiveNum(args.depth);
+    let kinds: Set<string> | undefined;
+    if (name === "neighbors" && args.kinds !== undefined) {
+      const list = strArray(args.kinds) ?? [];
+      const bad = list.filter((k) => !(EDGE_KINDS as readonly string[]).includes(k));
+      if (!list.length || bad.length) throw new Error(`\`kinds\` expects edge kinds among ${EDGE_KINDS.join("|")}, got ${JSON.stringify(bad.length ? bad : args.kinds)}`);
+      kinds = new Set(list);
+    }
+    const { graph } = readArtifacts();
+    for (const t of fileArgReadings(repo, target)) {
+      const res =
+        name === "impact"
+          ? impactOf(graph, t, depth ?? Infinity, { includeInferred: args.includeInferred === true })
+          : neighborsOf(graph, t, depth ?? 1, kinds);
+      if (res) return JSON.stringify(res, null, 2);
+    }
+    throw new Error(`no such file or module in the index: ${target}`);
   }
   if (name === "check_rules") {
     // Inline `rules` stays the primary form; `configPath` is the CLI's --config,

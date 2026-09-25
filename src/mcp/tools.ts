@@ -447,6 +447,36 @@ export const TOOLS = [
     },
   },
   {
+    name: "impact",
+    description:
+      "What breaks if I change this file or module? The reverse dependency closure over the link-graph: every file that transitively imports, uses or calls `target`, nearest first, with the modules touched. A Go import reaches every non-test file of the package it names. A call inferred from a name alone is counted (`inferredDependents`) but not followed unless includeInferred. Answers from the persisted graph — no need to pull the whole `graph`.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        target: { type: "string", description: "Repo-relative file path or module slug" },
+        depth: { type: "number", minimum: 1, description: "Hops to follow (default: the full closure)" },
+        includeInferred: { type: "boolean", description: "Also follow call edges inferred from a name alone (default false)" },
+      },
+      required: ["repo", "target"],
+    },
+  },
+  {
+    name: "neighbors",
+    description:
+      "What sits next to this file or module in the link-graph, both directions: every edge kind linking each neighbour (import, call, use, extends, implements, doc-link, mention, contains), strongest evidence first, out to `depth` hops. Hubs are listed but not expanded through, so depth 2 stays an answer rather than a dump.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...repoProp,
+        target: { type: "string", description: "Repo-relative file path or module slug" },
+        depth: { type: "number", minimum: 1, description: "Hops to follow (default 1)" },
+        kinds: { type: "array", items: { type: "string" }, description: "Edge kinds to traverse (default all)" },
+      },
+      required: ["repo", "target"],
+    },
+  },
+  {
     name: "check_rules",
     description:
       'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"} (module-level import cycles; edge-less code files). Returns deterministic violations with severity error|warn — a CI gate.',
@@ -506,6 +536,28 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       depthClamped: { type: "integer" },
     },
     required: ["root", "nodes", "edges"],
+  },
+  impact: {
+    type: "object",
+    properties: {
+      target: { type: "string" },
+      scope: { type: "string", enum: ["module", "file"] },
+      seeds: strArr,
+      files: { type: "array", items: anyObj },
+      modules: strArr,
+      inferredDependents: { type: "integer" },
+    },
+    required: ["target", "scope", "seeds", "files", "modules"],
+  },
+  neighbors: {
+    type: "object",
+    properties: {
+      target: { type: "string" },
+      scope: { type: "string", enum: ["module", "file"] },
+      links: { type: "array", items: anyObj },
+      members: strArr,
+    },
+    required: ["target", "scope", "links"],
   },
   scan_summary: {
     type: "object",
@@ -749,6 +801,8 @@ export const TOOL_META: Record<string, ToolMeta> = {
   type_hierarchy: { title: "Type hierarchy" },
   implementations: { title: "Implementations" },
   call_graph: { title: "Call graph neighborhood" },
+  impact: { title: "Reverse dependency closure" },
+  neighbors: { title: "Link-graph neighbours" },
   check_rules: { title: "Check architecture rules" },
 };
 
@@ -787,7 +841,7 @@ export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Locate a thing.
   find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "symbol_at"],
   // Decide whether changing it is safe.
-  impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
+  impact: ["find_references", "callers", "call_graph", "impact", "neighbors", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
   // Change it.
   edit: ["find_symbol", "symbols_overview", "symbol_at", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.

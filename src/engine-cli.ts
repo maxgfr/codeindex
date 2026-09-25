@@ -175,11 +175,11 @@ Commands:
               transitively imports/uses/calls it; a Go import reaches every
               file of its package. Calls inferred from a name alone are
               counted (inferredDependents), not followed, unless
-              --include-inferred (--depth <n>; JSON)
+              --include-inferred (--depth <n>; JSON; MCP impact)
   neighbors   Graph neighbours of a file or module, both directions: every
               edge kind linking each neighbour, strongest evidence first
               (--depth <n>, --kind import,call,use,extends,implements,
-              doc-link,mention; JSON)
+              doc-link,mention; JSON; MCP neighbors)
               File arguments (complexity, outline, symbol-at, impact, neighbors) may be
               written ./path, repo-absolute or with backslashes
   mermaid     Mermaid diagram of the module graph; pass a module positional to
@@ -189,10 +189,11 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (34 tools: scan_summary, graph,
+  mcp         Run as an MCP server over stdio (36 tools: scan_summary, graph,
               symbols, callers, workspaces, churn, symbols_overview,
               find_symbol, find_references, symbol_at, lsp_status, onboard, repo_map,
               hotspots, coupling, dead_code, complexity, mermaid, grep, search,
+              impact, neighbors,
               explain_search, embed_status, check_rules, the memory quartet and
               the three symbolic-edit writes). Flags: --repo <dir> pins ONE
               repository so the per-tool repo argument becomes optional (an

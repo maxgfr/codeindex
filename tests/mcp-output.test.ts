@@ -118,6 +118,8 @@ const CASES: Record<string, Record<string, unknown>> = {
   lsp_status: {},
   onboard: { remember: false },
   call_graph: { symbol: "HttpClient", depth: 1 },
+  impact: { target: "src/util.ts" },
+  neighbors: { target: "src/util.ts", depth: 2 },
   hotspots: {},
   coupling: {},
   duplicated_literals: {},

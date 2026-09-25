@@ -200,4 +200,28 @@ describe("MCP query surfaces", () => {
       expect((await call("symbol_at", args)).isError, JSON.stringify(args)).toBe(true);
     }
   });
+
+  it("impact and neighbors answer what the CLI answers, from any path spelling", async () => {
+    const impact = await answer("impact", { target: "./src/util.ts" });
+    expect(impact).toEqual(cli("impact", "src/util.ts").json());
+    expect(impact.files.map((f: { rel: string }) => f.rel)).toEqual(["src/client.ts", "src/app.ts"]);
+    expect((await answer("impact", { target: "src/util.ts", depth: 1 })).files.map((f: { rel: string }) => f.rel)).toEqual(["src/client.ts"]);
+    const neighbors = await answer("neighbors", { target: join(repo, "src/client.ts"), kinds: ["import"] });
+    expect(neighbors).toEqual(cli("neighbors", "src/client.ts", "--kind", "import").json());
+    expect(neighbors.links.map((l: { node: string; direction: string }) => `${l.direction}:${l.node}`)).toEqual(["out:src/util.ts", "in:src/app.ts"]);
+    expect(await answer("neighbors", { target: "src/client.ts", depth: 2 })).toEqual(cli("neighbors", "src/client.ts", "--depth", "2").json());
+  });
+
+  it("impact and neighbors reject an unknown target or edge kind", async () => {
+    for (const [tool, args] of [
+      ["impact", { target: "nope.ts" }],
+      ["neighbors", { target: "nope.ts" }],
+      ["neighbors", { target: "src/client.ts", kinds: ["import", "bogus"] }],
+      ["neighbors", { target: "src/client.ts", kinds: [] }],
+    ] as const) {
+      const res = await call(tool, args);
+      expect(res.isError, `${tool} ${JSON.stringify(args)}`).toBe(true);
+    }
+    expect((await call("neighbors", { target: "src/client.ts", kinds: ["bogus"] })).content[0].text).toMatch(/bogus/);
+  });
 });
