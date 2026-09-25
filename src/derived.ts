@@ -114,6 +114,8 @@ export function importPairsFor(scan: RepoScan): Set<string> {
     for (const f of scan.files) {
       for (const ref of f.refs) {
         if (ref.kind !== "import") continue;
+        // No `soft` special case needed: a soft ref adds a pair exactly when
+        // buildGraph gives it an edge — resolved to another in-repo file.
         const r = resolveImport(f.rel, f.ext, ref.spec, ctx);
         if (r.kind === "resolved" && r.target !== f.rel) pairs.add(`${f.rel}|${r.target}`);
       }

@@ -126,6 +126,8 @@ export interface CodeSymbol {
 export interface RawRef {
   kind: "doc-link" | "import";
   spec: string; // the target/specifier exactly as written
+  /** Speculative ref: an edge when it resolves to an in-repo file, otherwise dropped silently (never external, never dangling). */
+  soft?: true;
 }
 
 // A literal VALUE as written, kept verbatim. `terms` destroys exactly this:

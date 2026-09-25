@@ -36,8 +36,23 @@ compares](#how-it-compares).
   interface members, class fields, enum members, every `declare`/`.d.ts`
   declaration, Rust trait method signatures, Go interface method sets, record
   components and constructor `val` parameters.
-- **Resolve imports** across languages: tsconfig paths, package `exports`,
-  go.mod, Cargo, Java packages, PSR-4, C# namespaces.
+- **Resolve imports** across languages: tsconfig `paths` (tsc's precedence:
+  exact alias, then longest prefix) and `baseUrl`, `extends` chains into
+  workspace packages and `${configDir}`, package `exports` and `imports`
+  (`#subpath`), bundler `?query` suffixes, Python import roots found the way
+  mypy finds them (the dir holding each top-level package, so src layouts
+  resolve and a package's own `typing.py` does not shadow the stdlib), go.mod
+  (a package's representative file is never a `_test.go` when it has other
+  files), Cargo (`[lib]` names, renamed dependencies, `#[path]` modules, and
+  `use` paths read the way the crate's edition reads them), PSR-4, C#
+  namespaces, and one JVM index for Java, Kotlin and Scala, so a Kotlin file
+  importing a Java class (or the reverse, through the `<File>Kt` facade)
+  links; Scala selector groups and package-relative imports resolve too. Dart
+  (relative and `package:` URIs of an in-repo `pubspec.yaml`), Lua `require`
+  (`a/b.lua`, `a/b/init.lua`), shell `source`/`.` of a literal path, and
+  Elixir `alias`/`import`/`use` of a module the repo defines resolve as well.
+  A markdown link starting with `/` is repo-root-relative, as GitHub renders
+  it.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
   `use` / `doc-link` / `mention` edges at file and module level, plus Louvain
   communities, PageRank/betweenness centrality, a tests→code map, and
