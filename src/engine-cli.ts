@@ -217,9 +217,11 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       it really advertises (default: no spawn)
   --lsp               \`callers <name>\`: append incoming calls from a configured
                       language server; requires a symbol target
-  --recall            \`callers\`: recall-oriented binding (issue #7) — relaxes
-                      the JS/TS import gate to unique repo-wide names and labels
-                      each site corroborated|unique-name
+  --recall            \`callers\`: recall-oriented binding (issue #7) — adds the
+                      name-only matches the default rejects (a unique JS/TS name
+                      with no import, a same-file homonym whatever the receiver,
+                      a proximity guess in Go or into tests) and labels each
+                      site corroborated|unique-name
   --raw               \`callers\`: every call site by callee name, with no binding
                       at all (receiver and enclosing symbol per site)
   --ignore-case       \`grep\`: case-insensitive matching

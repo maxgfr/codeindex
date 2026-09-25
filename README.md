@@ -416,6 +416,34 @@ the same file are two links, strongest evidence first — and rejects an unknown
 does not hold. `--limit` caps `complexity`, `risk` and `deadcode`, the last as
 `{ total, shown, truncated, candidates }` like MCP `dead_code`.
 
+### How a call binds
+
+`callers`, `callgraph`, graph.json's `call` edges and SCIP references share one
+binder, so they agree on every call site. It reads what the site states, with no
+type inference:
+
+- **the receiver.** `self.f()`, or a Go method's own receiver variable, reaches
+  a member of the enclosing type; `pkg.F()` / `ns.f()` the module that import
+  names, and nothing when it lives outside the repo (`errors.New`, `io.Copy`,
+  `_json.dumps`); any other `x.f()` never a same-file homonym (`this.map.get(k)`
+  is not `Store.get`, `c.ClientIP()` is not a `ClientIP` field), in Go and
+  Python only a method, and nothing when the enclosing signature types `x` with
+  a package from outside the repo (`t *testing.T`). In Go and Python a bare
+  `f()` reaches a function or a type, never a method.
+- **what imports rename and barrels re-export**: `import { a as b }`, a default
+  import, `import * as ns`, `from m import a as b`, then `export { a } from`,
+  `export *` and a Python package's `__init__.py`, up to three hops.
+- **visibility.** A Go package is its directory: an unexported helper binds from
+  every file of it, a `_test.go` file only from its own package's tests, and
+  another package only through an import. JS/TS and Go never bind on a name
+  alone; elsewhere a name-only guess (graph.json labels it `inferred`) never
+  lands in a test file, nor goes from the product into examples, docs or
+  scripts.
+
+`callers --recall` (MCP `recall: true`) adds the name-only matches back — a
+unique JS/TS name with no import, a same-file homonym whatever the receiver, a
+proximity guess anywhere — and labels each site `corroborated` or `unique-name`.
+
 ## Values with no single source of truth
 
 `codeindex literals` reports the defect a compiler cannot: **one value written

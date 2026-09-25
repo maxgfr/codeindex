@@ -104,11 +104,12 @@ export function buildGraph(
   }
 
   // Cross-file call edges: a global second pass over every file's collected call
-  // sites, promoted to `extracted` when an import corroborates the call and
-  // `inferred` on a unique repo-wide name match. Recorded as a pair set because a
-  // `call` is stronger evidence than a `use` for the same directed pair.
+  // sites (src/bind.ts), `extracted` when stated evidence backs the call (an
+  // import, a re-export chain, package membership) and `inferred` on a name
+  // match alone. Recorded as a pair set because a `call` is stronger evidence
+  // than a `use` for the same directed pair.
   const callPairs = new Set<string>();
-  for (const e of resolveCallEdges(scan, importPairs)) {
+  for (const e of resolveCallEdges(scan, importPairs, ctx)) {
     collect(fileEdgeMap, e);
     callPairs.add(`${e.from}|${e.to}`);
   }
@@ -117,7 +118,7 @@ export function buildGraph(
   // list distinguishes from any other, and the strongest structural link a repo
   // has after the import itself. Recorded as a pair set for the same reason
   // calls are — a subtype relation outranks a bare `use` for the same pair.
-  for (const e of resolveRelationEdges(scan, importPairs)) {
+  for (const e of resolveRelationEdges(scan, importPairs, ctx)) {
     collect(fileEdgeMap, e);
     callPairs.add(`${e.from}|${e.to}`);
   }

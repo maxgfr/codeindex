@@ -33,7 +33,13 @@ const TEST_DIR = /(^|\/)(tests?|__tests?__|spec|specs|e2e)(\/|$)/i;
 // Is this repo-relative path a test file? Callers filter to code files; this
 // only judges the path.
 export function isTestPath(rel: string): boolean {
-  if (TEST_DIR.test(rel)) return true;
+  return TEST_DIR.test(rel) || isTestCaseFile(rel);
+}
+
+// Is the FILE ITSELF a test by its name (test_x.py, x_test.go, x.test.ts…)?
+// Narrower than isTestPath: a helper under tests/ is test material, but only a
+// test-case file is a leaf nothing else calls into.
+export function isTestCaseFile(rel: string): boolean {
   if (isTestFile(rel)) return true;
   const base = rel.split("/").pop()!;
   return BASENAME_PATTERNS.some((p) => p.test(base));

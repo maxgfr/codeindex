@@ -1,19 +1,16 @@
 // Per-symbol caller index (ultrasec parity): which call sites reach each
 // defined symbol, at (file, line) granularity — the data taint analysis and
-// impact tooling need. Mirrors resolveCallEdges' binding rules (family gating,
-// import corroboration for JS/TS, proximity tie-breaking) but keeps individual
-// call sites instead of aggregating to file→file edges, and binds same-file
-// calls to the local def (shadowing wins over a cross-file match).
+// impact tooling need. Every site is bound by the shared call-site binder
+// (src/bind.ts) — the one graph.json's call edges and the symbol graph use —
+// and kept individually instead of aggregated to file→file edges, including
+// the sites that bind inside their own file.
 //
-// ONE deliberate difference from resolveCallEdges: a barrel's re-export
-// (`export { greet } from "./lib.js"`) does NOT count as a local def here, so
-// a call in the barrel binds through to the real declaration — the caller
-// index answers "who calls greet", and the barrel does. resolveCallEdges
-// keeps its 5.1.0-lineage behavior (any own symbol suppresses the edge) so
-// graph.json stays byte-compatible with ultraindex.
+// A barrel's re-export (`export { greet } from "./lib.js"`) is not a
+// definition, so a call in the barrel binds through to the real declaration:
+// the caller index answers "who calls greet", and the barrel does.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { addDef, defsOutside, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
+import { createCallBinder } from "./bind.js";
 import { importPairsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 import { refMatches, symbolRefReadings } from "./symref.js";
@@ -102,78 +99,25 @@ export function buildCallerIndex(
 
 // buildCallerIndex's body. `only` restricts it to call sites of those names
 // (callerIndexForNames); every entry it does build is exactly the full index's.
+// Each site is bound by the shared call-site binder (src/bind.ts), the one the
+// graph's call edges and the symbol graph use.
 function indexCallers(scan: RepoScan, pairs: Set<string>, recall: boolean, only?: ReadonlySet<string>): CallerIndex {
-  // name → family → def sites (first symbol per (name, file) wins, like
-  // resolveCallEdges). CodeSymbol structurally contains Cand's file/lang
-  // fields, and pickCandidate returns the selected object unchanged.
-  const defs: DefTable<CodeSymbol> = new Map();
-  for (const f of scan.files) {
-    for (const s of f.symbols) {
-      if (!s.exported || REFERENCE_KINDS.has(s.kind)) continue;
-      if (only && !only.has(s.name)) continue;
-      addDef(defs, s.name, s);
-    }
-  }
-  const targetsOf = importTargets(pairs);
-
+  const binder = createCallBinder(scan, pairs, { recall, only });
   const sites = new Map<string, { def: CodeSymbol; callers: CallerSite[] }>();
-  const record = (def: CodeSymbol, caller: CallerSite): void => {
-    let entry = sites.get(def.name + "\0" + def.file);
-    if (!entry) sites.set(def.name + "\0" + def.file, (entry = { def, callers: [] }));
-    entry.callers.push(caller);
-  };
-
   for (const f of scan.files) {
-    if (!f.calls?.length) continue;
-    if (only && !f.calls.some((c) => only.has(c.name))) continue;
-    const family = familyOf(f.lang);
-    // Same-file binding also needs non-exported defs (a private helper shadows
-    // an exported symbol of the same name elsewhere).
-    const own = new Map<string, CodeSymbol>();
-    for (const s of f.symbols) {
-      if (!REFERENCE_KINDS.has(s.kind) && !own.has(s.name)) own.set(s.name, s);
-    }
-    const targets = targetsOf.get(f.rel);
-    // Every cross-file call of one name in one file binds the same way — the
-    // choice depends on (file, name) only — so resolve each name once per file.
-    // null = resolved to "no binding".
-    const bound = new Map<string, { def: CodeSymbol; corroborated: boolean } | null>();
-    for (const c of f.calls) {
-      if (only && !only.has(c.name)) continue;
-      const local = own.get(c.name);
-      if (local) {
-        // Shadowing: a same-file def wins. Skip the def line itself — a regex
-        // collector may re-match the declaration.
-        if (local.line !== c.line)
-          record(local, recall ? { file: f.rel, line: c.line, confidence: "corroborated" } : { file: f.rel, line: c.line });
-        continue;
-      }
-      let hit = bound.get(c.name);
-      if (hit === undefined) {
-        hit = null;
-        const group = defs.get(c.name)?.get(family);
-        const cands = group ? defsOutside(group, f.rel) : [];
-        if (group && cands.length) {
-          const imported = importedDefs(group, targets);
-          const chosen =
-            family === "js"
-              ? imported.length
-                ? pickCandidate(f.rel, imported)
-                : // JS/TS gate: no corroborating import → no binding. Recall mode
-                  // relaxes this to a unique-repo-wide name match (issue #7).
-                  recall && cands.length === 1
-                  ? cands[0]
-                  : undefined
-              : imported.length
-                ? pickCandidate(f.rel, imported)
-                : pickCandidate(f.rel, cands);
-          if (chosen) hit = { def: chosen, corroborated: imported.length > 0 };
-        }
-        bound.set(c.name, hit);
-      }
+    const bind = binder.forFile(f);
+    if (!bind) continue;
+    for (const c of f.calls!) {
+      const hit = bind(c);
       if (!hit) continue;
-      record(
-        hit.def,
+      // One entry per (name, file): same-file homonyms (Go's many `String`
+      // methods) share it, under the earliest declaration any site reached —
+      // whatever order the sites came in.
+      const key = hit.def.name + "\0" + hit.def.file;
+      let entry = sites.get(key);
+      if (!entry) sites.set(key, (entry = { def: hit.def, callers: [] }));
+      else if (hit.def.line < entry.def.line) entry.def = hit.def;
+      entry.callers.push(
         recall
           ? { file: f.rel, line: c.line, confidence: hit.corroborated ? "corroborated" : "unique-name" }
           : { file: f.rel, line: c.line },

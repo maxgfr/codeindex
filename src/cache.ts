@@ -37,6 +37,10 @@ function call(v: unknown): boolean {
   return object(v) && string(v.name) && line(v.line) && (v.receiver === undefined || string(v.receiver));
 }
 
+function importAlias(v: unknown): boolean {
+  return object(v) && string(v.local) && string(v.name) && (v.from === undefined || string(v.from));
+}
+
 function relation(v: unknown): boolean {
   return object(v) && (v.kind === "extends" || v.kind === "implements") &&
     string(v.from) && string(v.to) && line(v.line);
@@ -57,7 +61,7 @@ function record(v: unknown, rel: string): v is FileRecord {
     optionalFields(v, fileText, string) && optionalFields(v, fileLists, strings) &&
     strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel)) &&
     Array.isArray(v.refs) && v.refs.every(ref) &&
-    optionalArray(v.calls, call) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) &&
+    optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) &&
     (v.truncated === undefined || v.truncated === true);
 }
 

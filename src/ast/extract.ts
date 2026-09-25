@@ -1,4 +1,4 @@
-import type { CodeLiteral, CodeSymbol, RawRef, RawRelation } from "../types.js";
+import type { CodeLiteral, CodeSymbol, ImportAlias, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector } from "../extract/literals.js";
 import { byStr } from "../sort.js";
 import { grammarKeyForExt, grammarReady, parserFor } from "./loader.js";
@@ -6,6 +6,7 @@ import { IDENT_LEAF, findFirst, nameOf, readName, readReceiver, type TSNode } fr
 import { FUNCTION_KINDS, FUNCTION_VALUE_TYPES, PUBLIC_MEMBER_KINDS, SPECS, type LangSpec } from "./specs.js";
 import { declHeader } from "./signature.js";
 import { docCommentFor, docstringFor } from "./doc.js";
+import { readImportAliases } from "./aliases.js";
 import { stripCommentMarkers } from "../extract/doc-text.js";
 import { subtokens } from "../util.js";
 
@@ -24,6 +25,9 @@ export interface AstResult {
   calls: { name: string; line: number; receiver?: string }[];
   // JS/TS named-import bindings — always present (empty for non-JS/TS).
   importedNames: string[];
+  // Import bindings that rename (src/ast/aliases.ts) — always present (empty
+  // outside JS/TS, Python and Go).
+  importAliases: ImportAlias[];
   // Inheritance stated by this file's declarations, deduped and sorted. Always
   // present (empty when the grammar has no `relationsFrom` mapping).
   relations: RawRelation[];
@@ -240,7 +244,12 @@ function collectAll(
           node.childForFieldName("target") ??
           kids[0] ??
           null;
-        addCall(readName(callee), node, readReceiver(callee) ?? readReceiver(node));
+        // A curried callee (`self.ensure_sync(f)()`) is named through the inner
+        // call, so its receiver is the inner callee's; read off the outer call it
+        // is nothing, and this site — visited first, so the inner one dedupes
+        // away — would read as a bare `ensure_sync()`.
+        const inner = callee && spec.calls![callee.type] === "function" ? callee.childForFieldName("function") : null;
+        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node));
       } else if (how === "member") {
         addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
       } else if (how === "constructor") {
@@ -803,6 +812,7 @@ export function extractAst(
       idents,
       calls,
       importedNames,
+      importAliases: readImportAliases(root, spec.lang),
       relations,
       terms,
       literals,

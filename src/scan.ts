@@ -131,6 +131,7 @@ export function buildCodeRecord(
     record.idents = code.idents;
     record.calls = code.calls;
     record.importedNames = code.importedNames;
+    if (code.importAliases) record.importAliases = code.importAliases;
     record.truncated = code.truncated;
     record.relations = code.relations;
     record.terms = code.terms;

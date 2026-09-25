@@ -17,7 +17,9 @@
 // looked like.
 import type { Edge, RawRelation } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { addDef, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
+import type { ResolveContext } from "./resolve.js";
+import { addDef, familyOf, pickCandidate, type DefTable } from "./calls.js";
+import { createBindScope } from "./bind.js";
 import { byStr } from "./sort.js";
 import { refMatches, symbolRefReadings } from "./symref.js";
 
@@ -89,37 +91,61 @@ function typeDefs(scan: RepoScan): DefTable<TypeDef> {
  *
  * Deterministic: sorted, and never dependent on Map iteration order.
  */
-export function resolveRelations(scan: RepoScan, importPairs: Set<string>): ResolvedRelation[] {
+export function resolveRelations(scan: RepoScan, importPairs: Set<string>, ctx?: ResolveContext): ResolvedRelation[] {
+  return resolveAll(scan, importPairs, ctx).map((r) => r.rel);
+}
+
+// resolveRelations, keeping the base name each relation was WRITTEN with: an
+// import may rename it (`from .sansio.blueprints import Blueprint as
+// SansioBlueprint; class Blueprint(SansioBlueprint)`), and the hierarchy's
+// unresolved pass matches the file's raw relations by that name.
+function resolveAll(scan: RepoScan, importPairs: Set<string>, ctx?: ResolveContext): { rel: ResolvedRelation; written: string }[] {
   const defs = typeDefs(scan);
-  const targetsOf = importTargets(importPairs);
-  const out: ResolvedRelation[] = [];
+  // The call binder's view of imports: re-export hops, package mates and
+  // import renames, so a base class and a call can never disagree about which
+  // `Scheduler` a file means.
+  const scope = createBindScope(scan, importPairs, ctx);
+  const out: { rel: ResolvedRelation; written: string }[] = [];
   for (const f of scan.files) {
     if (!f.relations?.length) continue;
     const family = familyOf(f.lang);
-    const targets = targetsOf.get(f.rel);
+    const aliases = scope.aliases(f);
     for (const r of f.relations) {
-      const group = defs.get(r.to)?.get(family);
+      const renamed = aliases.names.get(r.to);
+      const name = renamed?.name ?? r.to;
+      const group = defs.get(name)?.get(family);
       if (!group) continue;
-      // Prefer a candidate the file actually imports (or declares itself);
-      // fall back to proximity.
-      const imported = importedDefs(group, targets);
-      const local = group.byFile.get(f.rel);
-      if (local) imported.push(local);
-      const target = pickCandidate(f.rel, imported.length ? imported : group.list);
+      let target: TypeDef | undefined;
+      if (renamed) {
+        // The import says where the base comes from; outside the repo, nowhere.
+        if (!renamed.files) continue;
+        target = pickCandidate(f.rel, scope.within(group, renamed.files, name));
+      } else {
+        // Prefer a candidate the file actually imports (or declares itself);
+        // fall back to proximity.
+        const imported = scope.reached(group, f, name);
+        const local = group.byFile.get(f.rel);
+        if (local) imported.push(local);
+        target = pickCandidate(f.rel, imported.length ? imported : group.list);
+      }
       if (!target) continue;
       out.push({
-        kind: CONTRACT_KINDS.has(target.kind) ? "implements" : r.kind,
-        from: r.from,
-        fromFile: f.rel,
-        fromLine: r.line,
-        to: target.name,
-        toFile: target.file,
-        toKind: target.kind,
+        written: r.to,
+        rel: {
+          kind: CONTRACT_KINDS.has(target.kind) ? "implements" : r.kind,
+          from: r.from,
+          fromFile: f.rel,
+          fromLine: r.line,
+          to: target.name,
+          toFile: target.file,
+          toKind: target.kind,
+        },
       });
     }
   }
   return out.sort(
-    (a, b) => byStr(a.fromFile, b.fromFile) || byStr(a.from, b.from) || byStr(a.kind, b.kind) || byStr(a.to, b.to),
+    (x, y) =>
+      byStr(x.rel.fromFile, y.rel.fromFile) || byStr(x.rel.from, y.rel.from) || byStr(x.rel.kind, y.rel.kind) || byStr(x.rel.to, y.rel.to),
   );
 }
 
@@ -128,9 +154,9 @@ export function resolveRelations(scan: RepoScan, importPairs: Set<string>): Reso
  * Self-edges are dropped: a type extending another in the same file is a real
  * relation (the hierarchy reports it) but not a dependency between files.
  */
-export function resolveRelationEdges(scan: RepoScan, importPairs: Set<string>): Edge[] {
+export function resolveRelationEdges(scan: RepoScan, importPairs: Set<string>, ctx?: ResolveContext): Edge[] {
   const agg = new Map<string, Edge>();
-  for (const r of resolveRelations(scan, importPairs)) {
+  for (const r of resolveRelations(scan, importPairs, ctx)) {
     if (r.toFile === r.fromFile) continue;
     const key = `${r.fromFile}${SEP}${r.toFile}${SEP}${r.kind}`;
     const prev = agg.get(key);
@@ -172,7 +198,8 @@ export interface TypeHierarchyEntry {
  */
 export function buildTypeHierarchy(scan: RepoScan, importPairs: Set<string>): Map<string, TypeHierarchyEntry> {
   const defs = typeDefs(scan);
-  const resolved = resolveRelations(scan, importPairs);
+  const all = resolveAll(scan, importPairs);
+  const resolved = all.map((r) => r.rel);
 
   // Which declaration a (name, file) pair refers to.
   const entries = new Map<string, TypeHierarchyEntry>();
@@ -216,7 +243,7 @@ export function buildTypeHierarchy(scan: RepoScan, importPairs: Set<string>): Ma
   }
 
   // Declared-but-unresolvable supertypes, per declaring type.
-  const resolvedKeys = new Set(resolved.map((r) => `${r.fromFile}${SEP}${r.from}${SEP}${r.kind}${SEP}${r.to}`));
+  const resolvedKeys = new Set(all.map(({ rel: r, written }) => `${r.fromFile}${SEP}${r.from}${SEP}${r.kind}${SEP}${written}`));
   for (const f of scan.files) {
     for (const r of f.relations ?? []) {
       if (resolvedKeys.has(`${f.rel}${SEP}${r.from}${SEP}${r.kind}${SEP}${r.to}`)) continue;

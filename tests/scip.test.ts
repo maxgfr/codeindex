@@ -196,6 +196,42 @@ describe("renderScip", () => {
     expect(targetRange![1]).not.toBe(utf8StartChar);
   });
 
+  it("references a unique definition only where the call binder binds the site to it", () => {
+    // `New` is unique in the repo, but `errors.New` is the standard library's
+    // and `wg.Done` (a sync.WaitGroup parameter) is not Context.Done.
+    const root = mkdtempSync(join(tmpdir(), "scip-bind-"));
+    writeFileSync(join(root, "go.mod"), "module example.com/app\n\ngo 1.21\n");
+    writeFileSync(join(root, "gin.go"), "package app\n\nfunc New() int { return 1 }\n");
+    writeFileSync(join(root, "context.go"), "package app\n\ntype Context struct{}\n\nfunc (c *Context) Done() {}\n");
+    writeFileSync(
+      join(root, "use.go"),
+      [
+        "package app",
+        "",
+        'import (\n\t"errors"\n\t"sync"\n)',
+        "",
+        'func fail() error { return errors.New("x") }',
+        "",
+        "func one() int { return New() }",
+        "",
+        "func wait(wg *sync.WaitGroup) { wg.Done() }",
+        "",
+      ].join("\n"),
+    );
+    const index = decode(renderScip(scanRepo(root), { projectRoot: PROJECT_ROOT }));
+    const refs: string[] = [];
+    for (const docField of allOf(index, 2)) {
+      const doc = decode(docField.bytes!);
+      if (str(first(doc, 1)) !== "use.go") continue;
+      for (const occField of allOf(doc, 2)) {
+        const occ = decode(occField.bytes!);
+        if ((first(occ, 3)?.varint ?? 0) & 1) continue; // a definition
+        refs.push(`${packedInts(first(occ, 1))[0]! + 1} ${str(first(occ, 2)).split("/").pop()}`);
+      }
+    }
+    expect(refs).toEqual(["10 New()."]);
+  });
+
   it("matches the committed golden index byte-for-byte", () => {
     const buf = Buffer.from(renderGolden());
     // Regenerate the golden after an intentional encoder/mapping change with:

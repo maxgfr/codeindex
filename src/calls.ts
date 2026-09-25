@@ -1,18 +1,13 @@
 import type { Edge } from "./types.js";
 import type { RepoScan } from "./scan.js";
+import type { ResolveContext } from "./resolve.js";
+import { createCallBinder } from "./bind.js";
 import { byStr } from "./sort.js";
-
-// Symbol kinds that are references to a definition elsewhere (a barrel re-export
-// or `export default Foo`) — they must NOT count as a call target, which should
-// resolve to where a symbol is actually declared. Re-declared here (canonical
-// copy lives in graph.ts) so this module has no import cycle with the graph
-// builder, which imports resolveCallEdges.
-const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
 // Collapse TypeScript/JavaScript to one family so a call in a `.ts` file can bind
 // to a def in a `.js` file (and vice versa) but never crosses into an unrelated
-// language. Every other language is its own family. Exported for callers.ts,
-// which mirrors this binding logic at call-site granularity.
+// language. Every other language is its own family. Shared by every binder
+// (src/bind.ts, relations.ts) and by the SCIP renderer.
 export function familyOf(lang: string): string {
   if (lang === "typescript" || lang === "javascript") return "js";
   // C and C++ interoperate through headers (.h files classify as "c" while
@@ -75,15 +70,14 @@ export function pickCandidate<T extends Cand>(callerRel: string, cands: readonly
 }
 
 // --- Shared binder plumbing -------------------------------------------------
-// resolveCallEdges below, buildCallerIndex (callers.ts), buildSymbolGraph
-// (symbolgraph.ts) and resolveRelations (relations.ts) all bind a NAME to one
-// of its definitions by asking the same questions: which defs share the
-// caller's language family, which of those an import corroborates, which is
-// closest. Each used to answer them per call site by filtering every same-name
-// def and building a `${from}|${to}` key per candidate — quadratic in homonyms,
-// and the TypeScript repo's test fixtures declare `C` 5,335 times and `A`
-// 2,449 times. These helpers group the defs ONCE and intersect them with the
-// caller's (few) import targets instead. Same answers; only the work changed.
+// The call-site binder (src/bind.ts) and resolveRelations (relations.ts) both
+// bind a NAME to one of its definitions by asking the same questions: which
+// defs share the caller's language family, which of those an import
+// corroborates, which is closest. Answering them per site by filtering every
+// same-name def and building a `${from}|${to}` key per candidate is quadratic
+// in homonyms, and the TypeScript repo's test fixtures declare `C` 5,335 times
+// and `A` 2,449 times. These helpers group the defs ONCE and intersect them
+// with the caller's (few) import targets instead.
 
 /** One name's definitions within ONE language family. */
 export interface DefGroup<T extends Cand> {
@@ -157,66 +151,33 @@ export function defsOutside<T extends Cand>(group: DefGroup<T>, rel: string): re
 }
 
 // Resolve every collected call site to a cross-file `call` edge in a global second
-// pass. An import between the two files promotes the edge to `extracted`; a unique
-// repo-wide name match with no import yields `inferred`. JS/TS is import-gated (no
-// import ⇒ no edge) because its bare identifiers are too ambiguous to infer safely;
-// other languages fall back to a unique-name inference. Deterministic: the emitted
-// array is sorted and never depends on Map iteration order.
-export function resolveCallEdges(scan: RepoScan, importPairs: Set<string>): Edge[] {
-  // name → family → distinct def sites (deduped per file; overloads collapse to one file).
-  const defs: DefTable<Cand> = new Map();
-  for (const f of scan.files) {
-    for (const s of f.symbols) {
-      if (!s.exported || REFERENCE_KINDS.has(s.kind)) continue;
-      addDef(defs, s.name, { file: s.file, lang: s.lang });
-    }
-  }
-  const targetsOf = importTargets(importPairs);
-
+// pass, through the shared call-site binder (src/bind.ts), so graph.json, the
+// caller index and the symbol graph agree on every call. An edge is `extracted`
+// when stated evidence backs it — an import between the files, a re-export
+// chain, package membership — and `inferred` when a unique or nearest name
+// match alone does, which the binder never allows for JS/TS or Go (their
+// names cross files only through an import or a package), into a test file,
+// or from the product into tail material. A call bound inside its own file is
+// not an edge. Deterministic: the emitted array is sorted and never depends on
+// Map iteration order.
+export function resolveCallEdges(scan: RepoScan, importPairs: Set<string>, ctx?: ResolveContext): Edge[] {
+  const binder = createCallBinder(scan, importPairs, { ctx });
   // (from|to) → aggregated edge. Strongest confidence wins; counts sum.
   const agg = new Map<string, { from: string; to: string; weight: number; confidence: "extracted" | "inferred" }>();
   for (const f of scan.files) {
-    if (!f.calls?.length) continue;
-    const family = familyOf(f.lang);
-    const targets = targetsOf.get(f.rel);
-    const ownNames = new Set(f.symbols.map((s) => s.name));
-    const counts = new Map<string, number>();
-    for (const c of f.calls) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
-
-    for (const [name, count] of counts) {
-      if (ownNames.has(name)) continue; // same-file call — not a cross-file edge
-      const group = defs.get(name)?.get(family);
-      if (!group) continue;
-      const cands = defsOutside(group, f.rel);
-      if (!cands.length) continue;
-      const imported = importedDefs(group, targets);
-
-      let chosen: Cand | undefined;
-      let confidence: "extracted" | "inferred";
-      if (family === "js") {
-        // JS/TS gate: without an import corroborating the call, drop it entirely.
-        // A named-import binding (f.importedNames) corroborates a name but not the
-        // file it came from, so it can't narrow `imported` further — pick among
-        // the imported candidates by proximity.
-        if (!imported.length) continue;
-        chosen = pickCandidate(f.rel, imported);
-        confidence = "extracted";
-      } else if (imported.length) {
-        chosen = pickCandidate(f.rel, imported);
-        confidence = "extracted";
-      } else {
-        chosen = pickCandidate(f.rel, cands);
-        confidence = "inferred";
-      }
-      if (!chosen) continue;
-
-      const key = `${f.rel}|${chosen.file}`;
+    const bind = binder.forFile(f);
+    if (!bind) continue;
+    for (const c of f.calls!) {
+      const hit = bind(c);
+      if (!hit || hit.def.file === f.rel) continue;
+      const confidence = hit.corroborated ? "extracted" : "inferred";
+      const key = `${f.rel}|${hit.def.file}`;
       const prev = agg.get(key);
       if (prev) {
-        prev.weight += count;
+        prev.weight += 1;
         if (confidence === "extracted") prev.confidence = "extracted";
       } else {
-        agg.set(key, { from: f.rel, to: chosen.file, weight: count, confidence });
+        agg.set(key, { from: f.rel, to: hit.def.file, weight: 1, confidence });
       }
     }
   }

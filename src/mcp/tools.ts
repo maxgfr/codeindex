@@ -53,7 +53,7 @@ export const TOOLS = [
         recall: {
           type: "boolean",
           description:
-            "Recall-oriented binding: relax the JS/TS import gate to unique repo-wide names, labelling each site corroborated|unique-name (default false = precision)",
+            "Recall-oriented binding: add the name-only matches precision mode rejects (a unique JS/TS name with no import, a same-file homonym whatever the receiver, a proximity guess in Go or into tests), labelling each site corroborated|unique-name (default false = precision)",
         },
         raw: {
           type: "boolean",

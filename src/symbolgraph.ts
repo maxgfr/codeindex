@@ -13,7 +13,7 @@
 // the graph is built on demand from the scan, so no artifact or schema grows.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { addDef, defsOutside, familyOf, importTargets, importedDefs, pickCandidate, type DefTable } from "./calls.js";
+import { createCallBinder } from "./bind.js";
 import { enclosingAmong } from "./callers.js";
 import { resolveRelations } from "./relations.js";
 import { byStr } from "./sort.js";
@@ -95,8 +95,6 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   // Per-file symbol lists, filtered once and reused for every call site in that
   // file (the reason enclosingAmong is factored out of enclosingSymbol).
   const perFile = new Map<string, CodeSymbol[]>();
-  // Callable definitions by name and family, deduped per (name, file).
-  const defs: DefTable<CodeSymbol> = new Map();
 
   for (const f of scan.files) {
     const usable: CodeSymbol[] = [];
@@ -104,11 +102,9 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
       if (REFERENCE_KINDS.has(s.kind)) continue;
       usable.push(s);
       nodes.set(symbolId(s), toNode(s));
-      if (s.exported) addDef(defs, s.name, s);
     }
     perFile.set(f.rel, usable);
   }
-  const targetsOf = importTargets(importPairs);
 
   const agg = new Map<string, SymbolEdge>();
   const add = (from: string, to: string, kind: SymbolEdgeKind): void => {
@@ -120,42 +116,20 @@ export function buildSymbolGraph(scan: RepoScan, importPairs: Set<string>): Symb
   };
 
   // --- calls: enclosing declaration → resolved callee declaration -----------
+  // Bound by the shared call-site binder (src/bind.ts), so this graph, the
+  // caller index and graph.json's call edges agree on every site. The binder
+  // gets the enclosing declaration too: it tells `c.Next()` inside a Go
+  // method on `c` from `c.Next()` anywhere else.
+  const binder = createCallBinder(scan, importPairs);
   for (const f of scan.files) {
-    if (!f.calls?.length) continue;
-    const family = familyOf(f.lang);
+    const bind = binder.forFile(f);
+    if (!bind) continue;
     const own = perFile.get(f.rel) ?? [];
-    const localByName = new Map<string, CodeSymbol>();
-    for (const s of own) if (!localByName.has(s.name)) localByName.set(s.name, s);
-    const targets = targetsOf.get(f.rel);
-    // The callee of a cross-file call depends on (file, name) only, so each
-    // name is bound once per file (null = no binding) — see buildCallerIndex.
-    const bound = new Map<string, string | null>();
-
-    for (const c of f.calls) {
+    for (const c of f.calls!) {
       const caller = enclosingAmong(own, c.line);
       if (!caller) continue; // a call at file scope has no symbol to attribute it to
-
-      // Same-file definition shadows anything elsewhere — mirrors buildCallerIndex.
-      const local = localByName.get(c.name);
-      if (local) {
-        if (local.line !== c.line) add(symbolId(caller), symbolId(local), "calls");
-        continue;
-      }
-      let callee = bound.get(c.name);
-      if (callee === undefined) {
-        callee = null;
-        const group = defs.get(c.name)?.get(family);
-        if (group) {
-          const imported = importedDefs(group, targets);
-          // JS/TS keeps its import gate: a bare identifier is too ambiguous to
-          // bind on name alone, and a wrong edge here misleads an impact analysis.
-          const pool = imported.length ? imported : family === "js" ? [] : defsOutside(group, f.rel);
-          const target = pickCandidate(f.rel, pool);
-          if (target) callee = symbolId(target);
-        }
-        bound.set(c.name, callee);
-      }
-      if (callee) add(symbolId(caller), callee, "calls");
+      const hit = bind(c, caller);
+      if (hit) add(symbolId(caller), symbolId(hit.def), "calls");
     }
   }
 
