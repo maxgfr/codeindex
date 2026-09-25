@@ -311,8 +311,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --exclude <glob>    Exclude matching paths (repeatable)
   --scope <path>      Restrict to one directory or file of the repo ('./src',
                       'src/' and an absolute path inside the repo work too).
-                      Combined with --include/--exclude as an intersection
-                      (\`grep\`: added to its globs instead)
+                      Combined with --include/--exclude as an intersection,
+                      \`grep\` included
   --no-gitignore      Do not honor .gitignore files (default: honored)
   --ignore-dir <name> Directory names to skip (repeatable) — REPLACES the
                       default ignored-directory set, never merges with it

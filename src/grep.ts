@@ -16,11 +16,12 @@
 //     with U+FFFD for invalid bytes, a file with a NUL is binary and skipped).
 import { Worker, MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { readFileSync } from "node:fs";
-import { isAbsolute, relative, sep } from "node:path";
+import { isAbsolute } from "node:path";
 import { walk, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
 import { compileGlobs, compileGlobFilter } from "./glob.js";
 import { sh, have } from "./util.js";
 import { byStr } from "./sort.js";
+import { normalizeScope } from "./scan.js";
 
 export interface SearchHit {
   file: string; // repo-relative posix path
@@ -266,13 +267,11 @@ function keepFilter(root: string, opts: GrepOptions): ((rel: string) => boolean)
 
 function scopeFilter(root: string, scope: string | undefined): ((rel: string) => boolean) | null {
   if (!scope) return null;
-  let s = scope;
-  if (isAbsolute(s)) {
-    s = relative(root, s).split(sep).join("/");
-    if (s === ".." || s.startsWith("../") || isAbsolute(s)) throw new Error(`--scope is outside the repository: ${scope}`);
-  }
-  s = s.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
-  if (s === "" || s === ".") return null;
+  // The scan's own normalization (./x, x/, an absolute path inside the repo,
+  // backslashes), so grep and every other command read one --scope alike.
+  const s = normalizeScope(root, scope);
+  if (s === ".." || s.startsWith("../") || isAbsolute(s)) throw new Error(`--scope is outside the repository: ${scope}`);
+  if (s === "") return null;
   // The path itself (a file scope) or anything beneath it (a directory scope).
   return compileGlobs([s, `${s}/**`]);
 }
@@ -329,6 +328,8 @@ function universeArgs(opts: GrepOptions): string[] {
   const dirs = opts.ignoreDirs ? new Set([".git", ...opts.ignoreDirs]) : IGNORE_DIRS;
   for (const d of [...dirs].sort(byStr)) args.push("--glob", `!**/${globLiteral(d)}/**`);
   args.push("--glob", "!**/.codeindex-edit-*/**"); // walk.ts: interrupted-edit scratch dirs
+  // walk.ts skips the engine's own .codeindex whatever --ignore-dir says.
+  args.push("--glob", "!**/.codeindex/**");
   // Lockfiles match at any depth, case-insensitively (the walker lowercases).
   for (const l of LOCKFILES) args.push("--iglob", `!**/${l}`);
   for (const ext of BINARY_EXT) args.push("--iglob", `!**/*${ext}`);

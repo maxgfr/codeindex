@@ -531,7 +531,8 @@ is the markdown under `src/`. Globs are rooted at the repo, so `*.md` is the
 top-level files only and `**/*.md` any depth. The filter runs inside the walk:
 `--max-files` counts only files it keeps, and a directory that cannot hold one
 is never listed (a `--scope` over 186 files of a 66k-file repo walks those
-186). `grep` is the exception: it adds the scope to its globs. A `--scope`
+186). `grep` takes the same intersection, applied to the files it searches
+(its ripgrep walk is not pruned by it). A `--scope`
 that does not exist, an `--ignore-dir` given a path rather than a directory
 name, and a filter that keeps no file at all each print a warning on stderr.
 

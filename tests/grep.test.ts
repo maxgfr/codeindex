@@ -87,6 +87,12 @@ describe("grep universe: walk flags, scope and globs", () => {
     expect(files(both(root, "NEEDLE", { globs: ["**/*.ts"] }))).toEqual(["src/a.ts"]);
   });
 
+  it("never searches the engine's own .codeindex, whatever --ignore-dir says", () => {
+    const root = repo({ "a.txt": "NEEDLE\n", ".codeindex/memories/n.md": "NEEDLE\n", "vendor/v.txt": "NEEDLE\n" });
+    expect(files(both(root, "NEEDLE"))).toEqual(["a.txt"]);
+    expect(files(both(root, "NEEDLE", { ignoreDirs: ["vendor"] }))).toEqual(["a.txt"]);
+  });
+
   it("hands rg only the exclusions both glob dialects read alike", () => {
     const root = repo({ "sub/a.txt": "NEEDLE\n", "a.txt": "NEEDLE\n", "gen/g.txt": "NEEDLE\n" });
     // `!sub` names a path, not a tree; `{a,b}` is not alternation here.
@@ -108,6 +114,11 @@ describe("grep universe: walk flags, scope and globs", () => {
     expect(files(both(root, "Default", { scope: "./binding/" }))).toEqual(["binding/a.go", "binding/b_test.go", "binding/doc.md"]);
     expect(files(both(root, "Default", { scope: join(root, "binding") }))).toEqual(["binding/a.go", "binding/b_test.go", "binding/doc.md"]);
     expect(() => grepRepo(root, "Default", { scope: tmpdir() })).toThrow(/outside the repository/);
+    // The scan's normalizeScope: backslashes and `..` segments read as the
+    // walk reads them, and a relative escape is refused like an absolute one.
+    expect(files(both(root, "Default", { scope: "binding\\" }))).toEqual(["binding/a.go", "binding/b_test.go", "binding/doc.md"]);
+    expect(files(both(root, "Default", { scope: "binding/../gin.go" }))).toEqual(["gin.go"]);
+    expect(() => grepRepo(root, "Default", { scope: "../elsewhere" })).toThrow(/outside the repository/);
     // The CLI and the MCP tool thread scope the same way.
     const out = cli(["grep", "Default", "--repo", root, "--scope", "binding", "--include", "**/*.md"]);
     expect((JSON.parse(out.stdout) as { file: string }[]).map((h) => h.file)).toEqual(["binding/doc.md"]);
