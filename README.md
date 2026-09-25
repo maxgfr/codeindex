@@ -788,11 +788,12 @@ turn**, so a session that only ever searches is paying for the graph analytics
 all day. `--tools` advertises a named subset:
 
 ```sh
-codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview
+codeindex mcp --tools find          # search, explain_search, grep, find_symbol, symbols, symbols_overview, embed_status
 codeindex mcp --tools orient,impact # compose profiles with a comma
 ```
 
-Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`.
+Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`
+and `memory` (all four memory tools). Every tool belongs to at least one.
 The MCP initialization response names the available profiles and active selection
 in its `instructions`, so a client can discover this configuration in-session.
 It trims what is **advertised**, not what is answerable: a tool left out of the

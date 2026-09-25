@@ -15,6 +15,10 @@ import {
   negotiateProtocol,
   scanFingerprint,
   toCacheMap,
+  TOOL_PROFILES,
+  TOOLS,
+  profileNames,
+  toolsInProfiles,
   validateArgs,
 } from "../src/mcp.js";
 import { parseMcpFlags } from "../src/engine-cli.js";
@@ -1721,6 +1725,18 @@ describe("tool profiles and onboarding", () => {
     expect(names).not.toContain("replace_symbol_body");
     expect(res.get(3)!.result!.isError).toBeUndefined();
   }, 20_000);
+
+  // Iterates the live catalogue, so a tool added later must be placed too.
+  it("places every tool in at least one profile, and names only real tools", () => {
+    const names = new Set<string>(TOOLS.map((t) => t.name));
+    const profiled = new Set(Object.values(TOOL_PROFILES).flat());
+    expect([...names].filter((n) => !profiled.has(n)), "tools in no profile").toEqual([]);
+    expect([...profiled].filter((n) => !names.has(n)), "profile entries that are not tools").toEqual([]);
+    // A narrowed agent that can read memories is told it can write them.
+    expect(toolsInProfiles("orient").has("write_memory")).toBe(true);
+    expect([...toolsInProfiles("memory")].sort()).toEqual(["delete_memory", "list_memories", "read_memory", "write_memory"]);
+    expect(profileNames()).toContain("memory");
+  });
 
   it("rejects an unknown profile at startup rather than advertising everything", () => {
     expect(() => parseMcpFlags(["--tools", "nonsense"])).toThrow(/unknown tool profile/);

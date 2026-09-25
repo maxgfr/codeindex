@@ -153,7 +153,7 @@ Commands:
               sent as a tool error, instead of an unusable blob);
               --tools <profile[,profile]>
               advertises a named subset (all | orient | find | impact | edit |
-              risk, default all) — every advertised tool's schema costs an agent
+              risk | memory, default all) — every advertised tool's schema costs an agent
               context on EVERY turn, and a tool left out is still answerable
               when called by name; --watch enables proactive invalidation for a
               pinned repo while retaining per-request freshness verification

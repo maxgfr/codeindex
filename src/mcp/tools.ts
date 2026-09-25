@@ -1,4 +1,4 @@
-// The MCP tool catalogue: the 29 tool definitions, their display metadata, and
+// The MCP tool catalogue: the tool definitions, their display metadata, and
 // the per-protocol-version view of the list a client actually receives.
 //
 // Split out of mcp.ts because it is pure data plus one projection function —
@@ -661,9 +661,9 @@ for (const name of ["replace_symbol_body", "insert_after_symbol", "insert_before
 
 // Per-tool display title and behaviour hints.
 //
-// The hints matter operationally: they are what lets a host auto-approve the 23
-// read-only tools and hold a confirmation for the 5 that write. Without them a
-// client must treat `scan_summary` and `replace_symbol_body` alike.
+// The hints matter operationally: they are what lets a host auto-approve the
+// read-only tools and hold a confirmation for the ones that write. Without them
+// a client must treat `scan_summary` and `replace_symbol_body` alike.
 //
 // openWorldHint is true only where a call can leave this machine — `search`
 // with semantic:true and `embed_status` may contact CODEINDEX_EMBED_ENDPOINT.
@@ -736,25 +736,33 @@ export function annotationsFor(name: string): Record<string, boolean> | undefine
  * Named subsets of the tool list, by the question they answer.
  *
  * Every advertised tool's full JSON Schema sits in an agent's context on EVERY
- * turn, so 32 of them is a standing cost paid whether or not the session ever
- * touches a graph. A profile trims what is advertised, not what exists: the
- * server still answers a tool that was not advertised, so nothing breaks for a
- * client that knows a name from elsewhere.
+ * turn, so the whole catalogue is a standing cost paid whether or not the
+ * session ever touches a graph. A profile trims what is advertised, not what
+ * exists: the server still answers a tool that was not advertised, so nothing
+ * breaks for a client that knows a name from elsewhere.
+ *
+ * Every tool belongs to at least one profile (tests/mcp.test.ts checks it):
+ * a tool in none can only be reached by a client that already knows its name,
+ * which is how write_memory went unadvertised by every narrowed server while
+ * read_memory was on offer.
  *
  * The default is `all`, deliberately. Narrowing by default would silently
  * remove capability from every existing configuration.
  */
 export const TOOL_PROFILES: Record<string, readonly string[]> = {
-  // Land in an unfamiliar repository and get your bearings.
-  orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "read_memory", "list_memories"],
-  // Locate a thing.
-  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
+  // Land in an unfamiliar repository and get your bearings — and keep what
+  // was learned: onboard persists its brief, write_memory anything else.
+  orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "graph", "read_memory", "list_memories", "write_memory"],
+  // Locate a thing. embed_status says whether `search` semantic:true fuses.
+  find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview", "embed_status"],
   // Decide whether changing it is safe.
   impact: ["find_references", "callers", "call_graph", "dead_code", "type_hierarchy", "implementations", "lsp_status"],
   // Change it.
   edit: ["find_symbol", "symbols_overview", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol"],
   // Where the work and the risk concentrate.
   risk: ["hotspots", "churn", "coupling", "complexity", "check_rules", "duplicated_literals", "dead_code"],
+  // The project notes, whole: write, read, list, delete.
+  memory: ["write_memory", "read_memory", "list_memories", "delete_memory"],
 };
 
 export function profileNames(): string[] {
