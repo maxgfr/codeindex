@@ -26,7 +26,7 @@ import { implementationsOf, typeEntry } from "./relations.js";
 import { callPath, neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex, buildRawCallerIndex, callerIndexForNames, lookupCallerEntry, rawCallerSitesFor, refNames } from "./callers.js";
 import { hierarchyFor, symbolGraphFor } from "./derived.js";
-import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymbolRef, symbolAt, symbolsOverview } from "./query.js";
+import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymbolRef, symbolAt, symbolsOverview, withCallerIds } from "./query.js";
 import { conciseReferences, symbolLocation } from "./mcp/concise.js";
 import { formatSymbolRef } from "./symref.js";
 import { detectWorkspaces } from "./workspaces.js";
@@ -70,7 +70,8 @@ Commands:
   callers     Per-symbol caller index (JSON); an optional <symbol> selects one
               (unknown symbol: exit 2; a symbol no site binds to: its defs and
               how many call sites name it anyway); --lsp appends language-server
-              incoming calls; --raw lists every call site by name, unresolved
+              incoming calls; --raw lists every call site by name, unresolved;
+              --with-caller names each site's enclosing symbol (its id)
   hierarchy   Type hierarchy: extends/implements, and what extends/implements it
   implementations  Everything implementing/extending a type (transitively). A
               Go type implements an interface by assertion (var _ I = (*T)(nil))
@@ -293,6 +294,8 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --concise           \`find\`, \`refs\`, \`outline\`: declarations as
                       name/kind/file/line only
   --files             \`callpath\`: walk the file link-graph between two files
+  --with-caller       \`callers\`: add "caller" to each site, the symbol id of the
+                      declaration the call sits in (a callgraph node)
 `;
 
 interface CliFlags {
@@ -345,6 +348,7 @@ interface CliFlags {
   includeBody?: boolean; // find: attach each declaration's source
   concise?: boolean; // find/refs/outline: name/kind/file/line only
   files?: boolean; // callpath: walk the file graph instead of the symbol graph
+  withCaller?: boolean; // callers: name each site's enclosing symbol
 }
 
 function parseFlags(args: string[]): CliFlags {
@@ -437,6 +441,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--include-body") flags.includeBody = true;
     else if (a === "--concise") flags.concise = true;
     else if (a === "--files") flags.files = true;
+    else if (a === "--with-caller") flags.withCaller = true;
     // A second positional is kept, not rejected here: `callpath <A> <B>`
     // takes two. runCli refuses it for every other command.
     else if (!a.startsWith("--") && flags.positionals.length < 2) {
@@ -890,6 +895,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   } else if (cmd === "callers") {
     if (flags.lsp && !flags.positional) throw new Error("callers --lsp requires a symbol: callers <name> --lsp");
     if (flags.raw && (flags.lsp || flags.recall)) throw new Error("callers --raw lists call sites before any binding: it takes neither --lsp nor --recall");
+    if (flags.raw && flags.withCaller) throw new Error("callers --raw already names each site's enclosing symbol: it takes no --with-caller");
     const scan = await readScan();
     const ref = flags.positional;
     if (flags.raw) {
@@ -904,7 +910,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // Only the names the ref can denote are bound — the whole-repo index is
       // the expensive part of a one-shot query, and nothing else needs it.
       const index = callerIndexForNames(scan, refNames(ref), { recall: flags.recall });
-      const entry = lookupCallerEntry(index, ref);
+      const found = lookupCallerEntry(index, ref);
+      const entry = found && flags.withCaller ? withCallerIds(scan, found) : found;
       const answer = entry ?? explainNoCallers(scan, ref, index);
       if (!answer) {
         const named = rawCallerSitesFor(scan, ref).length;
@@ -921,7 +928,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     } else {
       const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
       const obj: Record<string, unknown> = {};
-      for (const [name, entry] of index) obj[name] = entry;
+      for (const [name, entry] of index) obj[name] = flags.withCaller ? withCallerIds(scan, entry) : entry;
       emit(JSON.stringify(obj, null, 2) + "\n", flags.out);
     }
   } else if (cmd === "hierarchy") {

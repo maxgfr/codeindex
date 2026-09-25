@@ -447,7 +447,10 @@ and a call inferred from a name alone is a step only with
 `--include-inferred` (otherwise `inferredHops` says one would connect them).
 
 `callers --raw <name>` (MCP `raw: true`) lists every call site of a name before
-any binding, with its receiver and enclosing symbol. `callgraph` walks at most 5
+any binding, with its receiver and enclosing symbol. `callers --with-caller`
+(MCP `withCaller: true`) keeps the binding and adds `caller` to each site: the
+id of the declaration the call sits in, the node `callgraph` draws that call
+from. `callgraph` walks at most 5
 hops and says `depthClamped` when asked for more. It also follows dispatch. An
 `overrides` edge links a method to the nearest supertype method of the same
 name (a Go method to the method of an interface its type implements). A call

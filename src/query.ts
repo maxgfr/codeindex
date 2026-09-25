@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { readText } from "./walk.js";
-import { enclosingAmong, rawCallerSitesFor, type CallerIndex, type CallerSite, type RawCallerSite } from "./callers.js";
+import { enclosingAmong, rawCallerSitesFor, type CallerEntry, type CallerIndex, type CallerSite, type RawCallerSite } from "./callers.js";
 import { callerIndexFor, fileByRelFor, identSetsFor, symbolsByNameFor, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
 import { refMatches, symbolRefReadings, type SymbolRef } from "./symref.js";
@@ -64,6 +64,21 @@ export function symbolAt(scan: RepoScan, rel: string, line: number): SymbolAt | 
     // An overload repeats its id; a container is listed once.
     enclosing: [...new Set(enclosing)].filter((e) => e !== id),
     ...(inner.endLine === undefined ? { approximate: true as const } : {}),
+  };
+}
+
+// `callers --with-caller` (MCP withCaller): each site names the declaration
+// it sits in, by symbol id — the node callgraph starts that call's edge from —
+// so "who calls X" answers functions, not just lines. Opt-in: the default
+// entry keeps its bytes. A site at file scope has no caller to name.
+export function withCallerIds<T extends CallerEntry>(scan: RepoScan, entry: T): T {
+  const byRel = fileByRelFor(scan);
+  return {
+    ...entry,
+    callers: entry.callers.map((c) => {
+      const s = enclosingAmong(byRel.get(c.file)?.symbols ?? [], c.line);
+      return s ? { ...c, caller: symbolId(s) } : { ...c };
+    }),
   };
 }
 

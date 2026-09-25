@@ -60,6 +60,10 @@ export const TOOLS = [
           description:
             "Every call site of `name` as written, before any binding: {name, sites:[{file, line, receiver?, enclosingSymbol?}]}. Requires name (default false)",
         },
+        withCaller: {
+          type: "boolean",
+          description: "Add `caller` to each site: the symbol id of the declaration the call sits in (a call_graph node id), so the answer names functions, not just lines (default false)",
+        },
       },
       required: ["repo"],
     },

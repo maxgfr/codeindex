@@ -14,7 +14,7 @@ import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
-import { buildCallerIndex, lookupCallerEntry, rawCallerSitesFor } from "./callers.js";
+import { buildCallerIndex, lookupCallerEntry, rawCallerSitesFor, type CallerEntry } from "./callers.js";
 import { callerIndexFor, hierarchyFor, symbolGraphFor } from "./derived.js";
 import { implementationsOf, typeEntry } from "./relations.js";
 import { callPath, neighborhood, type Direction } from "./symbolgraph.js";
@@ -27,7 +27,7 @@ import { capDeadCode, findDeadCode } from "./deadcode.js";
 import { findLiteralDuplications } from "./literals.js";
 import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
-import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef, symbolAt } from "./query.js";
+import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef, symbolAt, withCallerIds } from "./query.js";
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
@@ -218,15 +218,18 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       // raw index is the library's (buildRawCallerIndex), too big for a turn.
       if (!lookup) throw new Error("callers with raw:true requires `name`");
       if (args.lsp === true || args.recall === true) throw new Error("callers raw:true takes neither lsp nor recall");
+      if (args.withCaller === true) throw new Error("callers raw:true already names each site's enclosing symbol: it takes no withCaller");
       return JSON.stringify(rawCallersOf(scan, lookup), null, 2);
     }
     const index = args.recall === true ? buildCallerIndex(scan, undefined, { recall: true }) : callerIndexFor(scan);
+    const sited = <T extends CallerEntry>(e: T): T => (args.withCaller === true ? withCallerIds(scan, e) : e);
     if (lookup) {
       // The LSP tier parses `Parent/name@file`; hand it that spelling of
       // whichever ref form was used.
       const reading = resolveSymbolRef(scan, lookup)?.reading;
       const lspRef = reading ? formatSymbolRef(reading) : lookup;
-      const entry = lookupCallerEntry(index, lookup);
+      const found = lookupCallerEntry(index, lookup);
+      const entry = found && sited(found);
       if (entry) {
         const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry) : entry;
         return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
@@ -244,7 +247,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
-    for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(v) : v;
+    for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(sited(v)) : sited(v);
     return JSON.stringify(obj, null, 2);
   }
   if (name === "workspaces") {

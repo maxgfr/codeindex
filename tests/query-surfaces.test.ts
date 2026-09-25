@@ -207,6 +207,21 @@ describe("symbol at file:line", () => {
   });
 });
 
+describe("callers --with-caller", () => {
+  it("names the declaration each site sits in, by the id callgraph uses", () => {
+    const plain = cli("callers", "retry").json();
+    expect(plain.callers).toEqual([{ file: "src/client.ts", line: 4 }]);
+    const sited = cli("callers", "retry", "--with-caller").json();
+    expect(sited).toEqual({ ...plain, callers: [{ file: "src/client.ts", line: 4, caller: "src/client.ts#Client/send" }] });
+    const edges = cli("callgraph", "Client/retry", "--direction", "in", "--depth", "1").json().edges;
+    expect(edges).toContainEqual(expect.objectContaining({ from: "src/client.ts#Client/send", to: "src/client.ts#Client/retry", kind: "calls" }));
+    // The whole index takes it too; without it no site carries the field.
+    expect(cli("callers", "--with-caller").json().backoff.callers).toEqual([{ file: "src/client.ts", line: 7, caller: "src/client.ts#Client/retry" }]);
+    expect(JSON.stringify(cli("callers").json())).not.toContain('"caller"');
+    expect(cli("callers", "retry", "--raw", "--with-caller").status).toBe(2);
+  });
+});
+
 describe("shortest paths", () => {
   // a → b → d, a → c → d, a → d2 → e → d: two shortest paths of two hops.
   const EDGES: Record<string, string[]> = { a: ["c", "b", "d2"], b: ["d"], c: ["d"], d2: ["e"], e: ["d"] };
@@ -312,6 +327,14 @@ describe("MCP query surfaces", () => {
     expect(neighbors).toEqual(cli("neighbors", "src/client.ts", "--kind", "import").json());
     expect(neighbors.links.map((l: { node: string; direction: string }) => `${l.direction}:${l.node}`)).toEqual(["out:src/util.ts", "in:src/app.ts"]);
     expect(await answer("neighbors", { target: "src/client.ts", depth: 2 })).toEqual(cli("neighbors", "src/client.ts", "--depth", "2").json());
+  });
+
+  it("callers withCaller answers what the CLI answers, concise included", async () => {
+    expect(await answer("callers", { name: "retry", withCaller: true })).toEqual(cli("callers", "retry", "--with-caller").json());
+    expect((await answer("callers", { name: "retry", withCaller: true, concise: true })).callers).toEqual([
+      { file: "src/client.ts", line: 4, caller: "src/client.ts#Client/send" },
+    ]);
+    expect((await call("callers", { name: "retry", raw: true, withCaller: true })).isError).toBe(true);
   });
 
   it("call_path answers what the CLI answers, symbols and files", async () => {

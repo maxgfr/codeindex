@@ -26,6 +26,9 @@ export interface CallerSite {
   // (the JS/TS unique-repo-wide relaxation, or a non-JS/TS inference without an
   // import). Default (precision) mode never sets it — output is byte-unchanged.
   confidence?: "corroborated" | "unique-name";
+  // The enclosing declaration's symbol id; only with `callers --with-caller`
+  // (MCP withCaller), see query.ts withCallerIds.
+  caller?: string;
 }
 
 export interface CallerIndexOptions {
