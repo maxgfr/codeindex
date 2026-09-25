@@ -45,6 +45,11 @@ compares](#how-it-compares).
   its whole package), and surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
   type extends and implements, and what extends and implements IT) and a
   **symbol-level graph** for bounded "what does this reach" neighborhoods.
+  Go states no implementations, so the hierarchy adds them: a
+  `var _ I = (*T)(nil)` assertion, or a type whose methods (its own, plus the
+  ones embedding promotes) match the interface's by name and parameter count.
+  The second kind is marked `structural: true`. These are answers to
+  `hierarchy` and `implementations` only, never graph.json edges.
 - **Render** byte-stable `graph.json` / `symbols.json` (two builds of an
   unchanged repo are byte-identical), plus a **SCIP** code-intelligence index
   (`index.scip`) via a hand-rolled zero-dependency protobuf encoder — validated

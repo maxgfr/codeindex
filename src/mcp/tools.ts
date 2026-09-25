@@ -410,7 +410,7 @@ export const TOOLS = [
   {
     name: "implementations",
     description:
-      "Who implements this interface (or extends this class)? Walks the hierarchy TRANSITIVELY, so a class implementing a sub-interface of the one asked about is included. The tool to reach for before changing an interface.",
+      "Who implements this interface (or extends this class)? Walks the hierarchy TRANSITIVELY, so a class implementing a sub-interface of the one asked about is included. Go states no implementations: a Go type counts when a `var _ I = (*T)(nil)` assertion says so, or when its methods (own and promoted by embedding) cover the interface's by name and parameter count — those are marked `structural: true`. The tool to reach for before changing an interface.",
     inputSchema: {
       type: "object",
       properties: { ...repoProp, name: { type: "string", description: `Interface/trait/class — ${symbolRefDescription}` } },

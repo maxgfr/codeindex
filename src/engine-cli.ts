@@ -70,7 +70,10 @@ Commands:
               how many call sites name it anyway); --lsp appends language-server
               incoming calls; --raw lists every call site by name, unresolved
   hierarchy   Type hierarchy: extends/implements, and what extends/implements it
-  implementations  Everything implementing/extending a type (transitively)
+  implementations  Everything implementing/extending a type (transitively). A
+              Go type implements an interface by assertion (var _ I = (*T)(nil))
+              or by method set (name + parameter count, embedding included;
+              marked "structural": true)
   callgraph   Bounded symbol-to-symbol neighborhood (--depth up to 5,
               --direction)
               A <symbol> above is any of: name, name@file, file#name,
