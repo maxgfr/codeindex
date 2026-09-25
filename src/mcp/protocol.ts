@@ -88,7 +88,8 @@ export function validateArgs(
 // outputSchema to be honoured by every structured result:
 //   * the tool declares an outputSchema (see OUTPUT_SCHEMAS),
 //   * the response was NOT replaced by the size guard — the truncation notice
-//     is a different shape and would not conform,
+//     is a different shape and would not conform (it is sent with isError,
+//     which is what exempts it from the schema),
 //   * the text parses to a JSON object (never an array: structuredContent is
 //     specified as an object).
 // The text block is left exactly as it was, so this is purely additive and
@@ -123,7 +124,9 @@ export function negotiateProtocol(requested: unknown): string {
 // consumed by any client anyway, so replacing it with something actionable
 // cannot regress a working call — it converts a hard failure into a usable
 // answer that says how big the payload is, where the artifact already sits on
-// disk, and which narrower tool answers the question.
+// disk, and which narrower tool answers the question. The server sends that
+// notice as a tool execution error (isError): the model reads it and retries
+// narrower, and a client validating against the tool's outputSchema skips it.
 export const DEFAULT_MAX_RESPONSE_BYTES = 1_000_000;
 
 // What to steer a caller toward when their whole-repo request is too large.

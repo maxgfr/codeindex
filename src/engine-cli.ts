@@ -149,8 +149,9 @@ Commands:
               explicit per-call repo still wins); --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
               tool response (default 1e6; a response under the cap is
-              byte-identical, one over it is replaced by an actionable notice
-              instead of an unusable blob); --tools <profile[,profile]>
+              byte-identical, one over it is replaced by an actionable notice,
+              sent as a tool error, instead of an unusable blob);
+              --tools <profile[,profile]>
               advertises a named subset (all | orient | find | impact | edit |
               risk, default all) — every advertised tool's schema costs an agent
               context on EVERY turn, and a tool left out is still answerable

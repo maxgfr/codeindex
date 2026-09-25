@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { OUTPUT_SCHEMAS, structuredContentFor, toolsFor } from "../src/mcp.js";
+import { OUTPUT_SCHEMAS, PROTOCOL_VERSIONS, structuredContentFor, toolsFor } from "../src/mcp.js";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
@@ -61,8 +61,12 @@ function validate(schema: Record<string, unknown>, value: unknown, path = "$"): 
 }
 
 // One server session, driven over the real stdio transport.
-async function session(calls: { name: string; arguments: Record<string, unknown> }[], version: string) {
-  const proc = spawn("node", [CLI, "mcp", "--repo", REPO], { stdio: ["pipe", "pipe", "ignore"] });
+async function session(
+  calls: { name: string; arguments: Record<string, unknown> }[],
+  version: string,
+  flags: string[] = [],
+) {
+  const proc = spawn("node", [CLI, "mcp", "--repo", REPO, ...flags], { stdio: ["pipe", "pipe", "ignore"] });
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
   let buf = "";
   proc.stdout.on("data", (d: Buffer) => {
@@ -92,11 +96,13 @@ async function session(calls: { name: string; arguments: Record<string, unknown>
     await call("initialize", { protocolVersion: version, capabilities: {}, clientInfo: { name: "t", version: "1" } });
     const tools = ((await call("tools/list", {})) as { result: { tools: Record<string, unknown>[] } }).result.tools;
     const results: Record<string, Record<string, unknown>> = {};
+    const ordered: Record<string, unknown>[] = [];
     for (const c of calls) {
-      results[c.name] = ((await call("tools/call", { name: c.name, arguments: c.arguments })) as { result: Record<string, unknown> })
-        .result;
+      const result = ((await call("tools/call", { name: c.name, arguments: c.arguments })) as { result: Record<string, unknown> }).result;
+      results[c.name] = result;
+      ordered.push(result);
     }
-    return { tools, results };
+    return { tools, results, ordered };
   } finally {
     proc.kill();
   }
@@ -186,6 +192,90 @@ describe("outputSchema / structuredContent", () => {
     expect(tools.every((t) => t.outputSchema === undefined)).toBe(true);
     expect(results.scan_summary!.structuredContent).toBeUndefined();
   }, 60_000);
+});
+
+// What the official TypeScript SDK client enforces on a tools/call result once
+// the tool advertised an outputSchema (client/index.js callTool): a non-error
+// result MUST carry structuredContent, and it MUST validate. Error results are
+// exempt. Returns the violation, or undefined.
+function sdkContractViolation(name: string, result: Record<string, unknown>): string | undefined {
+  const schema = OUTPUT_SCHEMAS[name];
+  if (!schema || result.isError === true) return undefined;
+  if (result.structuredContent === undefined) return `${name}: has an output schema but did not return structured content`;
+  return validate(schema, result.structuredContent);
+}
+
+describe("SDK conformance of the advertised tool list", () => {
+  // The SDK's ToolSchema types inputSchema and outputSchema as
+  // `{ type: "object", properties?, required? }`. A root without `type:
+  // "object"` (the symbols/callers `oneOf` schemas once) makes its client
+  // reject the ENTIRE tools/list, so an SDK-based host sees no tools at all.
+  // Iterates the live list, so a tool added later is covered automatically.
+  it("roots every inputSchema and outputSchema at type: object, for every version and pin", () => {
+    for (const version of PROTOCOL_VERSIONS) {
+      for (const pin of [undefined, "/pinned/repo"]) {
+        const tools = toolsFor(pin, version) as {
+          name: string;
+          inputSchema: Record<string, unknown>;
+          outputSchema?: Record<string, unknown>;
+        }[];
+        for (const tool of tools) {
+          for (const [kind, schema] of [["inputSchema", tool.inputSchema], ["outputSchema", tool.outputSchema]] as const) {
+            if (schema === undefined) continue;
+            const where = `${version} ${pin ?? "unpinned"} ${tool.name}.${kind}`;
+            expect(schema.type, where).toBe("object");
+            const props = (schema.properties ?? {}) as Record<string, unknown>;
+            expect(typeof props, where).toBe("object");
+            // A required name with no property is a typo nobody can satisfy.
+            for (const key of (schema.required as string[] | undefined) ?? []) {
+              expect(Object.keys(props), `${where}: required \`${key}\``).toContain(key);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("sends a capped response as a tool error without structuredContent, for every schema-declaring tool", async () => {
+    // A cap this small withholds every payload, so each call exercises the
+    // notice path. Before, the notice was a non-error result with no
+    // structuredContent — which an SDK client turns into a thrown -32600.
+    const names = Object.keys(CASES).filter((n) => !EDIT_TOOLS.includes(n) && n !== "write_memory" && n !== "delete_memory");
+    const { ordered } = await session(
+      names.map((name) => ({ name, arguments: CASES[name]! })),
+      "2025-11-25",
+      ["--max-response-bytes", "40"],
+    );
+    names.forEach((name, i) => {
+      const res = ordered[i] as Record<string, unknown>;
+      expect(res.isError, name).toBe(true);
+      expect(res.structuredContent, name).toBeUndefined();
+      const notice = JSON.parse((res.content as { text: string }[])[0]!.text) as { truncated: boolean; tool: string };
+      expect(notice).toMatchObject({ truncated: true, tool: name });
+    });
+  }, 120_000);
+
+  it("sends lookup misses as tool errors, keeping their { error } text", async () => {
+    const misses: [string, Record<string, unknown>, string][] = [
+      ["call_graph", { symbol: "NoSuchSymbolAnywhere" }, "no symbol named NoSuchSymbolAnywhere"],
+      ["type_hierarchy", { name: "NoSuchType" }, "no type named NoSuchType"],
+      ["implementations", { name: "NoSuchType" }, "no type named NoSuchType"],
+    ];
+    const { ordered } = await session(misses.map(([name, args]) => ({ name, arguments: args })), "2025-11-25");
+    misses.forEach(([name, , message], i) => {
+      const res = ordered[i] as Record<string, unknown>;
+      expect(res.isError, name).toBe(true);
+      expect(res.structuredContent, name).toBeUndefined();
+      expect(JSON.parse((res.content as { text: string }[])[0]!.text), name).toEqual({ error: message });
+      expect(sdkContractViolation(name, res)).toBeUndefined();
+    });
+  }, 60_000);
+
+  it("meets the SDK result contract on the ordinary answers too", async () => {
+    const names = Object.keys(CASES).filter((n) => !EDIT_TOOLS.includes(n));
+    const { ordered } = await session(names.map((name) => ({ name, arguments: CASES[name]! })), "2025-06-18");
+    names.forEach((name, i) => expect(sdkContractViolation(name, ordered[i] as Record<string, unknown>)).toBeUndefined());
+  }, 120_000);
 });
 
 describe("structuredContentFor", () => {

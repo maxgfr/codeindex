@@ -469,6 +469,13 @@ export const TOOLS = [
 //
 // Shapes are deliberately open (no `additionalProperties: false`): a later
 // engine adding a field must not turn a strict client's success into a failure.
+//
+// Every root is `type: "object"`, including the ones whose alternatives live in
+// a `oneOf`. The spec types Tool.outputSchema as an object schema, and the
+// official TypeScript SDK enforces it when it parses tools/list: a bare
+// `{ oneOf: [...] }` root made its client reject the WHOLE list, so every
+// SDK-based host saw zero tools. tests/mcp-output.test.ts pins this for every
+// declared schema, including ones added later.
 const strArr = { type: "array", items: { type: "string" } };
 const anyObj = { type: "object" };
 
@@ -511,6 +518,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   // Two shapes, both objects: the whole index, or one symbol's entry.
   symbols: {
+    type: "object",
     oneOf: [
       {
         type: "object",
@@ -526,6 +534,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   // The whole index (symbol name -> entry), one entry, or the not-found notice.
   callers: {
+    type: "object",
     oneOf: [
       { type: "object", additionalProperties: anyObj },
       { type: "object", properties: { def: anyObj, callers: { type: "array", items: anyObj }, lsp: anyObj }, required: ["def", "callers"] },

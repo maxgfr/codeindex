@@ -133,6 +133,14 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+// "There is no such symbol/type" from a lookup tool. Its text stays the
+// `{ "error": ... }` JSON it always was, but it travels as a tool execution
+// error (isError): it is not a result, and a declared outputSchema describes
+// results. An SDK client validates structuredContent on every NON-error
+// response, so `call_graph`'s notice used to surface as a -32602 protocol
+// failure instead of the sentence the model needed to read.
+class NotFound extends Error {}
+
 // Tools that never scan the file tree (git/grep/memory/embed-status only) — they
 // must not trigger a grammar warm. Every other tool is scan-needing and warms
 // the repo's grammars first; defaulting to "warm" keeps a newly added scan tool
@@ -488,14 +496,14 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       return JSON.stringify(obj, null, 2);
     }
     const entry = hierarchy.get(wanted);
-    if (!entry) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
+    if (!entry) throw new NotFound(`no type named ${wanted}`);
     return JSON.stringify(entry, null, 2);
   }
   if (name === "implementations") {
     const wanted = str(args.name);
     if (!wanted) throw new Error("`name` is required");
     const hierarchy = hierarchyFor(readScan());
-    if (!hierarchy.has(wanted)) return JSON.stringify({ error: `no type named ${wanted}` }, null, 2);
+    if (!hierarchy.has(wanted)) throw new NotFound(`no type named ${wanted}`);
     return JSON.stringify({ name: wanted, implementations: implementationsOf(hierarchy, wanted) }, null, 2);
   }
   if (name === "call_graph") {
@@ -507,7 +515,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       ...(positiveNum(args.depth) !== undefined ? { depth: positiveNum(args.depth)! } : {}),
       direction: dir,
     });
-    if (!result.root.length) return JSON.stringify({ error: `no symbol named ${symbol}` }, null, 2);
+    if (!result.root.length) throw new NotFound(`no symbol named ${symbol}`);
     return JSON.stringify(result, null, 2);
   }
   if (name === "check_rules") {
@@ -704,12 +712,18 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
             result: {
               content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
               ...(structured ? { structuredContent: structured } : {}),
+              // The withheld-payload notice is a tool execution error: the call
+              // did not deliver what was asked, and the notice is exactly the
+              // actionable text such an error exists to carry. It is also the
+              // only honest option for a tool with an outputSchema — the notice
+              // cannot conform to it, and SDK clients reject a non-error result
+              // that lacks conforming structuredContent.
+              ...(capped ? { isError: true } : {}),
             },
           });
         } catch (e) {
-          return respond({
-            result: { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true },
-          });
+          const text = e instanceof NotFound ? JSON.stringify({ error: e.message }, null, 2) : errMessage(e);
+          return respond({ result: { content: [{ type: "text", text }], isError: true } });
         }
       } else {
         return respond({ error: { code: -32601, message: `method not found: ${req.method}` } });

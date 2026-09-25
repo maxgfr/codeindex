@@ -835,14 +835,22 @@ which is what lets a host auto-approve reads and confirm only writes. From
 the result instead of re-parsing a string. The remaining tools return arrays,
 argument-dependent shapes or plain text, which cannot yield a conforming
 structured result without diverging from the text block — they are left
-unschema'd rather than described inaccurately.
+unschema'd rather than described inaccurately. Every schema is rooted at
+`type: "object"`, as the official TypeScript SDK requires to list tools at all.
+A lookup miss (`call_graph`, `type_hierarchy` or `implementations` naming
+nothing in the repo) keeps its `{ "error": ... }` text but is flagged
+`isError`, so a client validating against the schema reads it as the tool
+error it is.
 
 Responses are capped (`--max-response-bytes`, default 1 MB). Under the cap
 nothing changes. Over it — where a whole-repo `graph` on a large monorepo runs
 to millions of tokens and no client can accept it — the response is replaced by
 a short notice naming the size, the artifact already on disk, and the narrower
-tool that answers the question. Most tools also take a `limit`/`maxResults`/
-`top`/`maxEdges` argument to stay well under it.
+tool that answers the question. The notice is sent as a tool error
+(`isError: true`): the model reads it and narrows the call, and a client that
+validates `structuredContent` is not handed a result that cannot conform. Most
+tools also take a `limit`/`maxResults`/`top`/`maxEdges` argument to stay well
+under it.
 
 `engine.mjs` is a pure side-effect-free library (safe for consumers to inline
 into their own CLIs); `cli.mjs` is the thin standalone CLI/MCP wrapper.
