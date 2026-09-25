@@ -379,6 +379,7 @@ public repository client-side ([source](site/playground/)).
 brew install maxgfr/tap/codeindex        # or: npm i -g @maxgfr/codeindex
 
 codeindex index   --repo . --out .codeindex   # graph + symbols + incremental cache
+codeindex status  --repo . --check            # is .codeindex still fresh? (exit 1 if not)
 codeindex graph   --repo . > graph.json
 codeindex scip    --repo . --out index.scip   # SCIP index (--out - for stdout)
 codeindex callers --repo .                    # per-symbol caller index
@@ -405,6 +406,21 @@ mtime)`; for an edit that preserves both, `--full-hash` re-hashes every file
 and `--no-index-cache` ignores the cache altogether (for `index` too).
 Artifacts are replaced atomically (a temp file renamed over the old one), so a
 concurrent reader never sees a torn file.
+
+`codeindex status` says whether that index still describes the tree, without
+rebuilding anything: it reads `cache.json`, walks and stats, and hashes only
+the files whose `(size, mtime)` changed. It reports whether `cache.json` is
+usable (or why not: `absent`, `unreadable`, `corrupt`, or written for another
+`schema` or `extractor` version), the indexed and HEAD commits, per-file drift
+(`unchanged`, `touched`, `modified`, `added`, `deleted`, and `reextract` for
+records built under another `--no-ast`/`--max-calls` setting or grammar set),
+and `artifactsFresh` with the reasons it is false (`engine-version`,
+`extraction`, `files`, `graph.json`, `symbols.json`). It judges the index under
+the flags it is given, as a read command would. `--check` exits 1 unless the
+artifacts are fresh: a CI gate for a committed index. A moved HEAD alone is not
+stale, since an index committed to the repo never matches the commit that
+contains it and read commands restamp the commit anyway; `embeddings.bin` is
+not checked. The MCP `index_status` tool gives the same answer.
 
 `--scope <dir|file>` restricts a command to one part of the repo (`./src`,
 `src/` and an absolute path inside the repo all name `src`), and combines with
@@ -779,11 +795,11 @@ Register it in Claude Code with:
 claude mcp add codeindex -- codeindex mcp
 ```
 
-**33 tools**, grouped by what they answer:
+**34 tools**, grouped by what they answer:
 
 | group | tools |
 |---|---|
-| orient | `scan_summary`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
+| orient | `scan_summary`, `index_status`, `onboard` *(write)*, `repo_map`, `graph`, `mermaid`, `workspaces` |
 | find | `search`, `explain_search`, `grep`, `find_symbol`, `symbols`, `symbols_overview` |
 | impact | `find_references`, `callers`, `call_graph`, `dead_code` |
 | types | `type_hierarchy`, `implementations` |
@@ -945,7 +961,7 @@ dates in one table, said out loud rather than implied._
 | language coverage | 16 regex extractors, 21 tree-sitter grammars | **~40**, generic parser rules | any language with an LSP server | 36 via tree-sitter | **ctags / Serena** |
 | type-aware references | opt-in LSP tier, annotating the static answer | none | **native** | none | **Serena** |
 | install footprint | **23.5 MB, zero runtime deps** | single binary | 114.3 MB venv + language servers | 140.1 MB Python venv | **ctags** |
-| MCP server | **33 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
+| MCP server | **34 tools**, subsettable by profile | none | yes, LSP-backed | yes | **codeindex** |
 | onboarding brief | `onboard`, one call, persisted as a memory | none | `onboarding` | none | tie |
 | says when a query matched nothing | **verdict on every search** (`match`/`weak`/`none`) | no | not measured | not measured | — |
 

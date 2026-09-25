@@ -21,7 +21,7 @@
 // ran — 6.3s on a 7k-file repo with a fresh index sitting right next to it.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ENGINE_VERSION, SCHEMA_VERSION } from "./types.js";
+import { ENGINE_VERSION, EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { Graph, SymbolIndex } from "./types.js";
 import {
   compatibleEntries,
@@ -127,6 +127,11 @@ export function needsGrammarWarm(
   });
 }
 
+// Why a persisted index cannot seed a scan: no cache.json, one that cannot be
+// read or parsed (or holds an invalid entry — see parseCacheEntries), or one
+// written for another schema or extractor version.
+export type UnusableIndex = "absent" | "unreadable" | "corrupt" | "schema" | "extractor";
+
 // Read <indexDir>/cache.json into the (cacheMap, meta) the preload needs.
 // Per-file records are reusable ONLY when (schemaVersion, extractorVersion)
 // match this engine — the exact gate the CLI applies before trusting a cache —
@@ -139,16 +144,39 @@ export function readPersistedIndex(
   repo: string,
   indexDir: string = INDEX_DIR,
 ): { cacheMap: PersistedCacheMap; meta: PersistedMeta } | undefined {
+  const read = inspectPersistedIndex(repo, indexDir);
+  return "unusable" in read ? undefined : read;
+}
+
+// readPersistedIndex, saying WHY an index is unusable instead of only that it
+// is: every one of these used to degrade to a silent cold build, and `status`
+// reports which.
+export function inspectPersistedIndex(
+  repo: string,
+  indexDir: string = INDEX_DIR,
+): { cacheMap: PersistedCacheMap; meta: PersistedMeta } | { unusable: UnusableIndex } {
+  let text: string;
+  try {
+    text = readFileSync(join(indexDirPath(repo, indexDir), "cache.json"), "utf8");
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return { unusable: code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable" };
+  }
   let parsed:
     | ({ schemaVersion?: number; extractorVersion?: number; files?: Record<string, PersistedCacheEntry> } & PersistedMeta)
     | undefined;
   try {
-    parsed = JSON.parse(readFileSync(join(indexDirPath(repo, indexDir), "cache.json"), "utf8")) as typeof parsed;
+    parsed = JSON.parse(text) as typeof parsed;
   } catch {
-    return undefined;
+    return { unusable: "corrupt" };
   }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || typeof parsed.schemaVersion !== "number") {
+    return { unusable: "corrupt" };
+  }
+  if (parsed.schemaVersion !== SCHEMA_VERSION) return { unusable: "schema" };
+  if (parsed.extractorVersion !== EXTRACTOR_VERSION) return { unusable: "extractor" };
   const cacheMap = parseCacheEntries(parsed);
-  if (!parsed || !cacheMap) return undefined;
+  if (!cacheMap) return { unusable: "corrupt" };
   return {
     cacheMap,
     meta: {
@@ -162,11 +190,12 @@ export function readPersistedIndex(
   };
 }
 
-// One artifact's on-disk bytes, or undefined when it is missing or they are not
-// the bytes cache.json recorded (tampered, partial, rewritten since). sha over
-// the raw bytes; sha1(string) hashes the same UTF-8 bytes writeFileSync put on
-// disk, so this equals the meta sha the CLI computed over the render.
-function verifiedBytes(dir: string, name: ArtifactName, sha: string | undefined): Buffer | undefined {
+// One artifact's on-disk bytes in the index dir `dir`, or undefined when it is
+// missing or they are not the bytes cache.json recorded (tampered, partial,
+// rewritten since). sha over the raw bytes; sha1(string) hashes the same UTF-8
+// bytes writeFileSync put on disk, so this equals the meta sha the CLI
+// computed over the render.
+export function verifiedBytes(dir: string, name: ArtifactName, sha: string | undefined): Buffer | undefined {
   if (sha === undefined) return undefined;
   let bytes: Buffer;
   try {

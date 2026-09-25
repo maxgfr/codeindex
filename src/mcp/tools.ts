@@ -442,6 +442,12 @@ export const TOOLS = [
       required: ["repo"],
     },
   },
+  {
+    name: "index_status",
+    description:
+      "Is the persisted index (<repo>/.codeindex, written by `codeindex index`) fresh for this tree? Returns whether its cache.json is usable (or why not: absent/unreadable/corrupt/schema/extractor), the indexed vs HEAD commit, per-file drift counts (unchanged, touched, modified, added, deleted, reextract), artifactsFresh and the reasons it is not. Cheap: reads cache.json, walks and stats, hashes only stat-changed files, never extracts. A fresh index is what makes the first graph-shaped call on a large repo fast; a stale one is rebuilt in memory, so answers stay correct either way.",
+    inputSchema: { type: "object", properties: { ...repoProp, ...scopeProps }, required: ["repo"] },
+  },
 ] as const;
 
 
@@ -612,6 +618,21 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ["duplications", "families"],
   },
+  index_status: {
+    type: "object",
+    properties: {
+      indexDir: { type: "string" },
+      present: { type: "boolean" },
+      usable: { type: "boolean" },
+      reason: { type: "string", enum: ["absent", "unreadable", "corrupt", "schema", "extractor"] },
+      engineVersion: anyObj,
+      commit: anyObj,
+      files: { type: ["object", "null"] },
+      artifactsFresh: { type: "boolean" },
+      stale: strArr,
+    },
+    required: ["indexDir", "present", "usable", "engineVersion", "commit", "files", "artifactsFresh", "stale"],
+  },
   embed_status: {
     type: "object",
     properties: {
@@ -703,6 +724,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   implementations: { title: "Implementations" },
   call_graph: { title: "Call graph neighborhood" },
   check_rules: { title: "Check architecture rules" },
+  index_status: { title: "Index freshness" },
 };
 
 export function annotationsFor(name: string): Record<string, boolean> | undefined {
@@ -736,7 +758,7 @@ export function annotationsFor(name: string): Record<string, boolean> | undefine
  */
 export const TOOL_PROFILES: Record<string, readonly string[]> = {
   // Land in an unfamiliar repository and get your bearings.
-  orient: ["scan_summary", "repo_map", "onboard", "workspaces", "mermaid", "read_memory", "list_memories"],
+  orient: ["scan_summary", "index_status", "repo_map", "onboard", "workspaces", "mermaid", "read_memory", "list_memories"],
   // Locate a thing.
   find: ["search", "explain_search", "grep", "find_symbol", "symbols", "symbols_overview"],
   // Decide whether changing it is safe.

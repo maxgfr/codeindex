@@ -31,6 +31,7 @@ import { symbolsOverview, findSymbol, findReferences } from "./query.js";
 import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
 import { conciseCaller, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
+import { indexStatus } from "./status.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
@@ -142,8 +143,10 @@ const SCANLESS_TOOLS = new Set([
   "write_memory", "read_memory", "list_memories", "delete_memory",
   "embed_status",
   // scan_summary counts and classifies by path only — it never parses, so the
-  // grammar warm (a whole extra walk) would be pure overhead.
+  // grammar warm (a whole extra walk) would be pure overhead. index_status
+  // walks and stats against cache.json, and never extracts either.
   "scan_summary",
+  "index_status",
 ]);
 
 async function callTool(name: string, args: Record<string, unknown>, defaultRepo?: string): Promise<string> {
@@ -188,6 +191,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       null,
       2,
     );
+  }
+  if (name === "index_status") {
+    return JSON.stringify(indexStatus(repo, scanOpts), null, 2);
   }
   if (name === "graph") {
     return renderGraphJson(readArtifacts().graph);

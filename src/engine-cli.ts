@@ -21,6 +21,7 @@ import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan } from "./s
 import { scanRepoParallel } from "./pool.js";
 import {
   indexDirPath,
+  inspectPersistedIndex,
   persistedArtifacts,
   preloadSessionLazy,
   readPersistedIndex,
@@ -28,7 +29,9 @@ import {
   type ArtifactName,
   type PersistedMeta,
   type PreloadedSession,
+  type UnusableIndex,
 } from "./preload.js";
+import { indexStatus } from "./status.js";
 import { compatibleEntries, extractionProfile, sameExtractionProfile } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { buildTypeHierarchy, implementationsOf } from "./relations.js";
@@ -72,6 +75,15 @@ Commands:
               inside the repo is excluded from the scan; at the repo root only
               the artifacts are
   scan        Scan summary: file count, language histogram, capped flag
+  status      Is the persisted index (--index, default .codeindex) fresh for
+              this tree and these flags? JSON: whether cache.json is usable (or
+              why not: absent/unreadable/corrupt/schema/extractor), the indexed
+              vs HEAD commit, per-file drift (unchanged/touched/modified/added/
+              deleted/reextract), artifactsFresh and the reasons it is not.
+              Reads cache.json, walks and stats; hashes only stat-changed files,
+              never extracts. --check exits 1 when the artifacts are not fresh
+              (a CI gate for a committed index). A moved HEAD alone is not
+              stale: read commands restamp graph.json's commit
   graph       Full link-graph (graph.json bytes) to stdout or --out
   symbols     Symbol index (symbols.json bytes) to stdout or --out
   scip        SCIP code-intelligence index (protobuf bytes) into --out
@@ -156,12 +168,14 @@ Commands:
               and exits 0, or exits 1 when it has no opinion (run the original).
               Deliberately conservative — any shell metacharacter or unknown
               flag refuses the rewrite
-  mcp         Run as an MCP server over stdio (33 tools: scan_summary, graph,
-              symbols, callers, workspaces, churn, symbols_overview,
-              find_symbol, find_references, lsp_status, onboard, repo_map,
-              hotspots, coupling, dead_code, complexity, mermaid, grep, search,
-              explain_search, embed_status, check_rules, the memory quartet and
-              the three symbolic-edit writes). Flags: --repo <dir> pins ONE
+  mcp         Run as an MCP server over stdio (34 tools: scan_summary,
+              index_status, graph, symbols, callers, workspaces, churn,
+              symbols_overview, find_symbol, find_references, lsp_status,
+              onboard, repo_map, hotspots, coupling, dead_code, complexity,
+              duplicated_literals, mermaid, grep, search, explain_search,
+              embed_status, check_rules, type_hierarchy, implementations,
+              call_graph, the memory quartet and the three symbolic-edit
+              writes). Flags: --repo <dir> pins ONE
               repository so the per-tool repo argument becomes optional (an
               explicit per-call repo still wins); --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
@@ -222,6 +236,7 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --full-hash         Re-read and re-hash every file instead of trusting an
                       unchanged (size, mtime) — for an edit that kept both.
                       Unchanged content still reuses its extraction
+  --check             \`status\`: exit 1 unless the artifacts are fresh
   --config <file>     Rules config for \`rules\` (JSON: [{name, from, to, …}])
   --limit <n>         Max results for \`search\` (default 20)
   --no-fuzzy          \`search\`: disable trigram fuzzy fallback for query terms
@@ -265,6 +280,7 @@ interface CliFlags {
   indexDir?: string; // persisted index to read (default .codeindex)
   noIndexCache?: boolean; // never reuse a persisted index
   fullHash?: boolean; // re-read and re-hash every file (no (size, mtime) fastpath)
+  check?: boolean; // status: exit 1 unless the artifacts are fresh
   since?: string;
   ignoreCase?: boolean;
   maxHits?: number;
@@ -333,6 +349,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--index") flags.indexDir = next();
     else if (a === "--no-index-cache") flags.noIndexCache = true;
     else if (a === "--full-hash") flags.fullHash = true;
+    else if (a === "--check") flags.check = true;
     else if (a === "--workers") {
       // 0 is meaningful here (force sequential), so this cannot use num().
       const raw = next();
@@ -464,6 +481,18 @@ function scanOptions(flags: CliFlags, precomputedWalk?: WalkResult): BuildIndexO
 // resolves/downloads the wasms itself and must not warm them.
 // version/help/mcp return before we get there.
 const SCANLESS_COMMANDS = new Set(["grep", "churn", "coupling", "workspaces", "grammars"]);
+// Commands that walk the tree but never extract a file: no grammar warm, and so
+// no warm-up walk either — they walk once, themselves.
+const WALK_ONLY_COMMANDS = new Set(["scan", "status"]);
+
+// The one-line reason a NAMED --index could not be used (see tryPreload).
+const UNUSABLE_INDEX: Record<UnusableIndex, string> = {
+  absent: "no cache.json there",
+  unreadable: "cache.json cannot be read",
+  corrupt: "cache.json is not a valid index",
+  schema: "written for another schema version",
+  extractor: "written by another extractor version",
+};
 
 // Flags for `codeindex mcp`. Kept separate from parseFlags on purpose (see the
 // dispatch site). `--repo` is resolved to an absolute path and must exist: a
@@ -627,7 +656,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
   // scanRepo walks itself, exactly as before.
   const scans = !SCANLESS_COMMANDS.has(cmd) && !(cmd === "embed" && flags.positional !== "build");
   let precomputedWalk: WalkResult | undefined;
-  if (scans && !flags.noAst) {
+  if (scans && !flags.noAst && !WALK_ONLY_COMMANDS.has(cmd)) {
     // The scan's own walk options, path filter included, so the grammars
     // warmed are those of the files in scope and the scan can reuse this walk.
     precomputedWalk = walk(flags.repo, scanWalkOptions(flags.repo, scanOptions(flags)));
@@ -683,8 +712,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // user NAMED being unusable is a mistake worth one line (a typo'd path
       // otherwise just looks like a slow command).
       else if (flags.indexDir !== undefined) {
+        const read = inspectPersistedIndex(flags.repo, indexDir);
+        const why = UNUSABLE_INDEX["unusable" in read ? read.unusable : "unreadable"];
         process.stderr.write(
-          `codeindex: no usable index at ${indexDirPath(flags.repo, indexDir)} (missing, unreadable, or written by an incompatible engine) — building from scratch\n`,
+          `codeindex: no usable index at ${indexDirPath(flags.repo, indexDir)} (${why}) — building from scratch\n`,
         );
       }
       return preloaded;
@@ -882,6 +913,12 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       capped: s.capped,
     };
     emit(JSON.stringify(summary, null, 2) + "\n", flags.out);
+  } else if (cmd === "status") {
+    // The index the read commands would consult, judged under THIS run's scan
+    // flags: an index built with --scope src is stale for a whole-repo read.
+    const status = indexStatus(flags.repo, { ...scanOptions(flags), ast: !flags.noAst }, indexDir);
+    emit(JSON.stringify(status, null, 2) + "\n", flags.out);
+    if (flags.check && !status.artifactsFresh) process.exitCode = 1;
   } else if (cmd === "graph") {
     emit((await readArtifactBytes("graph")) ?? renderGraphJson(await readGraph()), flags.out);
   } else if (cmd === "symbols") {

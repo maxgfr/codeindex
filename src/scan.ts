@@ -366,6 +366,16 @@ export function keptCodeFiles(root: string, opts: ScanOptions = {}): { f: Walked
   return out;
 }
 
+// Every file this scan would keep, unread, in walk order: the file set and the
+// stats a freshness check compares against cache.json (status.ts), without a
+// record being built.
+export function keptWalkedFiles(root: string, opts: ScanOptions = {}): WalkedFile[] {
+  const out: WalkedFile[] = [];
+  const it = keptFiles(root, opts);
+  for (let step = it.next(); !step.done; step = it.next()) out.push(step.value.f);
+  return out;
+}
+
 // File count + language histogram WITHOUT reading or parsing a single file.
 // `codeindex scan` and the MCP `scan_summary` tool only ever report these, but
 // used to pay a full scanRepo — i.e. tree-sitter over the whole repo — to get

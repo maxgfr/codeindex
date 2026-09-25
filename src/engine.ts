@@ -38,7 +38,10 @@ export { keptCodeFiles, buildCodeRecord } from "./scan.js";
 // the engine gets the same shortcut. Every function degrades to undefined
 // (= "build it yourself") rather than throwing.
 export { preloadSession, preloadArtifacts, readPersistedIndex, toCacheMap, INDEX_DIR } from "./preload.js";
-export type { PersistedMeta, PersistedCacheEntry, PersistedCacheMap } from "./preload.js";
+export type { PersistedMeta, PersistedCacheEntry, PersistedCacheMap, UnusableIndex } from "./preload.js";
+// Whether that index still describes the tree, and why not (`codeindex status`).
+export { indexStatus } from "./status.js";
+export type { IndexStatus, IndexStatusOptions, IndexStaleness } from "./status.js";
 // Parallel extraction. scanRepoParallel is scanRepo with the code files
 // extracted across worker_threads; it returns the same RepoScan, byte-for-byte,
 // and degrades to the sequential path whenever workers are unavailable.

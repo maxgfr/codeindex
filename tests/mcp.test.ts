@@ -362,7 +362,7 @@ describe("MCP server", () => {
 
     expect(res.get(1)!.result!.serverInfo!.name).toBe("codeindex");
     const toolNames = res.get(2)!.result!.tools!.map((t) => t.name);
-    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "lsp_status", "onboard", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules"]);
+    expect(toolNames).toEqual(["scan_summary", "graph", "symbols", "callers", "workspaces", "churn", "symbols_overview", "find_symbol", "find_references", "lsp_status", "onboard", "repo_map", "hotspots", "coupling", "replace_symbol_body", "insert_after_symbol", "insert_before_symbol", "write_memory", "read_memory", "list_memories", "delete_memory", "dead_code", "duplicated_literals", "complexity", "mermaid", "grep", "search", "explain_search", "embed_status", "type_hierarchy", "implementations", "call_graph", "check_rules", "index_status"]);
 
     const summary = JSON.parse(res.get(3)!.result!.content![0]!.text) as { fileCount: number };
     expect(summary.fileCount).toBeGreaterThan(0);
@@ -1042,6 +1042,24 @@ function primeIndex(repo: string): void {
 }
 
 describe("MCP persisted-index preload (session seeding from .codeindex)", () => {
+  // The same freshness verdict as `codeindex status`, where an agent can ask
+  // for it: whether its first graph-shaped call will load or rebuild.
+  it("index_status reports the .codeindex the server would seed from", async () => {
+    const repo = tmpFixtureCopy("ci-mcp-index-status-");
+    const call = async (): Promise<{ usable: boolean; reason?: string; artifactsFresh: boolean; stale: string[] }> => {
+      const res = await mcpSession([
+        { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+        { id: 2, method: "tools/call", params: { name: "index_status", arguments: { repo } } },
+      ]);
+      return JSON.parse(res.get(2)!.result!.content![0]!.text);
+    };
+    expect(await call()).toMatchObject({ usable: false, reason: "absent", artifactsFresh: false, stale: ["absent"] });
+    primeIndex(repo);
+    expect(await call()).toMatchObject({ usable: true, artifactsFresh: true, stale: [] });
+    writeFileSync(join(repo, "src", "new.ts"), "export const fresh = false;\n");
+    expect(await call()).toMatchObject({ artifactsFresh: false, stale: ["files"] });
+  });
+
   it("rejects incomplete cache records and serves the same references as a cold server", async () => {
     const repo = tmpFixtureCopy("ci-preload-invalid-record-");
     const request = [
