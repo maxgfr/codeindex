@@ -6,7 +6,7 @@ import { extractReexports, extToLang, MAX_REEXPORTS } from "../lang/common.js";
 import { extractImports, extractPackage } from "./imports.js";
 import { sfcParts } from "./sfc.js";
 import { isMinified } from "./minified.js";
-import { isBanner, isDirective, stripCommentMarkers } from "./doc-text.js";
+import { fileSummary, stripCommentMarkers } from "./doc-text.js";
 import { subtokens } from "../util.js";
 
 // Per-file symbol ceiling. Raised from 400: a real 3000-line generated client or
@@ -38,69 +38,6 @@ export interface CodeInfo {
   // Inheritance stated by this file's declarations (AST path) — feeds the
   // extends/implements edges and the type hierarchy.
   relations?: RawRelation[];
-}
-
-// The leading comment block of a file, turned into one summary line. Handles
-// `//`, `#`, and `/* … */` / `""" … """` openers. Stops at the first code line.
-function topDocComment(content: string): string | undefined {
-  const lines = content.split(/\r?\n/);
-  const collected: string[] = [];
-  let inBlock: "c" | "py" | null = null;
-  for (let i = 0; i < Math.min(lines.length, 40); i++) {
-    const raw = lines[i]!;
-    const line = raw.trim();
-    if (inBlock === "c") {
-      // Strip the closing `*/` BEFORE the leading `*`s, so a lone `*/` (or a line
-      // ending in `*/`) doesn't leave a stray "/" once the leading star is gone.
-      collected.push(line.replace(/\*+\/\s*$/, "").replace(/^\*+/, "").trim());
-      if (line.includes("*/")) inBlock = null;
-      continue;
-    }
-    if (inBlock === "py") {
-      if (line.includes('"""') || line.includes("'''")) {
-        collected.push(line.replace(/['"]{3}.*$/, "").trim());
-        inBlock = null;
-      } else collected.push(line);
-      continue;
-    }
-    if (line === "" && collected.length === 0) continue; // skip leading blanks
-    if (line.startsWith("#!")) continue; // shebang
-    if (line.startsWith("//")) {
-      collected.push(line.replace(/^\/+/, "").trim());
-      continue;
-    }
-    if (line.startsWith("#")) {
-      collected.push(line.replace(/^#+/, "").trim());
-      continue;
-    }
-    if (line.startsWith("/*")) {
-      // Drop the opener, INCLUDING the `!` of a `/*!` "preserve" banner — else the
-      // stripped text is just "!", which the first-sentence regex then treats as a
-      // whole sentence, yielding the garbage summary "!".
-      collected.push(line.replace(/^\/\*+!?/, "").replace(/\*+\/\s*$/, "").trim());
-      if (!line.includes("*/")) inBlock = "c";
-      continue;
-    }
-    if (line.startsWith('"""') || line.startsWith("'''")) {
-      const rest = line.slice(3);
-      if (rest.includes('"""') || rest.includes("'''")) collected.push(rest.replace(/['"]{3}.*$/, "").trim());
-      else {
-        collected.push(rest.trim());
-        inBlock = "py";
-      }
-      continue;
-    }
-    break; // first real code line
-  }
-  const text = collected
-    .filter((l) => l && !isDirective(l) && !isBanner(l))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (text.length < 8) return undefined;
-  // First sentence, capped.
-  const sentence = /^(.*?[.!?])(\s|$)/.exec(text);
-  return (sentence ? sentence[1]! : text).slice(0, 200);
 }
 
 // Control-flow and declaration keywords that syntactically precede `(` but are
@@ -316,7 +253,7 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // (real edges, whoever wrote them) — and nothing else: its symbols and call
   // sites are one-letter noise (see extract/minified.ts). The flag says so.
   if (isMinified(ext, content)) {
-    return { symbols: [], minified: true, summary: topDocComment(content), refs: extractImports(ext, content) };
+    return { symbols: [], minified: true, summary: fileSummary(ext, content), refs: extractImports(ext, content) };
   }
   // A single-file component (.vue/.svelte/.astro) is extracted as its script:
   // the JS/TS tier runs over a copy with the markup blanked, lines unchanged
@@ -373,7 +310,7 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
     ...(ast?.truncated || raw.length > symbols.length || reexports.length >= MAX_REEXPORTS
       ? { truncated: true as const }
       : {}),
-    summary: topDocComment(content),
+    summary: fileSummary(ext, content),
     refs,
     pkg: extractPackage(ext, content),
     idents: ast?.idents,

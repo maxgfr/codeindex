@@ -54,6 +54,12 @@ compares](#how-it-compares).
   symbols, imports, and calls from both the script and the template, bound in
   the JS/TS call family. A Svelte prop (`export let`) and an Astro frontmatter
   export are not module exports, so they are never reported as dead code.
+  Each file's **summary** is the first leading comment that describes
+  something: license and copyright text (MIT, BSD, Apache, GPL, MPL, the Go
+  "governed by" line), linter and editor magic comments (`frozen_string_literal`,
+  `-*- coding -*-`, `go:build`), Xcode's file stamp and bundler region markers
+  are skipped, and `#` reads as a comment only in languages where it is one —
+  never a C `#include` or a Rust `#[attribute]`.
 - **Resolve imports** across languages: tsconfig paths, package `exports`,
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
