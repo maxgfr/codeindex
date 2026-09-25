@@ -1256,8 +1256,8 @@ job or a slow machine can retune them without editing a shared file.
 `CODEINDEX_LSP_CONFIG` points at a config elsewhere; set to `off`, `0` or an
 empty string, it disables the tier even when the repository has one.
 
-The TypeScript example disables its separate syntax server because codeindex
-opens short-lived query sessions. Otherwise an early reference request can be
+The TypeScript example disables its separate syntax server because a CLI
+query opens a short-lived session. Otherwise an early reference request can be
 answered before the semantic project is ready and return only the declaration.
 Other servers use their own initialization options; codeindex does not infer a
 server configuration from its binary name.
@@ -1293,7 +1293,10 @@ Three deliberate constraints:
   `typescript-language-server` happened to be installed would make the same repo
   answer differently per machine.
 - **Every failure degrades to the static answer on exit 0**, with a stated
-  reason for unavailable configured servers. For compatibility, references
+  reason for unavailable configured servers. A server that exits or never
+  answers `initialize` is reported with the last line it wrote to stderr
+  (`language server exited (code 1): error: Unknown binary 'rust-analyzer'
+  …`), in `lsp status --probe` as in query answers. For compatibility, references
   without any configuration retain their original static-only shape; the new
   callers option explicitly reports missing configuration.
 
@@ -1322,6 +1325,29 @@ TypeScript server. Calls require `prepareCallHierarchy` and `incomingCalls`;
 reference occurrences alone are not classified as calls. Missing configuration,
 unsupported capabilities, process/pipe failures and timeouts keep the static
 answer. Results already received survive a later failure with `ok: false`.
+
+### Session lifetime and readiness
+
+A CLI query starts its servers, asks, and shuts them down. The MCP server
+keeps one session per (server config, repository) for its whole lifetime, so
+only the first `lsp: true` query pays for the spawn and `initialize`. On a
+flask copy with pyright, the first query took 2.4-4 s including the scan and
+later ones 50-150 ms, where every query used to take 1.2-3 s. A
+pooled session is dropped and restarted when the config changes or when any
+non-doc file changes, because codeindex never sends `didChange` and a server
+must not answer from text it read before an edit. It is shut down after 5
+idle minutes (`CODEINDEX_LSP_IDLE_MS`) and when the MCP server stops: on
+stdin EOF, and on SIGINT, SIGTERM or SIGHUP. Every server is also sent the
+host pid as `processId`, which servers use to exit if the host is killed
+outright.
+
+A server that is still indexing answers without an error: with only the
+declaration, or with no incoming calls. When the static tier did see uses, the
+question is asked again a few times within the server's request budget
+(pyright's full answer comes on the second request). If it is still thin, the
+block keeps `ok: true` and adds `partial: true` with a `reason`: the server may
+still be indexing, or the static sites are homonyms. A session that has already
+given a full answer is trusted and is not asked again.
 
 ## Use as an MCP server
 
@@ -1374,10 +1400,44 @@ labels and LSP metadata stay intact. Defaults retain their full existing shape.
 `symbols` keeps its name-keyed groups and references for full-index requests.
 The option is a query projection; it never changes persisted artifacts.
 
-Symbolic edits preserve supported source encodings (UTF-8/BOM, UTF-16 LE/BE,
-Latin-1) and line endings. Malformed UTF-16 and replacements that cannot be
-represented in a Latin-1 source fail before writing. Memory notes stay under
-`.codeindex/memories`; linked storage paths are refused rather than followed.
+### Symbolic edits
+
+`replace_symbol_body`, `insert_after_symbol` and `insert_before_symbol` resolve
+`namePath` over every matching declaration. `file` narrows the matches to one
+file (`./src/a.ts` and absolute paths inside the repo are accepted). `line`
+selects one of several same-file homonyms, such as a property getter and
+setter or TypeScript overloads. Pass the declaration's first line or any line
+inside it; the ambiguity error lists the lines to choose from.
+
+- **Spans.** A replacement covers the declaration's own line span. The doc
+  comment above it stays, and so do decorators that the grammar keeps outside
+  the declaration (TypeScript, Python, Rust). `insert_before_symbol` inserts
+  above the decorators, attributes and attached doc comment, so they stay with
+  their declaration. Regex-tier symbols record only a first line. For them,
+  the end is taken from brace matching only when it is unambiguous (Swift,
+  Dart, and Kotlin without its extended grammar). Otherwise replace and
+  insert-after are refused.
+- **Verification.** Nothing is written until the edited text has been
+  re-extracted in memory. The target must still be on its indexed line, so a
+  stale scan is refused. The result then carries `warnings` when a declaration
+  outside the edited lines changed (for example, an unindented Python body that
+  re-parents the methods after it), when the replaced lines no longer declare
+  the target (renamed or moved), or when the edit adds syntax errors. With
+  `strict: true`, such an edit is refused and nothing is written. A clean
+  edit's result has no `warnings` key. A file past the per-file symbol cap
+  (2,000 declarations) gets only the syntax check.
+- **Encodings.** Supported source encodings (UTF-8/BOM, UTF-16 LE/BE, Latin-1)
+  are preserved. A valid UTF-8 file that contains U+FFFD stays UTF-8. Every
+  untouched line keeps its own line ending, so a mixed CRLF/LF file stays
+  mixed. New lines copy the ending of the line they replace or sit next to, and
+  a missing final newline stays missing. Malformed UTF-16 and replacements that
+  cannot be represented in a Latin-1 source fail before writing.
+- **Cache.** After an edit, the server revokes only the edited file's cached
+  stat proof, so the next call re-reads that one file. Other files and other
+  repositories stay warm.
+
+Memory notes stay under `.codeindex/memories`; linked storage paths are refused
+rather than followed.
 
 ### Advertising fewer tools
 

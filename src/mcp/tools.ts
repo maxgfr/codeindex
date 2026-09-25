@@ -14,6 +14,12 @@ const sinceProp = {
   description: 'Only count commits after this ref (tag, branch, sha) or since this date ("2024-01-01", "6 months ago"); anything else is an error',
 };
 const conciseProp = { concise: { type: "boolean", description: "Return declaration locations (name/kind/file/line, plus parent for a member) without full symbol metadata. Keeps every result, reference tier and confidence label (default false)." } };
+// How the three symbolic edits pick their target and how much they tolerate.
+const editTargetProps = {
+  file: { type: "string", description: "Disambiguate: repo-relative file containing the symbol" },
+  line: { type: "number", minimum: 1, description: "Disambiguate same-file homonyms: the declaration's first line, or any line inside it" },
+  strict: { type: "boolean", description: "Refuse the edit (nothing written) when the post-edit check reports warnings (default false)" },
+};
 const scopeProps = {
   scope: { type: "string", description: "Restrict to one directory or file (repo-relative); ANDed with include/exclude" },
   include: { type: "array", items: { type: "string" }, description: "Include globs, rooted at the repo: '*.ts' is top-level only, '**/*.ts' any depth" },
@@ -142,7 +148,7 @@ export const TOOLS = [
         lsp: {
           type: "boolean",
           description:
-            "Also ask a configured language server (see lsp_status) and append an `lsp` block: its references plus an `agreement` matrix (both / lspOnly / staticOnly). The three static tiers are unchanged either way. `staticOnly` can indicate homonyms or an incomplete language-server answer. No config, no binary, a crash or a timeout all degrade to the static answer with a stated reason (default false).",
+            "Also ask a configured language server (see lsp_status) and append an `lsp` block: its references plus an `agreement` matrix (both / lspOnly / staticOnly). The three static tiers are unchanged either way. `staticOnly` can indicate homonyms or an incomplete language-server answer; `partial: true` flags a declaration-only answer while static uses exist. Servers stay up for the session. No config, no binary, a crash or a timeout all degrade to the static answer with a stated reason (default false).",
         },
       },
       required: ["repo", "name"],
@@ -233,35 +239,30 @@ export const TOOLS = [
   {
     name: "replace_symbol_body",
     description:
-      "WRITE: replace a symbol's whole declaration with `body` (verbatim, supply full indentation). The symbol is resolved by name path ('Class/method'); ambiguity errors list the candidates — qualify with `file`. Line spans come from the AST index.",
+      "WRITE: replace a symbol's whole declaration with `body` (verbatim, supply full indentation). The symbol is resolved by name path ('Class/method'); ambiguity errors list the candidates — qualify with `file`, and `line` for same-file homonyms (getter/setter, overloads). Line spans come from the AST index; a regex-tier symbol whose end cannot be proven is refused. The doc comment above the declaration is kept. The edited file is re-extracted before writing: `warnings` reports declarations changed outside the edit and new syntax errors, and `strict` refuses such an edit.",
     inputSchema: {
       type: "object",
-      properties: {
-        ...repoProp,
-        namePath: { type: "string" },
-        body: { type: "string" },
-        file: { type: "string", description: "Disambiguate: repo-relative file containing the symbol" },
-      },
+      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, ...editTargetProps },
       required: ["repo", "namePath", "body"],
     },
   },
   {
     name: "insert_after_symbol",
     description:
-      "WRITE: insert `body` after a symbol's declaration (blank-line separation preserved for definition-like kinds). Resolved like replace_symbol_body.",
+      "WRITE: insert `body` after a symbol's declaration (blank-line separation preserved for definition-like kinds). Resolved and verified like replace_symbol_body.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
+      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, ...editTargetProps },
       required: ["repo", "namePath", "body"],
     },
   },
   {
     name: "insert_before_symbol",
     description:
-      "WRITE: insert `body` before a symbol's declaration (blank-line separation preserved). Resolved like replace_symbol_body.",
+      "WRITE: insert `body` before a symbol, above its decorators/attributes and attached doc comment (blank-line separation preserved). Resolved and verified like replace_symbol_body.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, file: { type: "string" } },
+      properties: { ...repoProp, namePath: { type: "string" }, body: { type: "string" }, ...editTargetProps },
       required: ["repo", "namePath", "body"],
     },
   },
@@ -909,6 +910,8 @@ for (const name of ["replace_symbol_body", "insert_after_symbol", "insert_before
       symbol: { type: "string" },
       startLine: { type: "integer" },
       endLine: { type: "integer" },
+      lines: { type: "integer" },
+      warnings: { type: "array", items: { type: "string" } },
     },
     required: ["file"],
   };

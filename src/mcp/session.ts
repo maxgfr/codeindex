@@ -5,8 +5,8 @@
 // These are the pieces that make a second tool call cheap. They are stateful by
 // nature — which is exactly why they belong in one file with the invariants
 // written down, rather than scattered through the request handler.
-import { statSync } from "node:fs";
-import { join } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { buildArtifactsFromScan, type IndexArtifacts } from "../pipeline.js";
 import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummary } from "../scan.js";
 import { scanRepoParallel } from "../pool.js";
@@ -172,11 +172,41 @@ function sessionPut(entry: SessionEntry): SessionEntry {
   return entry;
 }
 
-// Drop every entry. Used by the symbolic-edit tools: an edit landing in the same
-// mtime tick with the same byte count would pass the (size, mtimeMs) fastpath
-// and serve a stale scan.
-export function sessionClear(): void {
-  sessionCaches.length = 0;
+// Forget ONE file the server itself just rewrote (the symbolic edits) in every
+// entry that indexes it — whatever repo spelling or scan options keyed the
+// entry, including one for an enclosing or nested root. Emptying the whole LRU
+// instead made the next call on the edited repo re-extract every file, and
+// threw away unrelated repos with it.
+//
+// The record stays; its stat proof goes. An edit landing in the same mtime tick
+// with the same byte count would otherwise pass the (size, mtimeMs) fastpath
+// and serve the pre-edit record. Without the stat keys the next scan re-reads
+// and re-hashes exactly this file — and a no-op edit (same hash) still keeps
+// the warm scan object.
+export function sessionForgetFile(abs: string): void {
+  const real = realpathOr(abs);
+  for (const entry of sessionCaches) {
+    const rels = new Set([relInside(entry.scan.root, abs), relInside(realpathOr(entry.scan.root), real)]);
+    for (const rel of rels) {
+      const cached = rel === undefined ? undefined : entry.cacheMap.get(rel);
+      if (cached) entry.cacheMap.set(rel!, { hash: cached.hash, record: cached.record });
+    }
+  }
+}
+
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+// `abs` relative to `root` in the walk's "/"-separated form, or undefined outside it.
+function relInside(root: string, abs: string): string | undefined {
+  const rel = relative(root, abs);
+  if (!rel || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return undefined;
+  return rel.split(sep).join("/");
 }
 
 // Invalidate only the watched repository while retaining its incremental

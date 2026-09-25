@@ -34,7 +34,7 @@ import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCalle
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
-import { lspStatus, referencesWithLsp, callersWithLsp } from "./lsp/index.js";
+import { lspStatus, referencesWithLsp, callersWithLsp, LspSessionPool } from "./lsp/index.js";
 import { conciseCaller, conciseDelta, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
 import { indexStatus } from "./status.js";
@@ -71,7 +71,7 @@ import {
   memoizedEmbeddingIndex,
   memoizedEmbedModel,
   scanFingerprint,
-  sessionClear,
+  sessionForgetFile,
   sessionInvalidate,
   warmGrammarsForWalk,
   type SessionScanOptions,
@@ -226,12 +226,14 @@ function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
 // `progress` reports phase boundaries of a scan-needing call (see toolsCall).
 // `walkRepo` supplies the call's walk: the --watch oracle's for the pinned
 // repository, a plain walk otherwise.
+// `lspPool` keeps language servers warm across the calls of one server session.
 async function callTool(
   name: string,
   args: Record<string, unknown>,
   repo: string,
   progress?: (message: string) => void,
   walkRepo: (repo: string) => Promise<{ walked: WalkResult; reused: boolean }> = async (r) => ({ walked: walk(r, {}), reused: false }),
+  lspPool?: LspSessionPool,
 ): Promise<string> {
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // `search`'s optional structural prior. The schema's enum has already
@@ -318,7 +320,7 @@ async function callTool(
       const found = lookupCallerEntry(index, lookup);
       const entry = found && sited(found);
       if (entry) {
-        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry) : entry;
+        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry, { pool: lspPool }) : entry;
         return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
       }
       // A symbol that exists but binds no site says how many sites name it
@@ -331,7 +333,7 @@ async function callTool(
           `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : ""),
         );
       }
-      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent) : absent, null, 2);
+      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent, { pool: lspPool }) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
     for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(sited(v)) : sited(v);
@@ -377,7 +379,7 @@ async function callTool(
     // The tier locates the declared NAME on its line: pass the name a
     // qualified ref (`name@file`, `file#Parent/name`) resolved to.
     const leaf = resolveSymbolRef(scan, symName)?.reading.name ?? symName;
-    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik) : statik;
+    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik, { pool: lspPool }) : statik;
     return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
   }
   if (name === "symbol_at") {
@@ -398,17 +400,21 @@ async function callTool(
     const namePath = str(args.namePath);
     const body = typeof args.body === "string" ? args.body : undefined;
     if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
+    const line = positiveNum(args.line);
+    if (args.line !== undefined && (line === undefined || !Number.isInteger(line))) {
+      throw new Error("`line` must be a 1-based line number");
+    }
     const scan = readScan();
     const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
     const file = str(args.file);
-    const result = fn(scan, namePath, body, file === undefined ? undefined : indexedFile(scan, repo, file));
+    const result = fn(scan, namePath, body, file === undefined ? undefined : indexedFile(scan, repo, file), { line, strict: args.strict === true });
     // A write WE just performed must not be trusted to the stat oracle: an
     // edit landing in the same mtime tick with the same byte count would pass
-    // the (size, mtimeMs) fastpath and serve a stale scan. Drop the whole
-    // session entry unconditionally — the next call rescans from scratch.
-    // (write_memory needs no invalidation: .codeindex/ is excluded from the
-    // walk, so memories never enter a scan.)
-    sessionClear();
+    // the (size, mtimeMs) fastpath and serve a stale scan. Revoke that one
+    // file's stat proof in every session entry; the next call re-reads it and
+    // nothing else. (write_memory needs no invalidation: .codeindex/ is
+    // excluded from the walk, so memories never enter a scan.)
+    sessionForgetFile(join(scan.root, result.file));
     return JSON.stringify(result, null, 2);
   }
   if (name === "write_memory") {
@@ -838,6 +844,10 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     opts.watch && defaultRepo ? watchRepo(defaultRepo, (message) => process.stderr.write(`codeindex: ${message}\n`)) : undefined;
   const walkRepo = async (repo: string): Promise<{ walked: WalkResult; reused: boolean }> =>
     watcher && repo === defaultRepo ? watcher.walk() : { walked: walk(repo, {}), reused: false };
+  // Language servers live as long as this session, not as long as one call:
+  // spawning one per `lsp: true` query cost seconds and got pyright's
+  // pre-indexing answer every time. Closed when stdin ends (src/lsp/pool.ts).
+  const lspPool = new LspSessionPool();
   // No startup warm: each scan-needing tool warms the present-language grammars
   // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
@@ -908,6 +918,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     while (outstanding.size > 0) await Promise.all(outstanding);
   } finally {
     watcher?.close();
+    await lspPool.close();
   }
 
   function dispatch(req: unknown): Reply | Promise<Reply> {
@@ -1022,7 +1033,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   ): Promise<Record<string, unknown>> {
     try {
       const repo = repoRoot(args, defaultRepo);
-      const raw = await callTool(name, args, repo, progress, walkRepo);
+      const raw = await callTool(name, args, repo, progress, walkRepo, lspPool);
       // Narrowed or projected, the answer is not what a whole-repo artifact
       // holds, so the size guard must not point at one.
       const narrowed =

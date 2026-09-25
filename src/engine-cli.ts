@@ -296,7 +296,9 @@ Commands:
               explain_search, embed_status, check_rules, resolution_report,
               type_hierarchy, implementations, call_graph, call_path, impact,
               neighbors, delta, the memory quartet and the three
-              symbolic-edit writes). Flags: --repo <dir> pins ONE
+              symbolic-edit writes, checked before writing: a line argument
+              picks a same-file homonym and strict refuses an edit that
+              changes structure outside its lines). Flags: --repo <dir> pins ONE
               repository so the per-tool repo argument becomes optional (an
               explicit per-call repo still wins); --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
