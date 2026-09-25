@@ -74,7 +74,19 @@ export const SCHEMA_VERSION = 5;
 // threshold. Config files (JSON/YAML/TOML) get the same collector, because the
 // dangerous duplications are the ones that cross a language boundary where no
 // compiler is looking.
-export const EXTRACTOR_VERSION = 14;
+// v15 folds the extraction fixes of one integration round: declarations the
+// AST walk dropped or misread (multi-name declarations, `__all__`, Ruby
+// singleton classes, Elixir guards, Lua table members, TS/PHP promoted
+// parameters, C++ out-of-line owners), one-line signatures with no comment or
+// body, source-order call caps and one-letter callees, Python and non-leaf
+// string literals; imports scanned from code only on both tiers, with soft
+// refs for `from pkg import name` and Kotlin/Scala/Dart/Lua/shell/Elixir
+// specifiers plus Rust `#[path]` modules; FileRecord.importAliases and
+// FileRecord.generated (minified files and bundles); Vue/Svelte/Astro script
+// extraction; regex-tier docs and spans; reStructuredText docs; file
+// summaries that skip licenses; and UTF-8 decoding of files holding a literal
+// U+FFFD.
+export const EXTRACTOR_VERSION = 15;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
