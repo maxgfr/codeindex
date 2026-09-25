@@ -57,7 +57,7 @@ export function buildCommandTable(engine, mount) {
       else if (token === "--exact") opts.exact = true;
       else if (token === "--limit") {
         const value = Number(tokens[++i]);
-        if (!Number.isFinite(value) || value <= 0) throw new Error("--limit needs a positive number.");
+        if (!Number.isInteger(value) || value <= 0) throw new Error("--limit needs a positive whole number.");
         opts.limit = value;
       } else if (token.startsWith("--")) throw new Error(`Unknown flag ${token}. Supported: --limit <n>, --no-fuzzy, --exact, --explain.`);
       else rest.push(token);

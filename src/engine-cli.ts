@@ -293,6 +293,13 @@ function parseFlags(args: string[]): CliFlags {
       if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
       return n;
     };
+    // A count of results: 2.5 used to be accepted and silently act as 2.
+    const count = (): number => {
+      const raw = next();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0) throw new Error(`${a} expects a positive whole number, got "${raw}"`);
+      return n;
+    };
     if (a === "--repo") flags.repo = resolve(next());
     else if (a === "--out") {
       const v = next();
@@ -307,7 +314,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--max-bytes") flags.maxBytes = num();
     else if (a === "--max-calls") flags.maxCalls = num();
     else if (a === "--ignore-case") flags.ignoreCase = true;
-    else if (a === "--max-hits") flags.maxHits = num();
+    else if (a === "--max-hits") flags.maxHits = count();
     else if (a === "--timeout-ms") flags.timeoutMs = num();
     else if (a === "--files-with-matches") flags.filesWithMatches = true;
     else if (a === "--budget-tokens") flags.budgetTokens = num();
@@ -326,7 +333,7 @@ function parseFlags(args: string[]): CliFlags {
     }
     else if (a === "--since") flags.since = next();
     else if (a === "--config") flags.config = resolve(next());
-    else if (a === "--limit") flags.limit = num();
+    else if (a === "--limit") flags.limit = count();
     else if (a === "--no-fuzzy") flags.fuzzy = false;
     else if (a === "--exact") flags.exact = true;
     else if (a === "--explain") flags.explain = true;

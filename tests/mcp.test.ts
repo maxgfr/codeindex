@@ -330,12 +330,26 @@ describe("MCP server", () => {
     expect(hits).toHaveLength(1);
   });
 
-  it("honours zero-valued limits instead of replacing them with defaults", async () => {
+  it("refuses a search limit that is not a whole number of results, instead of bending it", async () => {
+    // limit 0 used to return [] in silence (the CLI rejects --limit 0), and 2.5
+    // acted as 2. Neither is replaced by the default: both are refused.
     const res = await mcpSession([
       { id: 1, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: 0 } } },
+      { id: 2, method: "tools/call", params: { name: "explain_search", arguments: { repo: REPO, query: "client", limit: 0 } } },
+      { id: 3, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: 2.5 } } },
+      { id: 4, method: "tools/call", params: { name: "explain_search", arguments: { repo: REPO, query: "client", limit: "2.5" } } },
+      { id: 5, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "client", limit: 2 } } },
     ]);
-    const hits = JSON.parse(res.get(1)!.result!.content![0]!.text) as unknown[];
-    expect(hits).toEqual([]);
+    for (const id of [1, 2]) {
+      expect(res.get(id)!.result!.isError).toBe(true);
+      expect(res.get(id)!.result!.content![0]!.text).toContain("`limit` must be at least 1");
+    }
+    for (const id of [3, 4]) {
+      expect(res.get(id)!.result!.isError).toBe(true);
+      expect(res.get(id)!.result!.content![0]!.text).toContain("`limit` must be a whole number");
+    }
+    expect(res.get(5)!.result!.isError).toBeUndefined();
+    expect(JSON.parse(res.get(5)!.result!.content![0]!.text)).toHaveLength(2);
   });
 
   it("handshakes, lists tools, and executes tool calls", async () => {

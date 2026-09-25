@@ -329,7 +329,9 @@ describe("query diagnostics", () => {
     expect(results).toEqual([]);
     expect(explain.verdict).toBe("none");
     expect(explain.unresolvedTerms).toEqual(["zzzzqqqqwwww"]);
-    expect(explain.note).toContain("zzzzqqqqwwww");
+    expect(explain.note).toContain("The term zzzzqqqqwwww appears nowhere");
+    const two = explainQuery(scanRepo(PHANTOM), "zzzzqqqqwwww xxxxvvvvyyyy", { fuzzy: false }).explain;
+    expect(two.note).toContain("The terms xxxxvvvvyyyy, zzzzqqqqwwww appear nowhere");
   });
 
   it("--exact drops the bridge-only rows and keeps the literal ones", () => {

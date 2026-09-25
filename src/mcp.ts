@@ -125,6 +125,13 @@ function num(v: unknown): number | undefined {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
+// A result count: a whole number, or absent. `limit: 2.5` used to be accepted
+// and act as 2 in silence.
+function wholeNum(v: unknown, key: string): number | undefined {
+  const n = num(v);
+  if (n !== undefined && !Number.isInteger(n)) throw new Error(`\`${key}\` must be a whole number, got ${n}`);
+  return n;
+}
 function positiveNum(v: unknown): number | undefined {
   const n = num(v);
   return n !== undefined && n > 0 ? n : undefined;
@@ -398,8 +405,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
+    const limit = wholeNum(args.limit, "limit");
     const scan = readScan();
-    const limit = num(args.limit);
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     const exactOpt = args.exact === true ? { exact: true as const } : {};
     if (args.semantic === true) {
@@ -458,8 +465,8 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   if (name === "explain_search") {
     const query = str(args.query);
     if (!query) throw new Error("`query` is required");
+    const limit = wholeNum(args.limit, "limit");
     const scan = readScan();
-    const limit = num(args.limit);
     const fuzzy = typeof args.fuzzy === "boolean" ? args.fuzzy : undefined;
     // Always an object, which is exactly why this is a tool of its own rather
     // than another shape `search` can return: a stable shape is what lets it

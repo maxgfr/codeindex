@@ -135,6 +135,19 @@ describe("F6/F7/F11: CLI flag validation", () => {
     expect(r.out).toContain("--max-bytes expects a positive number");
   });
 
+  it("rejects a fractional or zero result count for --limit and --max-hits", () => {
+    // 2.5 used to be accepted and act as 2.
+    for (const [cmd, flag, value] of [
+      ["search", "--limit", "2.5"],
+      ["search", "--limit", "0"],
+      ["grep", "--max-hits", "1.5"],
+    ] as const) {
+      const r = run([cmd, "client", "--repo", ".", flag, value]);
+      expect(r.code, `${flag} ${value}`).toBe(2);
+      expect(r.out).toContain(`${flag} expects a positive whole number, got "${value}"`);
+    }
+  });
+
   it("errors on a nonexistent --repo instead of reporting an empty repo", () => {
     const r = run(["scan", "--repo", "/nonexistent-path-codeindex-test"]);
     expect(r.code).toBe(2);

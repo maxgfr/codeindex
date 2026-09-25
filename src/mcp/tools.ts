@@ -352,7 +352,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", minimum: 0, description: "Max results (default 20)" },
+        limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
         fuzzy: {
           type: "boolean",
           description:
@@ -392,7 +392,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", minimum: 0, description: "Max results (default 20)" },
+        limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
         fuzzy: { type: "boolean", description: "Stem/trigram fallback for zero-document-frequency terms (default true)" },
         exact: { type: "boolean", description: "Drop results carrying no verbatim term match (default false)" },
       },

@@ -892,8 +892,9 @@ function noteFor(explain: QueryExplanation, missingIdentifier: boolean, allBridg
   if (verdict === "match") return undefined;
 
   if (!resultCount) {
-    return explain.unresolvedTerms.length
-      ? `No file matches. ${explain.unresolvedTerms.length === 1 ? "The term" : "The terms"} ${explain.unresolvedTerms.join(", ")} appear nowhere in this index.`
+    const missing = explain.unresolvedTerms;
+    return missing.length
+      ? `No file matches. ${missing.length === 1 ? "The term" : "The terms"} ${missing.join(", ")} ${missing.length === 1 ? "appears" : "appear"} nowhere in this index.`
       : "No file matches this query.";
   }
 
