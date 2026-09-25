@@ -144,7 +144,9 @@ Commands:
               find_symbol, find_references, lsp_status, onboard, repo_map,
               hotspots, coupling, dead_code, complexity, mermaid, grep, search,
               explain_search, embed_status, check_rules, the memory quartet and
-              the three symbolic-edit writes). Flags: --repo <dir> pins ONE
+              the three symbolic-edit writes, checked before writing: a line
+              argument picks a same-file homonym and strict refuses an edit
+              that changes structure outside its lines). Flags: --repo <dir> pins ONE
               repository so the per-tool repo argument becomes optional (an
               explicit per-call repo still wins); --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single

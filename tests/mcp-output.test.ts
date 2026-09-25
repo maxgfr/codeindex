@@ -211,8 +211,12 @@ describe("structuredContentFor", () => {
 describe("the symbolic edits share one result shape", () => {
   it("validates an EditResult against the declared schema", () => {
     const sample = { file: "src/client.ts", symbol: "HttpClient", startLine: 5, endLine: 9 };
+    // The post-edit check's findings ride along only when there are some.
+    const warned = { file: "src/client.ts", startLine: 5, endLine: 9, lines: 5, warnings: ["the edited file has 1 new syntax error(s), first at line 7"] };
     for (const name of EDIT_TOOLS) {
       expect(validate(OUTPUT_SCHEMAS[name]!, sample), name).toBeUndefined();
+      expect(validate(OUTPUT_SCHEMAS[name]!, warned), name).toBeUndefined();
+      expect(validate(OUTPUT_SCHEMAS[name]!, { ...warned, warnings: [1] }), name).toBeDefined();
     }
   });
 

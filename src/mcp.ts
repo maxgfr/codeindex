@@ -59,7 +59,7 @@ import {
   memoizedEmbeddingIndex,
   memoizedEmbedModel,
   scanFingerprint,
-  sessionClear,
+  sessionForgetFile,
   sessionInvalidate,
   warmGrammarsForWalk,
   type SessionScanOptions,
@@ -269,16 +269,20 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
     const namePath = str(args.namePath);
     const body = typeof args.body === "string" ? args.body : undefined;
     if (!namePath || body === undefined) throw new Error("`namePath` and `body` are required");
+    const line = positiveNum(args.line);
+    if (args.line !== undefined && (line === undefined || !Number.isInteger(line))) {
+      throw new Error("`line` must be a 1-based line number");
+    }
     const scan = readScan();
     const fn = name === "replace_symbol_body" ? replaceSymbolBody : name === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
-    const result = fn(scan, namePath, body, str(args.file));
+    const result = fn(scan, namePath, body, str(args.file), { line, strict: args.strict === true });
     // A write WE just performed must not be trusted to the stat oracle: an
     // edit landing in the same mtime tick with the same byte count would pass
-    // the (size, mtimeMs) fastpath and serve a stale scan. Drop the whole
-    // session entry unconditionally — the next call rescans from scratch.
-    // (write_memory needs no invalidation: .codeindex/ is excluded from the
-    // walk, so memories never enter a scan.)
-    sessionClear();
+    // the (size, mtimeMs) fastpath and serve a stale scan. Revoke that one
+    // file's stat proof in every session entry; the next call re-reads it and
+    // nothing else. (write_memory needs no invalidation: .codeindex/ is
+    // excluded from the walk, so memories never enter a scan.)
+    sessionForgetFile(join(scan.root, result.file));
     return JSON.stringify(result, null, 2);
   }
   if (name === "write_memory") {

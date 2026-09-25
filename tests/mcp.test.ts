@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -18,7 +18,7 @@ import {
   validateArgs,
 } from "../src/mcp.js";
 import { parseMcpFlags } from "../src/engine-cli.js";
-import { sessionInvalidate } from "../src/mcp/session.js";
+import { sessionForgetFile, sessionInvalidate } from "../src/mcp/session.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { headCommit } from "../src/git.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -913,6 +913,38 @@ describe("MCP session cache — e2e over one long-lived server", () => {
     }
   }, 20_000);
 
+  it("edit tools take `line` and `strict`, and report post-edit warnings", async () => {
+    const repo = tmpFixtureCopy("ci-mcp-edit-args-");
+    const file = join(repo, "src", "util.ts");
+    const original = readFileSync(file, "utf8");
+    const renamed = "export function backoffRenamed(attempt: number): number {\n  return attempt;\n}";
+    const session = mcpStagedSession({});
+    try {
+      const bad = await session.call(1, "replace_symbol_body", { repo, namePath: "backoff", body: "x", line: 1.5 });
+      expect(bad.result!.isError).toBe(true);
+      expect(bad.result!.content![0]!.text).toContain("`line` must be a 1-based line number");
+
+      const refused = await session.call(2, "replace_symbol_body", { repo, namePath: "backoff", file: "src/util.ts", line: 3, strict: true, body: renamed });
+      expect(refused.result!.isError).toBe(true);
+      expect(refused.result!.content![0]!.text).toContain("edit refused (strict), nothing written");
+      expect(readFileSync(file, "utf8")).toBe(original);
+
+      const warned = await session.call(3, "replace_symbol_body", { repo, namePath: "backoff", file: "src/util.ts", line: 3, body: renamed });
+      expect(warned.result!.isError).toBeUndefined();
+      expect(JSON.parse(warned.result!.content![0]!.text)).toEqual({
+        file: "src/util.ts",
+        startLine: 2,
+        endLine: 4,
+        lines: 3,
+        warnings: ['"backoff" is no longer declared in lines 2-4'],
+      });
+      const found = await session.call(4, "find_symbol", { repo, namePath: "backoffRenamed", concise: true });
+      expect(JSON.parse(found.result!.content![0]!.text)).toEqual([{ name: "backoffRenamed", kind: "function", file: "src/util.ts", line: 2 }]);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
   it("two graph calls on an unchanged repo return byte-identical text", async () => {
     const session = mcpStagedSession({});
     try {
@@ -1292,6 +1324,44 @@ describe("getScan — bounded LRU, not a single entry", () => {
     const other = getScan(two, {});
     sessionInvalidate(one, "src/client.ts");
     expect(getScan(two, {})).toBe(other);
+  });
+
+  // What the symbolic-edit tools call after writing. Emptying the whole LRU
+  // used to force a full re-extraction of the edited repo and of every other.
+  it("forgets only the edited file: other repos stay warm, a same-size same-mtime rewrite is still seen", () => {
+    const one = tmpFixtureCopy("ci-scan-forget-a-");
+    const two = tmpFixtureCopy("ci-scan-forget-b-");
+    const file = join(one, "src", "util.ts");
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const s1 = getScan(one, {});
+    const s2 = getScan(two, {});
+    // A no-op "edit" keeps the warm scan object: the hash proves it unchanged.
+    sessionForgetFile(file);
+    expect(getScan(one, {})).toBe(s1);
+    // Same byte count, same mtime: only the revoked stat proof exposes it.
+    const original = readFileSync(file, "utf8");
+    writeFileSync(file, original.replace("1000", "9999"));
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    sessionForgetFile(file);
+    expect(getScan(two, {})).toBe(s2);
+    const after = getScan(one, {});
+    expect(after).not.toBe(s1);
+    expect(after.files.find((f) => f.rel === "src/util.ts")!.hash).not.toBe(s1.files.find((f) => f.rel === "src/util.ts")!.hash);
+    // Unchanged records are reused, not re-extracted.
+    expect(after.files.find((f) => f.rel === "src/client.ts")).toBe(s1.files.find((f) => f.rel === "src/client.ts"));
+  });
+
+  it("forgets the edited file in an entry keyed by another spelling of the root", () => {
+    const repo = tmpFixtureCopy("ci-scan-forget-link-");
+    const link = join(mkdtempSync(join(tmpdir(), "ci-scan-forget-alias-")), "alias");
+    symlinkSync(repo, link);
+    const file = join(realpathSync(repo), "src", "util.ts");
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const viaLink = getScan(link, {});
+    writeFileSync(file, readFileSync(file, "utf8").replace("1000", "9999"));
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    sessionForgetFile(file);
+    expect(getScan(link, {})).not.toBe(viaLink);
   });
 
   it("keeps memoized artifacts when an ignored background path changes", () => {
