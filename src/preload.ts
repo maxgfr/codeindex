@@ -95,7 +95,8 @@ export interface PersistedArtifacts {
   // The artifact's on-disk bytes, when they are EXACTLY what rendering a fresh
   // build here prints (renderGraphJson / renderSymbolsJson): the guard proves
   // the build equal, and the sha proves these bytes are its render. undefined
-  // otherwise.
+  // otherwise, including a graph.json whose only difference is its commit stamp
+  // (graph() restamps that one).
   bytes(name: ArtifactName): Buffer | undefined;
   graph(): Graph | undefined;
   symbols(): SymbolIndex | undefined;
@@ -188,12 +189,25 @@ function parsed<T extends { schemaVersion: number }>(bytes: Buffer | undefined):
   }
 }
 
+// graph.json as a build under `commit` would produce it. The commit stamp is
+// the only part of either artifact that is not a function of the records, so
+// a HEAD move over an identical tree (a commit of already-indexed edits, an
+// amend, a checkout of the same tree) used to rebuild the whole pipeline — 4.5s
+// on typescript-go — for one changed field. Rebuilt in buildGraph's key order
+// rather than assigned, so a graph indexed outside git, which has no `commit`
+// key, does not gain one at the end, where a fresh build would not put it.
+function restamped(graph: Graph, commit: string | undefined): Graph {
+  if (graph.commit === commit) return graph;
+  const { schemaVersion, version, commit: _stale, ...rest } = graph;
+  return { schemaVersion, version, commit, ...rest };
+}
+
 // The freshness guard, applied to a scan seeded from cache.json:
 // contentUnchanged proves this scan's records are the ones that built the
-// on-disk artifacts; engineVersion pins the version stamp graph.json embeds and
-// commit the HEAD it embeds; the sha checks prove the on-disk bytes ARE that
-// build's output. All true ⇒ graph.json/symbols.json are byte-equal to
-// buildArtifactsFromScan(scan) run here and rendered. Graph/SymbolIndex are pure
+// on-disk artifacts; engineVersion pins the version stamp graph.json embeds;
+// the sha checks prove the on-disk bytes ARE that build's output. All true ⇒
+// symbols.json is byte-equal to a build run here, and graph.json is too once
+// its commit stamp is brought to this scan's HEAD. Graph/SymbolIndex are pure
 // JSON POJOs (no Map/Set/typed fields), so JSON.parse is a lossless round-trip
 // — a schemaVersion assert is the only reconstruction needed. undefined when
 // the guard fails; a missing/corrupt/partial artifact, or an unexpected
@@ -208,7 +222,6 @@ export function persistedArtifacts(
   if (
     !scan.contentUnchanged ||
     meta.engineVersion !== ENGINE_VERSION ||
-    meta.commit !== scan.commit ||
     meta.graphSha1 === undefined ||
     meta.symbolsSha1 === undefined
   ) {
@@ -217,8 +230,12 @@ export function persistedArtifacts(
   const dir = indexDirPath(repo, indexDir);
   const sha = (name: ArtifactName): string | undefined => (name === "graph" ? meta.graphSha1 : meta.symbolsSha1);
   return {
-    bytes: (name) => verifiedBytes(dir, name, sha(name)),
-    graph: () => parsed<Graph>(verifiedBytes(dir, "graph", meta.graphSha1)),
+    bytes: (name) =>
+      name === "graph" && meta.commit !== scan.commit ? undefined : verifiedBytes(dir, name, sha(name)),
+    graph: () => {
+      const graph = parsed<Graph>(verifiedBytes(dir, "graph", meta.graphSha1));
+      return graph && restamped(graph, scan.commit);
+    },
     symbols: () => parsed<SymbolIndex>(verifiedBytes(dir, "symbols", meta.symbolsSha1)),
   };
 }

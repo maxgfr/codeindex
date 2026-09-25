@@ -394,15 +394,17 @@ reuses whatever sits in `--index` (default `.codeindex`; relative to the repo,
 or absolute): unchanged files skip extraction, and when nothing changed the
 artifacts load instead of being rebuilt — one file at a time: `graph` and
 `symbols` print the sha-verified bytes on disk as they are, and a command that
-needs only the graph never reads `symbols.json`. The index dir itself is never
-scanned, and `--out .` at the repo root skips only the artifacts it writes. A
-record is reused only if it was extracted the way this run would extract it —
-the same `--no-ast`/`--max-calls` setting and the same grammar per language —
-so switching either, or pulling a grammar, re-extracts exactly the files it
-affects. Freshness is keyed on `(size, mtime)`; for an edit that preserves
-both, `--full-hash` re-hashes every file and `--no-index-cache` ignores the
-cache altogether (for `index` too). Artifacts are replaced atomically (a temp
-file renamed over the old one), so a concurrent reader never sees a torn file.
+needs only the graph never reads `symbols.json`. A new commit over an unchanged
+tree only restamps `graph.json`'s `commit`; `symbols.json` is kept as it is.
+The index dir itself is never scanned, and `--out .` at the repo root skips
+only the artifacts it writes. A record is reused only if it was extracted the
+way this run would extract it — the same `--no-ast`/`--max-calls` setting and
+the same grammar per language — so switching either, or pulling a grammar,
+re-extracts exactly the files it affects. Freshness is keyed on `(size,
+mtime)`; for an edit that preserves both, `--full-hash` re-hashes every file
+and `--no-index-cache` ignores the cache altogether (for `index` too).
+Artifacts are replaced atomically (a temp file renamed over the old one), so a
+concurrent reader never sees a torn file.
 
 `--scope <dir|file>` restricts a command to one part of the repo (`./src`,
 `src/` and an absolute path inside the repo all name `src`), and combines with

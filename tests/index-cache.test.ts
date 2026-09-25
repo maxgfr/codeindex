@@ -237,6 +237,53 @@ describe("graph.json commit stamp", { timeout: 60_000 }, () => {
   });
 });
 
+// graph.json embeds the HEAD commit and symbols.json nothing git-related, so a
+// HEAD move over an identical tree (committing already-indexed edits, an
+// amend) changes one field. It used to rerun the whole pipeline.
+describe("a new commit over an unchanged tree", { timeout: 60_000 }, () => {
+  const gitIn = (repo: string) => (...args: string[]): string =>
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
+  const restamps = (repo: string, out: string): boolean =>
+    cli(["index", "--repo", repo, "--out", out]).stderr.includes("graph.json restamped, symbols.json reused");
+
+  it("restamps graph.json, keeps symbols.json, and matches a cold build", () => {
+    const repo = freshRepo();
+    const git = gitIn(repo);
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-qm", "one");
+    const out = join(scratch(), "out");
+    index(repo, out);
+    const symbolsInode = statSync(join(out, "symbols.json")).ino;
+    git("commit", "-q", "--allow-empty", "-m", "two");
+    expect(restamps(repo, out)).toBe(true);
+    expect(statSync(join(out, "symbols.json")).ino).toBe(symbolsInode); // never rewritten
+    expect(JSON.parse(read(out, "graph.json")).commit).toBe(headCommit(repo));
+    const cold = join(scratch(), "cold");
+    index(repo, cold);
+    sameArtifacts(out, cold);
+    expect(index(repo, out)).toBe(true); // and cache.json now describes the new stamp
+  });
+
+  // Indexed outside git, graph.json has no `commit` key at all; the stamp must
+  // land where a fresh build puts it, not at the end.
+  it("gives a graph indexed outside git its stamp in build order", () => {
+    const repo = freshRepo();
+    const out = join(scratch(), "out");
+    index(repo, out);
+    expect(JSON.parse(read(out, "graph.json")).commit).toBeUndefined();
+    const git = gitIn(repo);
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-qm", "one");
+    expect(restamps(repo, out)).toBe(true);
+    const cold = join(scratch(), "cold");
+    index(repo, cold);
+    sameArtifacts(out, cold);
+    expect(Object.keys(JSON.parse(read(out, "graph.json"))).slice(0, 3)).toEqual(["schemaVersion", "version", "commit"]);
+  });
+});
+
 // The npm layout: the bundle ships scripts/grammars (CORE) and nothing else;
 // `grammars pull` puts CORE + EXTENDED into the shared cache. The adjacent dir
 // used to be the only one searched, so pulled Kotlin never loaded and

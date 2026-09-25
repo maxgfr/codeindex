@@ -21,6 +21,7 @@ import { normalizeScope, scanSummary, scanWalkOptions, type RepoScan } from "./s
 import { scanRepoParallel } from "./pool.js";
 import {
   indexDirPath,
+  persistedArtifacts,
   preloadSessionLazy,
   readPersistedIndex,
   INDEX_DIR,
@@ -805,11 +806,14 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // contentUnchanged means this scan's records are object-identical to that
     // run's; downstream is a pure function of (records, docText, commit,
     // meta-opts) and the CLI never sets meta/previousCommunities;
-    // engineVersion pins the version stamp; commit must match because
-    // graph.json embeds it (identical trees under a new HEAD must rebuild);
-    // the shas prove the on-disk bytes are that run's output. ANY failure —
-    // deleted or tampered artifacts included — falls through to the full
-    // build, which rewrites everything (self-healing).
+    // engineVersion pins the version stamp; the shas prove the on-disk bytes
+    // are that run's output (persistedArtifacts, the guard the read commands
+    // use). graph.json also embeds the commit, so under a new HEAD over the
+    // same tree only its stamp changes: it is restamped from its own parse
+    // and symbols.json kept, where the whole pipeline used to rerun (4.5s on
+    // typescript-go, after every commit of already-indexed edits). ANY other
+    // failure — deleted or tampered artifacts included — falls through to the
+    // full build, which rewrites everything (self-healing).
     const embedUnchanged =
       !model ||
       (meta.embed !== undefined &&
@@ -817,15 +821,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         meta.embed.modelId === model.modelId &&
         meta.embed.sha1 !== undefined &&
         artifactSha(embedPath) === meta.embed.sha1);
-    const fastpath =
-      scan.contentUnchanged &&
-      meta.engineVersion === ENGINE_VERSION &&
-      meta.commit === scan.commit &&
-      meta.graphSha1 !== undefined &&
-      artifactSha(graphPath) === meta.graphSha1 &&
-      meta.symbolsSha1 !== undefined &&
-      artifactSha(symbolsPath) === meta.symbolsSha1 &&
-      embedUnchanged;
+    const onDisk = embedUnchanged ? persistedArtifacts(flags.repo, scan, meta, outDir) : undefined;
+    const symbolsReused = onDisk?.bytes("symbols") !== undefined;
+    const fastpath = symbolsReused && onDisk!.bytes("graph") !== undefined;
+    const restampedGraph = symbolsReused && !fastpath && meta.commit !== scan.commit ? onDisk!.graph() : undefined;
 
     if (fastpath) {
       // Artifacts verified byte-identical to what this build would produce —
@@ -837,6 +836,13 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       if (scan.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction)) writeCache(meta);
       process.stderr.write(
         `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
+      );
+    } else if (restampedGraph) {
+      const graphJson = renderGraphJson(restampedGraph);
+      writeArtifact(graphPath, graphJson);
+      writeCache({ graphSha1: sha1(graphJson), symbolsSha1: meta.symbolsSha1, embed: meta.embed });
+      process.stderr.write(
+        `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged at a new commit — graph.json restamped, symbols.json reused)\n`,
       );
     } else {
       const { graph, symbols } = buildArtifactsFromScan(scan);

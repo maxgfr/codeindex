@@ -10,6 +10,8 @@ import { scanRepo } from "../src/scan.js";
 import { walk } from "../src/walk.js";
 import { sha1 } from "../src/hash.js";
 import { renderMermaid } from "../src/viz.js";
+import { renderGraphJson } from "../src/render/graph-json.js";
+import { headCommit } from "../src/git.js";
 import type { Graph } from "../src/types.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
@@ -227,6 +229,35 @@ describe("a fresh index is read one artifact at a time", { timeout: 60_000 }, ()
       doctor(repo, "graph", JSON.stringify(doctored, null, 2) + "\n");
       expect(run(repo, ["mermaid"])).toBe(renderMermaid(doctored));
       expect(run(repo, ["mermaid"])).not.toBe(run(repo, ["mermaid", "--no-index-cache"]));
+    });
+  });
+});
+
+// graph.json embeds the HEAD commit, symbols.json nothing git-related. After a
+// commit over an identical tree the read commands rebuilt everything until the
+// next `index`; now they serve symbols.json as is and restamp graph.json.
+describe("a fresh index read at a new commit", { timeout: 60_000 }, () => {
+  it("serves symbols.json as is and graph.json restamped", () => {
+    withRepo((repo) => {
+      const git = (...args: string[]): void => {
+        execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+      };
+      git("init", "-q");
+      git("add", "-A");
+      git("commit", "-qm", "one");
+      prime(repo);
+      const indexed = headCommit(repo);
+      git("commit", "-q", "--allow-empty", "-m", "two");
+      expect(headCommit(repo)).not.toBe(indexed);
+      expect(run(repo, ["graph"])).toBe(run(repo, ["graph", "--no-index-cache"]));
+      // Doctored artifacts show the answers came from disk, not a rebuild.
+      const compact = JSON.stringify(JSON.parse(artifact(repo, "symbols"))) + "\n";
+      doctor(repo, "symbols", compact);
+      expect(run(repo, ["symbols"])).toBe(compact);
+      const graph = JSON.parse(artifact(repo, "graph")) as Graph;
+      const doctored: Graph = { ...graph, moduleEdges: [] };
+      doctor(repo, "graph", renderGraphJson(doctored));
+      expect(run(repo, ["graph"])).toBe(renderGraphJson({ ...doctored, commit: headCommit(repo) }));
     });
   });
 });
