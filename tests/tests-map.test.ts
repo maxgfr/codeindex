@@ -124,6 +124,49 @@ describe("computeTestMap", () => {
     expect(tm.testedByFile.has("src/b.ts")).toBe(false);
     expect(tm.testedByFile.has("tests/util.ts")).toBe(false);
   });
+
+  // gin: path_test.go tests the unexported cleanPath (no edge can say so) and
+  // render_test.go every renderer through the Render interface; 29 of 58 Go
+  // sources had no covering test.
+  it("a Go _test.go file covers every non-test file of its package, and no other", () => {
+    const g = graphOf(
+      [mod("root", ["path.go", "path_test.go", "tree.go"]), mod("render", ["render/render.go", "render/json.go", "render/render_test.go"])],
+      [
+        file("path.go", "root"),
+        file("path_test.go", "root"),
+        file("tree.go", "root"),
+        file("render/render.go", "render"),
+        file("render/json.go", "render"),
+        file("render/render_test.go", "render"),
+      ],
+      [],
+    );
+    const tm = computeTestMap(g);
+    expect(Object.fromEntries(tm.testedByFile)).toEqual({
+      "path.go": ["path_test.go"],
+      "render/json.go": ["render/render_test.go"],
+      "render/render.go": ["render/render_test.go"],
+      "tree.go": ["path_test.go"],
+    });
+  });
+
+  it("a test named after its subject covers it, in the same directory", () => {
+    const files = [
+      "src/a.ts", "src/a.spec.ts", "src/b.tsx", "src/__tests__/b.test.ts",
+      "pkg/util.py", "pkg/test_util.py", "pkg/other.py",
+      "lib/x.rb", "lib/x_spec.rb",
+      "core/src/main/java/p/Foo.java", "core/src/test/java/p/FooTest.java",
+      "tests/test_elsewhere.py", "elsewhere.py",
+    ];
+    const g = graphOf([mod("all", files)], files.map((rel) => file(rel, "all")), []);
+    expect(Object.fromEntries(computeTestMap(g).testedByFile)).toEqual({
+      "core/src/main/java/p/Foo.java": ["core/src/test/java/p/FooTest.java"],
+      "lib/x.rb": ["lib/x_spec.rb"],
+      "pkg/util.py": ["pkg/test_util.py"],
+      "src/a.ts": ["src/a.spec.ts"],
+      "src/b.tsx": ["src/__tests__/b.test.ts"],
+    });
+  });
 });
 
 describe("testsForModule / untestedModules", () => {

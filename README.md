@@ -40,8 +40,9 @@ compares](#how-it-compares).
   go.mod, Cargo, Java packages, PSR-4, C# namespaces.
 - **Build a typed link-graph**: `import` / `call` / `extends` / `implements` /
   `use` / `doc-link` / `mention` edges at file and module level, plus Louvain
-  communities, PageRank/betweenness centrality, a tests→code map, and
-  surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
+  communities, PageRank/betweenness centrality, a tests→code map (a test
+  covers what it imports, uses or calls, the file it is named after, and in Go
+  its whole package), and surprise-edge detection. Inheritance also yields a **type hierarchy** (what a
   type extends and implements, and what extends and implements IT) and a
   **symbol-level graph** for bounded "what does this reach" neighborhoods.
 - **Render** byte-stable `graph.json` / `symbols.json` (two builds of an
