@@ -405,6 +405,14 @@ Two things make the output readable rather than a wall of strings:
   cross a language boundary — a threshold declared in TypeScript and again in a
   rules JSON, a route called from a Kubernetes manifest. Nothing else compares
   those pairs.
+- **Repetition with no possible owner is left out.** A value seen only across
+  GitHub Actions workflows (`ubuntu-latest`, `actions/checkout@v4`), or only
+  across one kind of package manifest that cannot inherit (`pyproject.toml`,
+  `package.json`, `composer.json`, `go.mod` in each example project), names no
+  fix. The same value in CI *and* in `pyproject.toml` is still reported. In Go,
+  one constant name declared in two files of a package is read as build-tag
+  variants of one holder (`binding.go` / `binding_nomsgpack.go`), not as two
+  competing ones.
 
 ```sh
 codeindex literals --repo . --min-files 3 --min-count 5   # tighten the floors

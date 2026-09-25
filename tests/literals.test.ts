@@ -278,6 +278,66 @@ describe("literal duplication tiers", () => {
   });
 });
 
+describe("literal duplications that name no fix", () => {
+  const MIME = "application/json";
+  const goHolder = (file: string, name: string) =>
+    rec(file, {
+      ext: ".go",
+      lang: "go",
+      literals: [{ value: MIME, line: 13, kind: "string" }],
+      symbols: [{ ...holder(name, 13, `${name} = "${MIME}"`), file }],
+    });
+
+  it("reads one Go name declared in two files of a package as build variants, not competing holders", () => {
+    // gin: binding.go (`//go:build !nomsgpack`) and binding_nomsgpack.go.
+    const scan = scanOf([
+      goHolder("binding/binding.go", "MIMEJSON"),
+      goHolder("binding/binding_nomsgpack.go", "MIMEJSON"),
+      rec("render/json.go", { ext: ".go", lang: "go", literals: [{ value: MIME, line: 53, kind: "string" }] }),
+    ]);
+    const [dup] = findLiteralDuplications(scan).duplications;
+    expect(dup).toMatchObject({ tier: "bypassed", files: 3 });
+    expect(dup!.literals.map((l) => `${l.file}:${l.line}`)).toEqual(["render/json.go:53"]);
+  });
+
+  it("keeps the same name in two Go packages, or two TS files, competing", () => {
+    const twoPackages = scanOf([
+      goHolder("binding/binding.go", "MIMEJSON"),
+      goHolder("render/mime.go", "MIMEJSON"),
+      rec("x/use.go", { ext: ".go", lang: "go", literals: [{ value: MIME, line: 1, kind: "string" }] }),
+    ]);
+    expect(findLiteralDuplications(twoPackages).duplications[0]!.tier).toBe("competing");
+    const twoFiles = scanOf([
+      rec("lib/a.ts", { literals: [{ value: MIME, line: 1, kind: "string" }], symbols: [holder("MIME", 1, `export const MIME = "${MIME}";`)] }),
+      rec("lib/b.ts", { literals: [{ value: MIME, line: 1, kind: "string" }], symbols: [holder("MIME", 1, `export const MIME = "${MIME}";`)] }),
+      rec("use.ts", { literals: [{ value: MIME, line: 1, kind: "string" }] }),
+    ]);
+    expect(findLiteralDuplications(twoFiles).duplications[0]!.tier).toBe("competing");
+  });
+
+  it("drops a value repeated only across CI workflows or only across one kind of package manifest", () => {
+    const yml = (rel: string, value: string) => rec(rel, { ext: ".yml", kind: "config", lang: "yaml", literals: [{ value, line: 3, kind: "string" }] });
+    const toml = (rel: string, value: string) => rec(rel, { ext: ".toml", kind: "config", lang: "toml", literals: [{ value, line: 5, kind: "string" }] });
+    const scan = scanOf([
+      yml(".github/workflows/a.yml", "actions/checkout@v4"),
+      yml(".github/workflows/b.yml", "actions/checkout@v4"),
+      yml(".github/workflows/c.yml", "actions/checkout@v4"),
+      toml("pyproject.toml", "flit_core.buildapi"),
+      toml("examples/one/pyproject.toml", "flit_core.buildapi"),
+      toml("examples/two/pyproject.toml", "flit_core.buildapi"),
+      // Crossing a boundary is the finding: CI and the manifest must agree.
+      yml(".github/workflows/a.yml", "python-3.10"),
+      yml(".github/workflows/b.yml", "python-3.10"),
+      toml("pyproject.toml", "python-3.10"),
+      // A config that can inherit (tsconfig `extends`) is centralizable.
+      rec("a/tsconfig.json", { kind: "config", literals: [{ value: "ES2022-strict", line: 2, kind: "string" }] }),
+      rec("b/tsconfig.json", { kind: "config", literals: [{ value: "ES2022-strict", line: 2, kind: "string" }] }),
+      rec("c/tsconfig.json", { kind: "config", literals: [{ value: "ES2022-strict", line: 2, kind: "string" }] }),
+    ]);
+    expect(findLiteralDuplications(scan).duplications.map((d) => d.value).sort()).toEqual(["ES2022-strict", "python-3.10"]);
+  });
+});
+
 // The span join is what makes the feature tier-independent; if the two
 // extraction tiers disagreed, a repo would report different findings depending
 // on whether a wasm grammar happened to be on disk.
