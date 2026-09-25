@@ -1,6 +1,6 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import {
   parseEmbedModel,
   resolveEmbedModelDir,
   resolveEmbedPullUrl,
+  tryLoadEmbedModel,
   type StaticEmbedModel,
 } from "../src/embed/model.js";
 import type { EmbedPullTarget } from "../src/engine.js";
@@ -124,6 +125,66 @@ describe("parseEmbedModel — shape validation (issue #12: guards the custom-URL
     expect(() => parseEmbedModel({ ...good(), weights: [[1, 0], [1]] }, "src")).toThrow(
       /row 1 has length 1, expected 2/,
     );
+  });
+});
+
+// A model.json that exists but does not load is "no usable model", not a
+// crash: the README's degradation table promises every row exits 0.
+describe("broken model.json degrades instead of failing", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+  const brokenDir = (body: string): string => {
+    const d = mkdtempSync(join(tmpdir(), "ci-embed-bad-"));
+    dirs.push(d);
+    writeFileSync(join(d, "model.json"), body);
+    return d;
+  };
+  const run = (args: string[], embedDir: string) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, CODEINDEX_EMBED_DIR: embedDir };
+    delete env.CODEINDEX_EMBED_ENDPOINT;
+    return spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", env });
+  };
+
+  it("tryLoadEmbedModel returns the error (naming the file) instead of throwing", () => {
+    const shape = brokenDir('{"modelId":"x"}');
+    expect(tryLoadEmbedModel(shape)).toEqual({ error: expect.stringMatching(/bad dim undefined in .*model\.json/) });
+    const json = brokenDir("{not json");
+    expect(tryLoadEmbedModel(json).error).toMatch(/model\.json is not valid JSON/);
+    expect(tryLoadEmbedModel(MODEL_DIR).model?.modelId).toBe("codeindex-fixture-tiny-8d");
+    expect(tryLoadEmbedModel(undefined)).toEqual({});
+  });
+
+  it("`search --semantic` returns the lexical results on exit 0 and names the broken file", () => {
+    const bad = brokenDir('{"modelId":"x"}');
+    const r = run(["search", "http client retry", "--repo", REPO, "--semantic"], bad);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/semantic search unavailable \(embed model: bad dim undefined in .*model\.json\) — returning lexical results/);
+    const lexical = spawnSync(process.execPath, [CLI, "search", "http client retry", "--repo", REPO], { encoding: "utf8" });
+    expect(r.stdout).toBe(lexical.stdout);
+  });
+
+  it("`embed status` reports the model as present with its error, mode none, exit 0", () => {
+    const bad = brokenDir('{"modelId":"x"}');
+    const r = run(["embed", "status", "--repo", REPO], bad);
+    expect(r.status).toBe(0);
+    const status = JSON.parse(r.stdout) as { mode: string; model: { present: boolean; dir?: string; error?: string } };
+    expect(status.mode).toBe("none");
+    expect(status.model.present).toBe(true);
+    expect(status.model.dir).toBe(bad);
+    expect(status.model.error).toMatch(/bad dim undefined/);
+  });
+
+  it("`index` still writes graph.json + symbols.json, skipping only embeddings.bin", () => {
+    const bad = brokenDir("{not json");
+    const out = mkdtempSync(join(tmpdir(), "ci-embed-bad-idx-"));
+    dirs.push(out);
+    const r = run(["index", "--repo", REPO, "--out", out], bad);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/not valid JSON .*embeddings\.bin skipped/);
+    expect(existsSync(join(out, "graph.json"))).toBe(true);
+    expect(existsSync(join(out, "embeddings.bin"))).toBe(false);
   });
 });
 

@@ -35,7 +35,7 @@ import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, searchIndex, type RankMode } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir } from "./embed/model.js";
+import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
@@ -436,7 +436,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
         }
       }
       const modelDir = resolveEmbedModelDir(repo);
-      const model = modelDir ? memoizedEmbedModel(modelDir) : undefined;
+      const { model, error: modelError } = tryLoadEmbedModel(modelDir, memoizedEmbedModel);
       if (model) {
         const index = await memoizedEmbeddingIndex(
           { mode: "static", identity: `${modelDir}#${model.modelId}`, scan },
@@ -445,11 +445,18 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
         const results = searchSemantic(scan, query, index, { model, limit, fuzzy });
         return JSON.stringify({ results, tier: "static" }, null, 2);
       }
-      // Opt-in tier not activated (no endpoint, no model asset) — degrade to
-      // lexical with a reason instead of failing silently.
+      // Opt-in tier not activated (no endpoint, no usable model asset) —
+      // degrade to lexical with a reason instead of failing the call. A broken
+      // model.json is named, since "configure one" would be the wrong advice.
       const results = searchIndex(scan, query, { limit, fuzzy, ...rankOpt });
       return JSON.stringify(
-        { results, tier: "lexical", degradedReason: "no embedding endpoint or static model configured — see embed_status" },
+        {
+          results,
+          tier: "lexical",
+          degradedReason: modelError
+            ? `static model unusable: ${modelError}`
+            : "no embedding endpoint or static model configured — see embed_status",
+        },
         null,
         2,
       );
@@ -481,7 +488,7 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
   }
   if (name === "embed_status") {
     const modelDir = resolveEmbedModelDir(repo);
-    const model = modelDir ? memoizedEmbedModel(modelDir) : undefined;
+    const { model, error: modelError } = tryLoadEmbedModel(modelDir, memoizedEmbedModel);
     const endpoint = resolveEmbedEndpoint();
     const mode: "none" | "static" | "endpoint" = endpoint ? "endpoint" : model ? "static" : "none";
     const status: Record<string, unknown> = {
@@ -489,7 +496,9 @@ async function callTool(name: string, args: Record<string, unknown>, defaultRepo
       mode,
       model: model
         ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
-        : { present: false },
+        : modelError
+          ? { present: true, dir: modelDir, error: modelError }
+          : { present: false },
       endpoint: endpoint ?? null,
     };
     if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);

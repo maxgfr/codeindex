@@ -443,6 +443,33 @@ describe("MCP server", () => {
     expect(sem.results.length).toBeGreaterThan(0);
   }, 20_000);
 
+  it("a broken model.json degrades search to lexical with a reason, and embed_status reports the error", async () => {
+    const badDir = mkdtempSync(join(tmpdir(), "ci-mcp-badmodel-"));
+    writeFileSync(join(badDir, "model.json"), '{"modelId":"x"}');
+    try {
+      const res = await mcpSession(
+        [
+          { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+          { method: "notifications/initialized" },
+          { id: 2, method: "tools/call", params: { name: "search", arguments: { repo: REPO, query: "http client retry", semantic: true } } },
+          { id: 3, method: "tools/call", params: { name: "embed_status", arguments: { repo: REPO } } },
+        ],
+        { CODEINDEX_EMBED_DIR: badDir, CODEINDEX_EMBED_ENDPOINT: undefined },
+      );
+      expect(res.get(2)!.result!.isError).toBeUndefined();
+      const sem = JSON.parse(res.get(2)!.result!.content![0]!.text) as { results: { file: string }[]; tier: string; degradedReason?: string };
+      expect(sem.tier).toBe("lexical");
+      expect(sem.degradedReason).toMatch(/^static model unusable: embed model: bad dim undefined in .*model\.json$/);
+      expect(sem.results[0]!.file).toBe("src/client.ts");
+      expect(res.get(3)!.result!.isError).toBeUndefined();
+      const status = JSON.parse(res.get(3)!.result!.content![0]!.text) as { mode: string; model: { present: boolean; error?: string } };
+      expect(status.mode).toBe("none");
+      expect(status.model).toMatchObject({ present: true, error: expect.stringMatching(/bad dim undefined/) });
+    } finally {
+      rmSync(badDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("search semantic:true with a configured but unreachable endpoint reports tier: lexical with the failure reason", async () => {
     // A URL guaranteed to refuse connections: bind a port, then free it.
     const dead = http.createServer();

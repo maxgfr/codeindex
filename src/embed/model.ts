@@ -125,8 +125,38 @@ export function loadEmbedModel(dir?: string): StaticEmbedModel | undefined {
   if (!dir) return undefined;
   const path = join(dir, "model.json");
   if (!existsSync(path)) return undefined;
-  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (e) {
+    // A bare SyntaxError names no file; say which asset is broken.
+    throw new Error(`embed model: ${path} is not valid JSON (${e instanceof Error ? e.message : String(e)})`);
+  }
   return parseEmbedModel(raw, path);
+}
+
+// A model.json that exists but fails to load (truncated download, hand-edited,
+// wrong shape). The search path must not turn that into a hard error: the
+// README promises every degradation row exits 0, and a broken asset is one more
+// way of "no usable model". `error` is the loader's message, which names the
+// file, so the caller can say exactly what to re-pull.
+export interface EmbedModelLoad {
+  model?: StaticEmbedModel;
+  error?: string;
+}
+
+// loadEmbedModel for callers that degrade instead of failing: search (CLI and
+// MCP), `index` (which then just skips the embeddings sidecar) and `embed
+// status` (which reports the error). `embed build` keeps the throwing loader —
+// there, a usable model IS the request.
+export function tryLoadEmbedModel(dir: string | undefined, load: (dir: string) => StaticEmbedModel | undefined = loadEmbedModel): EmbedModelLoad {
+  if (!dir) return {};
+  try {
+    const model = load(dir);
+    return model ? { model } : {};
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 // What `embed pull` fetches, and whether to verify it. CODEINDEX_EMBED_URL wins

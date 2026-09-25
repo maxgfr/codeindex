@@ -402,7 +402,7 @@ export const TOOLS = [
   {
     name: "embed_status",
     description:
-      "Report the embedding tier: the effective mode (none/static/endpoint; endpoint > static model), the resolved model (opt-in, never shipped in the package) with its modelId/dim, EMBED_VERSION, and the configured HTTP endpoint with its reachability. Use to check whether `search` with semantic:true will fuse embeddings or degrade to lexical.",
+      "Report the embedding tier: the effective mode (none/static/endpoint; endpoint > static model), the resolved model (opt-in, never shipped in the package) with its modelId/dim, EMBED_VERSION, and the configured HTTP endpoint with its reachability. A model.json that is present but fails to load is reported as `model: { present: true, error }` with mode none. Use to check whether `search` with semantic:true will fuse embeddings or degrade to lexical.",
     inputSchema: { type: "object", properties: { ...repoProp }, required: ["repo"] },
   },
   {

@@ -686,6 +686,7 @@ at run, non-root, `:8756`).
 | + model asset | RRF-fused deterministic static semantic search |
 | + `CODEINDEX_EMBED_ENDPOINT` | rich tier — **wins over a static model** |
 | `--semantic`, nothing available | lexical + stderr note |
+| `model.json` present but broken (bad JSON or shape) | lexical + a stderr note naming the file; `embed status` reports `model: { present: true, error }`, `index` skips only `embeddings.bin` |
 | endpoint set but unreachable | lexical + stderr note — **never** falls back to the static model |
 
 </details>

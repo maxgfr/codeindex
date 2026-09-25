@@ -38,7 +38,15 @@ import { impactOf, neighborsOf } from "./traverse.js";
 import { deltaFor, formatDeltaPanel } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
 import { checkRules, parseRules } from "./rules.js";
-import { EMBED_VERSION, resolveEmbedModelDir, loadEmbedModel, parseEmbedModel, resolveEmbedPullUrl, fetchEmbedModel } from "./embed/model.js";
+import {
+  EMBED_VERSION,
+  resolveEmbedModelDir,
+  loadEmbedModel,
+  tryLoadEmbedModel,
+  parseEmbedModel,
+  resolveEmbedPullUrl,
+  fetchEmbedModel,
+} from "./embed/model.js";
 import { buildEmbeddingIndex, serializeEmbeddings } from "./embed/index.js";
 import { searchSemantic } from "./embed/search.js";
 import {
@@ -683,7 +691,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       workers: flags.workers,
     });
     const modelDir = resolveEmbedModelDir(flags.repo);
-    const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+    // A broken model.json must not fail the whole index: graph.json and
+    // symbols.json do not depend on it. Skip the sidecar and say why.
+    const { model, error: modelError } = tryLoadEmbedModel(modelDir);
+    if (modelError) process.stderr.write(`codeindex: ${modelError} — embeddings.bin skipped; re-run \`codeindex embed pull\`\n`);
 
     const graphPath = join(outDir, "graph.json");
     const symbolsPath = join(outDir, "symbols.json");
@@ -896,13 +907,15 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           lexical();
         }
       } else {
-        const modelDir = resolveEmbedModelDir(flags.repo);
-        const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+        const { model, error: modelError } = tryLoadEmbedModel(resolveEmbedModelDir(flags.repo));
         if (!model) {
-          // Degradation: --semantic without a model or endpoint → lexical results
-          // + a stderr note, exit 0. The results shape is a superset of lexical.
+          // Degradation: --semantic without a usable model or endpoint → lexical
+          // results + a stderr note, exit 0. A model.json that is present but
+          // broken is the same case, named as such so the fix is obvious.
           process.stderr.write(
-            "codeindex: semantic search unavailable (no embedding model or endpoint) — returning lexical results; run `codeindex embed pull` or set CODEINDEX_EMBED_ENDPOINT to enable it\n",
+            modelError
+              ? `codeindex: semantic search unavailable (${modelError}) — returning lexical results; re-run \`codeindex embed pull\` to replace the model\n`
+              : "codeindex: semantic search unavailable (no embedding model or endpoint) — returning lexical results; run `codeindex embed pull` or set CODEINDEX_EMBED_ENDPOINT to enable it\n",
           );
           lexical();
         } else {
@@ -923,7 +936,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const sub = flags.positional;
     const modelDir = resolveEmbedModelDir(flags.repo);
     if (sub === "status") {
-      const model = modelDir ? loadEmbedModel(modelDir) : undefined;
+      // status is the command you run to find out what is wrong, so a broken
+      // model.json is reported (present, with its error) rather than thrown.
+      const { model, error: modelError } = tryLoadEmbedModel(modelDir);
       const endpoint = resolveEmbedEndpoint();
       // Effective mode with precedence: endpoint > static model > none.
       const mode: "none" | "static" | "endpoint" = endpoint ? "endpoint" : model ? "static" : "none";
@@ -932,7 +947,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         mode,
         model: model
           ? { present: true, dir: modelDir, modelId: model.modelId, dim: model.dim, vocabSize: model.vocabSize }
-          : { present: false },
+          : modelError
+            ? { present: true, dir: modelDir, error: modelError }
+            : { present: false },
         endpoint: endpoint ?? null,
       };
       // When an endpoint is configured, actually probe its reachability.
