@@ -255,14 +255,18 @@ describe("SDK conformance of the advertised tool list", () => {
   });
 
   it("sends a capped response as a tool error without structuredContent, for every schema-declaring tool", async () => {
-    // A cap this small withholds every payload, so each call exercises the
-    // notice path. Before, the notice was a non-error result with no
-    // structuredContent — which an SDK client turns into a thrown -32600.
+    // A 1-byte cap withholds every payload (the smallest JSON answer, `[]`,
+    // is 2 bytes), so each call exercises the notice path. A larger cap let a
+    // small honest answer through: with full git history, `coupling` on the
+    // fixture is `{"ok": true, "couplings": []}` — 36 bytes, under the 40 this
+    // test used — while a shallow clone adds a `shallow` flag and went over.
+    // Before, the notice was a non-error result with no structuredContent —
+    // which an SDK client turns into a thrown -32600.
     const names = Object.keys(CASES).filter((n) => !EDIT_TOOLS.includes(n) && n !== "write_memory" && n !== "delete_memory");
     const { ordered } = await session(
       names.map((name) => ({ name, arguments: CASES[name]! })),
       "2025-11-25",
-      ["--max-response-bytes", "40"],
+      ["--max-response-bytes", "1"],
     );
     names.forEach((name, i) => {
       const res = ordered[i] as Record<string, unknown>;
