@@ -40,7 +40,7 @@ describe("persisted cache validation", () => {
     const entry = current.files[REL]!;
     delete entry.size;
     delete entry.mtimeMs;
-    for (const key of ["calls", "idents", "terms", "literals", "relations", "importedNames"] as const) delete entry.record[key];
+    for (const key of ["calls", "idents", "terms", "literals", "relations", "importedNames", "importAliases"] as const) delete entry.record[key];
     expect(readCache(current)?.cacheMap.get(REL)).toEqual(entry);
   });
 
@@ -56,9 +56,11 @@ describe("persisted cache validation", () => {
     ["rel", "src/other.ts"], ["hash", "0".repeat(40)], ["ext", null], ["kind", "invalid"],
     ["lang", 42], ["size", -1], ["lines", "10"], ["title", {}],
     ["headings", [null]], ["symbols", null], ["symbols", [{}]], ["refs", [{ kind: "import", spec: null }]],
+    ["refs", [{ kind: "import", spec: ".util", soft: "yes" }]],
     ["calls", [{ name: "run", line: 0 }]], ["idents", [1]], ["terms", {}],
     ["importedNames", [null]], ["truncated", "yes"], ["relations", [{ kind: "extends", from: "A", to: null, line: 1 }]],
-    ["literals", [{ kind: "string", value: 10, line: 1 }]],
+    ["importAliases", [{ local: "b", name: 1, from: "./a.js" }]], ["importAliases", [{ local: "b", name: "a", from: null }]],
+    ["literals", [{ kind: "string", value: 10, line: 1 }]], ["generated", "obfuscated"],
   ])("rejects a malformed record field %s", (field, value) => {
     const current = cache();
     Object.assign(current.files[REL]!.record, { [field]: value });

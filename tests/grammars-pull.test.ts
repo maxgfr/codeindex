@@ -163,6 +163,36 @@ describe("resolveGrammarsTier — resolution order (adjacent > env > cache > non
     expect(t.dir).toBe(legacy);
   });
 
+  // The npm layout ships the CORE wasms next to the bundle and nothing else;
+  // the EXTENDED ones only ever arrive through `grammars pull` into the shared
+  // cache. `dirs` used to stop at the winning dir, so a pulled kotlin.wasm was
+  // never searched and Kotlin stayed on the regex tier with pullNeeded false.
+  it("keeps the lower tiers that exist as per-key fallbacks behind the winner", () => {
+    const modDir = mk("ci-gr-mod-");
+    mkdirSync(join(modDir, "grammars"));
+    const envDir = mk("ci-gr-env-");
+    process.env.CODEINDEX_GRAMMARS_DIR = envDir;
+    const home = populatedCacheHome();
+    process.env.XDG_CACHE_HOME = home;
+    const cdir = join(home, "codeindex", "grammars", ENGINE_VERSION);
+    const adjacent = resolveGrammarsTier({ moduleDir: modDir });
+    expect(adjacent.tier).toBe("adjacent");
+    expect(adjacent.dirs).toEqual([join(modDir, "grammars"), envDir, cdir]);
+    const env = resolveGrammarsTier({ moduleDir: mk("ci-gr-mod-") });
+    expect(env.tier).toBe("env");
+    expect(env.dirs).toEqual([envDir, cdir]);
+    delete process.env.CODEINDEX_GRAMMARS_DIR;
+    expect(resolveGrammarsTier({ moduleDir: modDir }).dirs).toEqual([join(modDir, "grammars"), cdir]);
+  });
+
+  it("the legacy override stays one pinned dir, with no fallback behind it", () => {
+    const legacy = mk("ci-gr-legacy-");
+    process.env.CODEINDEX_GRAMMAR_DIR = legacy;
+    process.env.CODEINDEX_GRAMMARS_DIR = mk("ci-gr-env-");
+    process.env.XDG_CACHE_HOME = populatedCacheHome();
+    expect(resolveGrammarsTier({ moduleDir: mk("ci-gr-mod-") }).dirs).toEqual([legacy]);
+  });
+
   it("sharedGrammarsCacheDir is version-scoped and honors XDG_CACHE_HOME", () => {
     process.env.XDG_CACHE_HOME = join(tmpdir(), "xdg-fixed");
     expect(sharedGrammarsCacheDir()).toBe(join(tmpdir(), "xdg-fixed", "codeindex", "grammars", ENGINE_VERSION));

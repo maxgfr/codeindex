@@ -77,7 +77,10 @@ export function readTextEx(abs: string): TextRead {
     return { ...base, text: '', encoding: null, binary: true, byteAddressable: false, bodyStart: 0 }
   }
   const text = buf.toString('utf8')
-  if (text.includes('�')) {
+  // U+FFFD after a lossy decode is only a SUSPICION of invalid UTF-8: a valid
+  // file may contain the replacement character literally. The strict decoder
+  // settles it, and only runs on that rare path.
+  if (text.includes('�') && !isUtf8(buf)) {
     // Invalid UTF-8. A latin1/Windows-1252 source decodes cleanly (every byte
     // maps to a code point), which beats baking mojibake into the inventory —
     // but a decoded-char offset is then not a file-byte offset.
@@ -90,6 +93,18 @@ export function readTextEx(abs: string): TextRead {
     }
   }
   return { ...base, text, encoding: 'utf8', byteAddressable: true, bodyStart: 0 }
+}
+
+// `buffer.isUtf8` needs Node 18.14; a fatal TextDecoder is available on every
+// supported runtime, the browser bundle included.
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true })
+function isUtf8(buf: Uint8Array): boolean {
+  try {
+    strictUtf8.decode(buf)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

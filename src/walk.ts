@@ -1,7 +1,8 @@
 import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, existsSync, type Dirent } from "node:fs";
 import { join, resolve, sep, extname } from "node:path";
-import { parseGitignore, isIgnored, type IgnoreRule } from "./ignore.js";
+import { parseGitignore, isIgnored, decidingRule, type IgnoreRule } from "./ignore.js";
 import { readTextEx } from "./text.js";
+import { sh } from "./util.js";
 export { readTextEx } from "./text.js";
 
 // Directories that never carry signal for a documentation/code question and
@@ -17,20 +18,57 @@ export const IGNORE_DIRS = new Set([
   "tmp", ".ultraindex", ".codeindex", "Pods", "DerivedData", ".terraform", "elm-stuff", ".dart_tool",
 ]);
 
+// The IGNORE_DIRS names that are build output only by CONVENTION: each is also
+// an ordinary package or directory name — Go's tsc/internal/execute/build and
+// a Go package `out`, Java's com.acme.build, a Rust or Go `target` module, a
+// tracked `tmp/` of fixtures. Skipped by name alone, such source vanished from
+// the index and every import of it dangled (typescript-go's build package, 7
+// files). In a git worktree the default walk therefore keeps one that git
+// tracks files in (see trackedBuildOutputDirs); the rest of IGNORE_DIRS —
+// dependencies, caches, `dist` bundles — stays skipped by name.
+export const BUILD_OUTPUT_DIRS = new Set(["build", "out", "target", "tmp"]);
+
+// The BUILD_OUTPUT_DIRS-named directories under `root` (repo-relative posix)
+// that hold at least one file git tracks: one `git ls-files` over the index,
+// paths relative to `root`. undefined when `root` is not in a git worktree or
+// git cannot run (the browser build): every such directory is then skipped by
+// name, as before.
+function trackedBuildOutputDirs(root: string): Set<string> | undefined {
+  const specs = [...BUILD_OUTPUT_DIRS].map((d) => `:(glob)**/${d}/**`);
+  const res = sh("git", ["-C", root, "ls-files", "-z", "--", ...specs]);
+  if (!res.ok) return undefined;
+  const dirs = new Set<string>();
+  for (const path of res.stdout.split("\0")) {
+    let from = 0;
+    for (let slash = path.indexOf("/"); slash !== -1; slash = path.indexOf("/", from)) {
+      if (BUILD_OUTPUT_DIRS.has(path.slice(from, slash))) dirs.add(path.slice(0, slash));
+      from = slash + 1;
+    }
+  }
+  return dirs;
+}
+
 // The VCS entry that marks a repository root: a directory for a normal clone,
 // a "gitdir: <path>" FILE for a linked worktree or a submodule.
 const GIT_ENTRY = ".git";
+// The engine's own index dir (preload.ts's INDEX_DIR, repeated here because
+// preload.ts imports this module).
+const INDEX_ENTRY = ".codeindex";
 
 function isIgnoredDirectory(name: string, ignoreDirs: Set<string>): boolean {
   // `.git` is structural, not a preference: VCS internals (objects, packs,
   // hooks) never carry signal, so it stays ignored even when a caller-supplied
   // `ignoreDirs` replaces the default set without listing it — `--ignore-dir
   // foo` used to pull thousands of loose objects into the index.
+  // `.codeindex` is structural for the same reason: it is this engine's own
+  // output (artifacts, pulled models, MCP memories). `--ignore-dir
+  // node_modules` put it back in the scan, so search answered with
+  // `.codeindex/symbols.json` and the index described itself.
   // A process killed during an atomic symbolic edit can leave the
   // `.codeindex-edit-*` directory beside the source. It contains a copy of that
   // source and must never become a duplicate phantom file in the next index,
   // even when the consumer repo has no matching .gitignore rule.
-  return name === GIT_ENTRY || ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
+  return name === GIT_ENTRY || name === INDEX_ENTRY || ignoreDirs.has(name) || name.startsWith(".codeindex-edit-");
 }
 
 // A gitfile's mandatory opening bytes. Git's parser (read_gitfile_gently)
@@ -127,9 +165,11 @@ export const BINARY_EXT = new Set([
 /** An observed exclusion. Directory contents are not enumerated. */
 export interface WalkSkip {
   rel: string;
-  reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
+  reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "file-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
   directory: boolean;
   size?: number;
+  /** For "gitignored": the rule that decided it — its file, 1-based line, and pattern as written. */
+  rule?: { source: string; line: number; pattern: string };
 }
 
 export interface WalkEntry {
@@ -146,7 +186,8 @@ export interface WalkOptions {
   // every consumer; pass false to index generated/ignored trees deliberately.
   gitignore?: boolean;
   // Directory names to skip, REPLACING the default set entirely (not merging
-  // with it) — except `.git`, which is skipped whatever the list says.
+  // with it) — except `.git` and `.codeindex`, which are skipped whatever the
+  // list says.
   // IGNORE_DIRS is a public export, so consumers compose
   // `[...IGNORE_DIRS, "extra"]` — or filter it — themselves; replace is the
   // simplest contract. Deliberate scope boundary: grep.ts (the ripgrep
@@ -158,6 +199,14 @@ export interface WalkOptions {
   includeBinary?: boolean;
   includeOversize?: boolean;
   includeMinified?: boolean;
+  /** Keep in-repo FILE symlinks as files of their own (skipped by default — see walk). */
+  includeFileSymlinks?: boolean;
+  // Keep a BUILD_OUTPUT_DIRS-named directory that git tracks files in (default
+  // true; applies to the DEFAULT ignore set only — a name the caller lists in
+  // `ignoreDirs` is skipped wherever it appears). False skips them by name
+  // alone, as ripgrep's name-based exclusions must: grep's JS backend passes
+  // it to search the same universe.
+  trackedBuildDirs?: boolean;
   /** Replace the binary extension policy, e.g. to retain textual SVG. */
   binaryExtensions?: ReadonlySet<string>;
   /** Called before entering a directory or accepting a file. False prunes it. */
@@ -205,11 +254,44 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   // Effective ignored-directory set, built once: the caller's replacement when
   // given (see WalkOptions.ignoreDirs — replace, never merge), else the default.
   const ignoreDirs = opts.ignoreDirs ? new Set(opts.ignoreDirs) : IGNORE_DIRS;
+  // Asked of git at most once, and only when the walk meets a build-output-
+  // named directory that no .gitignore rule already excludes — a repo that
+  // ignores its build output never spawns git here.
+  const keepTracked = !opts.ignoreDirs && opts.trackedBuildDirs !== false;
+  let tracked: Set<string> | undefined | null = null; // null: not asked yet
+  const isTrackedBuildDir = (rel: string): boolean => {
+    if (tracked === null) tracked = trackedBuildOutputDirs(root);
+    return tracked?.has(rel) ?? false;
+  };
+  // The ignored-directory verdict for a directory entry. A gitignored
+  // build-output dir is decided without asking git: the gitignore check below
+  // would drop it anyway.
+  const skipsDir = (name: string, rel: string, rules: readonly IgnoreRule[]): boolean =>
+    isIgnoredDirectory(name, ignoreDirs) &&
+    !(
+      keepTracked &&
+      BUILD_OUTPUT_DIRS.has(name) &&
+      !(useGitignore && rules.length && isIgnored(rules, rel, true)) &&
+      isTrackedBuildDir(rel)
+    );
   const out: WalkedFile[] = [];
   let capped = false;
   let excluded = 0;
   const skip = (rel: string, reason: WalkSkip["reason"], directory = false, size?: number): void => {
     opts.onSkip?.({ rel, reason, directory, ...(size === undefined ? {} : { size }) });
+  };
+  // A gitignored skip names its deciding rule. Looked up again only when
+  // someone observes skips; the walk itself needs just the verdict.
+  const skipIgnored = (rel: string, rules: readonly IgnoreRule[], directory: boolean, size?: number): void => {
+    if (!opts.onSkip) return;
+    const rule = decidingRule(rules, rel, directory);
+    opts.onSkip({
+      rel,
+      reason: "gitignored",
+      directory,
+      ...(size === undefined ? {} : { size }),
+      ...(rule?.source !== undefined ? { rule: { source: rule.source, line: rule.line!, pattern: rule.pattern! } } : {}),
+    });
   };
 
   // Containment root for the symlink-escape guard: a symlinked file or
@@ -273,11 +355,12 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     if (useGitignore && !frame.rel) {
       // `.git/info/exclude` sits BEFORE every .gitignore in git's own
       // precedence (a .gitignore rule can still negate it — later rules win).
-      const parsed = parseGitignore(readInfoExclude(gitDir), "");
+      const parsed = parseGitignore(readInfoExclude(gitDir), "", ".git/info/exclude");
       if (parsed.length) rules = [...rules, ...parsed];
     }
     if (useGitignore && entries.some((e) => e.name === ".gitignore")) {
-      const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel);
+      const source = frame.rel ? `${frame.rel}/.gitignore` : ".gitignore";
+      const parsed = parseGitignore(readText(join(frame.dir, ".gitignore")), frame.rel, source);
       if (parsed.length) rules = [...rules, ...parsed];
     }
     for (const entry of entries) {
@@ -296,7 +379,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       // false on its dirent and falls through to the stat-based
       // classification below, so a link named node_modules still classifies
       // by its target exactly as before.
-      if (entry.isDirectory() && isIgnoredDirectory(name, ignoreDirs)) {
+      if (entry.isDirectory() && skipsDir(name, rel, rules)) {
         skip(rel, "ignore-dir", true);
         continue;
       }
@@ -313,14 +396,14 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         continue;
       }
       if (st.isDirectory()) {
-        if (isIgnoredDirectory(name, ignoreDirs)) { skip(rel, "ignore-dir", true); continue; }
+        if (skipsDir(name, rel, rules)) { skip(rel, "ignore-dir", true); continue; }
         // An in-repo DIRECTORY symlink is skipped entirely: its target is (or
         // will be) walked under its canonical name, and letting both paths race
         // through the cycle guard would keep whichever readdir served first —
         // aliased, filesystem-order-dependent indexes. Out-of-repo links are
         // covered by the containment guard above.
         if (isLink) { skip(rel, "directory-symlink", true); continue; }
-        if (useGitignore && rules.length && isIgnored(rules, rel, true)) { skip(rel, "gitignored", true); continue; }
+        if (useGitignore && rules.length && isIgnored(rules, rel, true)) { skipIgnored(rel, rules, true); continue; }
         if (opts.filter && !opts.filter({ rel, abs, directory: true })) { skip(rel, "filter", true); continue; }
         stack.push({ dir: abs, rel, rules });
         continue;
@@ -338,10 +421,18 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       else if ((name.endsWith(".min.js") || name.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
       if (reason) {
         excluded++;
-        skip(rel, reason, false, st.size);
+        if (reason === "gitignored") skipIgnored(rel, rules, false, st.size);
+        else skip(rel, reason, false, st.size);
         continue;
       }
-      // Symlink-escape guard for files (statSync above follows links).
+      // Symlink-escape guard for files (statSync above follows links). A link
+      // that stays inside the repo is an ALIAS, skipped like a directory link:
+      // git stores it as a one-line blob naming its target, and indexing the
+      // target's content a second time under the link's path made every
+      // symbol in it ambiguous (`alias.py -> main.py` gave `main` two defs, so
+      // call resolution had no unique target) and doubled doc and search hits
+      // (`CLAUDE.md -> AGENTS.md`). The target is indexed under its own path
+      // whenever the walk keeps it. Inventories opt back in.
       if (isLink) {
         try {
           if (!contained(realpathSync(abs))) { skip(rel, "symlink-outside-root"); continue; }
@@ -349,6 +440,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
           skip(rel, "broken-symlink");
           continue;
         }
+        if (!opts.includeFileSymlinks) { skip(rel, "file-symlink"); continue; }
       }
       // The cap is enforced HERE, on kept files, so a flat directory cannot
       // silently overshoot it and `capped` is set exactly when a file was

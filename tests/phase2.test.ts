@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,14 +16,15 @@ import { atomicWriteText, replaceSymbolBody, insertAfterSymbol, insertBeforeSymb
 import { writeMemory, readMemory, deleteMemory, listMemories } from "../src/memory.js";
 import { readText as engineRead } from "../src/walk.js";
 import { findDeadCode } from "../src/deadcode.js";
-import { symbolComplexity, riskHotspots } from "../src/complexity.js";
-import { renderMermaid } from "../src/viz.js";
+import { indexedFile, symbolComplexity, riskHotspots } from "../src/complexity.js";
+import { renderMermaid, renderMermaidClustered } from "../src/viz.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { grepRepo } from "../src/grep.js";
 import { extractCode } from "../src/extract/code.js";
 import { extractAst } from "../src/ast/extract.js";
 
 const FIXTURES = fileURLToPath(new URL("./fixtures", import.meta.url));
+const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 
 function git(dir: string, ...args: string[]): void {
   execFileSync("git", ["-C", dir, ...args], {
@@ -233,7 +234,7 @@ describe("grepRepo backend parity", () => {
     const hits = grepRepo(root, "alphaToken", { globs: ["sub/**"], noRipgrep: true });
     expect(hits.every((h) => h.file.startsWith("sub/"))).toBe(true);
     const capped = grepRepo(root, "alphaToken", { maxHits: 1, noRipgrep: true });
-    expect(capped).toEqual([{ file: "a.ts", line: 1, text: "export const alphaToken = 1;" }]);
+    expect(capped).toEqual([{ file: "a.ts", line: 1, col: 14, text: "export const alphaToken = 1;" }]);
   });
 });
 
@@ -362,6 +363,11 @@ describe("symbol query API", () => {
     const withBody = findSymbol(scan, "makeWidget", { concise: true, includeBody: true })[0]!;
     expect(withBody.body).toContain("return new Widget()");
     expect(withBody.signature).toBeUndefined();
+
+    // A member keeps its parent: `Widget/size` is how it is addressed.
+    const member = findSymbol(scan, "size", { concise: true });
+    expect(member.map((m) => Object.keys(m).sort())).toEqual([["file", "kind", "line", "name", "parent"]]);
+    expect(member[0]!.parent).toBe("Widget");
   });
 
   it("findReferences merges precise call sites with file-level references", () => {
@@ -536,5 +542,95 @@ describe("dead code, complexity, mermaid", () => {
     expect(mmd).toContain("graph LR");
     expect(mmd).toContain("-->");
     expect(renderMermaid(graph)).toBe(mmd);
+  });
+
+  // `src/a-b` and `src/a_b` (slugs src-a-b, src-a_b) used to share the node id
+  // src_a_b, so the diagram drew one module with a doubled edge.
+  function collidingRepo(): string {
+    const root = mkdtempSync(join(tmpdir(), "ci-mmd-ids-"));
+    for (const dir of ["a-b", "a_b", "c"]) mkdirSync(join(root, "src", dir), { recursive: true });
+    writeFileSync(join(root, "src", "a-b", "x.ts"), "export const x = 1;\n");
+    writeFileSync(join(root, "src", "a_b", "y.ts"), "export const y = 2;\n");
+    writeFileSync(join(root, "src", "c", "z.ts"), 'import { x } from "../a-b/x";\nimport { y } from "../a_b/y";\nexport const z = x + y;\n');
+    return root;
+  }
+
+  it("renderMermaid gives every module its own node id, keeping readable ids where they are unique", () => {
+    const { graph } = buildIndexArtifacts(collidingRepo());
+    expect(renderMermaid(graph)).toBe(
+      [
+        "graph LR",
+        '  m_src_a_b["src/a-b"]',
+        '  m_src_a_b_2["src/a_b"]',
+        '  m_src_c["src/c"]',
+        "  m_src_c --> m_src_a_b",
+        "  m_src_c --> m_src_a_b_2",
+        "",
+      ].join("\n"),
+    );
+    const clustered = renderMermaidClustered(graph).content;
+    expect(clustered).toContain("m_src_a_b[");
+    expect(clustered).toContain("m_src_a_b_2[");
+    expect(clustered).toContain("m_src_c --> m_src_a_b\n");
+    expect(clustered).toContain("m_src_c --> m_src_a_b_2\n");
+  });
+
+  it("renderMermaid focuses on a slug, a module directory or a file, and throws on anything else", () => {
+    const { graph } = buildIndexArtifacts(collidingRepo());
+    const bySlug = renderMermaid(graph, { module: "src-a_b" });
+    expect(bySlug).toBe(['graph LR', '  m_src_a_b_2["src/a_b"]', '  m_src_c["src/c"]', "  m_src_c --> m_src_a_b_2", ""].join("\n"));
+    expect(renderMermaid(graph, { module: "src/a_b" })).toBe(bySlug);
+    expect(renderMermaid(graph, { module: "src/a_b/" })).toBe(bySlug);
+    expect(renderMermaid(graph, { module: "src/a_b/y.ts" })).toBe(bySlug);
+    // It used to print a bare "graph LR" — indistinguishable from "no dependencies".
+    expect(() => renderMermaid(graph, { module: "nonexistent" })).toThrow(/no such file or module in the index: nonexistent/);
+  });
+
+  it("renderMermaid never emits a flowchart keyword as a node id, and labels nodes by their directory", () => {
+    // mermaid@11 rejects the whole diagram on a bare `end`, `style`, `click`,
+    // `class`, `graph`, `subgraph`, `call` or `href` id.
+    const KEYWORDS = ["end", "style", "click", "class", "graph", "subgraph", "call", "href", "flowchart", "linkStyle", "classDef"];
+    const root = mkdtempSync(join(tmpdir(), "ci-mmd-kw-"));
+    for (const dir of [...KEYWORDS, "données"]) {
+      mkdirSync(join(root, dir));
+      writeFileSync(join(root, dir, "m.ts"), `import { hub } from "../hub/hub";\nexport const v = hub;\n`);
+    }
+    mkdirSync(join(root, "hub"));
+    writeFileSync(join(root, "hub", "hub.ts"), "export const hub = 1;\n");
+    const { graph } = buildIndexArtifacts(root);
+    const mmd = renderMermaid(graph);
+    const body = mmd.split("\n").slice(1).filter((l) => l.trim() && !l.trim().startsWith("%%"));
+    const ids = body.flatMap((l) => {
+      const node = /^ {2}(\S+)\["/.exec(l);
+      if (node) return [node[1]!];
+      const edge = /^ {2}(\S+) -->(?:\|[^|]*\|)? (\S+)$/.exec(l);
+      return edge ? [edge[1]!, edge[2]!] : ["UNPARSED: " + l];
+    });
+    expect(ids.length).toBeGreaterThan(KEYWORDS.length * 2);
+    for (const id of ids) {
+      expect(id).toMatch(/^m_\w+$/);
+      expect(KEYWORDS).not.toContain(id);
+    }
+    expect(mmd).toContain('["données"]');
+    expect(mmd).toContain('m_end["end"]');
+  });
+});
+
+describe("complexity targets", () => {
+  it("normalises ./ and absolute paths, and refuses a file the index does not hold", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-cx-target-"));
+    writeFileSync(join(root, "gin.go"), "package gin\n\nfunc F(a int) int {\n\tif a > 1 {\n\t\treturn a\n\t}\n\treturn 0\n}\n");
+    const scan = scanRepo(root);
+    expect(indexedFile(scan, "./gin.go")).toBe("gin.go");
+    expect(indexedFile(scan, join(root, "gin.go"))).toBe("gin.go");
+    expect(() => indexedFile(scan, "nosuch.go")).toThrow("no such file in the index: nosuch.go");
+    const cli = (target: string) => spawnSync(process.execPath, [CLI, "complexity", target, "--repo", root], { encoding: "utf8" });
+    const ok = cli("./gin.go");
+    expect(ok.status).toBe(0);
+    expect(JSON.parse(ok.stdout)).toEqual(symbolComplexity(scan, "gin.go"));
+    expect(JSON.parse(ok.stdout)).not.toEqual([]);
+    const missing = cli("nosuch.go");
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toContain("no such file in the index: nosuch.go");
   });
 });

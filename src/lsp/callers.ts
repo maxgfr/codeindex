@@ -11,6 +11,8 @@ import { columnOfSymbol, type LspAgreement } from "./refs.js";
 export interface LspCallersBlock {
   server: string;
   ok: boolean;
+  /** No incoming calls although the static tier found callers (see LspBlock). */
+  partial?: true;
   reason?: string;
   calls: LspIncomingCall[];
   agreement: LspAgreement;

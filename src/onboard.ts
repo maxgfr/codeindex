@@ -40,36 +40,71 @@ export interface OnboardBrief {
 
 const README_NAMES = ["README.md", "README.markdown", "README.rst", "README.txt", "README"];
 
+// Fewest commits the "Where work concentrates" section ranks from.
+const MIN_HOTSPOT_COMMITS = 10;
+
 /**
  * The repository's own one-line self-description, when it has one.
  *
- * Taken from the README's first non-heading, non-badge paragraph, because the
- * first LINE is usually the project name repeated and the badges below it are
- * noise an agent should never have to read past.
+ * Taken from the README's first prose paragraph that belongs to the top of the
+ * document: before any heading, or under the H1. The first LINE is usually the
+ * project name repeated, the badges below it are noise, and a paragraph under
+ * an H2 is a section — gin's README opens with "## Gin 1.12.0 is now
+ * available!" and a release announcement, then a `---` rule, then "Gin is a
+ * high-performance HTTP web framework". A thematic break ends such a banner:
+ * what follows it is top-level again. With no top-level paragraph at all
+ * (`# X` then `## Overview`), the first paragraph anywhere is taken.
  */
+export function taglineFromReadme(text: string): string | undefined {
+  let level = 0; // the heading level the current paragraph sits under
+  let fallback: string | undefined;
+  // A fenced block is code, and its blank lines would split it into
+  // "paragraphs"; a `#` comment inside it is not a heading either.
+  const prose = text.replace(/\r\n?/g, "\n").replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[^\n]*$/gm, "");
+  for (const raw of prose.split(/\n\s*\n/)) {
+    let lines = raw.trim().split("\n");
+    // ATX heading, possibly with its section's first lines right under it.
+    const atx = /^(#{1,6})\s/.exec(lines[0] ?? "");
+    if (atx) {
+      level = atx[1]!.length;
+      lines = lines.slice(1);
+    } else if (lines.length >= 2 && /^(=+|-+)\s*$/.test(lines[lines.length - 1]!)) {
+      // Setext (and reStructuredText) heading: a line underlined by = or -.
+      level = lines[lines.length - 1]!.startsWith("=") ? 1 : 2;
+      continue;
+    } else if (lines.length === 1 && /^(?:[-*_]\s*){3,}$/.test(lines[0]!)) {
+      level = Math.min(level, 1);
+      continue;
+    }
+    const line = lines.join(" ").trim();
+    if (!line || line.startsWith("<") || line.startsWith("#")) continue;
+    // A badge paragraph is entirely links and images; a link-reference
+    // definition block (`[WSGI]: https://…`) is not prose either.
+    if (/^(\[!\[|!\[|\[)/.test(line) && !/[.:]\s/.test(line)) continue;
+    if (/^\[[^\]]+\]:\s/.test(line)) continue;
+    const cleaned = line
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\](?:\[[^\]]*\])?/g, "$1") // reference links: [WSGI], [text][ref]
+      .replace(/[*_`]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (cleaned.length <= 20) continue;
+    if (level <= 1) return cleaned.slice(0, 400);
+    fallback ??= cleaned.slice(0, 400);
+  }
+  return fallback;
+}
+
 function tagline(root: string): string | undefined {
   for (const name of README_NAMES) {
     const path = join(root, name);
     if (!existsSync(path)) continue;
-    let text: string;
     try {
-      text = readFileSync(path, "utf8");
+      return taglineFromReadme(readFileSync(path, "utf8"));
     } catch {
       continue;
     }
-    for (const raw of text.split(/\n\s*\n/)) {
-      const line = raw.trim();
-      if (!line || line.startsWith("#") || line.startsWith("<")) continue;
-      // A badge paragraph is entirely links and images.
-      if (/^(\[!\[|!\[|\[)/.test(line) && !/[.:]\s/.test(line)) continue;
-      const cleaned = line
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-        .replace(/[*_`]/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (cleaned.length > 20) return cleaned.slice(0, 400);
-    }
-    break;
   }
   return undefined;
 }
@@ -110,17 +145,23 @@ export function onboardBrief(scan: RepoScan, graph: Graph, opts: OnboardOptions 
     lines.push("");
   }
 
-  lines.push("## Key files", "", renderRepoMap(scan, graph, { budgetTokens: opts.budgetTokens ?? 900 }).trim(), "");
+  // `bare`: the map's own `# repo map` title would sit as an H1 under this H2.
+  lines.push("## Key files", "", renderRepoMap(scan, graph, { budgetTokens: opts.budgetTokens ?? 900, bare: true }).trim(), "");
 
   // Where work concentrates. Git-only, and silent when there is no history —
   // an empty section would read as "nothing is hot", which is not what an
-  // unmeasurable repository means.
-  const { churn, ok: churnOk } = gitChurn(scan.root);
-  if (churnOk && churn.size) {
-    const hotspots = rankHotspots(scan, churn, 8);
+  // unmeasurable repository means — or too little of it to rank: a handful of
+  // commits (a young repository, a CI clone of depth 2) says what changed
+  // lately, not where work concentrates.
+  const history = gitChurn(scan.root);
+  if (history.ok && history.commits >= MIN_HOTSPOT_COMMITS) {
+    const hotspots = rankHotspots(scan, history.churn, 8);
     if (hotspots.length) {
-      lines.push("## Where work concentrates", "", "Files ranked by commits × size — where changes and defects cluster.", "");
-      for (const spot of hotspots) lines.push(`- \`${spot.rel}\` — ${spot.commits} commits, ${spot.lines} lines`);
+      const shallow = history.shallow ? ` Shallow clone: only ${history.commits} commits of history are visible.` : "";
+      lines.push("## Where work concentrates", "", `Files ranked by commits × size — where changes and defects cluster.${shallow}`, "");
+      for (const spot of hotspots) {
+        lines.push(`- \`${spot.rel}\` — ${spot.commits} commits, ${spot.lines} lines${spot.test ? " (test)" : ""}`);
+      }
       lines.push("");
     }
   }

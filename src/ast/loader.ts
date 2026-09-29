@@ -46,8 +46,43 @@ export const EXT_GRAMMAR: Record<string, string> = {
   ".sol": "solidity",
 };
 
+// Single-file components have no grammar of their own: their `<script>` blocks
+// are parsed with the JS/TS grammar their `lang` attribute names (see
+// extract/sfc.ts). Kept out of EXT_GRAMMAR, which maps a file to the grammar
+// that parses the WHOLE file, but warmed with it (grammarKeysForExts).
+const EMBEDDED_GRAMMARS: Record<string, string[]> = {
+  ".vue": ["javascript", "tsx", "typescript"],
+  ".svelte": ["javascript", "tsx", "typescript"],
+  ".astro": ["typescript"],
+};
+
 export function grammarKeyForExt(ext: string): string | undefined {
   return EXT_GRAMMAR[ext];
+}
+
+// `.h` is the one extension two shipped grammars claim. It maps to C, and a C++
+// header parsed as C is mostly ERROR nodes: leveldb's 56 headers yielded 142
+// symbols that way against 963 as C++ — fewer than the regex tier found — with
+// `namespace leveldb` read as a function and the whole `DB` class gone. Parsing
+// every `.h` as C++ is no fix either, since a pure-C header (cJSON's) loses a
+// third of its symbols to C++'s stricter grammar. So the content decides, on
+// constructs C cannot contain: a namespace block or `using namespace`, a
+// template, a class head (optionally behind an export macro:
+// `class LEVELDB_EXPORT DB {`), an access specifier, a standard C++ include
+// (`<string>` — C's are all `.h`), or `extern "C++"`. Each alternative is
+// anchored at a line start so prose in a comment rarely trips it, and leading
+// indentation is `[ \t]*` so a run of blank lines is never rescanned.
+// Deterministic: a pure function of the bytes.
+const CPP_HEADER =
+  /^[ \t]*(?:namespace(?:[ \t]+[A-Za-z_][\w:]*)?\s*\{|using[ \t]+namespace[ \t]|template[ \t]*<|class[ \t]+(?:[A-Z_][A-Z0-9_]*[ \t]+)?[A-Za-z_]\w*(?:[ \t]+final)?[ \t]*(?:[:;{]|$)|(?:public|private|protected)[ \t]*:(?!:)|#[ \t]*include[ \t]*<[a-z_]+>|extern[ \t]+"C\+\+")/m;
+
+// The grammar to parse ONE file with: the extension's, except a `.h` whose
+// content reads as C++ (above). The file keeps its "c" language either way —
+// c and cpp are one family for every cross-file join — so this changes how the
+// header is parsed, not what it is.
+export function grammarKeyFor(ext: string, content: string): string | undefined {
+  const key = EXT_GRAMMAR[ext];
+  return ext === ".h" && CPP_HEADER.test(content) ? "cpp" : key;
 }
 
 // Which supplier furnished the resolved grammars dir. Reported by
@@ -58,11 +93,18 @@ export interface GrammarsTier {
   tier: GrammarsTierName;
   dir?: string; // undefined only when tier === "none"
   cacheDir: string; // where a `grammars pull` would extract, regardless of tier
-  // Every directory a grammar may be loaded from, in precedence order. Usually
-  // just `dir`; in a DEV checkout it also includes the sibling
-  // `grammars-extended/` that `fetch-grammars.mjs --extended` writes, because
-  // locally the two tiers live in two dirs while the release asset extracts both
-  // into one. A consumer that only ever pulls sees a single dir here.
+  // Every directory a grammar may be loaded from, in precedence order, each
+  // probed per key (ensureGrammars takes the first dir holding `<key>.wasm`).
+  // `dir` comes first, then the sibling `grammars-extended/` that
+  // `fetch-grammars.mjs --extended` writes in a DEV checkout, then — unless
+  // the legacy CODEINDEX_GRAMMAR_DIR pins one dir outright — the lower tiers
+  // that exist (CODEINDEX_GRAMMARS_DIR, the pulled shared cache). The chain is
+  // what lets the npm layout work: it ships only the CORE wasms next to the
+  // bundle, so with `dirs` stopping at the adjacent dir the EXTENDED wasms a
+  // `grammars pull` put in the cache were never searched and Kotlin, Elixir,
+  // Zig, Solidity, HCL and Terraform stayed on the regex tier for good. The
+  // bytes of a key are the same in every tier of one ENGINE_VERSION, so which
+  // dir supplies it never shows in the output.
   dirs: string[];
 }
 
@@ -85,7 +127,8 @@ export function sharedGrammarsCacheDir(): string {
 // Resolve the grammars dir AND record which tier supplied it, IN ORDER:
 //   1. an explicit CODEINDEX_GRAMMAR_DIR / ULTRAINDEX_GRAMMAR_DIR override
 //      (legacy, singular; kept winning outright so vendored/test setups that
-//      pin it behave exactly as before) — reported as the "env" tier;
+//      pin it behave exactly as before, with no fallback behind it) —
+//      reported as the "env" tier;
 //   2. (a) the bundle-adjacent grammars/ dir — the shipped default: works from
 //      the tsup bundle (scripts/engine.mjs → scripts/grammars), a consumer's
 //      vendored copy (src/vendor → ../../scripts/grammars) or source under
@@ -94,29 +137,51 @@ export function sharedGrammarsCacheDir(): string {
 //   3. (b) CODEINDEX_GRAMMARS_DIR — an explicit shared/custom dir override;
 //   4. (c) the shared version-scoped cache a `grammars pull` populates;
 //   5. (d) nothing resolvable → tier "none", dir undefined → the regex tier.
+// The winner names the tier and `dir`; the tiers below it that exist stay in
+// `dirs` as per-key fallbacks (see GrammarsTier.dirs).
 // Never touches the network and never throws. `moduleDir` overrides the
 // module-relative base of the bundle-adjacent probe (tests/tooling only).
 export function resolveGrammarsTier(opts: { moduleDir?: string } = {}): GrammarsTier {
   const cacheDir = sharedGrammarsCacheDir();
-  const withDirs = (tier: GrammarsTierName, dir: string): GrammarsTier => ({
-    tier,
-    dir,
-    cacheDir,
-    dirs: [dir, ...(existsSync(join(dir, "..", EXTENDED_DIR)) ? [join(dir, "..", EXTENDED_DIR)] : [])],
-  });
+  const env = process.env.CODEINDEX_GRAMMARS_DIR;
+  const envDir = env && env.trim() && existsSync(env) ? env : undefined;
+  const cached = existsSync(cacheDir) ? cacheDir : undefined;
+  const withDirs = (tier: GrammarsTierName, dir: string, fallbacks: (string | undefined)[]): GrammarsTier => {
+    const sibling = join(dir, "..", EXTENDED_DIR);
+    const dirs: string[] = [];
+    for (const d of [dir, existsSync(sibling) ? sibling : undefined, ...fallbacks]) {
+      if (d !== undefined && !dirs.includes(d)) dirs.push(d);
+    }
+    return { tier, dir, cacheDir, dirs };
+  };
+  // The legacy override keeps its "one pinned dir" contract: vendored and test
+  // setups point it at a deliberately partial set, and a user's pulled cache
+  // leaking in behind it would silently change what those setups measure.
   const legacy = process.env.CODEINDEX_GRAMMAR_DIR ?? process.env.ULTRAINDEX_GRAMMAR_DIR;
-  if (legacy && legacy.trim() && existsSync(legacy)) return withDirs("env", legacy);
+  if (legacy && legacy.trim() && existsSync(legacy)) return withDirs("env", legacy, []);
   const here = opts.moduleDir ?? dirname(fileURLToPath(import.meta.url));
   const adjacent = [
     join(here, "grammars"), // bundle: <...>/scripts/grammars
     join(here, "..", "..", "scripts", "grammars"), // dev: src/ast → <repo>/scripts/grammars
     join(here, "..", "scripts", "grammars"),
   ];
-  for (const c of adjacent) if (existsSync(c)) return withDirs("adjacent", c);
-  const env = process.env.CODEINDEX_GRAMMARS_DIR;
-  if (env && env.trim() && existsSync(env)) return withDirs("env", env);
-  if (existsSync(cacheDir)) return withDirs("cache", cacheDir);
+  for (const c of adjacent) if (existsSync(c)) return withDirs("adjacent", c, [envDir, cached]);
+  if (envDir) return withDirs("env", envDir, [cached]);
+  if (cached) return withDirs("cache", cached, []);
   return { tier: "none", cacheDir, dirs: [] };
+}
+
+// The grammar keys ensureGrammars WOULD load right now — the runtime wasm and
+// `<key>.wasm` present somewhere in the resolved dirs — known from existsSync
+// alone, without instantiating any wasm. Lets a caller predict the extraction
+// tier before deciding whether to warm at all (see src/preload.ts). A present
+// but broken wasm is predicted ready and then fails to load; callers that go on
+// to warm re-check with grammarReady.
+export function resolvableGrammarKeys(): Set<string> {
+  const { dirs } = resolveGrammarsTier();
+  const present = (name: string): boolean => dirs.some((d) => existsSync(join(d, name)));
+  if (!present("web-tree-sitter.wasm")) return new Set();
+  return new Set(allGrammarKeys().filter((key) => present(`${key}.wasm`)));
 }
 
 // The chosen grammars dir, or undefined when nothing is resolvable anywhere
@@ -192,7 +257,8 @@ export function allGrammarKeys(): string[] {
 }
 
 // The grammar keys needed for a set of file extensions: each mapped through
-// EXT_GRAMMAR, unknown extensions dropped, then deduped and sorted. Warming
+// EXT_GRAMMAR (and `.h` to cpp as well — see grammarKeyFor), unknown extensions
+// dropped, then deduped and sorted. Warming
 // exactly this set (instead of every committed grammar) skips the wasm load for
 // languages the repo doesn't contain, while keeping output byte-identical:
 // extractAst falls back to regex only when grammarReady(key) is false, and the
@@ -202,8 +268,13 @@ export function allGrammarKeys(): string[] {
 export function grammarKeysForExts(exts: Iterable<string>): string[] {
   const keys = new Set<string>();
   for (const ext of exts) {
+    for (const key of EMBEDDED_GRAMMARS[ext] ?? []) keys.add(key);
     const key = EXT_GRAMMAR[ext];
     if (key !== undefined) keys.add(key);
+    // A `.h` may be parsed as C++ (grammarKeyFor). Leaving cpp cold in a repo
+    // with no .cpp would send those headers to the C grammar instead, making the
+    // output depend on which OTHER files the repo has.
+    if (ext === ".h") keys.add("cpp");
   }
   return [...keys].sort();
 }

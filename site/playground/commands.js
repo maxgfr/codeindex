@@ -57,7 +57,7 @@ export function buildCommandTable(engine, mount) {
       else if (token === "--exact") opts.exact = true;
       else if (token === "--limit") {
         const value = Number(tokens[++i]);
-        if (!Number.isFinite(value) || value <= 0) throw new Error("--limit needs a positive number.");
+        if (!Number.isInteger(value) || value <= 0) throw new Error("--limit needs a positive whole number.");
         opts.limit = value;
       } else if (token.startsWith("--")) throw new Error(`Unknown flag ${token}. Supported: --limit <n>, --no-fuzzy, --exact, --explain.`);
       else rest.push(token);
@@ -235,7 +235,10 @@ export function buildCommandTable(engine, mount) {
         } catch (error) {
           throw new Error(`The rules config is not valid JSON: ${error.message}`);
         }
-        return { kind: "json", data: engine.checkRules(session.artifacts.graph, engine.parseRules(parsed)) };
+        // The scan lets the `literals` builtin see every duplication, not
+        // only the headline graph.json carries.
+        const { scan, graph } = session.artifacts;
+        return { kind: "json", data: engine.checkRules(graph, engine.parseRules(parsed), { scan }) };
       },
     },
     rewrite: {

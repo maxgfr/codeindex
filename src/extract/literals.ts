@@ -44,7 +44,10 @@ export function isInterestingNumber(raw: string): boolean {
 
 // Strips the delimiters a literal was written with, in any language the engine
 // reads: quotes, backticks, and the language-specific raw/prefixed forms
-// (Python r"", C# @"", Go backticks, Rust r#""#).
+// (Python r"", C# @"", Go backticks, Rust r#""#). A triple-quoted delimiter
+// (Python and Scala `"""`/`'''`, Java text blocks, C# raw strings) is stripped
+// whole: stripping one quote a side left `""value""`, a value no other file's
+// `"value"` could ever equal.
 export function unquote(text: string): string {
   let s = text;
   const raw = /^(?:[rRbBuUfF]{1,2}|@|\$)?(?:#*)?(['"`])/.exec(s);
@@ -52,7 +55,8 @@ export function unquote(text: string): string {
     const q = raw[1]!;
     const start = s.indexOf(q);
     const end = s.lastIndexOf(q);
-    if (end > start) s = s.slice(start + 1, end);
+    const width = s.startsWith(q.repeat(3), start) && end - start >= 5 && s.endsWith(q.repeat(3), end + 1) ? 3 : 1;
+    if (end > start) s = s.slice(start + width, end + 1 - width);
   }
   return s;
 }

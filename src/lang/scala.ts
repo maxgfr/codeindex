@@ -1,5 +1,6 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { maskBraced } from "../extract/imports.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Scala. class/trait/object (incl. `case class`) and `def`. `private`/
 // `protected` defs are not exported.
@@ -13,7 +14,13 @@ const RULES: Rule[] = [
 export const scala = {
   lang: "scala",
   exts: [".scala", ".sc"],
-  extract(rel: string, content: string): CodeSymbol[] {
-    return scan(rel, content, "scala", RULES);
+  lexis: {
+    mask: (src: string) => maskBraced(src, { nested: true, triple: true, squote: "char" }),
+    comment: /^\s*\/\//,
+    block: true,
+    decoration: /^\s*@/,
+  } satisfies Lexis,
+  extract(rel: string, content: string, masked?: string): CodeSymbol[] {
+    return scan(rel, content, "scala", RULES, masked);
   },
 };

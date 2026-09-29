@@ -21,4 +21,16 @@ export class Worker {
   }
 }
 
-export default { isMainThread, parentPort, workerData, threadId, Worker };
+// grep.ts runs its JS regex scan in a Worker it can abandon at a deadline and
+// falls back to scanning inline when none can be spawned. Throwing here takes
+// that inline path, exactly like the Worker constructor above.
+export class MessageChannel {
+  constructor() {
+    throw new Error("worker_threads is not available in the browser build (the engine runs single-threaded here)");
+  }
+}
+export function receiveMessageOnPort(): undefined {
+  return undefined;
+}
+
+export default { isMainThread, parentPort, workerData, threadId, Worker, MessageChannel, receiveMessageOnPort };

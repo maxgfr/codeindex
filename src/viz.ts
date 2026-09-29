@@ -6,18 +6,68 @@ import { byStr } from "./sort.js";
 
 export interface MermaidOptions {
   // Restrict to one module's neighborhood (the module plus every module it
-  // touches, either direction).
+  // touches, either direction). A module slug, a module's directory path, or a
+  // file (meaning its module); anything else throws rather than rendering an
+  // empty diagram that reads as "no dependencies".
   module?: string;
   maxEdges?: number; // default 80 — keeps diagrams renderable
 }
 
-const sanitizeId = (slug: string): string => slug.replace(/[^\w]/g, "_");
+// Mermaid node ids must be identifier-safe, and the readable mapping (every
+// other character → "_") is not injective: `src/a-b` and `src/a_b` (slugs
+// `src-a-b`, `src-a_b`) both became `src_a_b`, silently merging two modules
+// into one node. Ids are assigned over EVERY slug of the graph in sorted
+// order, so they never depend on which subset a diagram shows: a slug whose
+// readable id is unique keeps it, and
+// within a colliding group the first keeps it and the rest take the first free
+// `_2`, `_3`, ….
+function mermaidIds(graph: Graph, prefix: string): Map<string, string> {
+  const slugs = new Set(graph.modules.map((m) => m.slug));
+  for (const e of graph.moduleEdges) slugs.add(e.from).add(e.to);
+  const sorted = [...slugs].sort(byStr);
+  const base = new Map(sorted.map((s) => [s, prefix + s.replace(/[^A-Za-z0-9_]/g, "_")]));
+  const uses = new Map<string, number>();
+  for (const b of base.values()) uses.set(b, (uses.get(b) ?? 0) + 1);
+  const taken = new Set([...base.values()].filter((b) => uses.get(b) === 1));
+  const ids = new Map<string, string>();
+  for (const s of sorted) {
+    const b = base.get(s)!;
+    let id = b;
+    if (uses.get(b)! > 1) {
+      for (let n = 2; taken.has(id); n++) id = `${b}_${n}`;
+      taken.add(id);
+    }
+    ids.set(s, id);
+  }
+  return ids;
+}
+
+// The module slug a focus target names: a slug, a module directory path
+// (`src/flask/json`, trailing slash tolerated), or a file rel (its module).
+export function moduleSlugFor(graph: Graph, target: string): string | undefined {
+  if (graph.modules.some((m) => m.slug === target)) return target;
+  const path = target.replace(/\/+$/, "");
+  const byPath = graph.modules.find((m) => m.path === path);
+  if (byPath) return byPath.slug;
+  return graph.files.find((f) => f.rel === target)?.module;
+}
+// The label is the directory as written: a slug is lossy (`données` →
+// `donn-es`). Mermaid ends a quoted label at `"`, so it is swapped for `'`.
+const nodeLabel = (m: ModuleNode): string => `${m.path.replace(/"/g, "'")}${m.tier === 0 ? " (core)" : ""}`;
 
 export function renderMermaid(graph: Graph, opts: MermaidOptions = {}): string {
   const maxEdges = opts.maxEdges ?? 80;
+  const focus = opts.module ? moduleSlugFor(graph, opts.module) : undefined;
+  if (opts.module && !focus) throw new Error(`no such file or module in the index: ${opts.module}`);
+  // Every node id carries a prefix, whatever the id scheme under it: a bare
+  // module named \`end\`, \`style\`, \`class\`, \`click\`, \`graph\`, \`subgraph\`,
+  // \`call\`, \`href\`… is a flowchart keyword, and mermaid rejects the whole
+  // diagram ("Parse error … got 'end'"). A prefixed id can never be one, and
+  // prefixing keeps mermaidIds' injective scheme injective.
+  const idOf = mermaidIds(graph, "m_");
   let edges = [...graph.moduleEdges].filter((e) => !e.dangling);
-  if (opts.module) {
-    edges = edges.filter((e) => e.from === opts.module || e.to === opts.module);
+  if (focus) {
+    edges = edges.filter((e) => e.from === focus || e.to === focus);
   }
   edges.sort((a, b) => b.weight - a.weight || byStr(a.from, b.from) || byStr(a.to, b.to));
   const dropped = Math.max(0, edges.length - maxEdges);
@@ -28,16 +78,16 @@ export function renderMermaid(graph: Graph, opts: MermaidOptions = {}): string {
     shown.add(e.from);
     shown.add(e.to);
   }
-  if (opts.module) shown.add(opts.module);
+  if (focus) shown.add(focus);
 
   const lines: string[] = ["graph LR"];
   for (const m of [...graph.modules].sort((a, b) => byStr(a.slug, b.slug))) {
     if (!shown.has(m.slug)) continue;
-    lines.push(`  ${sanitizeId(m.slug)}["${m.slug}${m.tier === 0 ? " (core)" : ""}"]`);
+    lines.push(`  ${idOf.get(m.slug)}["${nodeLabel(m)}"]`);
   }
   for (const e of edges) {
     const label = e.kind === "import" ? "" : `|${e.kind}|`;
-    lines.push(`  ${sanitizeId(e.from)} -->${label} ${sanitizeId(e.to)}`);
+    lines.push(`  ${idOf.get(e.from)} -->${label} ${idOf.get(e.to)}`);
   }
   if (dropped) lines.push(`  %% ${dropped} lighter edges omitted (maxEdges=${maxEdges})`);
   return lines.join("\n") + "\n";
@@ -77,18 +127,15 @@ const CLUSTER_MAX_EDGES = 80;
 
 const degreeOf = (m: ModuleNode): number => m.degIn + m.degOut;
 
-// Mermaid node ids must be identifier-safe; slugs may contain dashes. Prefixed
-// so a slug starting with a digit still yields a valid id.
-function clusterNodeId(slug: string): string {
-  return "m_" + slug.replace(/[^A-Za-z0-9_]/g, "_");
-}
-
 export function renderMermaidClustered(
   graph: Graph,
   opts: ClusteredMermaidOptions = {},
 ): ClusteredMermaidResult {
   const maxModules = opts.maxModules ?? CLUSTER_MAX_MODULES;
   const maxEdges = opts.maxEdges ?? CLUSTER_MAX_EDGES;
+  // Prefixed so a slug starting with a digit still yields a valid id.
+  const ids = mermaidIds(graph, "m_");
+  const clusterNodeId = (slug: string): string => ids.get(slug)!;
 
   const ranked = graph.modules.slice().sort((a, b) => degreeOf(b) - degreeOf(a) || byStr(a.slug, b.slug));
   const shown = ranked.slice(0, maxModules);

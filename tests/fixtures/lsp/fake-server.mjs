@@ -13,15 +13,38 @@
 //   crash    exit non-zero right after initialize
 //   garbage  emit an unframed log line before each real frame
 //   slow     delay every reply past a short per-request budget
+//   refuse   explain on stderr why it cannot start, then exit 1 (a rustup
+//            proxy without its component does exactly this)
+//   mute     explain on stderr, then never answer initialize
+//   stubborn answer normally, but ignore `exit` and a closed stdin: only a
+//            kill stops it (what a leak looks like)
 //
 // FAKE_LSP_REFS is a JSON array of {file, line, character} the server reports,
 // relative to FAKE_LSP_ROOT.
+//
+// FAKE_LSP_WARMUP=n answers the first n reference requests with the requested
+// position only — the declaration — like a server that is still indexing.
+//
+// FAKE_LSP_PIDFILE, when set, gets this process's pid appended on start, so a
+// test can count spawns and check that none outlives its host.
 
 const MODE = process.env.FAKE_LSP_MODE ?? "ok";
 const ROOT = process.env.FAKE_LSP_ROOT ?? process.cwd();
 const REFS = JSON.parse(process.env.FAKE_LSP_REFS ?? "[]");
+let warmup = Number(process.env.FAKE_LSP_WARMUP ?? 0);
+
+if (process.env.FAKE_LSP_PIDFILE) {
+  const { appendFileSync } = await import("node:fs");
+  appendFileSync(process.env.FAKE_LSP_PIDFILE, `${process.pid}\n`);
+}
 
 const encoder = new TextEncoder();
+
+if (MODE === "refuse" || MODE === "mute") {
+  process.stderr.write("info: syncing channel updates\n");
+  process.stderr.write("error: Unknown binary 'fake-analyzer' in official toolchain\n\n");
+  if (MODE === "refuse") process.exit(1);
+}
 
 function send(message) {
   const body = JSON.stringify(message);
@@ -73,6 +96,7 @@ process.stdin.on("data", (chunk) => {
 
 function handle(message) {
   const { id, method } = message;
+  if (MODE === "mute") return;
   if (method === "initialize") {
     initialized = true;
     const capabilities =
@@ -88,6 +112,12 @@ function handle(message) {
   // client and makes the test flaky in the direction that hides the bug.
   if (MODE === "crash" && method !== "exit") process.exit(3);
 
+  if (method === "textDocument/references" && warmup > 0) {
+    warmup--;
+    const { position, textDocument } = message.params;
+    reply(id, [{ uri: textDocument.uri, range: { start: position, end: position } }]);
+    return;
+  }
   if (method === "textDocument/references" || method === "textDocument/definition") {
     reply(
       id,
@@ -104,8 +134,11 @@ function handle(message) {
     reply(id, null);
     return;
   }
-  if (method === "exit") process.exit(0);
+  if (method === "exit" && MODE !== "stubborn") process.exit(0);
 }
 
 // A server whose stdin closes has no client left.
-process.stdin.on("end", () => process.exit(0));
+process.stdin.on("end", () => {
+  if (MODE === "stubborn") setInterval(() => {}, 1000);
+  else process.exit(0);
+});

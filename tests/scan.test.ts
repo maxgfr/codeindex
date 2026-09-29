@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { fileURLToPath } from "node:url";
-import { cpSync, mkdtempSync, rmSync, utimesSync, writeFileSync, appendFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanRepo, scanSummary, type RepoScan } from "../src/scan.js";
@@ -8,6 +8,9 @@ import { walk } from "../src/walk.js";
 import type { FileRecord } from "../src/types.js";
 import { extractMarkdown } from "../src/extract/markdown.js";
 import { extractCode } from "../src/extract/code.js";
+import { buildArtifactsFromScan } from "../src/pipeline.js";
+import { renderGraphJson } from "../src/render/graph-json.js";
+import { renderSymbolsJson } from "../src/render/symbols-json.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 
@@ -116,12 +119,45 @@ describe("scanRepo — change-tracking flags", () => {
     expect(rescan.cacheDirty).toBe(true);
   });
 
-  it("a doc edit clears contentUnchanged (docs stay on the exact hash path)", () => {
+  it("a doc edit clears contentUnchanged", () => {
     const { root, cache } = setup();
     appendFileSync(join(root, "README.md"), "\nEdited prose.\n");
     const rescan = scanRepo(root, { cache });
     expect(rescan.contentUnchanged).toBe(false);
     expect(rescan.cacheDirty).toBe(true);
+  });
+
+  // Docs were exempt from the stat fastpath only because the mention pass
+  // needs their text, so every warm run read and hashed all of them even when
+  // the artifacts were then reused. A stat-matched doc now reuses its record
+  // unread, and its text loads when (if) something asks for it.
+  it("a stat-matched doc reuses its record without a read, and loads its text on demand", () => {
+    const { root, cache } = setup();
+    const readme = cache.get("README.md")!;
+    // A record the file could never produce: only a scan that skipped the
+    // read (and so the hash check) can hand it back.
+    const marker = { ...readme.record, summary: "FROM-CACHE", hash: "not-the-content" };
+    cache.set("README.md", { ...readme, hash: marker.hash, record: marker });
+    const rescan = scanRepo(root, { cache });
+    expect(rescan.files.find((f) => f.rel === "README.md")).toBe(marker);
+    expect(rescan.contentUnchanged).toBe(true);
+    const text = readFileSync(join(root, "README.md"), "utf8");
+    expect(rescan.docText.get("README.md")).toBe(text);
+    expect(rescan.docText.has("docs/guide.md")).toBe(true);
+    // Enumeration sees the deferred docs too, like the eager Map it replaces.
+    const cold = scanRepo(root);
+    expect(rescan.docText.size).toBe(cold.docText.size);
+    expect(new Map(rescan.docText)).toEqual(new Map(cold.docText));
+  });
+
+  it("artifacts from a warm scan with deferred docs are byte-identical to a cold scan's", () => {
+    const { root, cache } = setup();
+    const cold = buildArtifactsFromScan(scanRepo(root), {});
+    const warm = buildArtifactsFromScan(scanRepo(root, { cache }), {});
+    expect(renderGraphJson(warm.graph)).toBe(renderGraphJson(cold.graph));
+    expect(renderSymbolsJson(warm.symbols)).toBe(renderSymbolsJson(cold.symbols));
+    // The fixture's docs do mention symbols, so the comparison is not vacuous.
+    expect(cold.graph.fileEdges.some((e) => e.kind === "mention")).toBe(true);
   });
 
   it("no cache supplied → contentUnchanged=false, cacheDirty=true", () => {
@@ -140,6 +176,69 @@ describe("scanRepo — change-tracking flags", () => {
     expect(precomputed.cacheDirty).toBe(direct.cacheDirty);
     expect(precomputed.capped).toBe(direct.capped);
     expect(precomputed.excluded).toBe(direct.excluded);
+  });
+
+  // The content hash is over DECODED text, and every binary decodes to "", so a
+  // binary that grows keeps an equal hash. Its record kept the stale size: the
+  // cache entry then missed the stat fastpath on every later run and cache.json
+  // was rewritten each time (and RepoScan.files[].size was simply wrong).
+  it("a binary that changes size under an equal hash takes the new size, then settles", () => {
+    const { root } = setup();
+    writeFileSync(join(root, "data.dat"), Buffer.from("a\0bcdef"));
+    const first = scanRepo(root);
+    writeFileSync(join(root, "data.dat"), Buffer.from("a\0bcdefghijk"));
+    const second = scanRepo(root, { cache: cacheOf(first) });
+    const before = first.files.find((f) => f.rel === "data.dat")!;
+    const after = second.files.find((f) => f.rel === "data.dat")!;
+    expect(after.hash).toBe(before.hash);
+    expect(after.size).toBe(12);
+    expect(second.contentUnchanged).toBe(true);
+    const third = scanRepo(root, { cache: cacheOf(second) });
+    expect(third.cacheDirty).toBe(false);
+    expect(third.contentUnchanged).toBe(true);
+  });
+});
+
+describe("scanRepo — the --out self-index guard", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+  function copy(): string {
+    const dir = mkdtempSync(join(tmpdir(), "ci-scan-out-"));
+    dirs.push(dir);
+    const root = join(dir, "mini-repo");
+    cpSync(REPO, root, { recursive: true });
+    return root;
+  }
+  const rels = (root: string, opts?: Parameters<typeof scanRepo>[1]): string[] => scanRepo(root, opts).files.map((f) => f.rel);
+
+  it("an --out inside the repo is excluded whole", () => {
+    const root = copy();
+    writeFileSync(join(root, "src", "graph.json"), "{}\n");
+    expect(rels(root, { out: join(root, "src") }).some((r) => r.startsWith("src/"))).toBe(false);
+  });
+
+  // `index --out .` used to exclude every file (all of them live under --out),
+  // so the run wrote a 0-file graph and still exited 0.
+  it("an --out at the repo root excludes only the index artifacts written there", () => {
+    const root = copy();
+    const artifacts = ["graph.json", "symbols.json", "cache.json", "graph.json.tmp-4242"];
+    for (const name of artifacts) writeFileSync(join(root, name), "{}\n");
+    writeFileSync(join(root, "src", "graph.json"), "{}\n"); // same name, not at --out: a repo file
+    const all = rels(root);
+    const guarded = rels(root, { out: root });
+    expect(all).toEqual(expect.arrayContaining(artifacts));
+    expect(guarded).toEqual(all.filter((r) => !artifacts.includes(r)));
+    expect(guarded).toContain("src/graph.json");
+    expect(rels(root, { out: `${root}/` })).toEqual(guarded);
+  });
+
+  it("an --out above the repo root excludes nothing", () => {
+    const root = copy();
+    const sub = join(root, "src");
+    expect(rels(sub, { out: root })).toEqual(rels(sub));
+    expect(rels(sub).length).toBeGreaterThan(0);
   });
 });
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseGitignore, isIgnored } from "../src/ignore.js";
-import { walk } from "../src/walk.js";
+import { walk, type WalkSkip } from "../src/walk.js";
 import { scanRepo } from "../src/scan.js";
 
 const test = (rules: ReturnType<typeof parseGitignore>, rel: string, isDir = false) =>
@@ -86,6 +86,65 @@ describe("parseGitignore semantics", () => {
     expect(test(r, "packages/other/x.gen.ts")).toBe(false);
     expect(test(r, "x.gen.ts")).toBe(false);
   });
+
+  // git's wildmatch (WM_PATHNAME) refuses `/` in a bracket expression, negated
+  // or not — checked with `git check-ignore --no-index`, which ignores none of
+  // these paths. `[!x]` compiled to a bare `[^x]` and crossed the separator.
+  it("a bracket expression never matches `/`", () => {
+    const r = parseGitignore("a[!x]b\nx/c[!x]d\ne[.-0]f\n", "");
+    expect(test(r, "a/b")).toBe(false);
+    expect(test(r, "sub/a/b")).toBe(false);
+    expect(test(r, "x/c/d")).toBe(false);
+    expect(test(r, "e/f")).toBe(false);
+    // …while still matching a non-`/` character as before.
+    expect(test(r, "sub/ayb")).toBe(true);
+    expect(test(r, "x/cyd")).toBe(true);
+    expect(test(r, "e.f")).toBe(true);
+  });
+
+  // parseGitignore attaches a cheaper matcher to each rule (basename compare,
+  // suffix test, literal-prefix precheck). It is a pure speedup: over every
+  // pattern shape and path below it must return exactly the full regex's
+  // verdict, which stays the reference semantics.
+  it("each rule's fast matcher agrees with its full-path regex", () => {
+    const patterns = [
+      "node_modules", "*.log", "*.py[cod]", "[Tt]humbs.db", "**", "***", "*", "foo*", "*foo*", "a?c",
+      "\\*lit", "\\#x", "a\\ b", "a\\\\b", "trail\\", "build/", "/anchored", "/a*", "docs/*.md", "**/deep",
+      "a/**/b", "a/**", "x/c[!x]d", "*.[", "[", "a**b", "**x", ".env*", "!keep.log", "lib/*.js",
+      "**/*.gen.ts", "*~", ".#*", "*.min.[jt]s", "sub/", "/sub/x", "[!a]*", "*[", "?",
+    ];
+    const paths = [
+      "node_modules", "a/node_modules", "pkg/node_modules", "pkg/sub/node_modules", "pkg/sub/x.log", "x.log",
+      "pkg/x.log", "pkgx/a.log", "foo", "afoo", "foox", "pkg/afoox", "a/b", "abc", "a/c", "pkg/abc", "*lit",
+      "pkg/*lit", "#x", "a b", "a\\b", "trail\\", "build", "pkg/build", "anchored", "pkg/anchored", "ab",
+      "pkg/ab", "docs/x.md", "docs/a/x.md", "pkg/docs/x.md", "pkg/sub/docs/x.md", "deep", "a/deep",
+      "pkg/a/deep", "a/x/b", "a/x/y/b", "pkg/a/b", "pkg/a/x/b", "x/c/d", "x/cad", "pkg/x/cyd", "x.[", "[",
+      "pkg/[", "a*b", "axyb", "x", "abx", ".env", ".env.local", "pkg/.env.x", "keep.log", "lib/x.js",
+      "lib/a/x.js", "pkg/lib/x.js", "src/x.gen.ts", "pkg/x.gen.ts", "pkg/sub/deep/y.gen.ts", "file~",
+      ".#file", "pkg", "pkg/sub", "pkg/sub/x", "sub/x", "m.min.js", "pkg/m.min.ts", "m.min.cs", "b", "pkg/b",
+      "a", "pkg/a", "Thumbs.db", "pkg/thumbs.db", "m.pyc", "pkg/sub/m.pyd",
+    ];
+    let checked = 0;
+    for (const base of ["", "pkg", "pkg/sub"]) {
+      for (const rule of parseGitignore(patterns.join("\n"), base)) {
+        expect(rule.test).toBeDefined();
+        for (const rel of paths) {
+          const name = rel.slice(rel.lastIndexOf("/") + 1);
+          expect([rule.re.source, rel, rule.test!(rel, name)]).toEqual([rule.re.source, rel, rule.re.test(rel)]);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(3 * 30 * paths.length);
+  });
+
+  it("last match wins when the chain is scanned from its end", () => {
+    const r = [...parseGitignore("*.log\n!keep*.log\n", ""), ...parseGitignore("keep-not.log\n", "pkg")];
+    expect(test(r, "a.log")).toBe(true);
+    expect(test(r, "keep.log")).toBe(false);
+    expect(test(r, "pkg/keep-not.log")).toBe(true); // the deeper rule is later: it wins
+    expect(test(r, "keep-not.log")).toBe(false); // …only under its own directory
+  });
 });
 
 describe("walk honors .gitignore", () => {
@@ -146,18 +205,28 @@ describe("symlink-escape guard", () => {
     expect(rels).toEqual(["inside.ts"]);
   });
 
-  it("keeps symlinks that stay inside the repo", () => {
+  // An in-repo file link is an alias of a file indexed under its own path.
+  // Kept, it duplicated the target: `main` defined in alias.py AND main.py,
+  // so no call to it resolved to a unique definition.
+  it("skips file symlinks that stay inside the repo, unless an inventory opts in", () => {
     const root = mkdtempSync(join(tmpdir(), "ci-symlink-in-"));
-    writeFileSync(join(root, "real.ts"), "export const a = 1;\n");
-    symlinkSync(join(root, "real.ts"), join(root, "alias.ts"));
-    const rels = walk(root)
-      .files.map((f) => f.rel)
-      .sort();
-    expect(rels).toEqual(["alias.ts", "real.ts"]);
+    writeFileSync(join(root, "real.py"), "def main():\n    return 1\n");
+    symlinkSync(join(root, "real.py"), join(root, "alias.py"));
+    symlinkSync("real.py", join(root, "relative-alias.py"));
+    const skips: WalkSkip[] = [];
+    expect(walk(root, { onSkip: (s) => skips.push(s) }).files.map((f) => f.rel)).toEqual(["real.py"]);
+    expect(skips.map((s) => [s.rel, s.reason])).toEqual([
+      ["alias.py", "file-symlink"],
+      ["relative-alias.py", "file-symlink"],
+    ]);
+    expect(scanRepo(root).files.flatMap((f) => f.symbols.map((s) => `${s.name}@${f.rel}`))).toEqual(["main@real.py"]);
+    const inventory = walk(root, { includeFileSymlinks: true }).files.map((f) => f.rel);
+    expect(inventory).toEqual(["alias.py", "real.py", "relative-alias.py"]);
   });
 
-  // Dirent-based walk regression: one walk containing a symlinked FILE (kept,
-  // classified/sized by its TARGET), a symlinked DIR (skipped — canonical path
+  // Dirent-based walk regression: one walk containing a symlinked FILE (an
+  // alias, skipped by default; kept by an inventory, it is classified and
+  // sized by its TARGET), a symlinked DIR (skipped — canonical path
   // only), a symlink NAMED like an ignored dir (still skipped via its target's
   // type, since the dirent itself is a link, not a directory), and a broken
   // symlink (skipped without aborting the walk).
@@ -172,7 +241,8 @@ describe("symlink-escape guard", () => {
     symlinkSync(join(root, "lib"), join(root, "node_modules")); // link named like an ignored dir
     symlinkSync(join(root, "gone.ts"), join(root, "dangling.ts")); // broken link
 
-    const { files } = walk(root);
+    expect(walk(root).files.map((f) => f.rel).sort()).toEqual(["lib/mod.ts", "real.ts"]); // file-link.ts: an alias
+    const { files } = walk(root, { includeFileSymlinks: true });
     const rels = files.map((f) => f.rel).sort();
     expect(rels).toEqual(["file-link.ts", "lib/mod.ts", "real.ts"]);
     // The kept file link carries its TARGET's size (stat follows), not the

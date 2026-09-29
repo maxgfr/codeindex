@@ -7,9 +7,12 @@
         { "name": "start", "parent": "Worker.Scheduler", "kind": "function" },
         { "name": "dispatch", "parent": "Worker.Scheduler", "kind": "function" },
         { "name": "reset", "parent": "Worker.Scheduler", "kind": "function", "exported": false },
-        { "name": "trace", "parent": "Worker.Scheduler", "kind": "macro" }
+        { "name": "trace", "parent": "Worker.Scheduler", "kind": "macro" },
+        { "name": "is_attempt", "parent": "Worker.Scheduler", "kind": "guard" },
+        { "name": "retry", "parent": "Worker.Scheduler", "kind": "function" },
+        { "name": "backoff", "parent": "Worker.Scheduler", "kind": "function", "exported": false }
       ],
-      "calls": ["dispatch", "reset"],
+      "calls": ["dispatch", "is_attempt", "is_integer", "reset"],
       "relations": []
     }
   }

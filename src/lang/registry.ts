@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../types.js";
-import { extToLang, extractReexports } from "./common.js";
+import { annotate, extToLang, extractReexports, type Lexis } from "./common.js";
 import { jsTs } from "./js-ts.js";
 import { python } from "./python.js";
 import { go } from "./go.js";
@@ -20,7 +20,11 @@ import { dart } from "./dart.js";
 export interface Extractor {
   lang: string;
   exts: string[];
-  extract(rel: string, content: string): CodeSymbol[];
+  // How to mask the language and read its doc comments (see lang/common.ts).
+  // The registry masks once and hands the result to `extract`, whose rules
+  // then match code only, and to `annotate`, which adds docs and body spans.
+  lexis?: Lexis;
+  extract(rel: string, content: string, masked?: string): CodeSymbol[];
 }
 
 // Registry of symbol extractors keyed by file extension. Adding a language is a
@@ -51,7 +55,10 @@ export function extractSymbols(rel: string, ext: string, content: string): CodeS
   if (!extractor) symbols = [];
   else {
     try {
-      symbols = extractor.extract(rel, content);
+      const lexis = extractor.lexis;
+      const masked = lexis?.mask?.(content);
+      symbols = extractor.extract(rel, content, masked);
+      if (lexis) symbols = annotate(symbols, content, lexis, masked);
     } catch {
       symbols = [];
     }

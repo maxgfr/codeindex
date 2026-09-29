@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Query } from "web-tree-sitter";
 import type { Language } from "web-tree-sitter";
-import { grammarKeyForExt, languageFor, resolveGrammarsTier, parserFor } from "./loader.js";
+import { grammarKeyFor, languageFor, resolveGrammarsTier, parserFor } from "./loader.js";
 import type { TSNode } from "./node.js";
 import { byStr } from "../sort.js";
 
@@ -86,7 +86,7 @@ export function tagsQueryStatus(key: string): TagsQueryStatus {
  * or when no grammar is loaded for the extension.
  */
 export function extractTags(ext: string, content: string): TagDefinition[] {
-  const key = grammarKeyForExt(ext);
+  const key = grammarKeyFor(ext, content);
   if (!key) return [];
   const language = languageFor(key);
   const parser = parserFor(key);

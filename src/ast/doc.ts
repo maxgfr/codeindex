@@ -49,17 +49,31 @@ const DOC_WRAPPERS = new Set([
   "body",
 ]);
 
+// Siblings written between a doc comment and its declaration that belong to the
+// declaration without being part of its node. Rust hangs every outer attribute
+// off the enclosing list, not the item (`/// Doc`, `#[derive(Debug)]`, then
+// `pub struct S`), and tree-sitter-typescript does the same with a decorator on
+// its own line in a class body. Stopping at them lost the doc of nearly every
+// documented Rust item that derives or inlines anything (457 of 1187 symbols in
+// memchr). `inner_attribute_item` (`#![…]`) is deliberately absent: it belongs
+// to the enclosing module, so a comment above it documents nothing below.
+const ATTRIBUTE_SIBLING = /^(attribute_item|decorator)$/;
+
 // The contiguous comment run immediately above `node`, oldest line first.
 // "Contiguous" means no blank line: a comment separated from what follows
 // belongs to neither, and attributing it would put a file header on whichever
-// declaration happens to come first.
+// declaration happens to come first. Attributes in between are stepped over
+// (rustdoc joins `/// a`, `#[x]`, `/// b` into one doc), but they still count
+// for contiguity.
 function commentLinesAbove(node: TSNode): string[] {
   const blocks: TSNode[] = [];
   let prev = node.previousNamedSibling;
   let nextRow = node.startPosition.row;
-  while (prev && COMMENT_TYPE.test(prev.type)) {
+  while (prev) {
+    const comment = COMMENT_TYPE.test(prev.type);
+    if (!comment && !ATTRIBUTE_SIBLING.test(prev.type)) break;
     if (nextRow - prev.endPosition.row > 1) break;
-    blocks.push(prev);
+    if (comment) blocks.push(prev);
     nextRow = prev.startPosition.row;
     prev = prev.previousNamedSibling;
   }

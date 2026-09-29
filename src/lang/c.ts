@@ -1,5 +1,6 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { maskBraced } from "../extract/imports.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // C / C++. Regex heuristics: function definitions (a return type then `name(…)`
 // with the line ending in an opening brace or nothing — not a `;` prototype or a
@@ -20,7 +21,12 @@ const RULES: Rule[] = [
 export const c = {
   lang: "c/cpp",
   exts: [".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"],
-  extract(rel: string, content: string): CodeSymbol[] {
-    return scan(rel, content, rel.match(/\.(c|h)$/) ? "c" : "cpp", RULES);
+  lexis: {
+    mask: (src: string) => maskBraced(src, { squote: "char" }),
+    comment: /^\s*\/\//,
+    block: true,
+  } satisfies Lexis,
+  extract(rel: string, content: string, masked?: string): CodeSymbol[] {
+    return scan(rel, content, rel.match(/\.(c|h)$/) ? "c" : "cpp", RULES, masked);
   },
 };

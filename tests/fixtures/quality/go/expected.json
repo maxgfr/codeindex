@@ -18,6 +18,11 @@
           "exported": false
         },
         {
+          "name": "deadQueue",
+          "kind": "var",
+          "exported": false
+        },
+        {
           "name": "Runnable",
           "kind": "type",
           "doc": true
@@ -50,6 +55,19 @@
           "kind": "field"
         },
         {
+          "name": "Priority",
+          "parent": "JobSpec",
+          "kind": "field",
+          "doc": true
+        },
+        {
+          "name": "weight",
+          "parent": "JobSpec",
+          "kind": "field",
+          "exported": false,
+          "doc": true
+        },
+        {
           "name": "Scheduler",
           "kind": "type",
           "doc": true
@@ -74,6 +92,21 @@
           "name": "Log",
           "parent": "Audited",
           "kind": "field"
+        },
+        {
+          "name": "QueueName",
+          "kind": "type",
+          "doc": true
+        },
+        {
+          "name": "Delay",
+          "kind": "type",
+          "doc": true
+        },
+        {
+          "name": "budget",
+          "kind": "type",
+          "exported": false
         },
         {
           "name": "Start",

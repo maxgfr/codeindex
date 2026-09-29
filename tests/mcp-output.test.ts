@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { OUTPUT_SCHEMAS, structuredContentFor, toolsFor } from "../src/mcp.js";
+import { OUTPUT_SCHEMAS, PROTOCOL_VERSIONS, structuredContentFor, toolsFor } from "../src/mcp.js";
 
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
@@ -61,8 +61,12 @@ function validate(schema: Record<string, unknown>, value: unknown, path = "$"): 
 }
 
 // One server session, driven over the real stdio transport.
-async function session(calls: { name: string; arguments: Record<string, unknown> }[], version: string) {
-  const proc = spawn("node", [CLI, "mcp", "--repo", REPO], { stdio: ["pipe", "pipe", "ignore"] });
+async function session(
+  calls: { name: string; arguments: Record<string, unknown> }[],
+  version: string,
+  flags: string[] = [],
+) {
+  const proc = spawn("node", [CLI, "mcp", "--repo", REPO, ...flags], { stdio: ["pipe", "pipe", "ignore"] });
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
   let buf = "";
   proc.stdout.on("data", (d: Buffer) => {
@@ -92,11 +96,13 @@ async function session(calls: { name: string; arguments: Record<string, unknown>
     await call("initialize", { protocolVersion: version, capabilities: {}, clientInfo: { name: "t", version: "1" } });
     const tools = ((await call("tools/list", {})) as { result: { tools: Record<string, unknown>[] } }).result.tools;
     const results: Record<string, Record<string, unknown>> = {};
+    const ordered: Record<string, unknown>[] = [];
     for (const c of calls) {
-      results[c.name] = ((await call("tools/call", { name: c.name, arguments: c.arguments })) as { result: Record<string, unknown> })
-        .result;
+      const result = ((await call("tools/call", { name: c.name, arguments: c.arguments })) as { result: Record<string, unknown> }).result;
+      results[c.name] = result;
+      ordered.push(result);
     }
-    return { tools, results };
+    return { tools, results, ordered };
   } finally {
     proc.kill();
   }
@@ -110,17 +116,23 @@ const CASES: Record<string, Record<string, unknown>> = {
   graph: {},
   symbols: {},
   callers: {},
-  workspaces: {},
+  workspaces: { check: true },
   churn: {},
   find_references: { name: "HttpClient" },
+  symbol_at: { file: "src/client.ts", line: 7 },
   explain_search: { query: "http client retry" },
   lsp_status: {},
   onboard: { remember: false },
   call_graph: { symbol: "HttpClient", depth: 1 },
+  call_path: { from: "HttpClient/request", to: "backoff" },
+  impact: { target: "src/util.ts" },
+  neighbors: { target: "src/util.ts", depth: 2 },
   hotspots: {},
   coupling: {},
   duplicated_literals: {},
   embed_status: {},
+  resolution_report: {},
+  index_status: {},
   write_memory: { name: "schema-probe", content: "x" },
   delete_memory: { name: "schema-probe" },
   // The three symbolic edits share a schema and would mutate the fixture, so
@@ -140,7 +152,7 @@ describe("outputSchema / structuredContent", () => {
     // The tools deliberately left out: array responses, argument-dependent
     // shapes, and plain text. Pinned so a future "just add a schema" does not
     // silently start emitting a structuredContent that cannot conform.
-    for (const name of ["symbols_overview", "find_symbol", "grep", "check_rules", "list_memories", "dead_code", "complexity", "search", "repo_map", "mermaid", "read_memory"]) {
+    for (const name of ["symbols_overview", "find_symbol", "grep", "check_rules", "list_memories", "dead_code", "complexity", "search", "repo_map", "mermaid", "read_memory", "delta"]) {
       expect(OUTPUT_SCHEMAS[name], name).toBeUndefined();
     }
   }, 60_000);
@@ -188,6 +200,102 @@ describe("outputSchema / structuredContent", () => {
   }, 60_000);
 });
 
+// What the official TypeScript SDK client enforces on a tools/call result once
+// the tool advertised an outputSchema (client/index.js callTool): a non-error
+// result MUST carry structuredContent, and it MUST validate. Error results are
+// exempt. Returns the violation, or undefined.
+function sdkContractViolation(name: string, result: Record<string, unknown>): string | undefined {
+  const schema = OUTPUT_SCHEMAS[name];
+  if (!schema || result.isError === true) return undefined;
+  if (result.structuredContent === undefined) return `${name}: has an output schema but did not return structured content`;
+  return validate(schema, result.structuredContent);
+}
+
+describe("SDK conformance of the advertised tool list", () => {
+  // The SDK's ToolSchema types inputSchema and outputSchema as
+  // `{ type: "object", properties?, required? }`. A root without `type:
+  // "object"` (the symbols/callers `oneOf` schemas once) makes its client
+  // reject the ENTIRE tools/list, so an SDK-based host sees no tools at all.
+  // Iterates the live list, so a tool added later is covered automatically.
+  it("roots every inputSchema and outputSchema at type: object, for every version and pin", () => {
+    for (const version of PROTOCOL_VERSIONS) {
+      for (const pin of [undefined, "/pinned/repo"]) {
+        const tools = toolsFor(pin, version) as {
+          name: string;
+          inputSchema: Record<string, unknown>;
+          outputSchema?: Record<string, unknown>;
+        }[];
+        for (const tool of tools) {
+          for (const [kind, schema] of [["inputSchema", tool.inputSchema], ["outputSchema", tool.outputSchema]] as const) {
+            if (schema === undefined) continue;
+            const where = `${version} ${pin ?? "unpinned"} ${tool.name}.${kind}`;
+            expect(schema.type, where).toBe("object");
+            const props = (schema.properties ?? {}) as Record<string, unknown>;
+            expect(typeof props, where).toBe("object");
+            // A required name with no property is a typo nobody can satisfy.
+            for (const key of (schema.required as string[] | undefined) ?? []) {
+              expect(Object.keys(props), `${where}: required \`${key}\``).toContain(key);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  // validateArgs skips a property with no `type`, so an untyped argument
+  // would be read with no guard at all — the silent misreads it exists for.
+  it("types every input property with a shape validateArgs checks", () => {
+    const checked = new Set(["string", "number", "boolean", "array"]);
+    for (const tool of toolsFor(undefined, "2025-11-25") as { name: string; inputSchema: { properties?: Record<string, { type?: string; enum?: unknown[] }> } }[]) {
+      for (const [key, prop] of Object.entries(tool.inputSchema.properties ?? {})) {
+        expect(checked.has(prop.type ?? ""), `${tool.name}.${key}: ${prop.type}`).toBe(true);
+        if (prop.enum) expect(prop.enum.every((v) => typeof v === prop.type), `${tool.name}.${key} enum`).toBe(true);
+      }
+    }
+  });
+
+  it("sends a capped response as a tool error without structuredContent, for every schema-declaring tool", async () => {
+    // A cap this small withholds every payload, so each call exercises the
+    // notice path. Before, the notice was a non-error result with no
+    // structuredContent — which an SDK client turns into a thrown -32600.
+    const names = Object.keys(CASES).filter((n) => !EDIT_TOOLS.includes(n) && n !== "write_memory" && n !== "delete_memory");
+    const { ordered } = await session(
+      names.map((name) => ({ name, arguments: CASES[name]! })),
+      "2025-11-25",
+      ["--max-response-bytes", "40"],
+    );
+    names.forEach((name, i) => {
+      const res = ordered[i] as Record<string, unknown>;
+      expect(res.isError, name).toBe(true);
+      expect(res.structuredContent, name).toBeUndefined();
+      const notice = JSON.parse((res.content as { text: string }[])[0]!.text) as { truncated: boolean; tool: string };
+      expect(notice).toMatchObject({ truncated: true, tool: name });
+    });
+  }, 120_000);
+
+  it("sends lookup misses as tool errors, keeping their { error } text", async () => {
+    const misses: [string, Record<string, unknown>, string][] = [
+      ["call_graph", { symbol: "NoSuchSymbolAnywhere" }, "no symbol named NoSuchSymbolAnywhere"],
+      ["type_hierarchy", { name: "NoSuchType" }, "no type named NoSuchType"],
+      ["implementations", { name: "NoSuchType" }, "no type named NoSuchType"],
+    ];
+    const { ordered } = await session(misses.map(([name, args]) => ({ name, arguments: args })), "2025-11-25");
+    misses.forEach(([name, , message], i) => {
+      const res = ordered[i] as Record<string, unknown>;
+      expect(res.isError, name).toBe(true);
+      expect(res.structuredContent, name).toBeUndefined();
+      expect(JSON.parse((res.content as { text: string }[])[0]!.text), name).toEqual({ error: message });
+      expect(sdkContractViolation(name, res)).toBeUndefined();
+    });
+  }, 60_000);
+
+  it("meets the SDK result contract on the ordinary answers too", async () => {
+    const names = Object.keys(CASES).filter((n) => !EDIT_TOOLS.includes(n));
+    const { ordered } = await session(names.map((name) => ({ name, arguments: CASES[name]! })), "2025-06-18");
+    names.forEach((name, i) => expect(sdkContractViolation(name, ordered[i] as Record<string, unknown>)).toBeUndefined());
+  }, 120_000);
+});
+
 describe("structuredContentFor", () => {
   it("returns the parsed object for a schema-declaring tool", () => {
     expect(structuredContentFor('{"a":1}', false, true)).toEqual({ a: 1 });
@@ -211,8 +319,12 @@ describe("structuredContentFor", () => {
 describe("the symbolic edits share one result shape", () => {
   it("validates an EditResult against the declared schema", () => {
     const sample = { file: "src/client.ts", symbol: "HttpClient", startLine: 5, endLine: 9 };
+    // The post-edit check's findings ride along only when there are some.
+    const warned = { file: "src/client.ts", startLine: 5, endLine: 9, lines: 5, warnings: ["the edited file has 1 new syntax error(s), first at line 7"] };
     for (const name of EDIT_TOOLS) {
       expect(validate(OUTPUT_SCHEMAS[name]!, sample), name).toBeUndefined();
+      expect(validate(OUTPUT_SCHEMAS[name]!, warned), name).toBeUndefined();
+      expect(validate(OUTPUT_SCHEMAS[name]!, { ...warned, warnings: [1] }), name).toBeDefined();
     }
   });
 

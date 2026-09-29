@@ -1,12 +1,14 @@
 import { ENGINE_VERSION, SCHEMA_VERSION } from "./types.js";
-import type { Edge, FileNode, Graph, ModuleNode } from "./types.js";
+import type { Edge, FileNode, Graph, ModuleNode, RawRef } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import type { ModuleInfo } from "./modules.js";
 import { resolveDocLink, resolveImport, type ResolveContext } from "./resolve.js";
-import { resolveCallEdges } from "./calls.js";
+import { importTargets, resolveCallEdges } from "./calls.js";
 import { resolveRelationEdges } from "./relations.js";
 import { docMentionsFor, publishImportPairs, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
+
+const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 
 // A symbol name distinctive enough to anchor a doc→code "mention" edge without
 // noise: long, and either mixed-case or snake_case (i.e. not a plain English
@@ -81,7 +83,12 @@ export function buildGraph(
 
   // doc-link and import edges from each file's raw refs.
   for (const f of scan.files) {
+    let soft: RawRef[] | undefined;
     for (const ref of f.refs) {
+      if (ref.soft) {
+        (soft ??= []).push(ref);
+        continue;
+      }
       if (ref.kind === "doc-link") {
         const r = resolveDocLink(f.rel, ref.spec, ctx);
         if (r.kind === "external") continue;
@@ -101,14 +108,28 @@ export function buildGraph(
         }
       }
     }
+    // Soft refs are guesses — Python `from pkg import name` may bind a submodule
+    // (pkg/name.py) or just an attribute of pkg — so one only counts when it
+    // lands on an in-repo file this file does not already link to: never an
+    // external, never a dangling edge, never extra weight on an existing one.
+    // Resolved after every firm ref of the file, so that verdict does not
+    // depend on where the extractor put the soft ref in the list.
+    for (const ref of soft ?? []) {
+      const r =
+        ref.kind === "doc-link" ? resolveDocLink(f.rel, ref.spec, ctx) : resolveImport(f.rel, f.ext, ref.spec, ctx);
+      if (r.kind !== "resolved" || r.target === f.rel || fileEdgeMap.has(keyOf(f.rel, r.target, ref.kind))) continue;
+      collect(fileEdgeMap, { from: f.rel, to: r.target, kind: ref.kind, weight: 1 });
+      if (ref.kind === "import") importPairs.add(`${f.rel}|${r.target}`);
+    }
   }
 
   // Cross-file call edges: a global second pass over every file's collected call
-  // sites, promoted to `extracted` when an import corroborates the call and
-  // `inferred` on a unique repo-wide name match. Recorded as a pair set because a
-  // `call` is stronger evidence than a `use` for the same directed pair.
+  // sites (src/bind.ts), `extracted` when stated evidence backs the call (an
+  // import, a re-export chain, package membership) and `inferred` on a name
+  // match alone. Recorded as a pair set because a `call` is stronger evidence
+  // than a `use` for the same directed pair.
   const callPairs = new Set<string>();
-  for (const e of resolveCallEdges(scan, importPairs)) {
+  for (const e of resolveCallEdges(scan, importPairs, ctx)) {
     collect(fileEdgeMap, e);
     callPairs.add(`${e.from}|${e.to}`);
   }
@@ -117,7 +138,7 @@ export function buildGraph(
   // list distinguishes from any other, and the strongest structural link a repo
   // has after the import itself. Recorded as a pair set for the same reason
   // calls are — a subtype relation outranks a bare `use` for the same pair.
-  for (const e of resolveRelationEdges(scan, importPairs)) {
+  for (const e of resolveRelationEdges(scan, importPairs, ctx)) {
     collect(fileEdgeMap, e);
     callPairs.add(`${e.from}|${e.to}`);
   }
@@ -139,6 +160,16 @@ export function buildGraph(
   // languages/patterns the resolver can't (dynamic wiring, DI containers,
   // string-keyed registries).
   if (unique.size) {
+    // A Go file names another package's declarations only through an import of
+    // it (which resolves to one file of that package's directory): a
+    // `ResponseWriter` in package render is net/http's, never gin's — render
+    // cannot import gin.
+    let targetsOf: Map<string, Set<string>> | undefined;
+    const goImportsPackage = (from: string, target: string): boolean => {
+      const dir = dirOf(target);
+      for (const t of (targetsOf ??= importTargets(importPairs)).get(from) ?? []) if (dirOf(t) === dir) return true;
+      return false;
+    };
     for (const f of scan.files) {
       if (f.kind !== "code" || !f.idents?.length) continue;
       const perTarget = new Map<string, number>();
@@ -147,9 +178,11 @@ export function buildGraph(
         if (!target || target === f.rel) continue;
         perTarget.set(target, (perTarget.get(target) ?? 0) + 1);
       }
+      const go = f.lang === "go";
       for (const [target, count] of perTarget) {
         const pair = `${f.rel}|${target}`;
         if (importPairs.has(pair) || callPairs.has(pair)) continue;
+        if (go && target.endsWith(".go") && dirOf(target) !== dirOf(f.rel) && !goImportsPackage(f.rel, target)) continue;
         collect(fileEdgeMap, { from: f.rel, to: target, kind: "use", weight: Math.min(count, 5) });
       }
     }
@@ -232,6 +265,7 @@ export function buildGraph(
       lines: f.lines,
       degIn: degIn.get(f.rel) ?? 0,
       degOut: degOut.get(f.rel) ?? 0,
+      ...(f.generated ? { generated: f.generated } : {}),
     }))
     .sort((a, b) => byStr(a.rel, b.rel));
 

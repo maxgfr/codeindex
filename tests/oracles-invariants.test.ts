@@ -304,6 +304,18 @@ describe("exemptions are narrow", () => {
     ).toEqual(["span-missing-name"]);
   });
 
+  test("a normalized operator or indexer name is exempt only over its own declaration", () => {
+    const cs = "class S {\n  public static S operator +(S a, S b) => a;\n  public int this[int i] => i;\n}\n";
+    const op = (name: string, line: number): CodeSymbol =>
+      sym({ name, kind: "operator", file: "S.cs", lang: "csharp", line, endLine: line });
+    expect(checkSymbols("S.cs", cs, [op("operator+", 2), op("this[]", 3)])).toEqual([]);
+    // Another operator, or an indexer name over a non-indexer span, still fires.
+    expect(checkSymbols("S.cs", cs, [op("operator-", 2), op("this[]", 2)]).map((v) => v.kind)).toEqual([
+      "span-missing-name",
+      "span-missing-name",
+    ]);
+  });
+
   test("a parent absent from the file is not a violation", () => {
     // A Go method whose receiver type lives in a sibling file: there is no local
     // `Scheduler` span to compare against, so nothing is claimed.

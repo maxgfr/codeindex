@@ -31,7 +31,7 @@ public class Scheduler : BaseWorker, IRunnable
     /// <summary>Bounds how often a job is retried.</summary>
     public const int MaxAttempts = 5;
 
-    private readonly List<JobSpec> pending = new();
+    private readonly List<JobSpec> pending = new(), failed = new();
 
     /// <summary>Raised after every attempt.</summary>
     public event AttemptHandler? Attempted;
@@ -64,6 +64,16 @@ public class Scheduler : BaseWorker, IRunnable
     private void Reset()
     {
         pending.Clear();
+    }
+
+    /// <summary>The job queued at <paramref name="index"/>.</summary>
+    public JobSpec this[int index] => pending[index];
+
+    /// <summary>Both queues, drained as one.</summary>
+    public static Scheduler operator +(Scheduler a, Scheduler b) => a;
+
+    private void Trace(string note = "public api")
+    {
     }
 
     /// <summary>The job at the head of the queue.</summary>

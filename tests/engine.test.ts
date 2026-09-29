@@ -96,6 +96,7 @@ const CONTRACT = [
   "gitChurn",
   "changedSince",
   "grepRepo",
+  "grepRepoEx",
   "searchIndex",
   "subtokens",
   "checkRules",

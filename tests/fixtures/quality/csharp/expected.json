@@ -72,6 +72,12 @@
           "exported": false
         },
         {
+          "name": "failed",
+          "parent": "Scheduler",
+          "kind": "field",
+          "exported": false
+        },
+        {
           "name": "Attempted",
           "parent": "Scheduler",
           "kind": "event",
@@ -98,6 +104,24 @@
         },
         {
           "name": "Reset",
+          "parent": "Scheduler",
+          "kind": "method",
+          "exported": false
+        },
+        {
+          "name": "this[]",
+          "parent": "Scheduler",
+          "kind": "indexer",
+          "doc": true
+        },
+        {
+          "name": "operator+",
+          "parent": "Scheduler",
+          "kind": "operator",
+          "doc": true
+        },
+        {
+          "name": "Trace",
           "parent": "Scheduler",
           "kind": "method",
           "exported": false

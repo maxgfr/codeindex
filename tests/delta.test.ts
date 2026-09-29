@@ -1,0 +1,337 @@
+// `delta` against real temporary git repositories: what a removal breaks, what
+// the diff side must ignore, and the CI gate.
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { brokenImports, computeDelta, deltaFor, deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff, RISK_WEIGHTS } from "../src/delta.js";
+import type { DeltaResult } from "../src/delta.js";
+import { buildIndexArtifacts } from "../src/pipeline.js";
+
+const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
+const clientModule = new URL("../scripts/bench/mcp-client.mjs", import.meta.url).href;
+
+function git(dir: string, args: string[]): string {
+  return execFileSync("git", ["-C", dir, "-c", "commit.gpgsign=false", ...args], {
+    encoding: "utf8",
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+}
+
+function write(root: string, files: Record<string, string>): void {
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), content);
+  }
+}
+
+// A committed repo on `main`, so delta has a base to diff against.
+function repo(files: Record<string, string>): string {
+  const root = mkdtempSync(join(tmpdir(), "ci-delta-"));
+  git(root, ["init", "-q", "-b", "main"]);
+  write(root, files);
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-qm", "init"]);
+  return root;
+}
+
+function delta(root: string, opts: { staged?: boolean } = {}): DeltaResult {
+  const { scan, graph, symbols } = buildIndexArtifacts(root);
+  const res = deltaFor(root, graph, symbols, { ...opts, scan });
+  if ("error" in res) throw new Error(res.error);
+  return res;
+}
+
+// lib/hub.ts is imported by five files in three directories.
+const HUB_REPO = {
+  "lib/hub.ts": "export function hub(): number {\n  return 1;\n}\n",
+  "lib/other.ts": "export const other = 2;\n",
+  "app/a.ts": 'import { hub } from "../lib/hub";\nexport const a = hub();\n',
+  "app/b.ts": 'import { hub } from "../lib/hub";\nexport const b = hub();\n',
+  "app/c.ts": 'import { hub } from "../lib/hub";\nexport const c = hub();\n',
+  "web/d.ts": 'import { hub } from "../lib/hub";\nexport const d = hub();\n',
+  "web/e.ts": 'import { a } from "../app/a";\nexport const e = a;\n',
+  "cli/f.ts": 'import { hub } from "../lib/hub";\nexport const f = hub();\n',
+};
+
+describe("delta: importers of a removed file", () => {
+  it("scores the module a still-imported file was deleted from, naming its importers", () => {
+    const root = repo(HUB_REPO);
+    try {
+      rmSync(join(root, "lib/hub.ts"));
+      const res = delta(root);
+      expect(res.deleted).toEqual(["lib/hub.ts"]);
+      expect(res.broken.map((b) => b.from)).toEqual(["app/a.ts", "app/b.ts", "app/c.ts", "cli/f.ts", "web/d.ts"]);
+      expect(res.broken.every((b) => b.target === "lib/hub.ts" && b.kind === "import" && b.renamedTo === undefined)).toBe(true);
+      const lib = res.modules.find((m) => m.slug === "lib")!;
+      expect(lib.reasons[0]).toBe("removed lib/hub.ts is still imported by 5 files (app/a.ts, app/b.ts, app/c.ts, …)");
+      expect(lib.score).toBeGreaterThanOrEqual(RISK_WEIGHTS.brokenImport);
+      expect(lib.changedFiles).toEqual(["lib/hub.ts"]);
+      // The importers are the blast radius, and the ones to open.
+      expect(lib.impact.directFiles).toBe(5);
+      expect(lib.impact.transitiveFiles).toBe(6); // + web/e.ts through app/a.ts
+      expect(lib.impact.modules).toEqual(["app", "cli", "web"]);
+      expect(lib.open).toEqual(["app/a.ts", "app/b.ts", "app/c.ts"]);
+      // Explained by the removal, so not repeated as an unexplained dangling import.
+      expect(res.dangling).toEqual([]);
+      expect(formatDeltaPanel(res)).toContain("broken:    lib/hub.ts still imported by app/a.ts, app/b.ts, app/c.ts, cli/f.ts, web/d.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says where a renamed file went, even when an importer changed too", () => {
+    const root = repo(HUB_REPO);
+    try {
+      git(root, ["mv", "lib/hub.ts", "lib/core.ts"]);
+      write(root, { "app/a.ts": 'import { hub } from "../lib/hub";\nexport const a = hub() + 1;\n' });
+      const res = delta(root);
+      expect(res.broken.filter((b) => b.from === "app/a.ts")).toEqual([
+        { from: "app/a.ts", spec: "../lib/hub", kind: "import", target: "lib/hub.ts", renamedTo: "lib/core.ts" },
+      ]);
+      expect(res.dangling).toEqual([]);
+      expect(res.modules.find((m) => m.slug === "lib")!.reasons[0]).toMatch(/^renamed lib\/hub\.ts \(now lib\/core\.ts\) is still imported by 5 files/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("scores a directory that is gone entirely under the slug it would have had", () => {
+    const root = repo(HUB_REPO);
+    try {
+      rmSync(join(root, "lib"), { recursive: true });
+      const res = delta(root);
+      const lib = res.modules.find((m) => m.slug === "lib")!;
+      expect(lib.path).toBe("lib");
+      expect(lib.tests.status).toBe("n/a");
+      expect(lib.reasons[0]).toMatch(/^removed lib\/hub\.ts is still imported by 5 files/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds nothing broken when nobody imported the removed file", () => {
+    const root = repo(HUB_REPO);
+    try {
+      rmSync(join(root, "lib/other.ts"));
+      const res = delta(root);
+      expect(res.broken).toEqual([]);
+      expect(res.modules).toEqual([]);
+      expect(res.deleted).toEqual(["lib/other.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-resolves against the live scan: a removed path re-created in place breaks nothing", () => {
+    const root = repo(HUB_REPO);
+    try {
+      const { scan, graph } = buildIndexArtifacts(root);
+      expect(brokenImports(scan, graph, [{ path: "lib/hub.ts" }])).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("notes when no scan was supplied instead of silently skipping the trace", () => {
+    const root = repo(HUB_REPO);
+    try {
+      rmSync(join(root, "lib/hub.ts"));
+      const { graph, symbols } = buildIndexArtifacts(root);
+      const res = deltaFor(root, graph, symbols) as DeltaResult;
+      expect(res.broken).toEqual([]);
+      expect(res.notes).toContain("no scan supplied — importers of removed files were not traced");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps computeDelta pure: broken imports arrive as input", () => {
+    const root = repo(HUB_REPO);
+    try {
+      rmSync(join(root, "lib/hub.ts"));
+      const { graph, symbols } = buildIndexArtifacts(root);
+      const base = { ref: "main", mergeBase: "0000000", staged: false };
+      const files = [{ path: "lib/hub.ts", status: "deleted" as const }];
+      expect(computeDelta(graph, symbols, { files, hunks: new Map(), base }).modules).toEqual([]);
+      const broken = [{ from: "cli/f.ts", spec: "../lib/hub", kind: "import" as const, target: "lib/hub.ts" }];
+      const res = computeDelta(graph, symbols, { files, hunks: new Map(), base, broken });
+      expect(res.modules.map((m) => m.slug)).toEqual(["lib"]);
+      expect(res.modules[0]!.impact).toEqual({ directFiles: 1, transitiveFiles: 1, modules: ["cli"] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delta: what the diff side ignores", () => {
+  it("drops the engine's own index and untracked paths the walker never indexes", () => {
+    const root = repo(HUB_REPO);
+    try {
+      write(root, {
+        ".codeindex/graph.json": "{}\n",
+        ".codeindex/memories/onboarding.md": "# brief\n",
+        "node_modules/pkg/index.js": "module.exports = 1;\n",
+        ".codeindex-edit-x1/hub.ts": "export const x = 1;\n",
+      });
+      const diff = readDeltaDiff(root);
+      if ("error" in diff) throw new Error(diff.error);
+      expect(diff.files).toEqual([]);
+      expect(formatDeltaPanel(emptyDelta(diff))).toMatch(/^codeindex: no changes vs main/);
+      // A real untracked source file is still part of the review.
+      write(root, { "app/new.ts": "export const n = 1;\n" });
+      const res = delta(root);
+      expect(res.changes.map((c) => c.path)).toEqual(["app/new.ts"]);
+      expect(res.unindexed).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops a custom --index directory, tracked or not, and keeps other tracked paths", () => {
+    const root = repo({ ...HUB_REPO, "vendor/dep.js": "module.exports = 1;\n", "idx/old.json": "{}\n" });
+    try {
+      write(root, {
+        "idx/graph.json": "{}\n",
+        "idx/old.json": "{\"x\":1}\n",
+        "vendor/dep.js": "module.exports = 2;\n",
+      });
+      const withDefault = readDeltaDiff(root);
+      if ("error" in withDefault) throw new Error(withDefault.error);
+      expect(withDefault.files.map((f) => f.path).sort()).toEqual(["idx/graph.json", "idx/old.json", "vendor/dep.js"]);
+      const diff = readDeltaDiff(root, { indexDir: "idx" });
+      if ("error" in diff) throw new Error(diff.error);
+      // A tracked change under an ignored directory is still the diff's: the
+      // panel lists it as unindexed rather than hiding it.
+      expect(diff.files.map((f) => f.path)).toEqual(["vendor/dep.js"]);
+      expect(deltaOfDiff(diff, buildIndexArtifacts(root).graph, undefined).unindexed).toEqual(["vendor/dep.js"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delta: symbol attribution reads only the changed files' defs", () => {
+  it("attributes hunks exactly as before when the repo holds many other defs", () => {
+    const root = repo(HUB_REPO);
+    try {
+      write(root, { "app/b.ts": 'import { hub } from "../lib/hub";\nexport const b = hub() * 2;\n' });
+      const res = delta(root);
+      expect(res.changes).toEqual([
+        {
+          path: "app/b.ts",
+          status: "modified",
+          linesAdded: 1,
+          linesDeleted: 1,
+          module: "app",
+          hunks: [{ start: 2, end: 2 }],
+          symbols: [{ name: "b", kind: "const", exported: true, line: 2, endLine: 2 }],
+        },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delta: the CI gate", () => {
+  it("--fail-on exits 1 once a module reaches the bucket, and writes the panel either way", () => {
+    const root = repo(HUB_REPO);
+    try {
+      rmSync(join(root, "lib/hub.ts")); // lib scores >= brokenImport (40): MEDIUM at least
+      const run = (...args: string[]) => spawnSync(process.execPath, [CLI, "delta", "--repo", root, ...args], { encoding: "utf8" });
+      const plain = run();
+      expect(plain.status).toBe(0);
+      const lib = (JSON.parse(run("--json").stdout) as DeltaResult).modules.find((m) => m.slug === "lib")!;
+      expect(lib.bucket).not.toBe("LOW");
+      const gated = run("--fail-on", "medium");
+      expect(gated.status).toBe(1);
+      expect(gated.stdout).toBe(plain.stdout);
+      expect(run("--fail-on", "HIGH").status).toBe(lib.bucket === "HIGH" ? 1 : 0);
+      expect(run("--fail-on", "urgent").stderr).toMatch(/--fail-on expects HIGH, MEDIUM or LOW/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delta over MCP", () => {
+  it("returns the review as JSON, concise, capped or as the panel", async () => {
+    const root = repo(HUB_REPO);
+    const { startMcpClient } = await import(/* @vite-ignore */ clientModule);
+    const client = startMcpClient(process.execPath, [CLI, "mcp", "--repo", root, "--tools", "risk"], { timeoutMs: 30_000 });
+    try {
+      expect((await client.handshake()).ok).toBe(true);
+      const listed = await client.request("tools/list", {});
+      expect(listed.result.tools.map((t: { name: string }) => t.name)).toContain("delta");
+      const call = async (args: Record<string, unknown>): Promise<string> => {
+        const r = await client.request("tools/call", { name: "delta", arguments: args });
+        expect(r.result.isError, JSON.stringify(r.result)).not.toBe(true);
+        return r.result.content[0].text as string;
+      };
+      expect(JSON.parse(await call({}))).toMatchObject({ changes: [], modules: [] });
+
+      rmSync(join(root, "lib/hub.ts"));
+      write(root, { "app/b.ts": 'import { hub } from "../lib/hub";\nexport const b = hub() * 2;\n' });
+      const full = JSON.parse(await call({})) as DeltaResult;
+      expect(full).toEqual(delta(root));
+      expect(full.modules.map((m) => m.slug)).toEqual(["lib", "app"]);
+
+      const concise = JSON.parse(await call({ concise: true }));
+      expect(concise).toEqual({
+        ...full,
+        changes: [
+          { path: "app/b.ts", status: "modified", module: "app", symbols: [{ name: "b", kind: "const", line: 2 }] },
+          { path: "lib/hub.ts", status: "deleted", symbols: [] },
+        ],
+      });
+      expect(JSON.parse(await call({ limit: 1 }))).toEqual({ ...full, modules: full.modules.slice(0, 1), totalModules: 2, truncated: true });
+      expect(await call({ format: "text" })).toBe(formatDeltaPanel(full));
+    } finally {
+      await client.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("delta: before the first commit, and the staged panel", () => {
+  it("reviews an unborn repository against the empty tree, staged or not", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-delta-unborn-"));
+    try {
+      git(root, ["init", "-q", "-b", "main"]);
+      write(root, { "a.ts": "export const a = 1;\n", "b.ts": 'import { a } from "./a";\nexport const b = a;\n' });
+      git(root, ["add", "a.ts"]);
+      const all = delta(root);
+      expect(all.base.ref).toBe("(no commits)");
+      expect(all.changes.map((c) => [c.path, c.status])).toEqual([
+        ["a.ts", "added"],
+        ["b.ts", "added"],
+      ]);
+      expect(all.changes[0]!.symbols.map((s) => s.name)).toEqual(["a"]);
+      expect(formatDeltaPanel(all)).toMatch(/^codeindex: delta vs the empty tree \(no commits yet\) — 2 changed file\(s\)/);
+      const staged = delta(root, { staged: true });
+      expect(staged.changes.map((c) => c.path)).toEqual(["a.ts"]);
+      expect(staged.notes).toContain("no commits yet — every staged file is reviewed as added");
+      expect(formatDeltaPanel(staged)).toMatch(/^codeindex: delta of staged changes vs the empty tree \(no commits yet\)/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says 'staged changes vs HEAD', not 'staged vs HEAD (merge-base …)'", () => {
+    const root = repo(HUB_REPO);
+    try {
+      const head = git(root, ["rev-parse", "HEAD"]).trim();
+      expect(formatDeltaPanel(delta(root, { staged: true }))).toBe(`codeindex: no staged changes vs HEAD (${head.slice(0, 7)})\n`);
+      write(root, { "lib/other.ts": "export const other = 3;\n" });
+      git(root, ["add", "lib/other.ts"]);
+      expect(formatDeltaPanel(delta(root, { staged: true }))).toMatch(
+        new RegExp(`^codeindex: delta of staged changes vs HEAD \\(${head.slice(0, 7)}\\) — 1 changed file\\(s\\)`),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

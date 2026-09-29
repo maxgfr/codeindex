@@ -219,3 +219,95 @@ describe("type hierarchy", () => {
     expect(JSON.stringify([...one])).toBe(JSON.stringify([...two]));
   });
 });
+
+describe("Go implicit interfaces", () => {
+  const GO_REPO = {
+    "go.mod": "module example.com/m\n\ngo 1.21\n",
+    "render/render.go": [
+      "package render",
+      "",
+      'import "net/http"',
+      "",
+      "// Render writes a response.",
+      "type Render interface {",
+      "\t// Render writes the body.",
+      "\tRender(http.ResponseWriter) error",
+      "\tWriteContentType(w http.ResponseWriter)",
+      "}",
+      "",
+      "// Body embeds Render.",
+      "type Body interface {",
+      "\tRender",
+      "\tBody() []byte",
+      "}",
+      "",
+      "// Closer embeds an interface from outside the repo: its method set is unknown.",
+      "type Closer interface {",
+      "\tio.Closer",
+      "\tName() string",
+      "}",
+      "",
+      "var _ Render = (*Asserted)(nil)",
+      "",
+    ].join("\n"),
+    "render/json.go": [
+      "package render",
+      "",
+      'import "net/http"',
+      "",
+      "type JSON struct{ Data any }",
+      "",
+      "func (r JSON) Render(w http.ResponseWriter) error { return nil }",
+      "",
+      "func (r JSON) WriteContentType(w http.ResponseWriter) {}",
+      "",
+      "func (r JSON) Body() []byte { return nil }",
+      "",
+      "// Half has one of the two methods.",
+      "type Half struct{}",
+      "",
+      "func (h Half) Render(w http.ResponseWriter) error { return nil }",
+      "",
+      "// Wrong has both names, but Render takes two parameters.",
+      "type Wrong struct{}",
+      "",
+      "func (w Wrong) Render(a http.ResponseWriter, b int) error { return nil }",
+      "",
+      "func (w Wrong) WriteContentType(x http.ResponseWriter) {}",
+      "",
+      "// Asserted is only declared to implement Render.",
+      "type Asserted struct{}",
+      "",
+      "// Wrapped gets its methods by embedding JSON.",
+      "type Wrapped struct {",
+      "\tJSON",
+      "}",
+      "",
+      "type Named struct{}",
+      "",
+      "func (n Named) Name() string { return \"\" }",
+      "",
+    ].join("\n"),
+  };
+
+  it("a type implements an interface whose methods it has; an assertion says so outright", () => {
+    const root = repoWith(GO_REPO);
+    const scan = scanRepo(root);
+    const h = buildTypeHierarchy(scan, computeImportPairs(scan));
+    const impls = implementationsOf(h, "Render").map((r) => `${r.name}${r.structural ? "*" : ""}`);
+    // JSON by method set, Wrapped through its embedded JSON, Asserted by its
+    // assertion; Half lacks a method and Wrong's Render has the wrong arity.
+    expect(impls).toEqual(["Asserted", "JSON*", "Wrapped*"]);
+    expect(h.get("JSON")!.implements.map((r) => r.name)).toEqual(["Body", "Render"]);
+    // An embedded interface contributes its methods to the embedding one.
+    expect(implementationsOf(h, "Body").map((r) => r.name)).toEqual(["JSON", "Wrapped"]);
+    // A method set the repo cannot see in full matches nothing by name alone.
+    expect(implementationsOf(h, "Closer")).toEqual([]);
+  });
+
+  it("changes no graph edge: structural matches are a hierarchy answer only", () => {
+    const root = repoWith(GO_REPO);
+    const scan = scanRepo(root);
+    expect(resolveRelationEdges(scan, computeImportPairs(scan)).filter((e) => e.kind === "implements")).toEqual([]);
+  });
+});

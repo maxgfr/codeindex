@@ -7,15 +7,19 @@
         { "name": "MAX_ATTEMPTS", "parent": "Worker", "kind": "const", "doc": true },
         { "name": "Runnable", "parent": "Worker", "kind": "module", "doc": true },
         { "name": "start", "parent": "Runnable", "kind": "def", "doc": true },
+        { "name": "JobSpec", "parent": "Worker", "kind": "class", "doc": true },
+        { "name": "retry?", "parent": "JobSpec", "kind": "def", "doc": true },
         { "name": "Scheduler", "parent": "Worker", "kind": "class", "doc": true },
         { "name": "queue", "parent": "Scheduler", "kind": "attr" },
         { "name": "initialize", "parent": "Scheduler", "kind": "def", "doc": true },
         { "name": "start", "parent": "Scheduler", "kind": "def", "doc": true },
         { "name": "dispatch", "parent": "Scheduler", "kind": "def", "doc": true },
         { "name": "build", "parent": "Scheduler", "kind": "def" },
+        { "name": "default", "parent": "Scheduler", "kind": "def", "doc": true },
+        { "name": "weight", "parent": "Scheduler", "kind": "def", "exported": false, "doc": true },
         { "name": "reset", "parent": "Scheduler", "kind": "def", "exported": false }
       ],
-      "calls": ["attr_reader", "clear", "dispatch", "each", "include", "new", "raise"],
+      "calls": ["attr_reader", "build", "clear", "dispatch", "each", "include", "new", "protected", "raise", "size"],
       "relations": [
         { "kind": "extends", "from": "Scheduler", "to": "BaseWorker" },
         { "kind": "implements", "from": "Scheduler", "to": "Runnable" }

@@ -1,5 +1,6 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { maskBraced } from "../extract/imports.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // Java. Types and methods, with `public` driving the exported flag. The method
 // rule is conservative: a visibility modifier, a return type, then `name(`.
@@ -13,7 +14,13 @@ const RULES: Rule[] = [
 export const java = {
   lang: "java",
   exts: [".java"],
-  extract(rel: string, content: string): CodeSymbol[] {
-    return scan(rel, content, "java", RULES);
+  lexis: {
+    mask: (src: string) => maskBraced(src, { triple: true, squote: "char" }),
+    comment: /^\s*\/\//,
+    block: true,
+    decoration: /^\s*@/,
+  } satisfies Lexis,
+  extract(rel: string, content: string, masked?: string): CodeSymbol[] {
+    return scan(rel, content, "java", RULES, masked);
   },
 };

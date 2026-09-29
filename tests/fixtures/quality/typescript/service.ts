@@ -76,3 +76,13 @@ export namespace Delivery {
     return state !== DeliveryState.Pending;
   }
 }
+
+/** Signs outgoing payloads with a shared secret. */
+export class PayloadSigner {
+  constructor(
+    private readonly secret: string,
+    /** Digest used for every signature. */
+    public readonly algorithm = "sha256",
+    label: string,
+  ) {}
+}

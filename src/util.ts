@@ -9,6 +9,10 @@ export interface ShResult {
   stdout: string;
   stderr: string;
   missing: boolean;
+  // The spawn error's code when the call did not complete normally (ENOBUFS:
+  // stdout outgrew maxBuffer; ETIMEDOUT: killed by the timeout). `stdout` then
+  // holds only what arrived before the kill.
+  errorCode?: string;
 }
 
 // Run a command synchronously. Sync keeps the CLI simple and deterministic
@@ -18,23 +22,24 @@ export interface ShResult {
 export function sh(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined> } = {},
+  opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined>; maxBufferBytes?: number } = {},
 ): ShResult {
   const res = spawnSync(cmd, args, {
     cwd: opts.cwd,
     input: opts.input,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 120_000,
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: opts.maxBufferBytes ?? 64 * 1024 * 1024,
     env: opts.env ?? process.env,
   });
-  const missing = !!res.error && (res.error as NodeJS.ErrnoException).code === "ENOENT";
+  const code = res.error ? (res.error as NodeJS.ErrnoException).code : undefined;
   return {
     ok: !res.error && res.status === 0,
     status: res.status,
     stdout: res.stdout ?? "",
     stderr: res.stderr ?? (res.error ? String(res.error.message) : ""),
-    missing,
+    missing: code === "ENOENT",
+    ...(code ? { errorCode: code } : {}),
   };
 }
 
@@ -104,14 +109,24 @@ const STOPWORDS = new Set([
   "happen","happens","default","value","values","please","explain","tell","me","my","our",
 ]);
 
+// eslint-disable-next-line no-control-regex
+const NON_ASCII = /[^\x00-\x7F]/;
+
 // Fold diacritics to their base letters (NFKD decomposition, then drop the
 // combining marks in the U+0300–U+036F block) so "café" and "cafe" tokenize
 // alike. Query and haystack must both pass through this so the two sides agree.
 export function foldText(s: string): string {
+  // ASCII is fixed under NFKD and holds no combining mark, so it folds to
+  // itself — and it is nearly every identifier and comment word. Skipping ICU
+  // for it is a measurable share of building the search index.
+  if (!NON_ASCII.test(s)) return s;
   return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
 
-export function keywords(question: string): string[] {
+// `keep` lets a caller that knows better reclaim a token the stopword list
+// would drop — search does, for a stopword the code base declares as a name
+// (gin's `Default`, `Use`). 1-char noise is never reclaimed.
+export function keywords(question: string, keep?: (raw: string) => boolean): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
@@ -120,7 +135,7 @@ export function keywords(question: string): string[] {
     // Keep identifiers as-is (camelCase/snake_case often carry the real signal),
     // but filter generic English stopwords and 1-char noise.
     if (raw.length < 2) continue;
-    if (STOPWORDS.has(lower)) continue;
+    if (STOPWORDS.has(lower) && !keep?.(raw)) continue;
     if (seen.has(lower)) continue;
     seen.add(lower);
     out.push(raw);
@@ -137,11 +152,11 @@ export function keywords(question: string): string[] {
  * results for a reason no caller can see from the empty array alone. Kept here
  * rather than in the search module so STOPWORDS stays defined exactly once.
  */
-export function droppedKeywords(question: string): string[] {
+export function droppedKeywords(question: string, keep?: (raw: string) => boolean): string[] {
   const out: string[] = [];
   for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
     if (!raw) continue;
-    if (raw.length < 2 || STOPWORDS.has(raw.toLowerCase())) out.push(raw);
+    if (raw.length < 2 || (STOPWORDS.has(raw.toLowerCase()) && !keep?.(raw))) out.push(raw);
   }
   return out;
 }

@@ -131,13 +131,13 @@ describe("the differential can actually fire", () => {
   //
   // The phantom uses the regex tier's defining weakness rather than a fabricated
   // AST hole: `scan` (lang/common.ts) matches line by line with no notion of
-  // comments, so a `function` inside a block comment is a declaration to it and
-  // is nothing at all to tree-sitter.
+  // scope, so a `const` that starts in column 0 is a module constant to it even
+  // inside a function body, where tree-sitter knows it for a local. (Comments
+  // and strings no longer serve: the regex tier now matches masked text.)
   const src = [
-    "export function real(): void {}",
-    "/*",
-    "function ghost() {}",
-    "*/",
+    "export function real(): void {",
+    "const ghost = 1;",
+    "}",
     "export class Holder {",
     "  method(): void {}",
     "}",
@@ -146,7 +146,7 @@ describe("the differential can actually fire", () => {
 
   it("reports the regex tier's phantom declaration as a candidate gap", () => {
     expect(report.astMissing).toEqual([
-      { lang: "typescript", file: "holder.ts", name: "ghost", regexKind: "function" },
+      { lang: "typescript", file: "holder.ts", name: "ghost", regexKind: "const" },
     ]);
     expect(report.filesChecked).toBe(1);
   });

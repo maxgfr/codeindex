@@ -19,14 +19,22 @@ import { LiteralCollector } from "./literals.js";
 // value in another: the GIP field names that egapro writes as object keys in
 // its OpenAPI spec are string values in its label table, and only comparing
 // both catches the drift between them.
-const QUOTED = /(['"])((?:\\.|(?!\1)[^\\])*)\1/g;
+//
+// Double quotes take backslash escapes. Single quotes take none: a YAML
+// single-quoted scalar escapes a quote by doubling it (`'it''s'`), a TOML
+// literal string cannot contain one, and in both a backslash is just a
+// character (`'C:\dir\'`).
+const QUOTED = /"((?:\\.|[^"\\])*)"|'((?:[^']|'')*)'/g;
 // Non-global twin: `.test()` on a /g regex advances lastIndex, so reusing
 // QUOTED for a predicate makes the NEXT match on the same line start mid-string.
-const HAS_QUOTE = /(['"])((?:\\.|(?!\1)[^\\])*)\1/;
+const HAS_QUOTE = /"(?:\\.|[^"\\])*"|'(?:[^']|'')*'/;
 const BARE_NUMBER = /(?<![\w.$-])-?\d[\d_]*(?:\.\d+)?(?![\w.$-])/g;
-// YAML/TOML/INI unquoted scalar after `key:` or `key =`. JSON never needs this;
-// YAML overwhelmingly does, since quoting is optional there.
-const UNQUOTED_SCALAR = /^\s*[\w.$-]+\s*[:=]\s*([^#\n]+?)\s*$/;
+// A whole value that is one number, as BARE_NUMBER reads it.
+const NUMBER = /^-?\d[\d_]*(?:\.\d+)?$/;
+// YAML/TOML/INI unquoted scalar after `key:` or `key =`, including a YAML
+// sequence entry's (`- name: web`). JSON never needs this; YAML overwhelmingly
+// does, since quoting is optional there.
+const UNQUOTED_SCALAR = /^\s*(?:-\s+)?[\w.$-]+\s*[:=]\s*([^#\n]+?)\s*$/;
 
 export function extractConfigLiterals(content: string): CodeLiteral[] | undefined {
   const literals = new LiteralCollector();
@@ -38,13 +46,22 @@ export function extractConfigLiterals(content: string): CodeLiteral[] | undefine
     // strip only what follows the last closing quote on the line.
     const line = stripTrailingComment(raw);
 
-    for (const m of line.matchAll(QUOTED)) literals.add("string", m[2]!, lineNo);
+    for (const m of line.matchAll(QUOTED)) {
+      literals.add("string", m[1] ?? m[2]!.replace(/''/g, "'"), lineNo);
+    }
 
+    // An unquoted scalar is ONE value. A number (`port: 8080`) is recorded
+    // once, as the number below; anything else (`time: 12:30:45`,
+    // `host: db:5432`) is a string, and the digits inside it are part of it,
+    // not values of their own. Counting both made every numeric setting a
+    // duplicate of itself and a time three unrelated thresholds.
     const bare = UNQUOTED_SCALAR.exec(line);
-    if (bare) {
-      const v = bare[1]!.trim();
-      // Structural YAML/TOML punctuation opening a block, not a value.
-      if (v && !/^[[{|>&*-]/.test(v) && !HAS_QUOTE.test(v)) literals.add("string", v, lineNo);
+    const v = bare?.[1]!.trim();
+    // Structural YAML/TOML punctuation opening a block, not a value.
+    const scalar = v && !/^[[{|>&*-]/.test(v) && !HAS_QUOTE.test(v) ? v : undefined;
+    if (scalar !== undefined && !NUMBER.test(scalar)) {
+      literals.add("string", scalar, lineNo);
+      continue;
     }
 
     for (const m of line.replace(QUOTED, " ").matchAll(BARE_NUMBER)) {
@@ -61,7 +78,8 @@ function stripTrailingComment(line: string): string {
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
     if (inQuote) {
-      if (c === "\\") i++;
+      // Only a double-quoted run has escapes; see QUOTED.
+      if (c === "\\" && inQuote === '"') i++;
       else if (c === inQuote) inQuote = undefined;
     } else if (c === '"' || c === "'") inQuote = c;
     else if (c === "#") return line.slice(0, i);

@@ -1,5 +1,6 @@
 import type { CodeSymbol } from "../types.js";
-import { scan, type Rule } from "./common.js";
+import { maskBraced } from "../extract/imports.js";
+import { scan, type Lexis, type Rule } from "./common.js";
 
 // C#. `public`/`internal` mark the public surface. Covers types and methods.
 const pub = (_m: RegExpExecArray, l: string) => /\b(public|internal)\b/.test(l);
@@ -16,7 +17,13 @@ const RULES: Rule[] = [
 export const csharp = {
   lang: "csharp",
   exts: [".cs"],
-  extract(rel: string, content: string): CodeSymbol[] {
-    return scan(rel, content, "csharp", RULES);
+  lexis: {
+    mask: (src: string) => maskBraced(src, { squote: "char" }),
+    comment: /^\s*\/\//,
+    block: true,
+    decoration: /^\s*\[/,
+  } satisfies Lexis,
+  extract(rel: string, content: string, masked?: string): CodeSymbol[] {
+    return scan(rel, content, "csharp", RULES, masked);
   },
 };

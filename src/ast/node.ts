@@ -14,6 +14,9 @@ export interface TSNode {
   namedChildCount: number;
   namedChild(i: number): TSNode | null;
   childForFieldName(name: string): TSNode | null;
+  // Every child under a field a grammar repeats — the several `declarator`s of
+  // `int x, y;`, the several `name`s of Go's `var a, b int`.
+  childrenForFieldName(name: string): TSNode[];
   children: TSNode[];
   // ONE marshal + ONE wasm call for the whole child list, memoized on the node —
   // versus `namedChildCount` plus a `namedChild(i)` round-trip per index. Every
@@ -23,6 +26,9 @@ export interface TSNode {
   // out of a transparent wrapper (`export …`, a decorator) when looking for it.
   previousNamedSibling: TSNode | null;
   parent: TSNode | null;
+  // The first child INCLUDING anonymous tokens — the only way to tell `#ifdef`
+  // from `#ifndef`, which share one node type and differ only in that keyword.
+  firstChild: TSNode | null;
 }
 
 // True for a leaf node that IS an identifier-ish name (identifier,
@@ -32,6 +38,11 @@ export interface TSNode {
 // keyword_* node types (keyword_argument, keyword_pattern, …) never match.
 export const IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
 
+// A comment node in any grammar: `comment`, `line_comment`, `block_comment`,
+// `doc_comment`. Comments are extras, so a grammar hangs them on whichever node
+// encloses them — in a parameter list as readily as between statements.
+export const COMMENT_NODE = /(^|_)comment$/;
+
 export function findFirst(node: TSNode, pred: (n: TSNode) => boolean): TSNode | undefined {
   for (const c of node.namedChildren) {
     if (pred(c)) return c;
@@ -39,6 +50,36 @@ export function findFirst(node: TSNode, pred: (n: TSNode) => boolean): TSNode | 
     if (deep) return deep;
   }
   return undefined;
+}
+
+// The C++ declarator leaves that name a function with something other than an
+// identifier, so the chain walk below never recognised them and every operator
+// overload and in-class destructor was dropped (or named after its return
+// type). Spacing is formatting, not identity: `operator ==` and `operator==` are
+// one name, so whitespace goes except the single space a word operator needs
+// (`operator new[]`, `operator bool`). A conversion operator's node runs on
+// through its parameter list; the name is the part before it.
+function cppSpecialName(n: TSNode): string | undefined {
+  switch (n.type) {
+    case "operator_name":
+      return n.text.replace(/\s+/g, "").replace(/^operator(?=\w)/, "operator ");
+    case "operator_cast": {
+      const head = n.text.split("(")[0]!.replace(/\s+/g, " ").replace(/\s*([*&])\s*/g, "$1").trim();
+      return head.length > "operator".length ? head : undefined;
+    }
+    case "destructor_name":
+      return n.text.replace(/\s+/g, "");
+  }
+  return undefined;
+}
+
+// The next link of a C/C++ declarator chain. Two declarators hold it as an
+// UNNAMED child rather than a `declarator` field: C++'s `reference_declarator`
+// (`const std::string& name()`) and the `parenthesized_declarator` of every C
+// function pointer (`void (*run)(job *)`).
+const UNNAMED_CHAIN = new Set(["reference_declarator", "parenthesized_declarator"]);
+export function nextDeclarator(decl: TSNode): TSNode | null {
+  return decl.childForFieldName("declarator") ?? (UNNAMED_CHAIN.has(decl.type) ? (decl.namedChildren[0] ?? null) : null);
 }
 
 // The declared name of a node, tried in order of decreasing reliability:
@@ -61,9 +102,24 @@ export function nameOf(node: TSNode): string | undefined {
   let decl = node.childForFieldName("declarator");
   while (decl) {
     const inner = decl.childForFieldName("name");
-    if (inner?.text) return inner.text;
+    if (inner?.text) {
+      // C++ nests one qualified_identifier per scope: `Outer::Inner::deep` is
+      // Outer :: (Inner :: deep), and the declared name is the innermost
+      // segment, not "Inner::deep".
+      if (inner.type === "qualified_identifier") {
+        decl = inner;
+        continue;
+      }
+      return cppSpecialName(inner) ?? inner.text;
+    }
     if (decl.namedChildren.length === 0 && /(^|_)identifier$/.test(decl.type)) return decl.text;
-    const next = decl.childForFieldName("declarator");
+    const special = cppSpecialName(decl);
+    if (special) return special;
+    // Following only the `declarator` field stopped at the two unnamed links
+    // (see nextDeclarator) and sent the reader to its last resort, which named
+    // each reference-returning function after its return type ("std::string",
+    // "Widget" for `Widget& operator=`) and dropped function-pointer fields.
+    const next = nextDeclarator(decl);
     if (!next || next === decl) break;
     decl = next;
   }
@@ -147,8 +203,11 @@ export function readTypeName(node: TSNode | null): string | undefined {
       if (TYPE_LEAF.test(n.type)) last = n.text;
       return;
     }
-    // Never descend into type ARGUMENTS — `Vec<JobSpec>` is a Vec.
-    if (/arguments|parameters/.test(n.type)) return;
+    // Never descend into type ARGUMENTS — `Vec<JobSpec>` is a Vec. C++ and C#
+    // spell the list `template_argument_list` / `type_argument_list`, which the
+    // plural test missed: `class B : public Base<Foo>` extended "Foo", and an
+    // out-of-line `Box<T>::get` belonged to "T".
+    if (/arguments|parameters|argument_list/.test(n.type)) return;
     for (const c of n.namedChildren) visit(c);
   };
   visit(node);

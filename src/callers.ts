@@ -1,21 +1,19 @@
 // Per-symbol caller index (ultrasec parity): which call sites reach each
 // defined symbol, at (file, line) granularity — the data taint analysis and
-// impact tooling need. Mirrors resolveCallEdges' binding rules (family gating,
-// import corroboration for JS/TS, proximity tie-breaking) but keeps individual
-// call sites instead of aggregating to file→file edges, and binds same-file
-// calls to the local def (shadowing wins over a cross-file match).
+// impact tooling need. Every site is bound by the shared call-site binder
+// (src/bind.ts) — the one graph.json's call edges and the symbol graph use —
+// and kept individually instead of aggregated to file→file edges, including
+// the sites that bind inside their own file.
 //
-// ONE deliberate difference from resolveCallEdges: a barrel's re-export
-// (`export { greet } from "./lib.js"`) does NOT count as a local def here, so
-// a call in the barrel binds through to the real declaration — the caller
-// index answers "who calls greet", and the barrel does. resolveCallEdges
-// keeps its 5.1.0-lineage behavior (any own symbol suppresses the edge) so
-// graph.json stays byte-compatible with ultraindex.
+// A barrel's re-export (`export { greet } from "./lib.js"`) is not a
+// definition, so a call in the barrel binds through to the real declaration:
+// the caller index answers "who calls greet", and the barrel does.
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
-import { familyOf, pickCandidate } from "./calls.js";
+import { createCallBinder } from "./bind.js";
 import { importPairsFor } from "./derived.js";
 import { byStr } from "./sort.js";
+import { refMatches, symbolRefReadings } from "./symref.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -28,6 +26,9 @@ export interface CallerSite {
   // (the JS/TS unique-repo-wide relaxation, or a non-JS/TS inference without an
   // import). Default (precision) mode never sets it — output is byte-unchanged.
   confidence?: "corroborated" | "unique-name";
+  // The enclosing declaration's symbol id; only with `callers --with-caller`
+  // (MCP withCaller), see query.ts withCallerIds.
+  caller?: string;
 }
 
 export interface CallerIndexOptions {
@@ -47,10 +48,36 @@ export interface CallerEntry {
 // serializing the index is deterministic without re-sorting).
 export type CallerIndex = Map<string, CallerEntry>;
 
-/** Resolve the explicit name@file form for every entry, including the first
- * homonym that the historical index stores under its unqualified name. */
-export function lookupCallerEntry(index: CallerIndex, name: string): CallerEntry | undefined {
-  return index.get(name) ?? [...index.values()].find((entry) => `${entry.def.name}@${entry.def.file}` === name);
+/**
+ * One symbol's entry, for any ref form src/symref.ts reads (`name`,
+ * `name@file`, `file#Parent/name`, `Parent/name`). A bare name answers with
+ * the key the index stores it under — the first homonym, historically — and
+ * the qualified forms reach every homonym, the first one included.
+ */
+export function lookupCallerEntry(index: CallerIndex, ref: string): CallerEntry | undefined {
+  const direct = index.get(ref);
+  if (direct) return direct;
+  // The literal reading is the key lookup above; the others scan the entries.
+  for (const reading of symbolRefReadings(ref).slice(1)) {
+    for (const entry of index.values()) if (refMatches(reading, entry.def)) return entry;
+  }
+  return undefined;
+}
+
+/**
+ * buildCallerIndex(scan, undefined, opts) restricted to the entries of
+ * `names`, without binding the whole repo: only those names' call sites are
+ * resolved, through the same code path, so every entry is exactly the full
+ * index's and the two cannot drift. A one-shot `callers <name>` on the
+ * TypeScript repo used to resolve 236k call sites to answer about one name.
+ */
+export function callerIndexForNames(scan: RepoScan, names: Iterable<string>, opts: CallerIndexOptions = {}): CallerIndex {
+  return indexCallers(scan, importPairsFor(scan), opts.recall === true, new Set(names));
+}
+
+/** Every name a symbol ref can denote — what callerIndexForNames needs to answer it. */
+export function refNames(ref: string): string[] {
+  return [...new Set(symbolRefReadings(ref).map((r) => r.name))];
 }
 
 // `${from}|${to}` pairs of resolved imports — the same corroboration set the
@@ -67,92 +94,35 @@ export function buildCallerIndex(
   importPairs?: Set<string>,
   opts: CallerIndexOptions = {},
 ): CallerIndex {
-  // Read-only use of the memoized pair set (no copy needed: only .has below).
+  // Read-only use of the memoized pair set (no copy needed: it is only read).
   // The INDEX built here is always fresh — the public path never memoizes it;
   // the default-opts cache lives in derived.ts's callerIndexFor.
-  const pairs = importPairs ?? importPairsFor(scan);
-  const recall = opts.recall === true;
+  return indexCallers(scan, importPairs ?? importPairsFor(scan), opts.recall === true);
+}
 
-  // name → def sites (first symbol per (name, file) wins, like resolveCallEdges).
-  const defs = new Map<string, CodeSymbol[]>();
-  for (const f of scan.files) {
-    const seen = new Set<string>();
-    for (const s of f.symbols) {
-      if (!s.exported || REFERENCE_KINDS.has(s.kind)) continue;
-      if (seen.has(s.name)) continue;
-      seen.add(s.name);
-      let arr = defs.get(s.name);
-      if (!arr) defs.set(s.name, (arr = []));
-      arr.push(s);
-    }
-  }
-  // The hot loop below resolves every call. Group definitions by language
-  // family once so it does not allocate a filtered + mapped candidate list for
-  // each site. CodeSymbol structurally contains Cand's file/lang fields, and
-  // pickCandidate returns the selected object unchanged.
-  const defsByFamily = new Map<string, Map<string, CodeSymbol[]>>();
-  for (const [name, sites] of defs) {
-    const families = new Map<string, CodeSymbol[]>();
-    for (const site of sites) {
-      const family = familyOf(site.lang);
-      let grouped = families.get(family);
-      if (!grouped) families.set(family, (grouped = []));
-      grouped.push(site);
-    }
-    defsByFamily.set(name, families);
-  }
-  // Same-file binding also needs non-exported defs (a private helper shadows
-  // an exported symbol of the same name elsewhere).
-  const localDefs = new Map<string, Map<string, CodeSymbol>>();
-  for (const f of scan.files) {
-    const byName = new Map<string, CodeSymbol>();
-    for (const s of f.symbols) {
-      if (!REFERENCE_KINDS.has(s.kind) && !byName.has(s.name)) byName.set(s.name, s);
-    }
-    localDefs.set(f.rel, byName);
-  }
-
+// buildCallerIndex's body. `only` restricts it to call sites of those names
+// (callerIndexForNames); every entry it does build is exactly the full index's.
+// Each site is bound by the shared call-site binder (src/bind.ts), the one the
+// graph's call edges and the symbol graph use.
+function indexCallers(scan: RepoScan, pairs: Set<string>, recall: boolean, only?: ReadonlySet<string>): CallerIndex {
+  const binder = createCallBinder(scan, pairs, { recall, only });
   const sites = new Map<string, { def: CodeSymbol; callers: CallerSite[] }>();
-  const record = (def: CodeSymbol, caller: CallerSite): void => {
-    let entry = sites.get(def.name + "\0" + def.file);
-    if (!entry) sites.set(def.name + "\0" + def.file, (entry = { def, callers: [] }));
-    entry.callers.push(caller);
-  };
-
   for (const f of scan.files) {
-    if (!f.calls?.length) continue;
-    const family = familyOf(f.lang);
-    const own = localDefs.get(f.rel)!;
-    for (const c of f.calls) {
-      const local = own.get(c.name);
-      if (local) {
-        // Shadowing: a same-file def wins. Skip the def line itself — a regex
-        // collector may re-match the declaration.
-        if (local.line !== c.line)
-          record(local, recall ? { file: f.rel, line: c.line, confidence: "corroborated" } : { file: f.rel, line: c.line });
-        continue;
-      }
-      const cands = (defsByFamily.get(c.name)?.get(family) ?? []).filter((d) => d.file !== f.rel);
-      if (!cands.length) continue;
-      const imported = cands.filter((d) => pairs.has(`${f.rel}|${d.file}`));
-      const chosen =
-        family === "js"
-          ? imported.length
-            ? pickCandidate(f.rel, imported)
-            : // JS/TS gate: no corroborating import → no binding. Recall mode
-              // relaxes this to a unique-repo-wide name match (issue #7).
-              recall && cands.length === 1
-              ? cands[0]
-              : undefined
-          : imported.length
-            ? pickCandidate(f.rel, imported)
-            : pickCandidate(f.rel, cands);
-      if (!chosen) continue;
-      const def = chosen as CodeSymbol;
-      record(
-        def,
+    const bind = binder.forFile(f);
+    if (!bind) continue;
+    for (const c of f.calls!) {
+      const hit = bind(c);
+      if (!hit) continue;
+      // One entry per (name, file): same-file homonyms (Go's many `String`
+      // methods) share it, under the earliest declaration any site reached —
+      // whatever order the sites came in.
+      const key = hit.def.name + "\0" + hit.def.file;
+      let entry = sites.get(key);
+      if (!entry) sites.set(key, (entry = { def: hit.def, callers: [] }));
+      else if (hit.def.line < entry.def.line) entry.def = hit.def;
+      entry.callers.push(
         recall
-          ? { file: f.rel, line: c.line, confidence: imported.length ? "corroborated" : "unique-name" }
+          ? { file: f.rel, line: c.line, confidence: hit.corroborated ? "corroborated" : "unique-name" }
           : { file: f.rel, line: c.line },
       );
     }
@@ -173,10 +143,10 @@ export function buildCallerIndex(
   return index;
 }
 
-// The innermost symbol whose declaration encloses (file, line). With AST
-// records `endLine` bounds the answer exactly; regex records have no endLine,
-// so the nearest preceding declaration is returned — a documented
-// approximation. Returns undefined outside any known symbol.
+// The innermost symbol whose declaration encloses (file, line). A record's
+// `endLine` bounds the answer exactly; one without it (the regex tier outside
+// formatted brace languages) yields the nearest preceding declaration — a
+// documented approximation. Returns undefined outside any known symbol.
 export function enclosingSymbol(scan: RepoScan, file: string, line: number): CodeSymbol | undefined {
   const f = scan.files.find((x) => x.rel === file);
   if (!f?.symbols.length) return undefined;
@@ -237,13 +207,25 @@ export interface RawCallerSite {
 export type RawCallerIndex = Map<string, RawCallerSite[]>;
 
 export function buildRawCallerIndex(scan: RepoScan): RawCallerIndex {
+  return indexRawCallers(scan);
+}
+
+/** buildRawCallerIndex(scan).get(name) ?? [], walking only that name's sites. */
+export function rawCallerSitesFor(scan: RepoScan, name: string): RawCallerSite[] {
+  return indexRawCallers(scan, name).get(name) ?? [];
+}
+
+function indexRawCallers(scan: RepoScan, only?: string): RawCallerIndex {
   const byName = new Map<string, RawCallerSite[]>();
   for (const f of scan.files) {
     if (!f.calls?.length) continue;
-    // Pre-filter this file's symbols ONCE, then reuse the small per-file list
-    // for every call site's enclosingSymbol lookup below (see enclosingAmong).
-    const symbols = f.symbols.filter((s) => !REFERENCE_KINDS.has(s.kind));
+    // Pre-filter this file's symbols ONCE (on its first kept site), then reuse
+    // the small per-file list for every call site's enclosingSymbol lookup
+    // below (see enclosingAmong).
+    let symbols: CodeSymbol[] | undefined;
     for (const c of f.calls) {
+      if (only !== undefined && c.name !== only) continue;
+      symbols ??= f.symbols.filter((s) => !REFERENCE_KINDS.has(s.kind));
       const site: RawCallerSite = { file: f.rel, line: c.line };
       if (c.receiver !== undefined) site.receiver = c.receiver;
       const enc = enclosingAmong(symbols, c.line);

@@ -116,6 +116,17 @@ describe(".git is skipped whatever ignoreDirs says", () => {
     const root = cloneFixture();
     expect(rels(root, { ignoreDirs: [], gitignore: false }).some((r) => r.startsWith(`${GIT}/`))).toBe(false);
   });
+
+  // The engine's own index dir is structural too: `--ignore-dir node_modules`
+  // used to put .codeindex/{graph,symbols,cache}.json and the MCP memories
+  // back into the scan, so search answered with the index itself.
+  it("a replacement list does not pull the engine's own .codeindex in", () => {
+    const root = cloneFixture();
+    mkfile(root, ".codeindex/graph.json", "{}\n");
+    mkfile(root, ".codeindex/memories/note.md", "# a memory\n");
+    expect(rels(root, { ignoreDirs: ["node_modules"] }).some((r) => r.startsWith(".codeindex/"))).toBe(false);
+    expect(rels(root, { ignoreDirs: [], gitignore: false }).some((r) => r.startsWith(".codeindex/"))).toBe(false);
+  });
 });
 
 // The boundary must be a REPOSITORY, not merely the name `.git`. Git accepts a

@@ -11,6 +11,14 @@ module Worker
     end
   end
 
+  # One queued unit of work.
+  JobSpec = Struct.new(:name, :attempts) do
+    # Whether the budget allows another attempt.
+    def retry?
+      attempts < MAX_ATTEMPTS
+    end
+  end
+
   # Runs jobs with exponential backoff between retries.
   class Scheduler < BaseWorker
     include Runnable
@@ -37,6 +45,18 @@ module Worker
 
     def self.build(queue)
       new(queue)
+    end
+
+    class << self
+      # The scheduler shared by every caller that does not bring its own.
+      def default
+        @default ||= build("default")
+      end
+    end
+
+    # Heavier jobs wait longer between attempts.
+    protected def weight(spec)
+      spec.size
     end
 
     private
