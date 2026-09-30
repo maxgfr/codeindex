@@ -344,6 +344,24 @@ describe("TS/JS fallback: generators, ambient declarations, Unicode names", () =
     // `export = Emitter` is how a declaration file exports its one value.
     expect(syms("d.ts", src).find((s) => s.name === "Emitter")?.exported).toBe(true);
   });
+
+  it("reads `export default Foo;` and `export = Foo` in a CRLF file", () => {
+    const exported = (src: string) => syms("d.ts", src).find((s) => s.kind === "class" && s.name === "Foo")?.exported;
+    expect(exported("class Foo {\r\n}\r\nexport default Foo;\r\n")).toBe(true);
+    expect(exported("declare class Foo {}\r\nexport = Foo  \r\n")).toBe(true);
+    expect(exported("class Foo {\r\n}\r\nexport default Foo.bar;\r\n")).toBe(false);
+  });
+
+  it("stays linear on a long run of comment lines (previously ~33 s)", () => {
+    // Comments are blanked to spaces and newlines before the export-list pass,
+    // and `export default Foo;` used to be matched with a `\s*` that crossed
+    // them: every line rescanned all the blank lines after it.
+    const comments = Array.from({ length: 50000 }, (_, i) => `// comment line ${i}`).join("\n");
+    const src = `class Foo {}\n${comments}\nconst tail = 1;\nexport default Foo;\n`;
+    const t0 = performance.now();
+    expect(syms("big.ts", src).find((s) => s.kind === "class" && s.name === "Foo")?.exported).toBe(true);
+    expect(performance.now() - t0).toBeLessThan(1500);
+  });
 });
 
 describe("doc comments and body spans on the regex tier", () => {

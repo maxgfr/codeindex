@@ -80,7 +80,9 @@ function stemOf(rel: string): string {
 //   so does a declaration file's `export = Foo;`.
 const EXPORT_LIST_RE = /export\s*\{([^}]*)\}\s*(from\b)?/g;
 const CJS_OBJECT_RE = /module\.exports\s*=\s*\{([^}]*)\}/g;
-const DEFAULT_ID_RE = /(^|\n)\s*export(?:\s+default\s+|\s*=\s*)([A-Za-z_$][\w$]*)\s*;?\s*(?=\n|$)/g;
+// Horizontal whitespace only around the line: comments are blanked to spaces
+// and newlines, so a `\s*` here rescanned every blank line after each one.
+const DEFAULT_ID_RE = /(^|\n)[ \t]*export(?:\s+default\s+|\s*=\s*)([A-Za-z_$][\w$]*)[ \t]*;?[ \t]*(?=\r?\n|$)/g;
 
 function applyExportLists(content: string, symbols: CodeSymbol[]): void {
   const markExported = (name: string | undefined): void => {
