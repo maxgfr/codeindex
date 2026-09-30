@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.1](https://github.com/maxgfr/codeindex/compare/v2.31.0...v2.31.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **js-ts:** keep the `export default Foo;` pass linear on comment runs ([d8c9a47](https://github.com/maxgfr/codeindex/commit/d8c9a4713faf3ea0d7b6ad045d5f9b9602602ba1))
+
 # [2.31.0](https://github.com/maxgfr/codeindex/compare/v2.30.1...v2.31.0) (2026-09-29)
 
 
