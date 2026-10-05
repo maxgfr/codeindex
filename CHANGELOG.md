@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.3](https://github.com/maxgfr/codeindex/compare/v2.31.2...v2.31.3) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** bump transitive undici to 6.29.0 and 7.30.0 ([#26](https://github.com/maxgfr/codeindex/issues/26)) ([74f1ad4](https://github.com/maxgfr/codeindex/commit/74f1ad4c9ea5fa426fee1f28060b17c132cc02bc)), closes [#16](https://github.com/maxgfr/codeindex/issues/16) [#22](https://github.com/maxgfr/codeindex/issues/22) [#23](https://github.com/maxgfr/codeindex/issues/23) [#24](https://github.com/maxgfr/codeindex/issues/24)
+
 ## [2.31.2](https://github.com/maxgfr/codeindex/compare/v2.31.1...v2.31.2) (2026-10-01)
 
 
