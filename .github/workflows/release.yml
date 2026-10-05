@@ -37,6 +37,7 @@ permissions:
   pull-requests: write
   id-token: write
   packages: write
+  actions: write
 
 jobs:
   release:
@@ -171,3 +172,15 @@ jobs:
       - name: Return to release commit
         if: always() && steps.release.outputs.released == 'true'
         run: git checkout ${{ github.sha }}
+
+      # A dispatched Release (grammars-repin merges with GITHUB_TOKEN, then
+      # dispatches this workflow) does not fire `workflow_run` for the image
+      # workflows: GitHub suppresses events caused by GITHUB_TOKEN. Dispatch them
+      # explicitly once the gate has passed so `latest` still tracks main.
+      - name: Publish main images for a dispatched release
+        if: success() && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run main-image.yml --ref main
+          gh workflow run embed-image.yml --ref main
