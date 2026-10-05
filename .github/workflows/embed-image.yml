@@ -1,19 +1,22 @@
 name: Embed image
 
 # Publishes the rich-tier embedding server image (Role B):
-# ghcr.io/maxgfr/codeindex-embed. Unlike the distribution image (built inside the
-# release job because semantic-release's GITHUB_TOKEN pushes don't retrigger
-# workflows), this image is driven by ordinary HUMAN pushes that touch
-# docker/embed/** — those DO trigger `on: push`, so a plain path-filtered
-# workflow is correct here (no anti-recursion gymnastics needed). The version is
-# read from the committed docker/embed/VERSION file (starts at 1.0.0); bump it in
-# the same commit that changes the server/model.
+# ghcr.io/maxgfr/codeindex-embed. Rebuilt on every push to `main` (tagged
+# `main` and `sha-<short>`), so the registry always carries an image for the
+# current commit. The version tag is read from the committed
+# docker/embed/VERSION file (starts at 1.0.0); bump it in the same commit that
+# changes the server/model.
+#
+# Commits merged by grammars-repin with GITHUB_TOKEN never fire `on: push`; that
+# job dispatches Release instead, so a dispatched Release run is the trigger for
+# those (the `if:` below skips push-started Release runs, already built by push).
 on:
   push:
     branches: [main]
-    paths:
-      - "docker/embed/**"
-      - ".github/workflows/embed-image.yml"
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -22,13 +25,18 @@ permissions:
 
 jobs:
   build-and-push:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Read image version
         id: meta
-        run: echo "version=$(cat docker/embed/VERSION)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(cat docker/embed/VERSION)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -56,3 +64,5 @@ jobs:
           tags: |
             ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}
             ghcr.io/maxgfr/codeindex-embed:latest
+            ghcr.io/maxgfr/codeindex-embed:main
+            ghcr.io/maxgfr/codeindex-embed:sha-${{ steps.meta.outputs.short }}
