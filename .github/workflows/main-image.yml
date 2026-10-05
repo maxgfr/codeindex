@@ -1,8 +1,9 @@
 name: Main image
 
-# Publishes ghcr.io/maxgfr/codeindex:main and :sha-<short> for every commit that
-# lands on `main`, release or not. `latest` and the version tags stay owned by
-# the release job (release.yml), since consumers pin those.
+# Publishes ghcr.io/maxgfr/codeindex:latest, :main and :sha-<short> for every
+# commit that lands on `main`, release or not, so `latest` is always the current
+# main. Version tags stay owned by the release job (release.yml), since consumers
+# pin those.
 #
 # Chained on the Release workflow rather than `on: push`: Release is also
 # started by `workflow_dispatch` (grammars-repin self-merges with GITHUB_TOKEN,
@@ -56,6 +57,7 @@ jobs:
             --platform linux/amd64,linux/arm64 \
             --build-arg VERSION="sha-${{ steps.sha.outputs.short }}" \
             --push \
+            -t ghcr.io/maxgfr/codeindex:latest \
             -t ghcr.io/maxgfr/codeindex:main \
             -t ghcr.io/maxgfr/codeindex:sha-${{ steps.sha.outputs.short }} \
             .
