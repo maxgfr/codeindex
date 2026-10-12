@@ -120,6 +120,11 @@ function indexCallers(scan: RepoScan, pairs: Set<string>, recall: boolean, only?
       let entry = sites.get(key);
       if (!entry) sites.set(key, (entry = { def: hit.def, callers: [] }));
       else if (hit.def.line < entry.def.line) entry.def = hit.def;
+      // `foo(a.foo(1))` is two sites on one line that may reach the same
+      // declaration: the caller is that line, once. A file's sites come sorted
+      // by name then line, so the twin is the entry's last caller.
+      const last = entry.callers[entry.callers.length - 1];
+      if (last && last.file === f.rel && last.line === c.line) continue;
       entry.callers.push(
         recall
           ? { file: f.rel, line: c.line, confidence: hit.corroborated ? "corroborated" : "unique-name" }
@@ -186,11 +191,11 @@ export function enclosingAmong(symbols: CodeSymbol[], line: number): CodeSymbol 
 // buildCallerIndex answers "who calls this DEFINED, RESOLVED symbol",
 // buildRawCallerIndex answers "where does this NAME get called", full stop.
 //
-// Bounded by the per-file call cap: FileRecord.calls truncates at 512
-// call-sites per file, name+line deduped (src/types.ts, FileRecord.calls doc).
-// A single generated/vendored file with more raw call sites than that loses
-// sites silently upstream of this function, in extraction — not something
-// buildRawCallerIndex can see or recover.
+// Bounded by the per-file call cap: FileRecord.calls truncates at 8192
+// call-sites per file, name+line+receiver deduped (src/types.ts, FileRecord.calls
+// doc). A file with more raw call sites than that loses sites upstream of this
+// function, in extraction; it carries `callsCapped`, which the CLI and MCP
+// answers report (see coverage.ts).
 export interface RawCallerSite {
   file: string;
   line: number; // 1-based line of the call site

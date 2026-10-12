@@ -32,6 +32,9 @@ export interface RepoScan {
   // the files those left out in the directories the walk entered. Surfaced so
   // a consumer can report how much of the tree was filtered out of the index.
   excluded: number;
+  // The files left out for size (WalkResult.oversized), which queries name when
+  // their answer may lie there. Absent when there are none.
+  oversized?: { rel: string; size: number }[];
   // Change-tracking flags. DERIVED ONLY — they never influence records or
   // ordering, so artifacts stay byte-identical whether or not anyone reads them.
   //
@@ -66,7 +69,7 @@ export interface ScanOptions {
   ignoreDirs?: string[];
   maxBytes?: number;
   maxFiles?: number;
-  // Per-file call-site cap for extraction (default 512, both AST and regex
+  // Per-file call-site cap for extraction (default 8192, both AST and regex
   // tiers). Raising it trades index size for call-graph recall; dedup/sort
   // semantics are unchanged. Absent, output is byte-identical to before.
   maxCallsPerFile?: number;
@@ -160,6 +163,7 @@ export function buildCodeRecord(
     record.importedNames = code.importedNames;
     if (code.importAliases) record.importAliases = code.importAliases;
     record.truncated = code.truncated;
+    if (code.callsCapped) record.callsCapped = true;
     if (code.astFallback) record.astFallback = true;
     record.generated = code.generated;
     record.relations = code.relations;
@@ -345,7 +349,7 @@ function* keptFiles(
   opts: ScanOptions,
 ): Generator<{ f: WalkedFile; kind: FileKind; lang: string }, WalkTotals, void> {
   const walkOpts = scanWalkOptions(root, opts);
-  const { files: walked, capped, excluded } = opts.precomputedWalk ?? walk(root, walkOpts);
+  const { files: walked, capped, excluded, oversized } = opts.precomputedWalk ?? walk(root, walkOpts);
   // Never index our own output (e.g. a committed `docs/ultraindex/`), or builds
   // would describe the encyclopedia instead of the code.
   const guard = selfIndexGuard(root, opts.out);
@@ -363,12 +367,13 @@ function* keptFiles(
     }
     yield { f, kind: classify(f.rel, f.ext), lang: extToLang(f.ext) };
   }
-  return { capped, excluded };
+  return { capped, excluded, oversized };
 }
 
 interface WalkTotals {
   capped: boolean;
   excluded: number;
+  oversized: { rel: string; size: number }[] | undefined;
 }
 
 // The files `codeindex index` writes into its --out dir, plus the
@@ -389,12 +394,14 @@ function selfIndexGuard(root: string, out: string | undefined): ((f: WalkedFile)
   const up = relative(dir, resolve(root));
   if (up === "") return (f) => !f.rel.includes("/") && isIndexArtifact(f.rel);
   if (up !== ".." && !up.startsWith(`..${sep}`) && !isAbsolute(up)) return undefined;
-  // Compared as a path, not a "/"-joined prefix: Windows walks with "\", and
-  // an --out spelled with "./" or ".." segments never matched either.
-  return (f) => {
-    const inside = relative(dir, f.abs);
-    return inside === "" || (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside));
-  };
+  // The out dir as the walk spells a rel: normalized by path.relative (an
+  // --out with "./" or ".." segments), joined with "/" (Windows walks with
+  // "\" but keys files with "/"). Computed once: a path.relative per file was
+  // a tenth of a query's time on a 67k-file repo.
+  const down = relative(resolve(root), dir);
+  if (down === ".." || down.startsWith(`..${sep}`) || isAbsolute(down)) return undefined; // --out outside the repo
+  const prefix = down.split(sep).join("/");
+  return (f) => f.rel === prefix || f.rel.startsWith(`${prefix}/`);
 }
 
 // The code files this scan would extract, in the same order scanRepo sees them.
@@ -606,6 +613,7 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     mtimes,
     capped: step.value.capped,
     excluded: step.value.excluded,
+    ...(step.value.oversized ? { oversized: step.value.oversized } : {}),
     contentUnchanged: allReused,
     cacheDirty,
   };

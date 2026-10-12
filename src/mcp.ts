@@ -31,6 +31,7 @@ import { symbolComplexity, riskHotspots } from "./complexity.js";
 import { renderMermaid } from "./viz.js";
 import { resolutionReport } from "./resolution.js";
 import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCallersOf, resolveSymbolRef, symbolAt, withCallerIds } from "./query.js";
+import { coverageFor, notIndexedFile, notIndexedNote, type Coverage } from "./coverage.js";
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
@@ -164,12 +165,19 @@ function errMessage(e: unknown): string {
 // An exact indexed spelling is taken as is, so no working call changes. A path
 // that names nothing indexed is an error with same-basename suggestions, since
 // the empty answer is precisely what hid the mistake.
+// An answer with what it could not see (coverage.ts) beside it, when anything.
+function withCoverage<T extends object>(answer: T, coverage: Coverage | undefined): T | (T & { coverage: Coverage }) {
+  return coverage ? { ...answer, coverage } : answer;
+}
+
 function indexedFile(scan: RepoScan, repo: string, file: string): string {
   const byRel = fileByRelFor(scan);
   if (byRel.has(file)) return file;
   const rel = relative(repo, resolve(repo, file.replaceAll("\\", "/"))).split(sep).join("/");
   if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) throw new Error(`\`file\` is outside the repository: ${file}`);
   if (byRel.has(rel)) return rel;
+  const unseen = notIndexedFile(scan, repo, file);
+  if (unseen) throw new Error(unseen);
   const name = basename(rel);
   const near = scan.files.filter((f) => basename(f.rel) === name).map((f) => f.rel).sort(byStr).slice(0, 5);
   throw new Error(
@@ -310,7 +318,8 @@ async function callTool(
       if (!lookup) throw new Error("callers with raw:true requires `name`");
       if (args.lsp === true || args.recall === true) throw new Error("callers raw:true takes neither lsp nor recall");
       if (args.withCaller === true) throw new Error("callers raw:true already names each site's enclosing symbol: it takes no withCaller");
-      return JSON.stringify(rawCallersOf(scan, lookup), null, 2);
+      const raw = rawCallersOf(scan, lookup);
+      return JSON.stringify(withCoverage(raw, coverageFor(scan, raw.name, { calls: true })), null, 2);
     }
     const index = args.recall === true ? buildCallerIndex(scan, undefined, { recall: true }) : callerIndexFor(scan);
     const sited = <T extends CallerEntry>(e: T): T => (args.withCaller === true ? withCallerIds(scan, e) : e);
@@ -319,11 +328,12 @@ async function callTool(
       // whichever ref form was used.
       const reading = resolveSymbolRef(scan, lookup)?.reading;
       const lspRef = reading ? formatSymbolRef(reading) : lookup;
+      const coverage = coverageFor(scan, reading?.name ?? lookup, { calls: true });
       const found = lookupCallerEntry(index, lookup);
       const entry = found && sited(found);
       if (entry) {
         const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry, lsp) : entry;
-        return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
+        return JSON.stringify(withCoverage(args.concise === true ? conciseCaller(result) : result, coverage), null, 2);
       }
       // A symbol that exists but binds no site says how many sites name it
       // anyway; one that does not exist at all is an error, as it is for
@@ -332,10 +342,11 @@ async function callTool(
       if (!absent) {
         const named = rawCallerSitesFor(scan, lookup).length;
         throw new Error(
-          `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : ""),
+          `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : "") +
+            notIndexedNote(scan, lookup),
         );
       }
-      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent, lsp) : absent, null, 2);
+      return JSON.stringify(withCoverage(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent, lsp) : absent, coverage), null, 2);
     }
     const obj: Record<string, unknown> = {};
     for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(sited(v)) : sited(v);
@@ -382,7 +393,7 @@ async function callTool(
     // qualified ref (`name@file`, `file#Parent/name`) resolved to.
     const leaf = resolveSymbolRef(scan, symName)?.reading.name ?? symName;
     const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik, lsp) : statik;
-    return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
+    return JSON.stringify(withCoverage(args.concise === true ? conciseReferences(result) : result, coverageFor(scan, leaf, { calls: true })), null, 2);
   }
   if (name === "symbol_at") {
     const file = str(args.file);
@@ -392,7 +403,7 @@ async function callTool(
     const scan = readScan();
     const files = new Set(scan.files.map((f) => f.rel));
     const rel = resolveFileArg(repo, file, (r) => files.has(r));
-    if (rel === undefined) throw new Error(`no such file in the index: ${file}`);
+    if (rel === undefined) throw new Error(notIndexedFile(scan, repo, file) ?? `no such file in the index: ${file}`);
     return JSON.stringify(symbolAt(scan, rel, line), null, 2);
   }
   if (name === "lsp_status") {

@@ -1,7 +1,7 @@
 import type { CodeLiteral, CodeSymbol, ImportAlias, RawRef, RawRelation } from "../types.js";
 import { LiteralCollector } from "./literals.js";
 import { extractSymbols } from "../lang/registry.js";
-import { capCallSites, extractAst } from "../ast/extract.js";
+import { DEFAULT_MAX_CALLS, capCallSites, extractAst } from "../ast/extract.js";
 import { extractReexports, extToLang, MAX_REEXPORTS } from "../lang/common.js";
 import { extractImports, extractPackage } from "./imports.js";
 import { sfcParts } from "./sfc.js";
@@ -20,6 +20,8 @@ export interface CodeInfo {
   summary?: string;
   // A cap truncated `symbols` — propagated onto the FileRecord.
   truncated?: true;
+  // `calls` reached the per-file call-site cap — propagated onto the FileRecord.
+  callsCapped?: true;
   // The AST tier failed on a file it has a grammar for — propagated onto the
   // FileRecord.
   astFallback?: true;
@@ -81,7 +83,7 @@ function introducedAt(line: string, index: number): boolean {
 // Regex-tier call-site collection for files with no AST grammar — a
 // conservative `identifier(` scan so call data exists wasm-free (the AST tier
 // stays authoritative when available). Same contract as ast/extract's
-// collector: deduped by name+line, capped at 512 by the same capCallSites
+// collector: deduped by name+line+receiver, capped at 8192 by the same capCallSites
 // (so the file is scanned to its end), sorted by name then line. An
 // immediate `receiver.` prefix is captured too (`axios.get(` → receiver
 // "axios"; `a.b.c(` → receiver "b" — the group anchors to the segment right
@@ -112,7 +114,7 @@ function introducedAt(line: string, index: number): boolean {
 export function collectCallsRegex(
   content: string,
   symbols: Pick<CodeSymbol, "name" | "line">[] = [],
-  maxCalls: number = 512,
+  maxCalls: number = DEFAULT_MAX_CALLS,
 ): { name: string; line: number; receiver?: string }[] {
   const out = new Map<string, { name: string; line: number; receiver?: string }>();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
@@ -155,7 +157,9 @@ export function collectCallsRegex(
           continue;
         }
       }
-      if (!out.has(key)) out.set(key, receiver ? { name, line: i + 1, receiver } : { name, line: i + 1 });
+      // Keyed with the receiver too, as the AST tier keys it: `a.f(b.f())` is two calls.
+      const site = `${key} ${receiver ?? ""}`;
+      if (!out.has(site)) out.set(site, receiver ? { name, line: i + 1, receiver } : { name, line: i + 1 });
     }
   }
   return capCallSites([...out.values()], maxCalls);
@@ -255,22 +259,23 @@ export function collectLiteralsRegex(content: string): CodeLiteral[] | undefined
   return literals.result();
 }
 
-// Two call lists as one: deduped by name+line, cut to the per-file cap by the
-// same capCallSites both collectors use (the script's sites first, then the
-// markup's), and sorted by name then line.
+// Two call lists as one: deduped by name+line+receiver, cut to the per-file cap
+// by the same capCallSites both collectors use (the script's sites first, then
+// the markup's), and sorted by name then line.
 function mergeCalls(
   a: { name: string; line: number; receiver?: string }[],
   b: { name: string; line: number; receiver?: string }[],
-  maxCalls = 512,
+  maxCalls = DEFAULT_MAX_CALLS,
 ): { name: string; line: number; receiver?: string }[] {
   if (!b.length) return a;
-  const seen = new Set(a.map((c) => `${c.name} ${c.line}`));
+  const key = (c: { name: string; line: number; receiver?: string }): string => `${c.name} ${c.line} ${c.receiver ?? ""}`;
+  const seen = new Set(a.map(key));
   const out = [...a];
-  for (const c of b) if (!seen.has(`${c.name} ${c.line}`)) out.push(c);
+  for (const c of b) if (!seen.has(key(c))) out.push(c);
   return capCallSites(out, maxCalls);
 }
 
-// `opts.maxCallsPerFile` overrides the per-file call-site cap (default 512) on
+// `opts.maxCallsPerFile` overrides the per-file call-site cap (default 8192) on
 // BOTH extraction tiers — AST and regex — so recall-oriented consumers can raise
 // it. Dedup/sort semantics are unchanged; absent, output is byte-identical.
 export function extractCode(rel: string, ext: string, content: string, opts: { maxCallsPerFile?: number } = {}): CodeInfo {
@@ -339,6 +344,9 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
       ? { truncated: true as const }
       : {}),
     ...(astFallback ? { astFallback: true as const } : {}),
+    // A capped list holds exactly the cap; a file with exactly that many call
+    // sites reads as capped too, the safe side of the doubt.
+    ...(calls.length >= (opts.maxCallsPerFile ?? DEFAULT_MAX_CALLS) ? { callsCapped: true as const } : {}),
     summary: fileSummary(ext, content),
     refs,
     pkg: extractPackage(ext, content),

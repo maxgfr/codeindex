@@ -276,6 +276,10 @@ export interface WalkResult {
   // (node_modules, gitignored trees…) are not counted — their contents were
   // never even listed.
   excluded: number;
+  // The files rejected as over-max-bytes, in walk order: the one exclusion a
+  // query has to name, because the file is source the index cannot see
+  // (typescript-go's 1.4 MB checker.go). Absent when there are none.
+  oversized?: { rel: string; size: number }[];
 }
 
 // The cap this walk USED to apply by default. Kept exported — it is part of the
@@ -321,6 +325,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const out: WalkedFile[] = [];
   let capped = false;
   let excluded = 0;
+  const oversized: { rel: string; size: number }[] = [];
   const skip = (rel: string, reason: WalkSkip["reason"], directory = false, size?: number): void => {
     opts.onSkip?.({ rel, reason, directory, ...(size === undefined ? {} : { size }) });
   };
@@ -470,6 +475,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       else if ((name.endsWith(".min.js") || name.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
       if (reason) {
         excluded++;
+        if (reason === "over-max-bytes") oversized.push({ rel: rel.split(sep).join("/"), size: st.size });
         if (reason === "gitignored") skipIgnored(rel, rules, false, st.size);
         else skip(rel, reason, false, st.size);
         continue;
@@ -502,7 +508,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     }
     for (let i = subdirs.length - 1; i >= 0; i--) stack.push(subdirs[i]!);
   }
-  return { files: out, capped, excluded };
+  return { files: out, capped, excluded, ...(oversized.length ? { oversized } : {}) };
 }
 
 /** Compatibility reader; use readTextEx when empty, binary and unreadable differ. */

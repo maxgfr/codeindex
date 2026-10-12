@@ -44,6 +44,7 @@ import { implementationsOf, typeEntry } from "./relations.js";
 import { callPath, neighborhood } from "./symbolgraph.js";
 import { buildCallerIndex, buildRawCallerIndex, callerIndexForNames, lookupCallerEntry, rawCallerSitesFor, refNames } from "./callers.js";
 import { explainNoCallers, findReferences, findSymbol, rawCallersOf, resolveSymbolRef, symbolAt, symbolsOverview, withCallerIds } from "./query.js";
+import { coverageFor, notIndexedFile, notIndexedNote, oversizedNaming } from "./coverage.js";
 import { conciseReferences, symbolLocation } from "./mcp/concise.js";
 import { formatSymbolRef } from "./symref.js";
 import { checkWorkspaceDeps, detectWorkspaces, workspaceReport } from "./workspaces.js";
@@ -347,8 +348,9 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       --exclude (default: none — the whole tree is indexed;
                       a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
-  --max-calls <n>     Per-file call-site cap for extraction (default 512); a
-                      capped file keeps one site per distinct callee first
+  --max-calls <n>     Per-file call-site cap for extraction (default 8192); a
+                      capped file keeps one site per distinct callee first,
+                      and a \`callers\`/\`refs\` answer counting it says so
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
   --workers <n>       \`index\`: extraction worker threads (default: cores-1,
                       capped at 8; 0 or 1 forces the single-threaded path).
@@ -1549,7 +1551,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const ref = flags.positional;
     if (flags.raw) {
       if (ref) {
-        emit(JSON.stringify(rawCallersOf(scan, ref), null, 2) + "\n", flags.out);
+        const raw = rawCallersOf(scan, ref);
+        const coverage = coverageFor(scan, raw.name, { calls: true });
+        emit(JSON.stringify(coverage ? { ...raw, coverage } : raw, null, 2) + "\n", flags.out);
       } else {
         const obj: Record<string, unknown> = {};
         for (const [name, sites] of buildRawCallerIndex(scan)) obj[name] = sites;
@@ -1566,14 +1570,16 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         const named = rawCallerSitesFor(scan, ref).length;
         throw new Error(
           `no symbol named "${ref}" in the index` +
-            (named ? ` (${named} call site(s) use the name; \`callers --raw ${ref}\` lists them)` : ""),
+            (named ? ` (${named} call site(s) use the name; \`callers --raw ${ref}\` lists them)` : "") +
+            notIndexedNote(scan, ref),
         );
       }
       // The LSP tier parses `Parent/name@file`; hand it that spelling of
       // whichever ref form was used.
       const reading = resolveSymbolRef(scan, ref)?.reading;
       const result = flags.lsp ? await callersWithLsp(scan, flags.repo, reading ? formatSymbolRef(reading) : ref, answer, { trustRepoConfig: flags.trustLspConfig }) : answer;
-      emit(JSON.stringify(result, null, 2) + "\n", flags.out);
+      const coverage = coverageFor(scan, reading?.name ?? ref, { calls: true });
+      emit(JSON.stringify(coverage ? { ...result, coverage } : result, null, 2) + "\n", flags.out);
     } else {
       const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
       const obj: Record<string, unknown> = {};
@@ -1634,19 +1640,31 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         concise: flags.concise,
         maxResults: flags.limit,
       });
+      // stdout stays the bare array; where the symbol may be goes to stderr.
+      if (Array.isArray(result) && !result.length) {
+        const unseen = oversizedNaming(scan, flags.positional.replace(/@.*$/, "").replace(/^.*[#/]/, ""));
+        if (unseen.length) {
+          process.stderr.write(
+            `codeindex: not indexed for size but naming it: ${unseen.map((u) => `${u.file} (${u.size} bytes)`).join(", ")}; ` +
+              `re-index with --max-bytes ${Math.max(...unseen.map((u) => u.size))}\n`,
+          );
+        }
+      }
     } else if (cmd === "refs") {
       // An unknown name still answers (defs: []): referencingFiles may name an
       // out-of-repo symbol (`useState`), which is exactly what one asks here.
       const statik = findReferences(scan, flags.positional);
       const leaf = resolveSymbolRef(scan, flags.positional)?.reading.name ?? flags.positional;
       const refs = flags.lsp ? await referencesWithLsp(scan, flags.repo, leaf, statik, { trustRepoConfig: flags.trustLspConfig }) : statik;
-      result = flags.concise ? conciseReferences(refs) : refs;
+      const answer = flags.concise ? conciseReferences(refs) : refs;
+      const coverage = coverageFor(scan, leaf, { calls: true });
+      result = coverage ? { ...answer, coverage } : answer;
     } else {
       // A file with no symbols answers []; one the index does not hold is an
       // error, as it is for `complexity`.
       const known = new Set(scan.files.map((f) => f.rel));
       const rel = resolveFileArg(flags.repo, flags.positional, (r) => known.has(r));
-      if (rel === undefined) throw new Error(`no such file in the index: ${flags.positional}`);
+      if (rel === undefined) throw new Error(notIndexedFile(scan, flags.repo, flags.positional) ?? `no such file in the index: ${flags.positional}`);
       const overview = symbolsOverview(scan, rel);
       result = flags.concise ? overview.map((s) => symbolLocation(s, s.name)) : overview;
     }
@@ -1681,7 +1699,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const scan = await readScan();
     const files = new Set(scan.files.map((f) => f.rel));
     const rel = resolveFileArg(flags.repo, m[1]!, (r) => files.has(r));
-    if (rel === undefined) throw new Error(`no such file in the index: ${m[1]}`);
+    if (rel === undefined) throw new Error(notIndexedFile(scan, flags.repo, m[1]!) ?? `no such file in the index: ${m[1]}`);
     emit(JSON.stringify(symbolAt(scan, rel, Number(m[2])), null, 2) + "\n", flags.out);
   } else if (cmd === "search") {
     if (!flags.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
@@ -1991,7 +2009,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // symbols: say which it is.
       const known = new Set(scan.files.map((f) => f.rel));
       const hit = fileArgReadings(flags.repo, rel).find((r) => known.has(r));
-      if (hit === undefined) throw new Error(`no such file in the index: ${rel}`);
+      if (hit === undefined) throw new Error(notIndexedFile(scan, flags.repo, rel) ?? `no such file in the index: ${rel}`);
       rel = hit;
     }
     emit(JSON.stringify(symbolComplexity(scan, rel, flags.limit), null, 2) + "\n", flags.out);

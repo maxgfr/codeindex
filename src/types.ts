@@ -91,7 +91,10 @@ export const SCHEMA_VERSION = 5;
 // regex-tier call collection and import extraction were rewritten (same
 // answers, linear), and the fixes to resolution, the graph and markdown links
 // that follow — an older cache holds records none of them produced.
-export const EXTRACTOR_VERSION = 16;
+// v17: the per-file call-site cap went from 512 to 8192 and a capped record
+// says so (callsCapped); a line calling one name on two receivers keeps both
+// sites; Rust `crate::`/`super::` calls carry their path as the receiver.
+export const EXTRACTOR_VERSION = 17;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
@@ -233,9 +236,9 @@ export interface FileRecord {
   refs: RawRef[]; // unresolved outbound links/imports
   pkg?: string; // Java: the file's `package` declaration — anchors source roots
   idents?: string[]; // distinctive identifiers referenced (transient — feeds `use` edges, not persisted)
-  // Unresolved call-site callee names (deduped by name+line, sorted by name then
-  // line; cap 512, where a capped file keeps one site per distinct callee
-  // first — see capCallSites). Transient-ish: consumed by the graph builder's
+  // Unresolved call-site callee names (deduped by name+line+receiver, sorted by
+  // name, line then receiver; cap 8192, where a capped file keeps one site per
+  // distinct callee first — see capCallSites — and sets `callsCapped`). Transient-ish: consumed by the graph builder's
   // global call resolution pass, not surfaced in the graph itself. `receiver`
   // is the simple name of the IMMEDIATE receiver of a qualified call —
   // `axios.get(...)` → {name: "get", receiver: "axios"}, `a.b.c(...)` →
@@ -254,6 +257,9 @@ export interface FileRecord {
   // A per-file extraction cap truncated this record's symbols. Same doctrine as
   // the walk's `capped`: a bounded result says so instead of looking complete.
   truncated?: true;
+  // `calls` reached the per-file call-site cap (--max-calls): sites past it are
+  // missing, and a `callers` answer that counts this file says so.
+  callsCapped?: true;
   // A grammar was loaded for this file but its parse or walk failed, so the
   // record comes from the regex tier: fewer spans, no idents. Said rather than
   // silent, since the extraction profile claims the AST tier for the language.

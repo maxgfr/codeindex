@@ -589,6 +589,15 @@ site binds to is still an answer, and says why it is empty:
 }
 ```
 
+An answer that may be missing something says what, in a `coverage` field
+(`callers`, `callers --raw` and `refs`, CLI and MCP): `callCapped` lists files
+that call the name but reached the per-file call-site cap (`--max-calls`,
+default 8192), `notIndexed` the files left out for size (`--max-bytes`, default
+1 MiB) whose text names it, and `hint` the flag that brings them in. An
+answer nothing limited carries no `coverage` field. `outline`, `symbol-at` and
+`complexity` on a file left out for size say so instead of "no such file",
+and `find` writes the same note to stderr when it finds nothing.
+
 `find`, `refs` and `outline` print the same answers as MCP `find_symbol`,
 `find_references` and `symbols_overview`: each declaration's complete
 signature, doc comment, parent and line span, which `symbols` leaves out.

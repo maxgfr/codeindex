@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.7";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 16;
+    EXTRACTOR_VERSION = 17;
   }
 });
 
@@ -125,7 +125,9 @@ function rrf(lists, keyOf2, k = 60) {
   return score;
 }
 function subtokens(raw) {
-  const folded = foldText(raw).replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2");
+  const ascii = !NON_ASCII.test(raw);
+  const text = ascii ? raw : foldText(raw);
+  const folded = ascii ? text.replace(ASCII_CASE_1, "$1 $2").replace(ASCII_CASE_2, "$1 $2") : text.replace(UNICODE_CASE_1, "$1 $2").replace(UNICODE_CASE_2, "$1 $2");
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
   const push = (t) => {
@@ -133,8 +135,8 @@ function subtokens(raw) {
     seen.add(t);
     out2.push(t);
   };
-  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ""));
-  for (const part of folded.split(/[^\p{L}\p{N}]+/u)) push(part.toLowerCase());
+  if (!/\s/.test(raw.trim())) push(text.toLowerCase().replace(ascii ? ASCII_GLUE : UNICODE_GLUE, ""));
+  for (const part of folded.split(ascii ? ASCII_SPLIT : UNICODE_SPLIT)) push(part.toLowerCase());
   return out2;
 }
 function stemOf(term) {
@@ -150,7 +152,7 @@ function stemOf(term) {
   if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
   return t;
 }
-var GIT_LOCALE, whichCache, STOPWORDS, NON_ASCII, NON_WORD;
+var GIT_LOCALE, whichCache, STOPWORDS, NON_ASCII, NON_WORD, ASCII_CASE_1, ASCII_CASE_2, ASCII_GLUE, ASCII_SPLIT, UNICODE_CASE_1, UNICODE_CASE_2, UNICODE_GLUE, UNICODE_SPLIT;
 var init_util = __esm({
   "src/util.ts"() {
     "use strict";
@@ -256,6 +258,14 @@ var init_util = __esm({
     ]);
     NON_ASCII = /[^\x00-\x7F]/;
     NON_WORD = /[^\p{L}\p{N}_]+/u;
+    ASCII_CASE_1 = /([a-z0-9])([A-Z])/g;
+    ASCII_CASE_2 = /([A-Z]+)([A-Z][a-z])/g;
+    ASCII_GLUE = /[^a-z0-9_]+/g;
+    ASCII_SPLIT = /[^A-Za-z0-9]+/;
+    UNICODE_CASE_1 = new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu");
+    UNICODE_CASE_2 = new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu");
+    UNICODE_GLUE = /[^\p{L}\p{N}_]+/gu;
+    UNICODE_SPLIT = /[^\p{L}\p{N}]+/u;
   }
 });
 
@@ -667,6 +677,7 @@ function walk(root, opts = {}) {
   const out2 = [];
   let capped = false;
   let excluded = 0;
+  const oversized = [];
   const skip = (rel2, reason, directory = false, size) => {
     opts.onSkip?.({ rel: rel2, reason, directory, ...size === void 0 ? {} : { size } });
   };
@@ -776,6 +787,7 @@ function walk(root, opts = {}) {
       else if ((name2.endsWith(".min.js") || name2.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
       if (reason) {
         excluded++;
+        if (reason === "over-max-bytes") oversized.push({ rel: rel2.split(sep).join("/"), size: st.size });
         if (reason === "gitignored") skipIgnored(rel2, rules, false, st.size);
         else skip(rel2, reason, false, st.size);
         continue;
@@ -803,7 +815,7 @@ function walk(root, opts = {}) {
     }
     for (let i2 = subdirs.length - 1; i2 >= 0; i2--) stack.push(subdirs[i2]);
   }
-  return { files: out2, capped, excluded };
+  return { files: out2, capped, excluded, ...oversized.length ? { oversized } : {} };
 }
 function readText(abs) {
   return readTextEx(abs).text;
@@ -8107,6 +8119,7 @@ function readName(node) {
 function readReceiver(node) {
   if (!node || node.namedChildren.length === 0) return void 0;
   const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver") ?? node.childForFieldName("table");
+  if (obj && (obj.type === "crate" || obj.type === "super")) return obj.type;
   const name2 = obj ? readName(obj) : void 0;
   return name2 && /^[A-Za-z_]\w*$/.test(name2) ? name2 : void 0;
 }
@@ -9758,7 +9771,7 @@ function capCallSites(sites, max) {
     }
     kept = sites.filter((_, i2) => keep[i2] === 1);
   }
-  return kept.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+  return kept.sort((a, b) => byStr(a.name, b.name) || a.line - b.line || byStr(a.receiver ?? "", b.receiver ?? ""));
 }
 function collectAll(root, spec, defNames, maxCalls) {
   const identsFound = /* @__PURE__ */ new Set();
@@ -9768,7 +9781,7 @@ function collectAll(root, spec, defNames, maxCalls) {
   const addCall = (name2, node, receiver) => {
     if (!name2 || name2 === "_" || !/^[A-Za-z_]\w*$/.test(name2)) return;
     const line2 = node.startPosition.row + 1;
-    const key = `${name2} ${line2}`;
+    const key = `${name2} ${line2} ${receiver ?? ""}`;
     if (callSeen.has(key)) return;
     callSeen.add(key);
     calls.push(receiver ? { name: name2, line: line2, receiver } : { name: name2, line: line2 });
@@ -10268,7 +10281,7 @@ function extractAst(rel2, ext, content, opts = {}) {
       root,
       spec,
       new Set(symbols.map((s) => s.name)),
-      opts.maxCalls ?? MAX_CALLS
+      opts.maxCalls ?? DEFAULT_MAX_CALLS
     );
     const wantImports = opts.imports !== false;
     const refs = wantImports ? extractImports(ext, content) : [];
@@ -10294,7 +10307,7 @@ function extractAst(rel2, ext, content, opts = {}) {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_TERMS, MAX_LITERAL_LEN2, MAX_FUNC_DEPTH, MAX_WALK_DEPTH, NESTED_TYPE_KINDS, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, STRING_NODE, NUMBER_NODE, REGEX_NODE, STRING_PART, PROSE_PART, T_REF_IDENT, T_COMMENT, T_STRING, T_NUMBER, T_REGEX, typeFlags, NAME_SEARCH_SKIP;
+var MAX_REF_IDENTS, DEFAULT_MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_TERMS, MAX_LITERAL_LEN2, MAX_FUNC_DEPTH, MAX_WALK_DEPTH, NESTED_TYPE_KINDS, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, STRING_NODE, NUMBER_NODE, REGEX_NODE, STRING_PART, PROSE_PART, T_REF_IDENT, T_COMMENT, T_STRING, T_NUMBER, T_REGEX, typeFlags, NAME_SEARCH_SKIP;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
@@ -10310,7 +10323,7 @@ var init_extract = __esm({
     init_imports();
     init_util();
     MAX_REF_IDENTS = 512;
-    MAX_CALLS = 512;
+    DEFAULT_MAX_CALLS = 8192;
     MAX_IMPORTED_NAMES = 256;
     MAX_SYMBOLS = 2e3;
     MAX_RELATIONS = 256;
@@ -10556,7 +10569,7 @@ function introducedAt(line2, index) {
   while (j > 0 && WORD.test(line2[j - 1])) j--;
   return j < i2 && DEF_INTRODUCERS.has(line2.slice(j, i2));
 }
-function collectCallsRegex(content, symbols = [], maxCalls = 512) {
+function collectCallsRegex(content, symbols = [], maxCalls = DEFAULT_MAX_CALLS) {
   const out2 = /* @__PURE__ */ new Map();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
@@ -10588,7 +10601,8 @@ function collectCallsRegex(content, symbols = [], maxCalls = 512) {
           continue;
         }
       }
-      if (!out2.has(key)) out2.set(key, receiver ? { name: name2, line: i2 + 1, receiver } : { name: name2, line: i2 + 1 });
+      const site = `${key} ${receiver ?? ""}`;
+      if (!out2.has(site)) out2.set(site, receiver ? { name: name2, line: i2 + 1, receiver } : { name: name2, line: i2 + 1 });
     }
   }
   return capCallSites([...out2.values()], maxCalls);
@@ -10667,11 +10681,12 @@ function collectLiteralsRegex(content) {
   }
   return literals.result();
 }
-function mergeCalls(a, b, maxCalls = 512) {
+function mergeCalls(a, b, maxCalls = DEFAULT_MAX_CALLS) {
   if (!b.length) return a;
-  const seen = new Set(a.map((c2) => `${c2.name} ${c2.line}`));
+  const key = (c2) => `${c2.name} ${c2.line} ${c2.receiver ?? ""}`;
+  const seen = new Set(a.map(key));
   const out2 = [...a];
-  for (const c2 of b) if (!seen.has(`${c2.name} ${c2.line}`)) out2.push(c2);
+  for (const c2 of b) if (!seen.has(key(c2))) out2.push(c2);
   return capCallSites(out2, maxCalls);
 }
 function extractCode(rel2, ext, content, opts = {}) {
@@ -10705,6 +10720,9 @@ function extractCode(rel2, ext, content, opts = {}) {
     // exists to prevent.
     ...ast?.truncated || raw.length > symbols.length || reexports.length >= MAX_REEXPORTS ? { truncated: true } : {},
     ...astFallback ? { astFallback: true } : {},
+    // A capped list holds exactly the cap; a file with exactly that many call
+    // sites reads as capped too, the safe side of the doubt.
+    ...calls.length >= (opts.maxCallsPerFile ?? DEFAULT_MAX_CALLS) ? { callsCapped: true } : {},
     summary: fileSummary(ext, content),
     refs,
     pkg: extractPackage(ext, content),
@@ -10860,6 +10878,7 @@ function buildCodeRecord(rel2, ext, size, content, hash, lang, opts = {}) {
     record2.importedNames = code.importedNames;
     if (code.importAliases) record2.importAliases = code.importAliases;
     record2.truncated = code.truncated;
+    if (code.callsCapped) record2.callsCapped = true;
     if (code.astFallback) record2.astFallback = true;
     record2.generated = code.generated;
     record2.relations = code.relations;
@@ -10923,7 +10942,7 @@ function scanWalkOptions(root, opts) {
 }
 function* keptFiles(root, opts) {
   const walkOpts = scanWalkOptions(root, opts);
-  const { files: walked, capped, excluded } = opts.precomputedWalk ?? walk(root, walkOpts);
+  const { files: walked, capped, excluded, oversized } = opts.precomputedWalk ?? walk(root, walkOpts);
   const guard = selfIndexGuard(root, opts.out);
   const filter = opts.precomputedWalk ? walkOpts.filter : void 0;
   for (const f of walked) {
@@ -10937,7 +10956,7 @@ function* keptFiles(root, opts) {
     }
     yield { f, kind: classify(f.rel, f.ext), lang: extToLang(f.ext) };
   }
-  return { capped, excluded };
+  return { capped, excluded, oversized };
 }
 function selfIndexGuard(root, out2) {
   if (!out2) return void 0;
@@ -10945,10 +10964,10 @@ function selfIndexGuard(root, out2) {
   const up = relative2(dir, resolve3(root));
   if (up === "") return (f) => !f.rel.includes("/") && isIndexArtifact(f.rel);
   if (up !== ".." && !up.startsWith(`..${sep2}`) && !isAbsolute(up)) return void 0;
-  return (f) => {
-    const inside = relative2(dir, f.abs);
-    return inside === "" || inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute(inside);
-  };
+  const down = relative2(resolve3(root), dir);
+  if (down === ".." || down.startsWith(`..${sep2}`) || isAbsolute(down)) return void 0;
+  const prefix = down.split(sep2).join("/");
+  return (f) => f.rel === prefix || f.rel.startsWith(`${prefix}/`);
 }
 function keptCodeFiles(root, opts = {}) {
   const out2 = [];
@@ -11057,6 +11076,7 @@ function scanRepo(root, opts = {}) {
     mtimes,
     capped: step.value.capped,
     excluded: step.value.excluded,
+    ...step.value.oversized ? { oversized: step.value.oversized } : {},
     contentUnchanged: allReused,
     cacheDirty
   };
@@ -11167,7 +11187,7 @@ function optionalArray(value, valid) {
   return value === void 0 || Array.isArray(value) && value.every(valid);
 }
 function record(v, rel2) {
-  return object(v) && v.rel === rel2 && string(v.ext) && count(v.size) && count(v.lines) && sha(v.hash) && string(v.kind) && kinds.has(v.kind) && string(v.lang) && optionalFields(v, fileText, string) && optionalFields(v, fileLists, strings) && strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel2)) && Array.isArray(v.refs) && v.refs.every(ref) && optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) && (v.truncated === void 0 || v.truncated === true) && (v.astFallback === void 0 || v.astFallback === true) && (v.generated === void 0 || v.generated === "minified" || v.generated === "bundle");
+  return object(v) && v.rel === rel2 && string(v.ext) && count(v.size) && count(v.lines) && sha(v.hash) && string(v.kind) && kinds.has(v.kind) && string(v.lang) && optionalFields(v, fileText, string) && optionalFields(v, fileLists, strings) && strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel2)) && Array.isArray(v.refs) && v.refs.every(ref) && optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) && (v.truncated === void 0 || v.truncated === true) && (v.callsCapped === void 0 || v.callsCapped === true) && (v.astFallback === void 0 || v.astFallback === true) && (v.generated === void 0 || v.generated === "minified" || v.generated === "bundle");
 }
 function entry(v, rel2) {
   return object(v) && sha(v.hash) && record(v.record, rel2) && v.hash === v.record.hash && (v.size === void 0 || count(v.size) && v.size === v.record.size) && (v.mtimeMs === void 0 || typeof v.mtimeMs === "number" && Number.isFinite(v.mtimeMs));
@@ -15061,6 +15081,8 @@ function indexCallers(scan2, pairs, recall, only) {
       let entry2 = sites.get(key);
       if (!entry2) sites.set(key, entry2 = { def: hit.def, callers: [] });
       else if (hit.def.line < entry2.def.line) entry2.def = hit.def;
+      const last = entry2.callers[entry2.callers.length - 1];
+      if (last && last.file === f.rel && last.line === c2.line) continue;
       entry2.callers.push(
         recall ? { file: f.rel, line: c2.line, confidence: hit.corroborated ? "corroborated" : "unique-name" } : { file: f.rel, line: c2.line }
       );
@@ -15400,13 +15422,37 @@ function createCallBinder(scan2, pairs, opts = {}) {
     fnParentsMemo.set(rel2, parents = set ?? noParents);
     return parents;
   };
+  const indexed = (rel2) => (byRel ??= new Map(scan2.files.map((f) => [f.rel, f]))).has(rel2);
+  const firstIndexed = (dir, names) => names.map((n) => dir ? `${dir}/${n}` : n).find(indexed);
+  const crateRoot = (rel2, base) => {
+    if (base === "lib.rs" || base === "main.rs") return true;
+    const dir = dirOf3(rel2);
+    const parent = dir.slice(dir.lastIndexOf("/") + 1);
+    return parent === "examples" || parent === "tests" || parent === "benches" || parent === "bin" && /(^|\/)src\/bin$/.test(dir);
+  };
+  const rustPath = (rel2, receiver) => {
+    const base = rel2.slice(rel2.lastIndexOf("/") + 1);
+    let found;
+    if (crateRoot(rel2, base)) {
+      if (receiver === "crate") found = rel2;
+    } else if (receiver === "crate") {
+      for (let dir = dirOf3(rel2); !found; dir = dirOf3(dir)) {
+        found = firstIndexed(dir, ["lib.rs", "main.rs"]);
+        if (!dir) break;
+      }
+    } else {
+      const parent = dirOf3(base === "mod.rs" ? dirOf3(rel2) : rel2.slice(0, -".rs".length));
+      found = firstIndexed(parent, ["mod.rs", "lib.rs", "main.rs"]) ?? (parent && indexed(`${parent}.rs`) ? `${parent}.rs` : void 0);
+    }
+    return found === void 0 ? void 0 : [found];
+  };
   const inFunction = (s) => s.parent !== void 0 && fnParentsOf(s.file).has(s.parent);
   const isMember = (s) => s.parent !== void 0 && !fnParentsOf(s.file).has(s.parent);
   const byName = /* @__PURE__ */ new Map();
   for (const f of scan2.files) {
     const reach = PRIVATE_REACH[familyOf(f.lang)] !== void 0;
     for (const s of f.symbols) {
-      if (REFERENCE_KINDS3.has(s.kind) || !s.exported && !reach) continue;
+      if (REFERENCE_KINDS3.has(s.kind) || NOT_CALLABLE.has(s.kind) || !s.exported && !reach) continue;
       if (only && !only.has(s.name)) continue;
       const list = byName.get(s.name);
       if (list) list.push(s);
@@ -15456,7 +15502,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
     const fnParents = fnParentsOf(f.rel);
     const isOwnMember = (s) => s.parent !== void 0 && !fnParents.has(s.parent);
     for (const s of f.symbols) {
-      if (REFERENCE_KINDS3.has(s.kind)) continue;
+      if (REFERENCE_KINDS3.has(s.kind) || NOT_CALLABLE.has(s.kind)) continue;
       if (!ownAny.has(s.name)) ownAny.set(s.name, s);
       if (isOwnMember(s)) {
         if (!ownMember.has(s.name)) ownMember.set(s.name, s);
@@ -15470,7 +15516,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
       if (!ownMemberOf) {
         ownMemberOf = /* @__PURE__ */ new Map();
         for (const s of f.symbols) {
-          if (REFERENCE_KINDS3.has(s.kind) || !isOwnMember(s)) continue;
+          if (REFERENCE_KINDS3.has(s.kind) || NOT_CALLABLE.has(s.kind) || !isOwnMember(s)) continue;
           const key = `${s.parent}\0${s.name}`;
           if (!ownMemberOf.has(key)) ownMemberOf.set(key, s);
         }
@@ -15489,10 +15535,20 @@ function createCallBinder(scan2, pairs, opts = {}) {
       return ownTypeByLower.get(receiver.toLowerCase());
     };
     const aliases = scope.aliases(f);
+    let rustModules;
+    let inlineMods;
+    if (family === "rust") {
+      for (const q of ["crate", "super"]) {
+        const files = rustPath(f.rel, q);
+        if (files) (rustModules ??= /* @__PURE__ */ new Map()).set(q, files);
+      }
+      inlineMods = f.symbols.filter((s) => s.kind === "mod" && s.endLine !== void 0 && s.endLine > s.line);
+      if (inlineMods.length) (rustModules ??= /* @__PURE__ */ new Map()).set(INLINE_SUPER, [f.rel]);
+    }
     const corroborated = (name2, pool) => {
       const out2 = scope.reached(exportedGroup(name2, family, pool), f, name2);
       const priv = hiddenGroup(name2, family, pool);
-      if (priv && hiddenReach) {
+      if (priv && (hiddenReach === "package" || hiddenReach === "import")) {
         const seen = new Set(out2.map((d) => d.file));
         for (const d of hiddenReach === "package" ? scope.reached(priv, f, name2) : importedDefs(priv, scope.targets(f.rel))) {
           if (hiddenReach === "package" && dirOf3(d.file) !== dirOf3(f.rel)) continue;
@@ -15513,13 +15569,15 @@ function createCallBinder(scan2, pairs, opts = {}) {
     const byReceiver = /* @__PURE__ */ new Map();
     const byEnclosing = /* @__PURE__ */ new Map();
     const read = (c2, enclosing) => {
-      const receiver = c2.receiver;
+      let receiver = c2.receiver;
       if (receiver === void 0) return BARE;
+      if (receiver === "super" && inlineMods?.some((m) => c2.line > m.line && c2.line <= m.endLine)) receiver = INLINE_SUPER;
       let r = byReceiver.get(receiver);
       if (r) return r;
       const self = (t) => reading("self", receiver, t, t);
       if (!SELF_NAMES.has(receiver)) {
-        if (aliases.modules.has(receiver)) r = reading("module", receiver);
+        if (rustModules?.has(receiver)) r = reading("module", receiver);
+        else if (aliases.modules.has(receiver)) r = reading("module", receiver);
         else if (ownTypes.has(receiver)) r = self(receiver);
         else if (!SHAPED.has(family)) {
           const named = typeNamedLike(receiver);
@@ -15568,7 +15626,8 @@ function createCallBinder(scan2, pairs, opts = {}) {
       if (shape === "bare") {
         const renamed = aliases.names.get(name2);
         if (renamed) ({ name: callee, files: restrict } = renamed);
-      } else if (shape === "module") restrict = aliases.modules.get(receiver);
+      } else if (shape === "module") restrict = rustModules?.get(receiver) ?? aliases.modules.get(receiver);
+      const viaPath = rustModules?.has(receiver) === true && shape === "module";
       if (only && !only.has(callee)) return null;
       const pool = !shaped ? "any" : shape === "bare" || shape === "module" ? "free" : shape === "self" || family === "go" ? "member" : "member-first";
       const guessPool = pool === "member-first" ? "member" : pool;
@@ -15577,7 +15636,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
           if (!recall) return null;
         } else {
           const hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
-          if (hiddenReach === "import") {
+          if (hiddenReach === "import" || viaPath) {
             for (const d of scope.within(hiddenGroup(callee, family, pool), restrict, callee)) if (!hits.includes(d)) hits.push(d);
           }
           const chosen2 = pickCandidate(f.rel, hits);
@@ -15617,7 +15676,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
   };
   return { forFile };
 }
-var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf3, isGoTest, declaredRe, aliasMemo, newTables;
+var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, INLINE_SUPER, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf3, isGoTest, declaredRe, aliasMemo, newTables;
 var init_bind = __esm({
   "src/bind.ts"() {
     "use strict";
@@ -15632,7 +15691,9 @@ var init_bind = __esm({
     STRICT = /* @__PURE__ */ new Set(["js", "go"]);
     SHAPED = /* @__PURE__ */ new Set(["go", "python"]);
     PACKAGE_DIR = /* @__PURE__ */ new Set(["go", "java"]);
-    PRIVATE_REACH = { go: "package", java: "package", python: "import" };
+    PRIVATE_REACH = { go: "package", java: "package", python: "import", rust: "path" };
+    NOT_CALLABLE = /* @__PURE__ */ new Set(["mod", "module", "package", "namespace"]);
+    INLINE_SUPER = "super\0inline";
     SELF_NAMES = /* @__PURE__ */ new Set(["self", "cls", "this", "Self"]);
     FUNCTION_KINDS2 = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator"]);
     MAX_HOPS = 3;
@@ -21723,6 +21784,69 @@ var init_patharg = __esm({
   }
 });
 
+// src/coverage.ts
+import { readFileSync as readFileSync16 } from "fs";
+import { extname as extname4, join as join24 } from "path";
+function oversizedNaming(scan2, name2) {
+  if (!scan2.oversized?.length || !/^[A-Za-z_$][\w$]*$/.test(name2)) return [];
+  let memo = wordMemo.get(scan2);
+  if (!memo) wordMemo.set(scan2, memo = /* @__PURE__ */ new Map());
+  const known = memo.get(name2);
+  if (known) return known;
+  const word = new RegExp(`(?<![\\w$])${name2.replace(/\$/g, "\\$")}(?![\\w$])`);
+  const out2 = [];
+  for (const o of scan2.oversized) {
+    if (o.size > MAX_PROBE_BYTES || classify(o.rel, extname4(o.rel).toLowerCase()) !== "code") continue;
+    let text;
+    try {
+      text = readFileSync16(join24(scan2.root, o.rel), "utf8");
+    } catch {
+      continue;
+    }
+    if (word.test(text)) out2.push({ file: o.rel, size: o.size });
+  }
+  memo.set(name2, out2);
+  return out2;
+}
+function coverageFor(scan2, name2, opts) {
+  const callCapped = opts.calls ? scan2.files.filter((f) => f.callsCapped && f.calls?.some((c2) => c2.name === name2)).map((f) => f.rel) : [];
+  const notIndexed = oversizedNaming(scan2, name2);
+  if (!callCapped.length && !notIndexed.length) return void 0;
+  const hints = [];
+  if (callCapped.length) {
+    hints.push(`${callCapped.length} file(s) reached the per-file call-site cap, so some of their calls are missing; re-index with a higher --max-calls`);
+  }
+  if (notIndexed.length) hints.push(sizeHint(notIndexed, `name "${name2}"`));
+  return {
+    ...callCapped.length ? { callCapped } : {},
+    ...notIndexed.length ? { notIndexed } : {},
+    hint: hints.join("; ")
+  };
+}
+function sizeHint(files, what) {
+  const largest = Math.max(...files.map((f) => f.size));
+  return `${files.length} file(s) over --max-bytes ${what} but are not indexed (${files.map((f) => f.file).join(", ")}); re-index with --max-bytes ${largest}`;
+}
+function notIndexedNote(scan2, name2) {
+  const files = oversizedNaming(scan2, name2);
+  return files.length ? ` \u2014 ${sizeHint(files, `name "${name2}"`)}` : "";
+}
+function notIndexedFile(scan2, repo, arg) {
+  const readings = fileArgReadings(repo, arg);
+  const hit = scan2.oversized?.find((o) => readings.includes(o.rel));
+  return hit ? `not in the index: ${hit.rel} is ${hit.size} bytes, over --max-bytes (default 1 MiB); re-index with --max-bytes ${hit.size} to include it` : void 0;
+}
+var MAX_PROBE_BYTES, wordMemo;
+var init_coverage = __esm({
+  "src/coverage.ts"() {
+    "use strict";
+    init_classify();
+    init_patharg();
+    MAX_PROBE_BYTES = 32 * 1024 * 1024;
+    wordMemo = /* @__PURE__ */ new WeakMap();
+  }
+});
+
 // src/mcp/concise.ts
 function symbolLocation(symbol2, name2) {
   return { name: name2, kind: symbol2.kind, file: symbol2.file, line: symbol2.line, ...symbol2.parent ? { parent: symbol2.parent } : {} };
@@ -21758,11 +21882,11 @@ var init_concise = __esm({
 });
 
 // src/embed/persist.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync16, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync17, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "fs";
 import { dirname as dirname7 } from "path";
 function readEmbeddingsFile(path) {
   try {
-    return deserializeEmbeddings(readFileSync16(path));
+    return deserializeEmbeddings(readFileSync17(path));
   } catch {
     return void 0;
   }
@@ -21788,7 +21912,7 @@ var init_persist = __esm({
 
 // src/mcp/session.ts
 import { realpathSync as realpathSync6, statSync as statSync9 } from "fs";
-import { isAbsolute as isAbsolute8, join as join24, relative as relative8, sep as sep6 } from "path";
+import { isAbsolute as isAbsolute8, join as join25, relative as relative8, sep as sep6 } from "path";
 function scanFingerprint(scan2) {
   return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
 }
@@ -21803,7 +21927,7 @@ async function memoizedEmbeddingIndex(key, build) {
 function memoizedEmbedModel(modelDir) {
   let stat;
   try {
-    stat = statSync9(join24(modelDir, "model.json"));
+    stat = statSync9(join25(modelDir, "model.json"));
   } catch {
     return void 0;
   }
@@ -22012,7 +22136,7 @@ var init_session = __esm({
 // src/mcp/watch.ts
 import { existsSync as existsSync11, mkdtempSync as mkdtempSync3, rmSync as rmSync5, statSync as statSync10, watch as watchFs, writeFileSync as writeFileSync5 } from "fs";
 import { tmpdir } from "os";
-import { join as join25 } from "path";
+import { join as join26 } from "path";
 function watchRepo(repo, warn, maxDirs = MAX_WATCHED_DIRS) {
   if (process.platform === "linux") return new DirWatch(repo, warn, maxDirs);
   return hintWatch(repo, warn);
@@ -22089,7 +22213,7 @@ var init_watch = __esm({
         const barrier = this.barrier;
         if (!barrier) return Promise.resolve(void 0);
         const name2 = `barrier-${++barrier.seq}`;
-        const file = join25(barrier.dir, name2);
+        const file = join26(barrier.dir, name2);
         return new Promise((resolvePromise) => {
           const finish = (value) => {
             clearTimeout(timer);
@@ -22109,7 +22233,7 @@ var init_watch = __esm({
       openBarrier() {
         let dir;
         try {
-          dir = mkdtempSync3(join25(tmpdir(), "codeindex-watch-"));
+          dir = mkdtempSync3(join26(tmpdir(), "codeindex-watch-"));
           const barrier = {
             dir,
             seq: 0,
@@ -22139,7 +22263,7 @@ var init_watch = __esm({
           }
         });
         const info2 = ".git/info";
-        if (existsSync11(join25(this.repo, info2)) && statSync10(join25(this.repo, info2)).isDirectory()) {
+        if (existsSync11(join26(this.repo, info2)) && statSync10(join26(this.repo, info2)).isDirectory()) {
           visited.add(info2);
           this.add(info2);
         }
@@ -22157,7 +22281,7 @@ var init_watch = __esm({
           return;
         }
         try {
-          const watcher = watchFs(rel2 ? join25(this.repo, rel2) : this.repo, (event, filename) => this.onEvent(rel2, event, filename));
+          const watcher = watchFs(rel2 ? join26(this.repo, rel2) : this.repo, (event, filename) => this.onEvent(rel2, event, filename));
           watcher.on("error", () => {
             this.events++;
             this.forget(rel2);
@@ -22208,8 +22332,8 @@ var init_watch = __esm({
 });
 
 // src/mcp/protocol.ts
-import { readFileSync as readFileSync17, statSync as statSync11 } from "fs";
-import { join as join26 } from "path";
+import { readFileSync as readFileSync18, statSync as statSync11 } from "fs";
+import { join as join27 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 function validateArgs(schema, args2) {
   const props = schema.properties ?? {};
@@ -22270,7 +22394,7 @@ function artifactState(path, text, bytes) {
   }
   if (size !== bytes && size !== bytes + 1) return "stale";
   try {
-    const disk = readFileSync17(path, "utf8");
+    const disk = readFileSync18(path, "utf8");
     return disk === text || disk === text + "\n" ? "identical" : "stale";
   } catch {
     return "absent";
@@ -22284,9 +22408,9 @@ function capResponse(text, tool, repo, maxBytes, wholeRepo = true, onWire) {
   const bytes = onWire ?? textBytes;
   if (bytes <= maxBytes) return text;
   const artifactName = wholeRepo && Object.hasOwn(ARTIFACT_FOR, tool) ? ARTIFACT_FOR[tool] : void 0;
-  const artifact = artifactName ? join26(repo, INDEX_DIR, artifactName) : void 0;
+  const artifact = artifactName ? join27(repo, INDEX_DIR, artifactName) : void 0;
   const state = artifact ? artifactState(artifact, text, textBytes) : void 0;
-  const refresh = `codeindex index --repo ${shellArg(repo)} --out ${shellArg(join26(repo, INDEX_DIR))}`;
+  const refresh = `codeindex index --repo ${shellArg(repo)} --out ${shellArg(join27(repo, INDEX_DIR))}`;
   return JSON.stringify(
     {
       truncated: true,
@@ -23333,8 +23457,8 @@ __export(mcp_exports, {
   warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
-import { readFileSync as readFileSync18, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
-import { basename as basename5, isAbsolute as isAbsolute9, join as join27, relative as relative9, resolve as resolve10, sep as sep7 } from "path";
+import { readFileSync as readFileSync19, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
+import { basename as basename5, isAbsolute as isAbsolute9, join as join28, relative as relative9, resolve as resolve10, sep as sep7 } from "path";
 import { createInterface } from "readline";
 function isRpcRequest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -23369,12 +23493,17 @@ function positiveNum(v) {
 function errMessage(e) {
   return e instanceof Error ? e.message : String(e);
 }
+function withCoverage(answer, coverage) {
+  return coverage ? { ...answer, coverage } : answer;
+}
 function indexedFile(scan2, repo, file) {
   const byRel = fileByRelFor(scan2);
   if (byRel.has(file)) return file;
   const rel2 = relative9(repo, resolve10(repo, file.replaceAll("\\", "/"))).split(sep7).join("/");
   if (rel2 === ".." || rel2.startsWith("../") || isAbsolute9(rel2)) throw new Error(`\`file\` is outside the repository: ${file}`);
   if (byRel.has(rel2)) return rel2;
+  const unseen = notIndexedFile(scan2, repo, file);
+  if (unseen) throw new Error(unseen);
   const name2 = basename5(rel2);
   const near = scan2.files.filter((f) => basename5(f.rel) === name2).map((f) => f.rel).sort(byStr).slice(0, 5);
   throw new Error(
@@ -23445,27 +23574,29 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       if (!lookup) throw new Error("callers with raw:true requires `name`");
       if (args2.lsp === true || args2.recall === true) throw new Error("callers raw:true takes neither lsp nor recall");
       if (args2.withCaller === true) throw new Error("callers raw:true already names each site's enclosing symbol: it takes no withCaller");
-      return JSON.stringify(rawCallersOf(scan2, lookup), null, 2);
+      const raw = rawCallersOf(scan2, lookup);
+      return JSON.stringify(withCoverage(raw, coverageFor(scan2, raw.name, { calls: true })), null, 2);
     }
     const index = args2.recall === true ? buildCallerIndex(scan2, void 0, { recall: true }) : callerIndexFor(scan2);
     const sited = (e) => args2.withCaller === true ? withCallerIds(scan2, e) : e;
     if (lookup) {
       const reading = resolveSymbolRef(scan2, lookup)?.reading;
       const lspRef = reading ? formatSymbolRef(reading) : lookup;
+      const coverage = coverageFor(scan2, reading?.name ?? lookup, { calls: true });
       const found = lookupCallerEntry(index, lookup);
       const entry2 = found && sited(found);
       if (entry2) {
         const result = args2.lsp === true ? await callersWithLsp(scan2, repo, lspRef, entry2, lsp) : entry2;
-        return JSON.stringify(args2.concise === true ? conciseCaller(result) : result, null, 2);
+        return JSON.stringify(withCoverage(args2.concise === true ? conciseCaller(result) : result, coverage), null, 2);
       }
       const absent = explainNoCallers(scan2, lookup, index);
       if (!absent) {
         const named = rawCallerSitesFor(scan2, lookup).length;
         throw new Error(
-          `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : "")
+          `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : "") + notIndexedNote(scan2, lookup)
         );
       }
-      return JSON.stringify(args2.lsp === true ? await callersWithLsp(scan2, repo, lspRef, absent, lsp) : absent, null, 2);
+      return JSON.stringify(withCoverage(args2.lsp === true ? await callersWithLsp(scan2, repo, lspRef, absent, lsp) : absent, coverage), null, 2);
     }
     const obj = {};
     for (const [k, v] of index) obj[k] = args2.concise === true ? conciseCaller(sited(v)) : sited(v);
@@ -23507,7 +23638,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
     const statik = findReferences(scan2, symName);
     const leaf = resolveSymbolRef(scan2, symName)?.reading.name ?? symName;
     const result = args2.lsp === true ? await referencesWithLsp(scan2, repo, leaf, statik, lsp) : statik;
-    return JSON.stringify(args2.concise === true ? conciseReferences(result) : result, null, 2);
+    return JSON.stringify(withCoverage(args2.concise === true ? conciseReferences(result) : result, coverageFor(scan2, leaf, { calls: true })), null, 2);
   }
   if (name2 === "symbol_at") {
     const file = str(args2.file);
@@ -23517,7 +23648,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
     const scan2 = readScan();
     const files = new Set(scan2.files.map((f) => f.rel));
     const rel2 = resolveFileArg(repo, file, (r) => files.has(r));
-    if (rel2 === void 0) throw new Error(`no such file in the index: ${file}`);
+    if (rel2 === void 0) throw new Error(notIndexedFile(scan2, repo, file) ?? `no such file in the index: ${file}`);
     return JSON.stringify(symbolAt(scan2, rel2, line2), null, 2);
   }
   if (name2 === "lsp_status") {
@@ -23535,7 +23666,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
     const fn = name2 === "replace_symbol_body" ? replaceSymbolBody : name2 === "insert_after_symbol" ? insertAfterSymbol : insertBeforeSymbol;
     const file = str(args2.file);
     const result = fn(scan2, namePath, body2, file === void 0 ? void 0 : indexedFile(scan2, repo, file), { line: line2, strict: args2.strict === true });
-    sessionForgetFile(join27(scan2.root, result.file));
+    sessionForgetFile(join28(scan2.root, result.file));
     return JSON.stringify(result, null, 2);
   }
   if (name2 === "write_memory") {
@@ -23681,7 +23812,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       if (model) {
         const index = await memoizedEmbeddingIndex(
           { mode: "static", identity: `${modelDir}#${model.modelId}`, scan: scan2 },
-          (previous) => buildEmbeddingIndex(scan2, model, { previous: previous ?? readEmbeddingsFile(join27(repo, INDEX_DIR, "embeddings.bin")) })
+          (previous) => buildEmbeddingIndex(scan2, model, { previous: previous ?? readEmbeddingsFile(join28(repo, INDEX_DIR, "embeddings.bin")) })
         );
         return answer(explainSemantic(scan2, query, index, { ...lexOpts, model }), "static");
       }
@@ -23803,7 +23934,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       const unreadable = new Error(`cannot read rules config ${configPath}`);
       let abs;
       try {
-        abs = realpathSync7(isAbsolute9(configPath) ? configPath : join27(repo, configPath));
+        abs = realpathSync7(isAbsolute9(configPath) ? configPath : join28(repo, configPath));
       } catch {
         throw unreadable;
       }
@@ -23813,7 +23944,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       }
       let text;
       try {
-        text = readFileSync18(abs, "utf8");
+        text = readFileSync19(abs, "utf8");
       } catch {
         throw unreadable;
       }
@@ -24040,6 +24171,7 @@ var init_mcp = __esm({
     init_viz();
     init_resolution();
     init_query();
+    init_coverage();
     init_patharg();
     init_traverse();
     init_symref();
@@ -24093,8 +24225,8 @@ __export(rewrite_exports, {
   shellQuote: () => shellQuote,
   tokenize: () => tokenize2
 });
-import { existsSync as existsSync12, readFileSync as readFileSync19 } from "fs";
-import { dirname as dirname8, join as join28, relative as relative10, resolve as resolve11, sep as sep8 } from "path";
+import { existsSync as existsSync12, readFileSync as readFileSync20 } from "fs";
+import { dirname as dirname8, join as join29, relative as relative10, resolve as resolve11, sep as sep8 } from "path";
 function lex(line2) {
   const out2 = [];
   let cur = "";
@@ -24657,17 +24789,17 @@ function toScope(path) {
 }
 function submodulesAround(cwd) {
   for (let dir = resolve11(cwd); ; dir = dirname8(dir)) {
-    const modules = join28(dir, ".gitmodules");
+    const modules = join29(dir, ".gitmodules");
     if (existsSync12(modules)) {
       let text;
       try {
-        text = readFileSync19(modules, "utf8");
+        text = readFileSync20(modules, "utf8");
       } catch {
         return [];
       }
       return [...text.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)].map((m) => resolve11(dir, m[1]));
     }
-    if (existsSync12(join28(dir, ".git")) || dirname8(dir) === dir) return [];
+    if (existsSync12(join29(dir, ".git")) || dirname8(dir) === dir) return [];
   }
 }
 function rewriteCommand(cmd, bin = "codeindex", cwd) {
@@ -25902,8 +26034,8 @@ init_patharg();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
-import { isAbsolute as isAbsolute10, join as join29, resolve as resolve12 } from "path";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync21, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
+import { isAbsolute as isAbsolute10, join as join30, resolve as resolve12 } from "path";
 init_pipeline();
 init_hash();
 init_graph_json();
@@ -25921,6 +26053,7 @@ init_relations();
 init_symbolgraph();
 init_callers();
 init_query();
+init_coverage();
 init_concise();
 init_symref();
 init_workspaces();
@@ -26208,8 +26341,9 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
                       --exclude (default: none \u2014 the whole tree is indexed;
                       a cap sets the \`capped\` flag)
   --max-bytes <n>     Skip files above this size (default 1 MiB)
-  --max-calls <n>     Per-file call-site cap for extraction (default 512); a
-                      capped file keeps one site per distinct callee first
+  --max-calls <n>     Per-file call-site cap for extraction (default 8192); a
+                      capped file keeps one site per distinct callee first,
+                      and a \`callers\`/\`refs\` answer counting it says so
   --no-ast            Skip tree-sitter grammars even when present (regex tier)
   --workers <n>       \`index\`: extraction worker threads (default: cores-1,
                       capped at 8; 0 or 1 forces the single-threaded path).
@@ -26605,7 +26739,7 @@ function warnPathFlags(flags2) {
   if (scope === ".." || scope.startsWith("../") || isAbsolute10(scope)) {
     process.stderr.write(`codeindex: warning: --scope ${flags2.scope} is outside --repo ${flags2.repo} \u2014 nothing matches
 `);
-  } else if (scope && !/[*?[]/.test(scope) && !existsSync13(join29(flags2.repo, scope))) {
+  } else if (scope && !/[*?[]/.test(scope) && !existsSync13(join30(flags2.repo, scope))) {
     process.stderr.write(`codeindex: warning: --scope ${flags2.scope} does not exist under ${flags2.repo} \u2014 nothing matches
 `);
   }
@@ -26897,18 +27031,18 @@ ${HELP}`);
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync4(outDir, { recursive: true });
-    const cachePath = join29(outDir, "cache.json");
+    const cachePath = join30(outDir, "cache.json");
     await warmPresentGrammars();
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const { model, error: modelError } = tryLoadEmbedModel(modelDir);
     if (modelError) process.stderr.write(`codeindex: ${modelError} \u2014 embeddings.bin skipped; re-run \`codeindex embed pull\`
 `);
-    const graphPath = join29(outDir, "graph.json");
-    const symbolsPath = join29(outDir, "symbols.json");
-    const embedPath = join29(outDir, "embeddings.bin");
+    const graphPath = join30(outDir, "graph.json");
+    const symbolsPath = join30(outDir, "symbols.json");
+    const embedPath = join30(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
-        return sha1(readFileSync20(path));
+        return sha1(readFileSync21(path));
       } catch {
         return void 0;
       }
@@ -26937,7 +27071,7 @@ ${HELP}`);
     });
     const extraction = extractionProfile(scan2.files, flags2.maxCalls, grammarReady);
     if (scan2.files.length === 0) warnEmptyScan(flags2);
-    const freshnessPath = join29(outDir, FRESHNESS_FILE);
+    const freshnessPath = join30(outDir, FRESHNESS_FILE);
     const writeFreshness = (out2) => {
       let cacheStat;
       try {
@@ -26948,7 +27082,7 @@ ${HELP}`);
       const text = renderFreshness(scan2, out2, extraction, { size: cacheStat.size, mtimeMs: cacheStat.mtimeMs });
       let current;
       try {
-        current = readFileSync20(freshnessPath, "utf8");
+        current = readFileSync21(freshnessPath, "utf8");
       } catch {
         current = void 0;
       }
@@ -27072,7 +27206,9 @@ ${HELP}`);
     const ref2 = flags2.positional;
     if (flags2.raw) {
       if (ref2) {
-        emit(JSON.stringify(rawCallersOf(scan2, ref2), null, 2) + "\n", flags2.out);
+        const raw = rawCallersOf(scan2, ref2);
+        const coverage = coverageFor(scan2, raw.name, { calls: true });
+        emit(JSON.stringify(coverage ? { ...raw, coverage } : raw, null, 2) + "\n", flags2.out);
       } else {
         const obj = {};
         for (const [name2, sites] of buildRawCallerIndex(scan2)) obj[name2] = sites;
@@ -27086,12 +27222,13 @@ ${HELP}`);
       if (!answer) {
         const named = rawCallerSitesFor(scan2, ref2).length;
         throw new Error(
-          `no symbol named "${ref2}" in the index` + (named ? ` (${named} call site(s) use the name; \`callers --raw ${ref2}\` lists them)` : "")
+          `no symbol named "${ref2}" in the index` + (named ? ` (${named} call site(s) use the name; \`callers --raw ${ref2}\` lists them)` : "") + notIndexedNote(scan2, ref2)
         );
       }
       const reading = resolveSymbolRef(scan2, ref2)?.reading;
       const result = flags2.lsp ? await callersWithLsp(scan2, flags2.repo, reading ? formatSymbolRef(reading) : ref2, answer, { trustRepoConfig: flags2.trustLspConfig }) : answer;
-      emit(JSON.stringify(result, null, 2) + "\n", flags2.out);
+      const coverage = coverageFor(scan2, reading?.name ?? ref2, { calls: true });
+      emit(JSON.stringify(coverage ? { ...result, coverage } : result, null, 2) + "\n", flags2.out);
     } else {
       const index = buildCallerIndex(scan2, void 0, { recall: flags2.recall });
       const obj = {};
@@ -27149,15 +27286,26 @@ ${HELP}`);
         concise: flags2.concise,
         maxResults: flags2.limit
       });
+      if (Array.isArray(result) && !result.length) {
+        const unseen = oversizedNaming(scan2, flags2.positional.replace(/@.*$/, "").replace(/^.*[#/]/, ""));
+        if (unseen.length) {
+          process.stderr.write(
+            `codeindex: not indexed for size but naming it: ${unseen.map((u) => `${u.file} (${u.size} bytes)`).join(", ")}; re-index with --max-bytes ${Math.max(...unseen.map((u) => u.size))}
+`
+          );
+        }
+      }
     } else if (cmd === "refs") {
       const statik = findReferences(scan2, flags2.positional);
       const leaf = resolveSymbolRef(scan2, flags2.positional)?.reading.name ?? flags2.positional;
       const refs = flags2.lsp ? await referencesWithLsp(scan2, flags2.repo, leaf, statik, { trustRepoConfig: flags2.trustLspConfig }) : statik;
-      result = flags2.concise ? conciseReferences(refs) : refs;
+      const answer = flags2.concise ? conciseReferences(refs) : refs;
+      const coverage = coverageFor(scan2, leaf, { calls: true });
+      result = coverage ? { ...answer, coverage } : answer;
     } else {
       const known = new Set(scan2.files.map((f) => f.rel));
       const rel2 = resolveFileArg(flags2.repo, flags2.positional, (r) => known.has(r));
-      if (rel2 === void 0) throw new Error(`no such file in the index: ${flags2.positional}`);
+      if (rel2 === void 0) throw new Error(notIndexedFile(scan2, flags2.repo, flags2.positional) ?? `no such file in the index: ${flags2.positional}`);
       const overview = symbolsOverview(scan2, rel2);
       result = flags2.concise ? overview.map((s) => symbolLocation(s, s.name)) : overview;
     }
@@ -27190,7 +27338,7 @@ ${HELP}`);
     const scan2 = await readScan();
     const files = new Set(scan2.files.map((f) => f.rel));
     const rel2 = resolveFileArg(flags2.repo, m[1], (r) => files.has(r));
-    if (rel2 === void 0) throw new Error(`no such file in the index: ${m[1]}`);
+    if (rel2 === void 0) throw new Error(notIndexedFile(scan2, flags2.repo, m[1]) ?? `no such file in the index: ${m[1]}`);
     emit(JSON.stringify(symbolAt(scan2, rel2, Number(m[2])), null, 2) + "\n", flags2.out);
   } else if (cmd === "search") {
     if (!flags2.positional) throw new Error('search needs a query: cli.mjs search "<query>" --repo <dir>');
@@ -27212,7 +27360,7 @@ ${HELP}`);
       if (endpoint) {
         let fused;
         try {
-          const cacheFile = existsSync13(join29(indexDirPath(flags2.repo, indexDir), "cache.json")) ? join29(indexDirPath(flags2.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
+          const cacheFile = existsSync13(join30(indexDirPath(flags2.repo, indexDir), "cache.json")) ? join30(indexDirPath(flags2.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
           const modelId = cacheFile ? await endpointModelId() : void 0;
           const previous = cacheFile ? readEmbeddingsFile(cacheFile) : void 0;
           const index = await buildEndpointIndex(scan2, { previous, modelId });
@@ -27236,7 +27384,7 @@ ${HELP}`);
           );
           lexical();
         } else {
-          const previous = readEmbeddingsFile(join29(indexDirPath(flags2.repo, indexDir), "embeddings.bin"));
+          const previous = readEmbeddingsFile(join30(indexDirPath(flags2.repo, indexDir), "embeddings.bin"));
           const index = buildEmbeddingIndex(scan2, model, { previous });
           answer(explainSemantic(scan2, flags2.positional, index, { ...searchOpts, model }));
         }
@@ -27298,15 +27446,15 @@ ${HELP}`);
       const model = loadEmbedModel(modelDir);
       mkdirSync4(flags2.out, { recursive: true });
       const scan2 = await readScan();
-      const index = buildEmbeddingIndex(scan2, model, { previous: readEmbeddingsFile(join29(flags2.out, "embeddings.bin")) });
-      writeArtifact(join29(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      const index = buildEmbeddingIndex(scan2, model, { previous: readEmbeddingsFile(join30(flags2.out, "embeddings.bin")) });
+      writeArtifact(join30(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
       const { url, sha256 } = resolveEmbedPullUrl();
-      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join29(flags2.repo, ".codeindex", "models");
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join30(flags2.repo, ".codeindex", "models");
       mkdirSync4(destDir, { recursive: true });
-      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join29(destDir, "model.json")}
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join30(destDir, "model.json")}
 `);
       let body2;
       try {
@@ -27327,8 +27475,8 @@ ${HELP}`);
         process.exitCode = 1;
         return;
       }
-      writeArtifact(join29(destDir, "model.json"), body2);
-      process.stderr.write(`codeindex: model written to ${join29(destDir, "model.json")}
+      writeArtifact(join30(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join30(destDir, "model.json")}
 `);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");
@@ -27342,7 +27490,7 @@ ${HELP}`);
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const present = (name2) => info2.dirs.some((d) => existsSync13(join29(d, name2)));
+      const present = (name2) => info2.dirs.some((d) => existsSync13(join30(d, name2)));
       const runtimePresent = present("web-tree-sitter.wasm");
       const target = resolveGrammarsPullTarget();
       const resolvedIn = (keys) => [...keys].filter((k) => present(`${k}.wasm`)).sort();
@@ -27379,7 +27527,7 @@ ${HELP}`);
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const configPath = [resolve12(flags2.config), resolve12(flags2.repo, flags2.config)].find((p) => existsSync13(p)) ?? resolve12(flags2.config);
-    const rules = parseRulesText(readFileSync20(configPath, "utf8"), configPath);
+    const rules = parseRulesText(readFileSync21(configPath, "utf8"), configPath);
     const { scan: scan2, graph } = await readArtifacts();
     const report = rulesReport(checkRules(graph, rules, { scan: scan2 }));
     emit(JSON.stringify(report, null, 2) + "\n", flags2.out);
@@ -27392,7 +27540,7 @@ ${HELP}`);
   } else if (cmd === "churn") {
     const res = gitChurn(flags2.repo, { since: flags2.since });
     const filter = scanPathFilter(flags2.repo, scanOptions(flags2));
-    const keep = filter && ((rel2) => filter({ rel: rel2, abs: join29(flags2.repo, rel2), directory: false }));
+    const keep = filter && ((rel2) => filter({ rel: rel2, abs: join30(flags2.repo, rel2), directory: false }));
     const sorted = {};
     for (const k of [...res.churn.keys()].sort()) if (!keep || keep(k)) sorted[k] = res.churn.get(k);
     emit(JSON.stringify({ ok: res.ok, ...historyStatus(res), churn: sorted }, null, 2) + "\n", flags2.out);
@@ -27431,7 +27579,7 @@ ${HELP}`);
     if (rel2 !== void 0) {
       const known = new Set(scan2.files.map((f) => f.rel));
       const hit = fileArgReadings(flags2.repo, rel2).find((r) => known.has(r));
-      if (hit === void 0) throw new Error(`no such file in the index: ${rel2}`);
+      if (hit === void 0) throw new Error(notIndexedFile(scan2, flags2.repo, rel2) ?? `no such file in the index: ${rel2}`);
       rel2 = hit;
     }
     emit(JSON.stringify(symbolComplexity(scan2, rel2, flags2.limit), null, 2) + "\n", flags2.out);

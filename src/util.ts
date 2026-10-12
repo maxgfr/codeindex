@@ -219,10 +219,25 @@ export function rrf<T>(
 // token (lowercased) is kept alongside its parts so an exact identifier query
 // ("HttpClient") still matches a compound definition. 1-char fragments are
 // dropped as noise; letter↔digit runs stay together ("sha1", "bm25").
+// The Unicode classes below cost twice the ASCII ones in V8, and ASCII is nearly
+// every identifier and comment word: an ASCII string takes the ASCII spelling
+// of the same classes, which reads it identically (on the TypeScript repo,
+// `search` paid 130 ms more for the Unicode split alone).
+const ASCII_CASE_1 = /([a-z0-9])([A-Z])/g;
+const ASCII_CASE_2 = /([A-Z]+)([A-Z][a-z])/g;
+const ASCII_GLUE = /[^a-z0-9_]+/g;
+const ASCII_SPLIT = /[^A-Za-z0-9]+/;
+const UNICODE_CASE_1 = /([\p{Ll}\p{N}])(\p{Lu})/gu;
+const UNICODE_CASE_2 = /(\p{Lu}+)(\p{Lu}\p{Ll})/gu;
+const UNICODE_GLUE = /[^\p{L}\p{N}_]+/gu;
+const UNICODE_SPLIT = /[^\p{L}\p{N}]+/u;
+
 export function subtokens(raw: string): string[] {
-  const folded = foldText(raw)
-    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1 $2")
-    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2");
+  const ascii = !NON_ASCII.test(raw);
+  const text = ascii ? raw : foldText(raw);
+  const folded = ascii
+    ? text.replace(ASCII_CASE_1, "$1 $2").replace(ASCII_CASE_2, "$1 $2")
+    : text.replace(UNICODE_CASE_1, "$1 $2").replace(UNICODE_CASE_2, "$1 $2");
   const out: string[] = [];
   const seen = new Set<string>();
   const push = (t: string): void => {
@@ -232,8 +247,8 @@ export function subtokens(raw: string): string[] {
   };
   // The whole identifier (lowercased) is a term of its own — but only for
   // single tokens: gluing a prose heading into one mega-token would index junk.
-  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ""));
-  for (const part of folded.split(/[^\p{L}\p{N}]+/u)) push(part.toLowerCase());
+  if (!/\s/.test(raw.trim())) push(text.toLowerCase().replace(ascii ? ASCII_GLUE : UNICODE_GLUE, ""));
+  for (const part of folded.split(ascii ? ASCII_SPLIT : UNICODE_SPLIT)) push(part.toLowerCase());
   return out;
 }
 
