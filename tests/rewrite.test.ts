@@ -266,7 +266,9 @@ describe.skipIf(!haveTools)("rewrite equivalence against the real tools", () => 
       .split("\n")
       .filter(Boolean)
       .map((l) => l.replace(/^\.\//, ""))
-      .filter((l) => !l.startsWith(".git/"))
+      // .git is out of scope, in grep's "Binary file ./.git/index matches"
+      // form too (the index's timestamps occasionally hold the pattern).
+      .filter((l) => !l.startsWith(".git/") && !/^Binary file (?:\.\/)?\.git\//.test(l))
       .map((l) => (files ? l : l.split(":").slice(0, 2).join(":")))
       .sort();
   }

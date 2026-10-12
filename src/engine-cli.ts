@@ -455,6 +455,20 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --files             \`callpath\`: walk the file link-graph between two files
   --with-caller       \`callers\`: add "caller" to each site, the symbol id of the
                       declaration the call sits in (a callgraph node)
+  --depth <n>         \`callgraph\` (default 2, max 5), \`callpath\` (default 8,
+                      max 16), \`impact\` (default: the full closure),
+                      \`neighbors\` (default 1), \`delta\` (blast radius, default 2)
+  --direction <d>     \`callgraph\`: out (callees) | in (callers) | both (default)
+  --kind <k,…>        \`neighbors\`: the edge kinds to traverse (import, call, use,
+                      extends, implements, doc-link, mention, contains)
+  --budget-tokens <n> \`repomap\`: approximate token budget (default 1024)
+  --base <ref>        \`delta\`: review against the merge-base with this ref
+                      (default: origin/HEAD, origin/main, origin/master, main,
+                      master; else HEAD)
+  --staged            \`delta\`: review the staged changeset instead
+  --json              \`delta\`: the JSON result instead of the text panel
+  --fail-on <bucket>  \`delta\`: exit 1 when a module scores HIGH, MEDIUM or LOW
+                      (or above)
 `;
 
 interface CliFlags {

@@ -468,7 +468,7 @@ codeindex scip    --repo . --out index.scip   # SCIP index (--out - for stdout)
 codeindex callers --repo .                    # per-symbol caller index
 codeindex hierarchy       --repo .            # type hierarchy (both directions)
 codeindex implementations Runnable --repo .   # who implements it, transitively
-codeindex callgraph buildGraph --repo . --depth 2
+codeindex callgraph buildGraph --repo . --depth 2 --direction in   # callers of callers (out | in | both)
 codeindex find    Client/send --repo .        # declarations: signature, doc, parent, span
 codeindex refs    backoff --repo .            # defs, bound call sites, referencing files
 codeindex outline src/client.ts --repo .      # one file's symbols, in declaration order
@@ -480,6 +480,7 @@ codeindex workspaces --repo . --check         # monorepo packages; undeclared si
 codeindex resolution --repo .                 # per-language import resolution health
 codeindex mermaid src/app --repo .            # module diagram around a module, dir or file
 codeindex hotspots --repo . --since "6 months ago"   # where work concentrates
+codeindex repomap --repo . --budget-tokens 800      # the most central files and their API, in ~800 tokens
 ```
 
 `index` keeps a `cache.json` next to the artifacts, and every read command
@@ -859,6 +860,12 @@ Every occurrence and relationship names a symbol the index defines, and
 its relationship pass only knows the documents it has already visited, in Go
 map order, so a relationship to a symbol of another document is reported as
 missing at random.
+
+`Metadata.project_root` is the repository's `file://` URI, percent-encoded.
+`--project-root <uri>` overrides it — pin it (`--project-root
+file:///src/repo`) for an index whose bytes do not depend on where the
+checkout sits.
+
 ## What git history says
 
 Four commands read the commit history rather than the code: `churn` (commits
@@ -912,6 +919,7 @@ every point comes with the reason that fired it.
 
 ```sh
 codeindex delta --repo .                  # the branch vs its merge-base with the default branch
+codeindex delta --repo . --base v2.0.0     # vs the merge-base with another ref (a branch, a tag, HEAD~5)
 codeindex delta --repo . --staged --json  # the staged changeset, as JSON
 codeindex delta --repo . --fail-on HIGH   # CI gate: exit 1 when a module scores HIGH
 ```
@@ -999,6 +1007,8 @@ scan otherwise, and both give the same answer:
   (a directory or a single file) is ANDed with `--include`/`--exclude`. Globs
   are rooted at the repo: `*.ts` matches root-level files only, `**/*.ts`
   matches at any depth.
+- **Case.** Matching is case-sensitive; `--ignore-case` makes it insensitive.
+  `--files-with-matches` keeps one hit per file (`grep -l` with evidence).
 - **Bounded output.** Results stop at `--max-hits` (default 200). When the cap
   cuts the list, stderr says so and gives the number of matching files. A line
   longer than 300 characters comes back as a window around the match, and
@@ -1773,7 +1783,15 @@ pnpm typecheck
 pnpm build         # tsup → scripts/engine.mjs + scripts/engine.d.mts
 pnpm check:build   # proves the committed bundle is byte-reproducible
 pnpm test:e2e      # opt-in: pinned real-repo builds with ratchets
+pnpm test:e2e:commands   # opt-in: every command and MCP tool on the pinned repos, against git/ripgrep oracles
 ```
+
+The real-world corpus (19 public repositories across 13 language families,
+each pinned by commit) lives in `tests/real-repos.ts`; `CODEINDEX_E2E_REPOS=a/b`
+narrows a run to some of them. `tests/adversarial.test.ts` holds the inputs that
+once cost minutes or came out wrong (blank-line runs, 120k calls on a line,
+deep nesting, odd file names), and runs with the default suite. The last
+campaign's findings are in `docs/real-world-validation-2026-10.md`.
 
 The compat suite pins golden bytes for the `mini-repo` fixture — the proof
 that extraction stays lossless across releases.

@@ -6,8 +6,9 @@
 // src/engine.ts — the browser build offers exactly the library surface the Node
 // build does, minus nothing.
 //
-// Everything Node-specific is handled at the module-resolution layer (see the
-// `browser` target in tsup.config.ts), not here and not in the engine source:
+// Everything Node-specific is handled at the module-resolution layer (the
+// esbuild plugin of scripts/build-browser.mjs — not a tsup target, see there
+// for why), not here and not in the engine source:
 // node:fs becomes the in-memory VFS, node:crypto a synchronous SHA-1, and the
 // spawn-based helpers report their binaries as missing so git.ts, grep.ts and
 // pool.ts take the fallback paths they already ship and already test.
