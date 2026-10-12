@@ -356,6 +356,24 @@ describe("CLI wiring — endpoint precedence, success and degradation (exit 0)",
     }
   });
 
+  it("an ABSOLUTE --index keeps the endpoint cache in that index, not under the repo", async () => {
+    const base = mkdtempSync(join(tmpdir(), "ci-endpoint-abs-"));
+    const repo = join(base, "mini-repo");
+    const idx = join(base, "idx"); // outside the repo
+    cpSync(REPO, repo, { recursive: true });
+    try {
+      const env = { CODEINDEX_EMBED_ENDPOINT: undefined, CODEINDEX_EMBED_DIR: undefined };
+      const m = await mock();
+      expect((await run(["index", "--repo", repo, "--out", idx], env)).status).toBe(0);
+      const res = await run(["search", "http client retry", "--repo", repo, "--semantic", "--index", idx], { ...env, CODEINDEX_EMBED_ENDPOINT: m.url });
+      expect(res.status).toBe(0);
+      expect(readdirSync(join(idx, "embed-cache"))).toEqual([expect.stringMatching(/^endpoint-[0-9a-f]{12}\.bin$/)]);
+      expect(existsSync(join(repo, idx))).toBe(false); // no phantom <repo>/<abs path>
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it("`embed status` reports endpointReachable=false when the endpoint is down", async () => {
     const dead = await deadUrl();
     const { stdout } = await run(["embed", "status", "--repo", REPO], {

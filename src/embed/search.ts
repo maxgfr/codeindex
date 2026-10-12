@@ -81,6 +81,21 @@ export function explainSemantic(
   if (!q || !index || index.records.length === 0) {
     return explainQuery(scan, query, { ...lexOpts, limit });
   }
+  // Vectors of another model, or another width, are not comparable to the
+  // query's: intDot silently read the shorter length and ranked on noise.
+  // Lexical, saying why (the CLI checks the model before it gets here; a
+  // library caller may not).
+  const mismatch =
+    opts.model && index.modelId !== opts.model.modelId
+      ? `the embedding index was built with model ${index.modelId}, not ${opts.model.modelId}`
+      : q.length !== index.dim
+        ? `the embedding index holds ${index.dim}-dimension vectors and the query has ${q.length}`
+        : undefined;
+  if (mismatch) {
+    const lexicalOnly = explainQuery(scan, query, { ...lexOpts, limit });
+    const note = `Semantic ranking skipped: ${mismatch} — rebuild it (codeindex index).`;
+    return { ...lexicalOnly, explain: { ...lexicalOnly.explain, note: lexicalOnly.explain.note ? `${lexicalOnly.explain.note} ${note}` : note } };
+  }
   // Pull a deeper lexical list than the final limit so RRF has enough overlap to
   // fuse meaningfully, then trim after fusion. This is the ONE lexical scoring
   // pass: its explanation feeds the fused one below.

@@ -422,6 +422,18 @@ describe("searchSemantic — RRF fusion + degradation", () => {
     expect(semantic.every((r) => r.semanticSymbol === undefined)).toBe(true);
     expect(semantic[0]!.file).toBe("src/auth/service.ts");
   });
+
+  it("an index of another model or width ranks lexically and says why", () => {
+    const m = model();
+    const idx = buildEmbeddingIndex(scan, m);
+    const lexical = explainQuery(scan, "auth token");
+    const foreign = explainSemantic(scan, "auth token", { ...idx, modelId: "another-model" }, { model: m });
+    expect(foreign.results).toEqual(lexical.results);
+    expect(foreign.explain.note).toMatch(/Semantic ranking skipped: the embedding index was built with model another-model/);
+    const narrow = explainSemantic(scan, "auth token", idx, { queryVec: new Int8Array(idx.dim - 1) });
+    expect(narrow.results).toEqual(lexical.results);
+    expect(narrow.explain.note).toMatch(/dimension/);
+  });
 });
 
 // The fused list used to drop every lexical option but `fuzzy`, and every

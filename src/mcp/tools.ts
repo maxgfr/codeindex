@@ -803,7 +803,8 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       lspVersion: { type: "number" },
       mode: { type: "string", enum: ["none", "configured"] },
       configPath: { type: ["string", "null"] },
-      source: { type: "string", enum: ["env", "repo", "cwd", "none"] },
+      source: { type: "string", enum: ["env", "repo", "cwd", "user", "none"] },
+      ignoredConfig: { type: "object", properties: { path: { type: "string" }, reason: { type: "string" } }, required: ["path", "reason"] },
       servers: { type: "array", items: anyObj },
       unmappedLanguages: strArr,
     },
@@ -811,7 +812,7 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   onboard: {
     type: "object",
-    properties: { brief: { type: "string" }, memory: { type: "string" } },
+    properties: { brief: { type: "string" }, memory: { type: "string" }, memoryError: { type: "string" } },
     required: ["brief"],
   },
   explain_search: {

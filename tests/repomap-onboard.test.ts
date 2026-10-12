@@ -1,7 +1,7 @@
 // What the repo map and the onboarding brief choose to show: production code
 // ranked as production code sees it, and each file's public surface before its
 // members and values.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -133,5 +133,16 @@ describe("onboard brief", () => {
     expect(brief).toContain("\nAn engine that runs things, and harnesses that test it.\n");
     expect(brief).toMatch(/## Key files\n\nsrc\/engine\.ts:\n/);
     expect(brief).not.toContain("# repo map");
+  });
+
+  it("still returns the brief when the memory cannot be written", () => {
+    const root = repo({ ...FILES, "README.md": "# engine\n\nAn engine that runs things.\n" });
+    const { scan, graph } = buildIndexArtifacts(root);
+    // A symlinked .codeindex is refused by the memory store (it could point anywhere).
+    symlinkSync(mkdtempSync(join(tmpdir(), "ci-onboard-elsewhere-")), join(root, ".codeindex"));
+    const res = onboardBrief(scan, graph);
+    expect(res.brief).toContain("An engine that runs things.");
+    expect(res.memory).toBeUndefined();
+    expect(res.memoryError).toMatch(/^not saved as the onboarding memory: /);
   });
 });

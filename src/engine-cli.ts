@@ -1522,8 +1522,11 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           // repo has an index (`index` wrote cache.json), they are cached
           // beside it under the endpoint's URL and model fingerprint, and a
           // search sends only the units whose text is new.
-          const cacheFile = existsSync(join(flags.repo, indexDir, "cache.json"))
-            ? join(flags.repo, indexDir, "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`)
+          // indexDirPath, as everywhere else: an absolute --index used to be
+          // joined under the repo, so its cache was never found and was written
+          // into a phantom <repo>/<abs path>.
+          const cacheFile = existsSync(join(indexDirPath(flags.repo, indexDir), "cache.json"))
+            ? join(indexDirPath(flags.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`)
             : undefined;
           const modelId = cacheFile ? await endpointModelId() : undefined;
           const previous = cacheFile ? readEmbeddingsFile(cacheFile) : undefined;
@@ -1555,7 +1558,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
           // for the same unit text under the same model and EMBED_VERSION, so
           // after an edit only the changed units are encoded, and a stale or
           // foreign file costs a re-encode, never a wrong ranking.
-          const previous = readEmbeddingsFile(join(flags.repo, indexDir, "embeddings.bin"));
+          const previous = readEmbeddingsFile(join(indexDirPath(flags.repo, indexDir), "embeddings.bin"));
           const index = buildEmbeddingIndex(scan, model, { previous });
           answer(explainSemantic(scan, flags.positional, index, { ...searchOpts, model }));
         }

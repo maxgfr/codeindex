@@ -18677,6 +18677,12 @@ function explainSemantic(scan2, query, index, opts = {}) {
   if (!q || !index || index.records.length === 0) {
     return explainQuery(scan2, query, { ...lexOpts, limit });
   }
+  const mismatch = opts.model && index.modelId !== opts.model.modelId ? `the embedding index was built with model ${index.modelId}, not ${opts.model.modelId}` : q.length !== index.dim ? `the embedding index holds ${index.dim}-dimension vectors and the query has ${q.length}` : void 0;
+  if (mismatch) {
+    const lexicalOnly = explainQuery(scan2, query, { ...lexOpts, limit });
+    const note = `Semantic ranking skipped: ${mismatch} \u2014 rebuild it (codeindex index).`;
+    return { ...lexicalOnly, explain: { ...lexicalOnly.explain, note: lexicalOnly.explain.note ? `${lexicalOnly.explain.note} ${note}` : note } };
+  }
   const lexical = explainQuery(scan2, query, { ...lexOpts, limit: Math.max(limit, 50) });
   const bestByFile = /* @__PURE__ */ new Map();
   for (const r of index.records) {
@@ -19161,7 +19167,11 @@ function onboardBrief(scan2, graph, opts = {}) {
   const brief = lines.join("\n");
   if (opts.remember === false) return { brief };
   const memoryName = opts.memoryName ?? "onboarding";
-  writeMemory(scan2.root, memoryName, brief);
+  try {
+    writeMemory(scan2.root, memoryName, brief);
+  } catch (e) {
+    return { brief, memoryError: `not saved as the ${memoryName} memory: ${e instanceof Error ? e.message : String(e)}` };
+  }
   return { brief, memory: memoryName };
 }
 var README_NAMES, MIN_HOTSPOT_COMMITS;
@@ -23012,7 +23022,8 @@ var init_tools = __esm({
           lspVersion: { type: "number" },
           mode: { type: "string", enum: ["none", "configured"] },
           configPath: { type: ["string", "null"] },
-          source: { type: "string", enum: ["env", "repo", "cwd", "none"] },
+          source: { type: "string", enum: ["env", "repo", "cwd", "user", "none"] },
+          ignoredConfig: { type: "object", properties: { path: { type: "string" }, reason: { type: "string" } }, required: ["path", "reason"] },
           servers: { type: "array", items: anyObj },
           unmappedLanguages: strArr
         },
@@ -23020,7 +23031,7 @@ var init_tools = __esm({
       },
       onboard: {
         type: "object",
-        properties: { brief: { type: "string" }, memory: { type: "string" } },
+        properties: { brief: { type: "string" }, memory: { type: "string" }, memoryError: { type: "string" } },
         required: ["brief"]
       },
       explain_search: {
@@ -26876,7 +26887,7 @@ async function runCli(rawArgv) {
       if (endpoint) {
         let fused;
         try {
-          const cacheFile = existsSync11(join28(flags2.repo, indexDir, "cache.json")) ? join28(flags2.repo, indexDir, "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
+          const cacheFile = existsSync11(join28(indexDirPath(flags2.repo, indexDir), "cache.json")) ? join28(indexDirPath(flags2.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
           const modelId = cacheFile ? await endpointModelId() : void 0;
           const previous = cacheFile ? readEmbeddingsFile(cacheFile) : void 0;
           const index = await buildEndpointIndex(scan2, { previous, modelId });
@@ -26900,7 +26911,7 @@ async function runCli(rawArgv) {
           );
           lexical();
         } else {
-          const previous = readEmbeddingsFile(join28(flags2.repo, indexDir, "embeddings.bin"));
+          const previous = readEmbeddingsFile(join28(indexDirPath(flags2.repo, indexDir), "embeddings.bin"));
           const index = buildEmbeddingIndex(scan2, model, { previous });
           answer(explainSemantic(scan2, flags2.positional, index, { ...searchOpts, model }));
         }

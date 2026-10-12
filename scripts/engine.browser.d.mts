@@ -1336,6 +1336,8 @@ interface OnboardBrief {
     brief: string;
     /** Where it was persisted, when it was. */
     memory?: string;
+    /** Why it could not be persisted (a read-only checkout, a symlinked .codeindex). */
+    memoryError?: string;
 }
 /**
  * Compose a project brief from the analyses this engine already computes.
