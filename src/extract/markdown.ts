@@ -212,8 +212,10 @@ export function extractMarkdown(content: string): MarkdownInfo {
     if (dest) addRef(dest);
   }
   // Indentation from its own line only: `^\s*` let every line start of a
-  // whitespace-only run rescan the rest of it.
-  const refdef = /^[^\S\r\n]*\[[^\]]+\]:\s+(\S+)/gm;
+  // whitespace-only run rescan the rest of it. A GFM footnote (`[^2]: Trivial
+  // changes include…`) has the same shape and is prose, not a link: its first
+  // word was taken for a target (opentelemetry-go dangled to "Trivial").
+  const refdef = /^[^\S\r\n]*\[(?!\^)[^\]]+\]:\s+(\S+)/gm;
   while ((m = refdef.exec(scan))) addRef(m[1]!);
 
   return { title, summary, headings, refs };

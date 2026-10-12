@@ -3575,7 +3575,7 @@ function extractMarkdown(content) {
     const dest = linkDestination(scan2, inline.lastIndex);
     if (dest) addRef(dest);
   }
-  const refdef = /^[^\S\r\n]*\[[^\]]+\]:\s+(\S+)/gm;
+  const refdef = /^[^\S\r\n]*\[(?!\^)[^\]]+\]:\s+(\S+)/gm;
   while (m = refdef.exec(scan2)) addRef(m[1]);
   return { title, summary, headings, refs };
 }

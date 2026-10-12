@@ -167,7 +167,7 @@ export const REPOS: RealRepo[] = [
     // Go: nested modules (sdk/metric, exporters/otlp/... each with a go.mod).
     slug: "open-telemetry/opentelemetry-go",
     sha: "033fcebbc46e03bb7671e2bd7088212c8d6281e7",
-    maxDanglingRatio: 0.003, // measured baseline: 16/6,844 edges (0.23%)
+    maxDanglingRatio: 0.001, // measured: 0/6,835 edges; 16 (footnotes read as links) before S-103
     primaryLang: "go",
     crossEdge: [/^exporters\/otlp\//, /^sdk\/metric\//],
     budgetMs: 120_000,
