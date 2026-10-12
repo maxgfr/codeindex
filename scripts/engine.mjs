@@ -25081,6 +25081,7 @@ function* readTar(buf) {
     const type = String.fromCharCode(block[156] ?? 0);
     off += 512;
     const data = buf.subarray(off, off + size);
+    if (data.length !== size) throw new Error(`truncated grammars archive: ${name2} declares ${size} bytes, ${data.length} remain`);
     off += Math.ceil(size / 512) * 512;
     yield { name: prefix ? `${prefix}/${name2}` : name2, type, data };
   }

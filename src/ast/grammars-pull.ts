@@ -123,6 +123,10 @@ function* readTar(buf: Buffer): Generator<TarEntry> {
     const type = String.fromCharCode(block[156] ?? 0);
     off += 512;
     const data = buf.subarray(off, off + size);
+    // A short read is a truncated archive, never a short file: a custom
+    // CODEINDEX_GRAMMARS_URL has no sha256 to catch it, and a cut wasm was
+    // installed as if whole.
+    if (data.length !== size) throw new Error(`truncated grammars archive: ${name} declares ${size} bytes, ${data.length} remain`);
     off += Math.ceil(size / 512) * 512;
     yield { name: prefix ? `${prefix}/${name}` : name, type, data };
   }

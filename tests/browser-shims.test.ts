@@ -228,6 +228,17 @@ describe("VFS", () => {
     expect(vfs.realpathSync("/r/sub")).toBe("/r/sub");
   });
 
+  it("removes a directory only with recursive, and renames a path onto itself as a no-op", () => {
+    vfs.resetVfs();
+    vfs.mountFiles([{ path: "/r/sub/b.ts", size: 1, bytes: new Uint8Array([66]) }]);
+    expect(() => vfs.rmSync("/r/sub")).toThrow(/EISDIR/);
+    expect(vfs.existsSync("/r/sub/b.ts")).toBe(true);
+    vfs.renameSync("/r/sub/b.ts", "/r/sub/b.ts");
+    expect(vfs.existsSync("/r/sub/b.ts")).toBe(true);
+    vfs.rmSync("/r/sub", { recursive: true });
+    expect(vfs.existsSync("/r/sub")).toBe(false);
+  });
+
   it("throws ENOENT for missing paths, so walk's guards fire", () => {
     vfs.resetVfs();
     expect(() => vfs.realpathSync("/nope")).toThrow(/ENOENT/);

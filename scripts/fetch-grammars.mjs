@@ -22,7 +22,7 @@
 // consumer's checkout for a benefit only some of them can use; without a pull
 // they are simply absent, and the engine falls back to the regex tier exactly as
 // it does today for any language with no grammar.
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -82,7 +82,11 @@ const RUNTIME = "web-tree-sitter/web-tree-sitter.wasm";
 // flag.
 const extended = process.argv.includes("--extended");
 const grammars = extended ? EXTENDED : CORE;
-const targetDir = extended ? extDir : outDir;
+const finalDir = extended ? extDir : outDir;
+// Built beside the real dir, then swapped in: deleting the committed
+// scripts/grammars first left it half-empty whenever one node_modules package
+// was missing.
+const targetDir = `${finalDir}.staging-${process.pid}`;
 
 function copyInto(name, rel) {
   const src = join(nm, rel);
@@ -109,6 +113,9 @@ function copyTags(key, rel) {
 // Rebuild the dir from scratch so a removed grammar never lingers.
 rmSync(targetDir, { recursive: true, force: true });
 mkdirSync(targetDir, { recursive: true });
+process.on("exit", (code) => {
+  if (code !== 0) rmSync(targetDir, { recursive: true, force: true });
+});
 
 let total = 0;
 const rows = [];
@@ -147,3 +154,5 @@ if (written.length !== expected) {
   process.stderr.write(`fetch-grammars: expected ${expected} wasm files, wrote ${written.length}\n`);
   process.exit(1);
 }
+rmSync(finalDir, { recursive: true, force: true });
+renameSync(targetDir, finalDir);
