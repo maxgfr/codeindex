@@ -69,6 +69,10 @@ const PRIVATE_REACH: Record<string, "package" | "import" | "path"> = { go: "pack
 // Rust's `mod search;` beside `fn search` took every `search()` call in the file.
 const NOT_CALLABLE = new Set(["mod", "module", "package", "namespace"]);
 
+// The receiver a Rust `super::` takes inside an inline `mod { … }` block, where
+// it names the enclosing file rather than its parent module.
+const INLINE_SUPER = "super\u0000inline";
+
 // Receivers that name the enclosing object. JS/TS/Java `this` and Rust `self`
 // never get here (the extractor reads no receiver from them); PHP's `$this`
 // does, as "this".
@@ -511,15 +515,25 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
   const indexed = (rel: string): boolean => (byRel ??= new Map(scan.files.map((f) => [f.rel, f]))).has(rel);
   const firstIndexed = (dir: string, names: string[]): string | undefined =>
     names.map((n) => (dir ? `${dir}/${n}` : n)).find(indexed);
+  // Cargo also makes every file directly under a target directory a crate of
+  // its own: `src/bin/tool.rs`, `examples/demo.rs`, `tests/it.rs`, `benches/b.rs`.
+  const crateRoot = (rel: string, base: string): boolean => {
+    if (base === "lib.rs" || base === "main.rs") return true;
+    const dir = dirOf(rel);
+    const parent = dir.slice(dir.lastIndexOf("/") + 1);
+    return parent === "examples" || parent === "tests" || parent === "benches" || (parent === "bin" && /(^|\/)src\/bin$/.test(dir));
+  };
   const rustPath = (rel: string, receiver: string): string[] | undefined => {
     const base = rel.slice(rel.lastIndexOf("/") + 1);
     let found: string | undefined;
-    if (receiver === "crate") {
+    if (crateRoot(rel, base)) {
+      if (receiver === "crate") found = rel;
+    } else if (receiver === "crate") {
       for (let dir = dirOf(rel); !found; dir = dirOf(dir)) {
         found = firstIndexed(dir, ["lib.rs", "main.rs"]);
         if (!dir) break;
       }
-    } else if (base !== "lib.rs" && base !== "main.rs") {
+    } else {
       const parent = dirOf(base === "mod.rs" ? dirOf(rel) : rel.slice(0, -".rs".length));
       found = firstIndexed(parent, ["mod.rs", "lib.rs", "main.rs"]) ?? (parent && indexed(`${parent}.rs`) ? `${parent}.rs` : undefined);
     }
@@ -631,11 +645,16 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const aliases = scope.aliases(f);
     // `crate` and `super` as this Rust file's path qualifiers, where they name a file.
     let rustModules: Map<string, string[]> | undefined;
+    // The file's inline `mod name { … }` blocks: inside one, `super::` is the
+    // file itself (`#[cfg(test)] mod tests` calling `super::parse`).
+    let inlineMods: CodeSymbol[] | undefined;
     if (family === "rust") {
       for (const q of ["crate", "super"]) {
         const files = rustPath(f.rel, q);
         if (files) (rustModules ??= new Map()).set(q, files);
       }
+      inlineMods = f.symbols.filter((s) => s.kind === "mod" && s.endLine !== undefined && s.endLine > s.line);
+      if (inlineMods.length) (rustModules ??= new Map()).set(INLINE_SUPER, [f.rel]);
     }
 
     // Cross-file defs of `name` this file reaches by stated evidence.
@@ -685,8 +704,9 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const byReceiver = new Map<string, Reading>();
     const byEnclosing = new Map<CodeSymbol | null, Map<string, Reading>>();
     const read = (c: CallSite, enclosing: CodeSymbol | undefined): Reading => {
-      const receiver = c.receiver;
+      let receiver = c.receiver;
       if (receiver === undefined) return BARE;
+      if (receiver === "super" && inlineMods?.some((m) => c.line > m.line && c.line <= m.endLine!)) receiver = INLINE_SUPER;
       let r = byReceiver.get(receiver);
       if (r) return r;
       const self = (t: string | undefined): Reading => reading("self", receiver, t, t);

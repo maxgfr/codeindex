@@ -110,6 +110,39 @@ describe("Rust paths", () => {
     expect(lines(callersOf(crate, "top"))).toEqual(["src/a/b.rs:2"]);
   });
 
+  it("super:: inside an inline `mod tests { … }` is the file itself", () => {
+    const inline = repo({
+      "Cargo.toml": '[package]\nname = "y"\nversion = "0.1.0"\n',
+      "src/lib.rs": "mod foo;\n\nfn parse(s: &str) -> usize { s.len() }\n",
+      "src/foo.rs": [
+        "fn parse(s: &str) -> usize { s.len() }",
+        "",
+        "#[cfg(test)]",
+        "mod tests {",
+        "    #[test]",
+        "    fn t() {",
+        '        let _ = super::parse("ab");',
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    expect(lines(callersOf(inline, "parse@src/foo.rs"))).toEqual(["src/foo.rs:7"]);
+    expect(lines(callersOf(inline, "parse@src/lib.rs"))).toEqual([]);
+  });
+
+  it("crate:: in a binary target is that binary's own crate", () => {
+    const bins = repo({
+      "Cargo.toml": '[package]\nname = "z"\nversion = "0.1.0"\n',
+      "src/lib.rs": "fn setup() -> u8 { 0 }\n",
+      "src/bin/tool.rs": "fn setup() -> u8 { 1 }\n\nfn main() {\n    let _ = crate::setup();\n}\n",
+      "examples/demo.rs": "fn setup() -> u8 { 2 }\n\nfn main() {\n    let _ = crate::setup();\n}\n",
+    });
+    expect(lines(callersOf(bins, "setup@src/bin/tool.rs"))).toEqual(["src/bin/tool.rs:4"]);
+    expect(lines(callersOf(bins, "setup@examples/demo.rs"))).toEqual(["examples/demo.rs:4"]);
+    expect(lines(callersOf(bins, "setup@src/lib.rs"))).toEqual([]);
+  });
+
   it("a call never binds to a `mod` declaration of the same name", () => {
     const entry = callersOf(crate, "search@src/main.rs");
     expect(entry?.def.kind).toBe("function");

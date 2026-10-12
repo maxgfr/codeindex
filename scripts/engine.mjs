@@ -15424,15 +15424,23 @@ function createCallBinder(scan2, pairs, opts = {}) {
   };
   const indexed = (rel2) => (byRel ??= new Map(scan2.files.map((f) => [f.rel, f]))).has(rel2);
   const firstIndexed = (dir, names) => names.map((n) => dir ? `${dir}/${n}` : n).find(indexed);
+  const crateRoot = (rel2, base) => {
+    if (base === "lib.rs" || base === "main.rs") return true;
+    const dir = dirOf3(rel2);
+    const parent = dir.slice(dir.lastIndexOf("/") + 1);
+    return parent === "examples" || parent === "tests" || parent === "benches" || parent === "bin" && /(^|\/)src\/bin$/.test(dir);
+  };
   const rustPath = (rel2, receiver) => {
     const base = rel2.slice(rel2.lastIndexOf("/") + 1);
     let found;
-    if (receiver === "crate") {
+    if (crateRoot(rel2, base)) {
+      if (receiver === "crate") found = rel2;
+    } else if (receiver === "crate") {
       for (let dir = dirOf3(rel2); !found; dir = dirOf3(dir)) {
         found = firstIndexed(dir, ["lib.rs", "main.rs"]);
         if (!dir) break;
       }
-    } else if (base !== "lib.rs" && base !== "main.rs") {
+    } else {
       const parent = dirOf3(base === "mod.rs" ? dirOf3(rel2) : rel2.slice(0, -".rs".length));
       found = firstIndexed(parent, ["mod.rs", "lib.rs", "main.rs"]) ?? (parent && indexed(`${parent}.rs`) ? `${parent}.rs` : void 0);
     }
@@ -15528,11 +15536,14 @@ function createCallBinder(scan2, pairs, opts = {}) {
     };
     const aliases = scope.aliases(f);
     let rustModules;
+    let inlineMods;
     if (family === "rust") {
       for (const q of ["crate", "super"]) {
         const files = rustPath(f.rel, q);
         if (files) (rustModules ??= /* @__PURE__ */ new Map()).set(q, files);
       }
+      inlineMods = f.symbols.filter((s) => s.kind === "mod" && s.endLine !== void 0 && s.endLine > s.line);
+      if (inlineMods.length) (rustModules ??= /* @__PURE__ */ new Map()).set(INLINE_SUPER, [f.rel]);
     }
     const corroborated = (name2, pool) => {
       const out2 = scope.reached(exportedGroup(name2, family, pool), f, name2);
@@ -15558,8 +15569,9 @@ function createCallBinder(scan2, pairs, opts = {}) {
     const byReceiver = /* @__PURE__ */ new Map();
     const byEnclosing = /* @__PURE__ */ new Map();
     const read = (c2, enclosing) => {
-      const receiver = c2.receiver;
+      let receiver = c2.receiver;
       if (receiver === void 0) return BARE;
+      if (receiver === "super" && inlineMods?.some((m) => c2.line > m.line && c2.line <= m.endLine)) receiver = INLINE_SUPER;
       let r = byReceiver.get(receiver);
       if (r) return r;
       const self = (t) => reading("self", receiver, t, t);
@@ -15664,7 +15676,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
   };
   return { forFile };
 }
-var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf3, isGoTest, declaredRe, aliasMemo, newTables;
+var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, INLINE_SUPER, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf3, isGoTest, declaredRe, aliasMemo, newTables;
 var init_bind = __esm({
   "src/bind.ts"() {
     "use strict";
@@ -15681,6 +15693,7 @@ var init_bind = __esm({
     PACKAGE_DIR = /* @__PURE__ */ new Set(["go", "java"]);
     PRIVATE_REACH = { go: "package", java: "package", python: "import", rust: "path" };
     NOT_CALLABLE = /* @__PURE__ */ new Set(["mod", "module", "package", "namespace"]);
+    INLINE_SUPER = "super\0inline";
     SELF_NAMES = /* @__PURE__ */ new Set(["self", "cls", "this", "Self"]);
     FUNCTION_KINDS2 = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator"]);
     MAX_HOPS = 3;
