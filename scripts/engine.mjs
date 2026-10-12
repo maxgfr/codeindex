@@ -8119,7 +8119,7 @@ function readName(node) {
 function readReceiver(node) {
   if (!node || node.namedChildren.length === 0) return void 0;
   const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver") ?? node.childForFieldName("table");
-  if (obj && node.type === "scoped_identifier" && (obj.type === "crate" || obj.type === "super")) return obj.type;
+  if (obj?.type === "super" || obj?.type === "crate" && node.type === "scoped_identifier") return obj.type;
   if (obj?.type === "composite_literal") {
     const type = obj.childForFieldName("type");
     const name3 = type ? readTypeName(type) : void 0;
@@ -15548,8 +15548,23 @@ function createCallBinder(scan2, pairs, opts = {}) {
         if (files) (rustModules ??= /* @__PURE__ */ new Map()).set(q, files);
       }
       inlineMods = f.symbols.filter((s) => s.kind === "mod" && s.endLine !== void 0 && s.endLine > s.line);
-      if (inlineMods.length) (rustModules ??= /* @__PURE__ */ new Map()).set(INLINE_SUPER, [f.rel]);
     }
+    const modScope = (line2) => {
+      let best = 0;
+      for (const m of inlineMods ?? []) if (line2 > m.line && line2 <= m.endLine && m.line > best) best = m.line;
+      return best;
+    };
+    const baseOf = (cls) => f.relations?.find((r) => r.kind === "extends" && r.from === cls)?.to;
+    const classAround = (e) => {
+      if (e === void 0) return void 0;
+      if (e.parent !== void 0 && baseOf(e.parent) !== void 0) return e.parent;
+      let best;
+      for (const s of f.symbols) {
+        if (s.endLine === void 0 || s.line > e.line || e.line > s.endLine || baseOf(s.name) === void 0) continue;
+        if (!best || s.line > best.line) best = s;
+      }
+      return best?.name ?? e.parent;
+    };
     let usedPaths;
     const variantInScope = (d) => {
       if (d.file !== f.rel || d.parent === void 0) return false;
@@ -15562,6 +15577,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
           if (segs.length > 1) usedPaths.add(`${segs[segs.length - 2]}::${segs[segs.length - 1]}`);
         }
       }
+      if (PRELUDE_VARIANTS.has(d.name)) return usedPaths.has(`${d.parent}::${d.name}`);
       return usedPaths.has(d.parent) || usedPaths.has(`${d.parent}::${d.name}`);
     };
     const corroborated = (name2, pool) => {
@@ -15590,11 +15606,17 @@ function createCallBinder(scan2, pairs, opts = {}) {
     const read = (c2, enclosing) => {
       let receiver = c2.receiver;
       if (receiver === void 0) return BARE;
-      if (receiver === "super" && inlineMods?.some((m) => c2.line > m.line && c2.line <= m.endLine)) receiver = INLINE_SUPER;
+      if (family === "rust" && receiver === "super") {
+        const block = modScope(c2.line);
+        if (block) {
+          receiver = `${INLINE_SUPER}${modScope(block)}`;
+          if (!rustModules?.has(receiver)) (rustModules ??= /* @__PURE__ */ new Map()).set(receiver, [f.rel]);
+        }
+      }
       let r = byReceiver.get(receiver);
       if (r) return r;
       const self = (t) => reading("self", receiver, t, t);
-      if (!SELF_NAMES.has(receiver)) {
+      if (!SELF_NAMES.has(receiver) && !(receiver === "super" && family !== "rust")) {
         if (rustModules?.has(receiver)) r = reading("module", receiver);
         else if (aliases.modules.has(receiver)) r = reading("module", receiver);
         else if (ownTypes.has(receiver)) r = self(receiver);
@@ -15621,6 +15643,11 @@ function createCallBinder(scan2, pairs, opts = {}) {
     };
     const readInScope = (receiver, e, self) => {
       if (SELF_NAMES.has(receiver)) return self(e?.parent);
+      if (receiver === "super") {
+        const cls = classAround(e);
+        const base = cls !== void 0 ? baseOf(cls) : void 0;
+        return base !== void 0 && ownTypes.has(base) ? self(base) : reading("foreign", receiver, void 0, base);
+      }
       if (family === "go" && goReceiverVar(e) === receiver) return self(e.parent);
       const d = e?.signature ? declaredType(e.signature, receiver) : void 0;
       if (d?.qualifier !== void 0 && !recall && aliases.modules.get(d.qualifier) === null) return OUTSIDE;
@@ -15633,13 +15660,20 @@ function createCallBinder(scan2, pairs, opts = {}) {
       const { shape, receiver, selfType, typeHint } = how;
       if (shape === "outside") return null;
       const bareRust = family === "rust" && shape === "bare";
-      const inlineSuper = receiver === INLINE_SUPER;
-      const reachable = (d) => !(bareRust && d.kind === "enum-member" && !variantInScope(d)) && !(inlineSuper && d.file === f.rel && inlineMods.some((m) => d.line > m.line && d.line <= m.endLine));
+      const scopeLine = receiver?.startsWith(INLINE_SUPER) ? Number(receiver.slice(INLINE_SUPER.length)) : void 0;
+      const reachable = (d) => !(bareRust && d.kind === "enum-member" && !variantInScope(d)) && !(scopeLine !== void 0 && (d.file !== f.rel || modScope(d.line) !== scopeLine));
       let local;
       if (recall) local = ownAny.get(name2);
       else if (shape === "bare") local = shaped ? ownFree.get(name2) : ownAny.get(name2);
       else if (shape === "self") {
         local = selfType !== void 0 ? memberOf(selfType, name2) : void 0;
+        if (receiver === "super") {
+          for (let t = selfType, hops = 0; !local && t !== void 0 && hops < MAX_BASE_HOPS; hops++) {
+            t = baseOf(t);
+            if (t !== void 0 && ownTypes.has(t)) local = memberOf(t, name2);
+            else break;
+          }
+        }
         if (!local && receiver !== void 0 && SELF_NAMES.has(receiver)) local = ownMember.get(name2);
       }
       if (local && !reachable(local)) {
@@ -15704,7 +15738,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
   };
   return { forFile };
 }
-var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, INLINE_SUPER, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf3, isGoTest, declaredRe, aliasMemo, newTables;
+var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, INLINE_SUPER, MAX_BASE_HOPS, PRELUDE_VARIANTS, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf3, isGoTest, declaredRe, aliasMemo, newTables;
 var init_bind = __esm({
   "src/bind.ts"() {
     "use strict";
@@ -15721,7 +15755,9 @@ var init_bind = __esm({
     PACKAGE_DIR = /* @__PURE__ */ new Set(["go", "java"]);
     PRIVATE_REACH = { go: "package", java: "package", python: "import", rust: "path" };
     NOT_CALLABLE = /* @__PURE__ */ new Set(["mod", "module", "package", "namespace"]);
-    INLINE_SUPER = "super\0inline";
+    INLINE_SUPER = "super\0inline\0";
+    MAX_BASE_HOPS = 8;
+    PRELUDE_VARIANTS = /* @__PURE__ */ new Set(["Ok", "Err", "Some", "None"]);
     SELF_NAMES = /* @__PURE__ */ new Set(["self", "cls", "this", "Self"]);
     FUNCTION_KINDS2 = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator"]);
     MAX_HOPS = 3;
