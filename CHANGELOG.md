@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.7](https://github.com/maxgfr/codeindex/compare/v2.31.6...v2.31.7) (2026-10-12)
+
+
+### Bug Fixes
+
+* **deps:** bump transitive handlebars to 4.7.10 ([#33](https://github.com/maxgfr/codeindex/issues/33)) ([996a291](https://github.com/maxgfr/codeindex/commit/996a29116ee4e3a42682d27bda23cf587ae4f2ae)), closes [#26](https://github.com/maxgfr/codeindex/issues/26) [#27](https://github.com/maxgfr/codeindex/issues/27) [#28](https://github.com/maxgfr/codeindex/issues/28)
+
 ## [2.31.6](https://github.com/maxgfr/codeindex/compare/v2.31.5...v2.31.6) (2026-10-12)
 
 
