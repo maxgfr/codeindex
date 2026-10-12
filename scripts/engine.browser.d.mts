@@ -667,6 +667,7 @@ interface TsPath {
 }
 interface TsConfigScope {
     dir: string;
+    file: string;
     baseUrl: string;
     baseUrlSet: boolean;
     paths: TsPath[];

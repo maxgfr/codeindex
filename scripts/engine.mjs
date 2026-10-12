@@ -3491,6 +3491,17 @@ function isParagraphLine(line2) {
   const t = line2.trim();
   return !!t && !/^ {4}|^\t/.test(line2) && !/^([-*+]|\d+[.)])(\s|$)/.test(t) && !/^[>|<]/.test(t);
 }
+function linkDestination(text, from) {
+  let depth = 1;
+  for (let i2 = from; i2 < text.length; i2++) {
+    const c2 = text[i2];
+    if (c2 === "\\") i2++;
+    else if (c2 === "\n") return void 0;
+    else if (c2 === "(") depth++;
+    else if (c2 === ")" && --depth === 0) return i2 > from ? text.slice(from, i2) : void 0;
+  }
+  return void 0;
+}
 function extractMarkdown(content) {
   let body2 = content;
   let frontTitle;
@@ -3550,9 +3561,12 @@ function extractMarkdown(content) {
     seen.add(spec);
     refs.push({ kind: "doc-link", spec });
   };
-  const inline = /!?\[[^\]]*\]\(([^)]+)\)/g;
+  const inline = /!?\[[^\]]*\]\(/g;
   let m;
-  while (m = inline.exec(scan2)) addRef(m[1]);
+  while (m = inline.exec(scan2)) {
+    const dest = linkDestination(scan2, inline.lastIndex);
+    if (dest) addRef(dest);
+  }
   const refdef = /^[^\S\r\n]*\[[^\]]+\]:\s+(\S+)/gm;
   while (m = refdef.exec(scan2)) addRef(m[1]);
   return { title, summary, headings, refs };
@@ -11852,6 +11866,13 @@ function resolveExtends(fileSet, fromDir, ext, packages) {
 function readTsConfig(root, fileSet, rel2, warnings, seen, packages) {
   if (seen.has(rel2)) return void 0;
   seen.add(rel2);
+  try {
+    return readTsConfigOnce(root, fileSet, rel2, warnings, seen, packages);
+  } finally {
+    seen.delete(rel2);
+  }
+}
+function readTsConfigOnce(root, fileSet, rel2, warnings, seen, packages) {
   const cfg = tolerantJsonParse(readText(join9(root, rel2)));
   if (cfg === void 0) {
     warnings.push(`unparseable ${rel2} \u2014 its path aliases were ignored`);
@@ -11948,7 +11969,7 @@ function matchEntryTargets(entries, key) {
     const post = entry2.key.slice(starAt + 1);
     if (!key.startsWith(pre) || !key.endsWith(post) || key.length < pre.length + post.length) continue;
     const fill = key.slice(pre.length, key.length - post.length);
-    return entry2.targets.map((t) => t.replace(/\*/g, fill));
+    return entry2.targets.map((t) => t.replace(/\*/g, () => fill));
   }
   return void 0;
 }
@@ -12131,9 +12152,10 @@ function buildResolveContext(scan2) {
       (a, b) => Number(a.star) - Number(b.star) || b.prefix.length - a.prefix.length || byStr(a.prefix, b.prefix)
     );
     if (!tsPaths.length && eff.baseUrl === void 0) continue;
-    tsConfigs.push({ dir, baseUrl, baseUrlSet: eff.baseUrl !== void 0, paths: tsPaths });
+    tsConfigs.push({ dir, file: base, baseUrl, baseUrlSet: eff.baseUrl !== void 0, paths: tsPaths });
   }
-  tsConfigs.sort((a, b) => b.dir.length - a.dir.length);
+  const fileRank = (f) => f === "tsconfig.json" ? 0 : f === "jsconfig.json" ? 1 : 2;
+  tsConfigs.sort((a, b) => b.dir.length - a.dir.length || fileRank(a.file) - fileRank(b.file));
   warnings.push(...pkgWarnings);
   const goModules = [];
   for (const rel2 of fileSet) {
@@ -12269,15 +12291,21 @@ function resolveDocLink(fromRel, spec, ctx) {
   let p = norm(posix2.join(base, rooted ? target.slice(1) : target));
   if (p === ".") p = "";
   if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
-  const hit = firstExisting(ctx, [
-    p,
-    p + ".md",
-    p + ".mdx",
-    posix2.join(p, "README.md"),
-    posix2.join(p, "readme.md"),
-    posix2.join(p, "index.md"),
-    posix2.join(p, "index.mdx")
-  ]);
+  const probes = (q) => [
+    q,
+    q + ".md",
+    q + ".mdx",
+    posix2.join(q, "README.md"),
+    posix2.join(q, "readme.md"),
+    posix2.join(q, "index.md"),
+    posix2.join(q, "index.mdx")
+  ];
+  let decoded = p;
+  try {
+    decoded = decodeURIComponent(p);
+  } catch {
+  }
+  const hit = firstExisting(ctx, decoded === p ? probes(p) : [...probes(p), ...probes(decoded)]);
   if (hit) return { kind: "resolved", target: hit };
   if (!p || ctx.dirSet.has(p)) return { kind: "external" };
   return { kind: "dangling", reason: "missing-target" };
@@ -12319,7 +12347,7 @@ function resolveJs(fromRel, rawSpec, ctx) {
       const suffix = tp.star ? spec.slice(tp.prefix.length) : "";
       let targetTreeExists = false;
       for (const t of tp.targets) {
-        const resolved = tp.star ? t.replace(/\*/, suffix) : t;
+        const resolved = tp.star ? t.replace(/\*/, () => suffix) : t;
         const p = norm(posix2.join(cfg.baseUrl, resolved));
         const hit = tryResolve(p);
         if (hit) return { kind: "resolved", target: hit };
@@ -12376,10 +12404,15 @@ function resolvePython(fromRel, spec, ctx) {
     const dots = /^\.+/.exec(spec)[0].length;
     const rest = spec.slice(dots);
     const base = fromRel.includes("/") ? posix2.dirname(fromRel) : "";
-    let dir = base;
-    for (let i2 = 1; i2 < dots; i2++) dir = dir.includes("/") ? posix2.dirname(dir) : "";
-    const hit = rest ? probeModule(dir, rest) : firstExisting(ctx, [posix2.join(norm(dir), "__init__.py")]);
-    return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    const segs = base ? base.split("/") : [];
+    if (dots - 1 > segs.length) return { kind: "dangling", reason: "escapes-repo-root" };
+    const dir = segs.slice(0, segs.length - (dots - 1)).join("/");
+    if (rest) {
+      const hit = probeModule(dir, rest);
+      return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    }
+    const init2 = firstExisting(ctx, [posix2.join(dir, "__init__.py")]);
+    return init2 ? { kind: "resolved", target: init2 } : { kind: "external" };
   }
   const enclosing = [];
   const others = [];
@@ -12408,13 +12441,18 @@ function resolveGo(fromRel, spec, ctx) {
       return probePkg(posix2.join(r.toDir, sub));
     }
   }
-  const ordered = home ? [home, ...ctx.goModules.filter((g) => g !== home)] : ctx.goModules;
-  for (const g of ordered) {
+  let owner;
+  for (const g of ctx.goModules) {
     if (spec !== g.module && !spec.startsWith(g.module + "/")) continue;
-    const sub = spec.slice(g.module.length).replace(/^\//, "");
-    return probePkg(posix2.join(g.dir, sub));
+    if (!owner || g.module.length > owner.module.length || g.module.length === owner.module.length && g === home) owner = g;
   }
-  return { kind: "external" };
+  if (!owner) return { kind: "external" };
+  const pkgDir = norm(posix2.join(owner.dir, spec.slice(owner.module.length).replace(/^\//, ""))).replace(/^\.$/, "");
+  const inside = (dir, parent) => !parent || dir === parent || dir.startsWith(parent + "/");
+  if (ctx.goModules.some((g) => g !== owner && g.dir !== owner.dir && inside(g.dir, owner.dir) && inside(pkgDir, g.dir))) {
+    return { kind: "dangling", reason: "missing-package" };
+  }
+  return probePkg(pkgDir);
 }
 function resolveRust(fromRel, spec, ctx) {
   if (!ctx.rustCrates.length) return { kind: "external" };

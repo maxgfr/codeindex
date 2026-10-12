@@ -75,3 +75,10 @@ describe("extractMarkdown: GitHub alerts", () => {
     expect(extractMarkdown(md).summary).toBe("A path manipulation library for Dart.");
   });
 });
+
+describe("extractMarkdown: link destinations", () => {
+  it("keeps balanced parentheses in an inline link's target", () => {
+    const refs = extractMarkdown('see [d](docs/a(1).md) and [e](b.md "title (x)")\n').refs.map((r) => r.spec);
+    expect(refs).toEqual(["docs/a(1).md", "b.md"]);
+  });
+});

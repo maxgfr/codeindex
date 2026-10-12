@@ -24,6 +24,7 @@ interface TsPath {
 // NEAREST enclosing config (deepest dir first) rather than a single root config.
 interface TsConfigScope {
   dir: string; // the config's own directory (posix, "" = repo root) — scope test
+  file: string; // tsconfig.json | jsconfig.json | tsconfig.base.json (root only)
   baseUrl: string; // repo-relative posix dir the `targets` resolve against
   // True only when the config (or its extends chain) DECLARES baseUrl: tsc then
   // also resolves a bare name (`components/Card`) against it. `paths` without
@@ -338,7 +339,11 @@ const CONFIG_DIR = "${configDir}";
 // Nx/Turborepo/lerna layout) still contributes its aliases. baseUrl and paths
 // are each tracked with the dir of the config that DECLARED them (TS resolves
 // them relative to that file, `${configDir}` aside). Cycles are broken via
-// `seen`; a missing relative base is surfaced as a warning.
+// `seen`, the chain of configs being read — not every config read so far: in
+// a diamond (`extends: ["./a", "./b"]`, both extending ./base) the second
+// visit of base is no cycle, and returning nothing there kept a's paths where
+// tsc lets b's inherited ones win. A missing relative base is surfaced as a
+// warning.
 function readTsConfig(
   root: string,
   fileSet: Set<string>,
@@ -349,6 +354,21 @@ function readTsConfig(
 ): TsEffective | undefined {
   if (seen.has(rel)) return undefined;
   seen.add(rel);
+  try {
+    return readTsConfigOnce(root, fileSet, rel, warnings, seen, packages);
+  } finally {
+    seen.delete(rel);
+  }
+}
+
+function readTsConfigOnce(
+  root: string,
+  fileSet: Set<string>,
+  rel: string,
+  warnings: string[],
+  seen: Set<string>,
+  packages: WorkspacePackage[],
+): TsEffective | undefined {
   const cfg = tolerantJsonParse(readText(join(root, rel))) as
     | { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> }; extends?: string | string[] }
     | undefined;
@@ -471,7 +491,9 @@ function matchEntryTargets(entries: ExportEntry[], key: string): string[] | unde
     const post = entry.key.slice(starAt + 1);
     if (!key.startsWith(pre) || !key.endsWith(post) || key.length < pre.length + post.length) continue;
     const fill = key.slice(pre.length, key.length - post.length);
-    return entry.targets.map((t) => t.replace(/\*/g, fill));
+    // A function, never a replacement string: `$&`, `$'` or `$$` in the
+    // specifier are characters of a path, not substitution patterns.
+    return entry.targets.map((t) => t.replace(/\*/g, () => fill));
   }
   return undefined;
 }
@@ -751,10 +773,14 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
       (a, b) => Number(a.star) - Number(b.star) || b.prefix.length - a.prefix.length || byStr(a.prefix, b.prefix),
     );
     if (!tsPaths.length && eff.baseUrl === undefined) continue; // nothing affects resolution
-    tsConfigs.push({ dir, baseUrl, baseUrlSet: eff.baseUrl !== undefined, paths: tsPaths });
+    tsConfigs.push({ dir, file: base, baseUrl, baseUrlSet: eff.baseUrl !== undefined, paths: tsPaths });
   }
   // Nearest-enclosing first: deepest dir wins; the root ("") is the fallback.
-  tsConfigs.sort((a, b) => b.dir.length - a.dir.length);
+  // In one dir the project config wins over the root tsconfig.base.json it
+  // usually extends: the base sorted first and its aliases shadowed the
+  // project's own overrides (tsc compiles tsconfig.json).
+  const fileRank = (f: string): number => (f === "tsconfig.json" ? 0 : f === "jsconfig.json" ? 1 : 2);
+  tsConfigs.sort((a, b) => b.dir.length - a.dir.length || fileRank(a.file) - fileRank(b.file));
   warnings.push(...pkgWarnings);
 
   // Every go.mod, not just the one nearest the root — multi-module repos (a Go
@@ -950,11 +976,20 @@ export function resolveDocLink(fromRel: string, spec: string, ctx: ResolveContex
   let p = norm(posix.join(base, rooted ? target.slice(1) : target));
   if (p === ".") p = ""; // the repo root itself (`/`, or `./` from a root doc)
   if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
-  const hit = firstExisting(ctx, [
-    p, p + ".md", p + ".mdx",
-    posix.join(p, "README.md"), posix.join(p, "readme.md"),
-    posix.join(p, "index.md"), posix.join(p, "index.mdx"),
-  ]);
+  const probes = (q: string): string[] => [
+    q, q + ".md", q + ".mdx",
+    posix.join(q, "README.md"), posix.join(q, "readme.md"),
+    posix.join(q, "index.md"), posix.join(q, "index.mdx"),
+  ];
+  // A URL path is percent-encoded (`my%20file.md`): the file is probed as
+  // written, then decoded.
+  let decoded = p;
+  try {
+    decoded = decodeURIComponent(p);
+  } catch {
+    // a lone "%": not an encoding, keep the text as written
+  }
+  const hit = firstExisting(ctx, decoded === p ? probes(p) : [...probes(p), ...probes(decoded)]);
   if (hit) return { kind: "resolved", target: hit };
   // A link to a real directory (even one without a README/index) is valid — it's
   // just not a file-node edge. Don't cry "broken link".
@@ -1012,7 +1047,7 @@ function resolveJs(fromRel: string, rawSpec: string, ctx: ResolveContext): Resol
       const suffix = tp.star ? spec.slice(tp.prefix.length) : "";
       let targetTreeExists = false;
       for (const t of tp.targets) {
-        const resolved = tp.star ? t.replace(/\*/, suffix) : t;
+        const resolved = tp.star ? t.replace(/\*/, () => suffix) : t; // see matchEntryTargets
         const p = norm(posix.join(cfg.baseUrl, resolved));
         const hit = tryResolve(p);
         if (hit) return { kind: "resolved", target: hit };
@@ -1099,12 +1134,21 @@ function resolvePython(fromRel: string, spec: string, ctx: ResolveContext): Reso
     const rest = spec.slice(dots);
     const base = fromRel.includes("/") ? posix.dirname(fromRel) : "";
     // 1 dot = current package (the file's dir); each extra dot goes up one.
-    let dir = base;
-    for (let i = 1; i < dots; i++) dir = dir.includes("/") ? posix.dirname(dir) : "";
-    const hit = rest
-      ? probeModule(dir, rest)
-      : firstExisting(ctx, [posix.join(norm(dir), "__init__.py")]);
-    return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    // Past the repository root is Python's "attempted relative import beyond
+    // top-level package", never a file there (the climb used to stop at the
+    // root and resolve `from ... import util` to the root's util.py).
+    const segs = base ? base.split("/") : [];
+    if (dots - 1 > segs.length) return { kind: "dangling", reason: "escapes-repo-root" };
+    const dir = segs.slice(0, segs.length - (dots - 1)).join("/");
+    if (rest) {
+      const hit = probeModule(dir, rest);
+      return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    }
+    // `from . import x` names the package itself: its __init__.py when it has
+    // one, else a PEP 420 namespace package — a directory, no file to link,
+    // and no broken import either.
+    const init = firstExisting(ctx, [posix.join(dir, "__init__.py")]);
+    return init ? { kind: "resolved", target: init } : { kind: "external" };
   }
 
   // Absolute import: only an edge if it resolves inside the repo; otherwise it
@@ -1148,15 +1192,25 @@ function resolveGo(fromRel: string, spec: string, ctx: ResolveContext): Resoluti
       return probePkg(posix.join(r.toDir, sub));
     }
   }
-  // (ii) The home module's own path, then (iii) every other in-repo module —
-  // cross-module imports are the point of a multi-module repo.
-  const ordered = home ? [home, ...ctx.goModules.filter((g) => g !== home)] : ctx.goModules;
-  for (const g of ordered) {
+  // (ii) The in-repo module whose path is the LONGEST prefix of the import —
+  // the go toolchain's rule — the home module breaking a tie. Home first used
+  // to win outright: from a repo whose root module is github.com/org/repo,
+  // `github.com/org/repo/api/v2/types` dangled instead of reaching the nested
+  // api/go.mod module github.com/org/repo/api/v2.
+  let owner: (typeof ctx.goModules)[number] | undefined;
+  for (const g of ctx.goModules) {
     if (spec !== g.module && !spec.startsWith(g.module + "/")) continue;
-    const sub = spec.slice(g.module.length).replace(/^\//, "");
-    return probePkg(posix.join(g.dir, sub));
+    if (!owner || g.module.length > owner.module.length || (g.module.length === owner.module.length && g === home)) owner = g;
   }
-  return { kind: "external" };
+  if (!owner) return { kind: "external" };
+  const pkgDir = norm(posix.join(owner.dir, spec.slice(owner.module.length).replace(/^\//, ""))).replace(/^\.$/, "");
+  // A directory holding its own go.mod is not part of the module above it, so
+  // a path into it through the outer module names no package.
+  const inside = (dir: string, parent: string): boolean => !parent || dir === parent || dir.startsWith(parent + "/");
+  if (ctx.goModules.some((g) => g !== owner && g.dir !== owner!.dir && inside(g.dir, owner!.dir) && inside(pkgDir, g.dir))) {
+    return { kind: "dangling", reason: "missing-package" };
+  }
+  return probePkg(pkgDir);
 }
 
 function resolveRust(fromRel: string, spec: string, ctx: ResolveContext): Resolution {

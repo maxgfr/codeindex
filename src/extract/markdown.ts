@@ -112,6 +112,23 @@ const ALERT = /^>\s*\[!(?:note|tip|important|warning|caution)\]\s*$/i;
 
 // Extract title, section headings, a one-line summary, and local doc-link refs
 // from a markdown document. Deterministic and dependency-free.
+// The text of an inline link's `(…)` starting at `from` (just past the
+// `(`), up to the parenthesis that closes it: CommonMark lets a destination
+// hold balanced parentheses (`docs/a(1).md`), which a `[^)]+` capture cut at
+// the first `)`. A backslash escapes the next character. Undefined when the
+// line ends first, or for an empty destination.
+function linkDestination(text: string, from: number): string | undefined {
+  let depth = 1;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\") i++;
+    else if (c === "\n") return undefined;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) return i > from ? text.slice(from, i) : undefined;
+  }
+  return undefined;
+}
+
 export function extractMarkdown(content: string): MarkdownInfo {
   let body = content;
   let frontTitle: string | undefined;
@@ -188,9 +205,12 @@ export function extractMarkdown(content: string): MarkdownInfo {
     seen.add(spec);
     refs.push({ kind: "doc-link", spec });
   };
-  const inline = /!?\[[^\]]*\]\(([^)]+)\)/g;
+  const inline = /!?\[[^\]]*\]\(/g;
   let m: RegExpExecArray | null;
-  while ((m = inline.exec(scan))) addRef(m[1]!);
+  while ((m = inline.exec(scan))) {
+    const dest = linkDestination(scan, inline.lastIndex);
+    if (dest) addRef(dest);
+  }
   // Indentation from its own line only: `^\s*` let every line start of a
   // whitespace-only run rescan the rest of it.
   const refdef = /^[^\S\r\n]*\[[^\]]+\]:\s+(\S+)/gm;
