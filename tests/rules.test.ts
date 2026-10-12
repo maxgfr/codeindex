@@ -392,7 +392,7 @@ describe("checkRules — literals reads the whole duplication list", () => {
       const call = (args: Record<string, unknown>) => client.request("tools/call", { name: "check_rules", arguments: args });
       const inside = await call({ configPath: "rules.json" });
       expect(inside.result.isError).not.toBe(true);
-      expect(JSON.parse(inside.result.content[0].text)).toHaveLength(1);
+      expect(JSON.parse(inside.result.content[0].text).violations).toHaveLength(1);
       const escaped = await call({ configPath: join(outside, "secret.txt") });
       expect(escaped.result.isError).toBe(true);
       expect(escaped.result.content[0].text).toMatch(/must be a file inside the repository/);

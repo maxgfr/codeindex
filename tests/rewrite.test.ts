@@ -74,8 +74,9 @@ describe("rewriteCommand — rewrites it understands", () => {
     const want = "codeindex grep foo --include '**/*.ts' --ignore-dir .codeindex";
     expect(rewriteCommand("grep -r --include=*.ts foo .")).toBe(want);
     expect(rewriteCommand("grep -r --include '*.ts' foo .")).toBe(want);
-    expect(rewriteCommand("rg -g '*.ts' foo")).toBe(want);
-    expect(rewriteCommand("rg -g '!*_test.go' foo")).toBe("codeindex grep foo --exclude '**/*_test.go' --ignore-dir .codeindex");
+    // Plain rg skips hidden paths; the rewrite says so.
+    expect(rewriteCommand("rg -g '*.ts' foo")).toBe("codeindex grep foo --include '**/*.ts' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -g '!*_test.go' foo")).toBe("codeindex grep foo --exclude '**/*_test.go' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
     // A scope stays a separate, ANDed predicate.
     expect(rewriteCommand("grep -r --include=*.md foo binding")).toBe(
       "codeindex grep foo --scope binding --include '**/*.md' --ignore-dir .codeindex",
@@ -87,8 +88,8 @@ describe("rewriteCommand — rewrites it understands", () => {
     expect(rewriteCommand("grep -r 'a\\+b' .")).toBe("codeindex grep 'a+b' --ignore-dir .codeindex"); // GNU BRE \+
     expect(rewriteCommand("grep -rE 'a+b' .")).toBe("codeindex grep 'a+b' --ignore-dir .codeindex");
     expect(rewriteCommand("grep -r '[[:digit:]]x' .")).toBe("codeindex grep '[0-9]x' --ignore-dir .codeindex");
-    expect(rewriteCommand("rg -F 'a.b('")).toBe("codeindex grep 'a\\.b\\(' --ignore-dir .codeindex");
-    expect(rewriteCommand("rg -w id")).toBe("codeindex grep '\\bid\\b' --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -F 'a.b('")).toBe("codeindex grep 'a\\.b\\(' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -w id")).toBe("codeindex grep '\\bid\\b' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
   });
 
   it("guards a pattern that starts with - behind --", () => {
@@ -103,26 +104,50 @@ describe("rewriteCommand — rewrites it understands", () => {
   });
 
   it("reads shell metacharacters only where the shell does", () => {
-    expect(rewriteCommand(`rg 'foo|bar'`)).toBe("codeindex grep 'foo|bar' --ignore-dir .codeindex");
-    expect(rewriteCommand(`rg "foo|bar"`)).toBe("codeindex grep 'foo|bar' --ignore-dir .codeindex");
+    expect(rewriteCommand(`rg 'foo|bar'`)).toBe("codeindex grep 'foo|bar' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
+    expect(rewriteCommand(`rg "foo|bar"`)).toBe("codeindex grep 'foo|bar' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
   });
 
   it("covers the common agent forms: types, smart case, -l, git grep", () => {
-    expect(rewriteCommand("rg -tpy 'def main'")).toBe("codeindex grep 'def main' --include '**/*.py' --include '**/*.pyi' --ignore-dir .codeindex");
-    expect(rewriteCommand("rg -S foo")).toBe("codeindex grep foo --ignore-case --ignore-dir .codeindex");
-    expect(rewriteCommand("rg -S Foo")).toBe("codeindex grep Foo --ignore-dir .codeindex");
-    expect(rewriteCommand("rg -S -F '\\Q'")).toBe("codeindex grep '\\\\Q' --ignore-dir .codeindex"); // a literal Q is uppercase
-    expect(rewriteCommand("rg -l foo")).toBe("codeindex grep foo --files-with-matches --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -tpy 'def main'")).toBe("codeindex grep 'def main' --include '**/*.py' --include '**/*.pyi' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -S foo")).toBe("codeindex grep foo --exclude '**/.*' --exclude '**/.*/**' --ignore-case --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -S Foo")).toBe("codeindex grep Foo --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -S -F '\\Q'")).toBe("codeindex grep '\\\\Q' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex"); // a literal Q is uppercase
+    expect(rewriteCommand("rg -l foo")).toBe("codeindex grep foo --exclude '**/.*' --exclude '**/.*/**' --files-with-matches --ignore-dir .codeindex");
     expect(rewriteCommand("git grep -n foo -- '*.ts'")).toBe("codeindex grep foo --include '**/*.ts' --ignore-dir .codeindex");
   });
 
   it("drops purely presentational flags codeindex already satisfies", () => {
     expect(rewriteCommand("grep -r -n -H foo .")).toBe("codeindex grep foo --ignore-dir .codeindex");
-    expect(rewriteCommand("rg --no-heading -n --color=never foo")).toBe("codeindex grep foo --ignore-dir .codeindex");
+    expect(rewriteCommand("rg --no-heading -n --color=never foo")).toBe("codeindex grep foo --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
   });
 
   it("respects a caller-supplied binary name", () => {
     expect(rewriteCommand("grep -r foo .", "/usr/local/bin/codeindex")).toBe("/usr/local/bin/codeindex grep foo --ignore-dir .codeindex");
+  });
+});
+
+describe("rewriteCommand — review fixes (2026-10)", () => {
+  it("a * or ^ after a LITERAL paren or bar is not at the start of a group", () => {
+    expect(rewriteCommand("grep -r 'a(*b' .")).toBe("codeindex grep 'a\\(*b' --ignore-dir .codeindex"); // BRE: ( is literal
+    expect(rewriteCommand("grep -rE 'a\\(*b' .")).toBe("codeindex grep 'a\\(*b' --ignore-dir .codeindex"); // ERE: \( is literal
+    expect(rewriteCommand("grep -r 'x(^y' .")).toBe("codeindex grep 'x\\(\\^y' --ignore-dir .codeindex");
+    expect(rewriteCommand("grep -rE 'a\\|*b' .")).toBe("codeindex grep 'a\\|*b' --ignore-dir .codeindex");
+    // Real groups and alternatives still start anew.
+    expect(rewriteCommand("grep -r 'a\\(*b\\)' .")).toBe("codeindex grep 'a(\\*b)' --ignore-dir .codeindex");
+    expect(rewriteCommand("grep -rE '(^a|^b)' .")).toBe("codeindex grep '(^a|^b)' --ignore-dir .codeindex");
+  });
+
+  it("refuses -R: it follows symlinks, which the engine never does", () => {
+    expect(rewriteCommand("grep -R foo .")).toBeUndefined();
+    expect(rewriteCommand("grep --dereference-recursive foo .")).toBeUndefined();
+  });
+
+  it("keeps rg's hidden files out unless rg would search them", () => {
+    expect(rewriteCommand("rg foo")).toBe("codeindex grep foo --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex");
+    expect(rewriteCommand("rg --hidden foo")).toBe("codeindex grep foo --ignore-dir .codeindex");
+    expect(rewriteCommand("rg -uu foo")).toBe("codeindex grep foo --no-gitignore --ignore-dir .codeindex");
+    expect(rewriteCommand("rg foo .github")).toBeUndefined(); // a hidden scope rg searches when named
   });
 });
 
@@ -241,7 +266,9 @@ describe.skipIf(!haveTools)("rewrite equivalence against the real tools", () => 
       .split("\n")
       .filter(Boolean)
       .map((l) => l.replace(/^\.\//, ""))
-      .filter((l) => !l.startsWith(".git/"))
+      // .git is out of scope, in grep's "Binary file ./.git/index matches"
+      // form too (the index's timestamps occasionally hold the pattern).
+      .filter((l) => !l.startsWith(".git/") && !/^Binary file (?:\.\/)?\.git\//.test(l))
       .map((l) => (files ? l : l.split(":").slice(0, 2).join(":")))
       .sort();
   }

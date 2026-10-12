@@ -75,3 +75,17 @@ describe("extractMarkdown: GitHub alerts", () => {
     expect(extractMarkdown(md).summary).toBe("A path manipulation library for Dart.");
   });
 });
+
+describe("extractMarkdown: footnotes (real-world campaign S-103)", () => {
+  it("a GFM footnote definition is prose, not a link reference", () => {
+    const md = "See the note.[^2]\n\n[^2]: Trivial changes include typo fixes.\n[^3]: [Go FAQ](https://go.dev/doc/faq)\n[ref]: ./docs/a.md\n";
+    expect(extractMarkdown(md).refs.map((r) => r.spec)).toEqual(["./docs/a.md"]);
+  });
+});
+
+describe("extractMarkdown: link destinations", () => {
+  it("keeps balanced parentheses in an inline link's target", () => {
+    const refs = extractMarkdown('see [d](docs/a(1).md) and [e](b.md "title (x)")\n').refs.map((r) => r.spec);
+    expect(refs).toEqual(["docs/a(1).md", "b.md"]);
+  });
+});

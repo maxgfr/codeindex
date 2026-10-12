@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { trustRepoLspConfig } from "./lsp-trust.js";
+
+trustRepoLspConfig();
 
 const command = process.env.CODEINDEX_TYPESCRIPT_LSP;
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));

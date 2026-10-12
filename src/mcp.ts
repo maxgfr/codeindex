@@ -34,14 +34,14 @@ import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCalle
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
-import { lspStatus, referencesWithLsp, callersWithLsp, LspSessionPool } from "./lsp/index.js";
+import { lspStatus, referencesWithLsp, callersWithLsp, LspSessionPool, type LspQueryOptions } from "./lsp/index.js";
 import { conciseCaller, conciseDelta, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
 import { indexStatus } from "./status.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, type RankMode } from "./bm25.js";
-import { checkRules, parseRules, parseRulesText, type ArchRule } from "./rules.js";
+import { checkRules, parseRules, parseRulesText, rulesReport, type ArchRule } from "./rules.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
@@ -62,6 +62,7 @@ import {
   resourceLinkFor,
   structuredContentFor,
   validateArgs,
+  WIRE_ENVELOPE_BYTES,
 } from "./mcp/protocol.js";
 import {
   getArtifacts,
@@ -226,14 +227,15 @@ function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
 // `progress` reports phase boundaries of a scan-needing call (see toolsCall).
 // `walkRepo` supplies the call's walk: the --watch oracle's for the pinned
 // repository, a plain walk otherwise.
-// `lspPool` keeps language servers warm across the calls of one server session.
+// `lsp` keeps language servers warm across the calls of one server session
+// (its pool), and says whether a repo's own lsp.json may name them.
 async function callTool(
   name: string,
   args: Record<string, unknown>,
   repo: string,
   progress?: (message: string) => void,
   walkRepo: (repo: string) => Promise<{ walked: WalkResult; reused: boolean }> = async (r) => ({ walked: walk(r, {}), reused: false }),
-  lspPool?: LspSessionPool,
+  lsp: LspQueryOptions = {},
 ): Promise<string> {
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // `search`'s optional structural prior. The schema's enum has already
@@ -320,7 +322,7 @@ async function callTool(
       const found = lookupCallerEntry(index, lookup);
       const entry = found && sited(found);
       if (entry) {
-        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry, { pool: lspPool }) : entry;
+        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry, lsp) : entry;
         return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
       }
       // A symbol that exists but binds no site says how many sites name it
@@ -333,7 +335,7 @@ async function callTool(
           `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : ""),
         );
       }
-      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent, { pool: lspPool }) : absent, null, 2);
+      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent, lsp) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
     for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(sited(v)) : sited(v);
@@ -379,7 +381,7 @@ async function callTool(
     // The tier locates the declared NAME on its line: pass the name a
     // qualified ref (`name@file`, `file#Parent/name`) resolved to.
     const leaf = resolveSymbolRef(scan, symName)?.reading.name ?? symName;
-    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik, { pool: lspPool }) : statik;
+    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik, lsp) : statik;
     return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
   }
   if (name === "symbol_at") {
@@ -394,7 +396,7 @@ async function callTool(
     return JSON.stringify(symbolAt(scan, rel, line), null, 2);
   }
   if (name === "lsp_status") {
-    return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true), null, 2);
+    return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true, lsp), null, 2);
   }
   if (name === "replace_symbol_body" || name === "insert_after_symbol" || name === "insert_before_symbol") {
     const namePath = str(args.namePath);
@@ -441,7 +443,7 @@ async function callTool(
   if (name === "dead_code") {
     // Additive: without `limit` the payload is exactly what it always was.
     const dead = findDeadCode(readScan(), { kinds: args.kinds === "all" ? "all" : "callable", includeTail: args.includeTail === true });
-    return JSON.stringify(capDeadCode(dead, num(args.limit)), null, 2);
+    return JSON.stringify(capDeadCode(dead, wholeNum(args.limit, "limit")), null, 2);
   }
   if (name === "duplicated_literals") {
     const report = findLiteralDuplications(readScan(), {
@@ -449,7 +451,7 @@ async function callTool(
       minCount: positiveNum(args.minCount),
       includeTests: args.includeTests === true,
     });
-    const limit = num(args.limit);
+    const limit = wholeNum(args.limit, "limit");
     if (limit === undefined || report.duplications.length <= limit) return JSON.stringify(report, null, 2);
     // Truncation says so, same doctrine as dead_code: a capped list that looks
     // complete is worse than a shorter one that admits it.
@@ -757,7 +759,8 @@ async function callTool(
       rules = parseRulesText(text, configPath);
     } else throw new Error("`rules` (or `configPath`) is required");
     const { scan, graph } = readArtifacts();
-    return JSON.stringify(checkRules(graph, rules, { scan }), null, 2);
+    // The CLI's shape: the counts a gate reads, then the violations.
+    return JSON.stringify(rulesReport(checkRules(graph, rules, { scan })), null, 2);
   }
   if (name === "delta") {
     // The CLI's review panel, for an agent that just edited files over this
@@ -810,6 +813,10 @@ export interface McpServerOptions {
   // elsewhere it only invalidates eagerly. Whenever it cannot prove freshness
   // a call walks exactly as without it.
   watch?: boolean;
+  // Let a repository's own .codeindex/lsp.json name the language servers the
+  // `lsp: true` calls spawn (`codeindex mcp --trust-lsp-config`). Off by
+  // default: that file is a command line the repository runs (src/lsp/config.ts).
+  trustLspConfig?: boolean;
 }
 
 export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
@@ -1033,7 +1040,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   ): Promise<Record<string, unknown>> {
     try {
       const repo = repoRoot(args, defaultRepo);
-      const raw = await callTool(name, args, repo, progress, walkRepo, lspPool);
+      const raw = await callTool(name, args, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig: opts.trustLspConfig });
       // Narrowed or projected, the answer is not what a whole-repo artifact
       // holds, so the size guard must not point at one.
       const narrowed =
@@ -1042,23 +1049,24 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
         strArray(args.exclude) !== undefined ||
         str(args.name) !== undefined ||
         args.concise === true;
-      const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES, !narrowed);
-      // A capped whole-repo response points at an artifact already on disk.
-      // From 2025-06-18 the protocol has a content type that says exactly
-      // that, so the client can fetch the bytes instead of re-asking.
-      //
-      // Gated on `text !== raw` — i.e. capResponse actually replaced the
-      // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
-      // every single call just to discover it was not truncated.
-      const capped = text !== raw;
-      const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
-      // Typed, validatable result alongside the text block — for the tools
-      // that declare an outputSchema, and never when the guard replaced the
-      // payload (see structuredContentFor).
-      const structured =
-        version >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined) : undefined;
-      return {
-        result: {
+      const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+      const assemble = (text: string): Record<string, unknown> => {
+        // A capped whole-repo response points at an artifact already on
+        // disk. From 2025-06-18 the protocol has a content type that says
+        // exactly that, so the client can fetch the bytes instead of
+        // re-asking.
+        //
+        // Gated on `text !== raw` — i.e. capResponse actually replaced the
+        // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
+        // every single call just to discover it was not truncated.
+        const capped = text !== raw;
+        const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+        // Typed, validatable result alongside the text block — for the tools
+        // that declare an outputSchema, and never when the guard replaced the
+        // payload (see structuredContentFor).
+        const structured =
+          version >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined) : undefined;
+        return {
           content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
           ...(structured ? { structuredContent: structured } : {}),
           // The withheld-payload notice is a tool execution error: the call
@@ -1068,8 +1076,18 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
           // cannot conform to it, and SDK clients reject a non-error result
           // that lacks conforming structuredContent.
           ...(capped ? { isError: true } : {}),
-        },
+        };
       };
+      const text = capResponse(raw, name, repo, maxBytes, !narrowed);
+      let result = assemble(text);
+      if (text === raw) {
+        // The cap bounds what is SENT. The text measured alone went out at
+        // about 1.8x as a JSON-escaped string plus structuredContent: a 990 KB
+        // graph under the 1 MB default left as 1.8 MB.
+        const onWire = Buffer.byteLength(JSON.stringify(result), "utf8") + WIRE_ENVELOPE_BYTES;
+        if (onWire > maxBytes) result = assemble(capResponse(raw, name, repo, maxBytes, !narrowed, onWire));
+      }
+      return { result };
     } catch (e) {
       const text = e instanceof NotFound ? JSON.stringify({ error: e.message }, null, 2) : errMessage(e);
       return { result: { content: [{ type: "text", text }], isError: true } };

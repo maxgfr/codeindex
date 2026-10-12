@@ -1,10 +1,11 @@
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { readPersistedIndex, toCacheMap } from "../src/preload.js";
+import { extractedAlike } from "../src/cache.js";
 import { scanRepo } from "../src/scan.js";
 import { EXTRACTOR_VERSION, SCHEMA_VERSION } from "../src/types.js";
 
@@ -108,5 +109,74 @@ describe("malformed cache through the shipped CLI", () => {
     run("index", "--out", out);
     expect(run("symbols")).toBe(run("symbols", "--no-index-cache"));
     expect(readPersistedIndex(repo)?.cacheMap.get(REL)?.record.symbols.length).toBeGreaterThan(0);
+  });
+});
+
+describe("what the cache may reuse", () => {
+  it("a .vue/.svelte/.astro or .h record extracted at another tier is not reused", () => {
+    const regexTier = extractedAlike({ grammars: [] }, { ast: () => true });
+    for (const ext of [".vue", ".svelte", ".astro", ".h", ".ts"]) expect(regexTier("code", ext), ext).toBe(false);
+    // A header extracted with C alone, now that C++ is loaded too.
+    expect(extractedAlike({ grammars: ["c"] }, { ast: () => true })("code", ".h")).toBe(false);
+    const loaded = ["c", "cpp", "javascript", "typescript"];
+    const same = extractedAlike({ grammars: loaded }, { ast: (k) => loaded.includes(k) });
+    for (const ext of [".vue", ".svelte", ".h", ".ts"]) expect(same("code", ext), ext).toBe(true);
+  });
+
+  it("index after an --no-ast index re-extracts a single-file component", { timeout: 60_000 }, () => {
+    const repo = scratch();
+    // The regex tier sees the class; only the AST tier sees its members.
+    writeFileSync(
+      join(repo, "comp.vue"),
+      '<script setup lang="ts">\nexport class Store {\n  count = 0;\n  bump(by: number): number {\n    return this.count + by;\n  }\n}\n</script>\n',
+    );
+    const out = join(scratch(), "idx");
+    const run = (...args: string[]) => execFileSync(process.execPath, [CLI, ...args, "--repo", repo], { encoding: "utf8", stdio: "pipe" });
+    run("index", "--out", out, "--no-ast");
+    run("index", "--out", out);
+    const fresh = join(scratch(), "fresh");
+    run("index", "--out", fresh, "--no-index-cache");
+    expect(readFileSync(join(out, "symbols.json"), "utf8")).toBe(readFileSync(join(fresh, "symbols.json"), "utf8"));
+  });
+
+  // A filesystem with 1 s timestamps, simulated: both writes and the index land
+  // in one second, so the edit keeps the size and mtime cache.json recorded.
+  it("a same-size edit in the tick the index was written in is seen", { timeout: 60_000 }, () => {
+    const repo = scratch();
+    const file = join(repo, "a.ts");
+    const out = join(scratch(), "idx");
+    const run = (...args: string[]) => execFileSync(process.execPath, [CLI, ...args, "--repo", repo], { encoding: "utf8", stdio: "pipe" });
+    const tick = Math.floor(Date.now() / 1000) - 10;
+    writeFileSync(file, "export const a = 1;\n");
+    utimesSync(file, tick, tick);
+    run("index", "--out", out);
+    utimesSync(join(out, "cache.json"), tick, tick);
+    writeFileSync(file, "export const b = 2;\n");
+    utimesSync(file, tick, tick);
+    run("index", "--out", out);
+    expect(Object.keys((JSON.parse(readFileSync(join(out, "symbols.json"), "utf8")) as { defs: object }).defs)).toEqual(["b"]);
+  });
+
+  it("an old mtime is persisted, so an unchanged tree takes the stat fastpath", () => {
+    const repo = scratch();
+    const file = join(repo, "a.ts");
+    writeFileSync(file, "export const a = 1;\n");
+    const old = Date.now() / 1000 - 3600;
+    utimesSync(file, old, old);
+    const first = scanRepo(repo);
+    expect(first.mtimes.get("a.ts")).toBe(statSync(file).mtimeMs);
+    const second = scanRepo(repo, { cache: toCacheMap(first) });
+    expect(second.contentUnchanged).toBe(true);
+    expect(second.cacheDirty).toBe(false);
+  });
+
+  it("an --out spelled with '..' segments is still left out of the scan", () => {
+    const repo = scratch();
+    writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+    mkdirSync(join(repo, "idx"));
+    writeFileSync(join(repo, "idx", "graph.json"), "{}\n");
+    mkdirSync(join(repo, "sub"));
+    const scan = scanRepo(repo, { out: `${repo}/sub/../idx` }); // as a library caller may pass it
+    expect(scan.files.map((f) => f.rel)).toEqual(["a.ts"]);
   });
 });

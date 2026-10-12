@@ -21,6 +21,7 @@
 // without calling it, and every server is told the host's pid (`processId`),
 // which servers use to exit when their parent is SIGKILLed.
 
+import { realpathSync } from "node:fs";
 import { have } from "../util.js";
 import { sha1 } from "../hash.js";
 import type { RepoScan } from "../scan.js";
@@ -32,6 +33,18 @@ export type OpenResult =
   | { ok: true; session: LspSession; transport: LspTransport }
   | { ok: false; reason: string };
 
+// The root's real path, when it differs: tsserver and pyright answer with
+// realpath'd URIs, and a repo under /tmp (really /private/tmp on macOS) or a
+// symlinked checkout had every reference read as outside it and dropped.
+function realRootOf(root: string): string[] {
+  try {
+    const real = realpathSync(root);
+    return real === root ? [] : [real];
+  } catch {
+    return [];
+  }
+}
+
 /** Spawn a configured server and complete `initialize`, or say why not. */
 export async function openServer(server: LspServerConfig, root: string): Promise<OpenResult> {
   if (!have(server.command)) return { ok: false, reason: `${server.command} is not on PATH` };
@@ -40,6 +53,7 @@ export async function openServer(server: LspServerConfig, root: string): Promise
   try {
     const session = await openLspSession(transport, {
       root,
+      rootAliases: realRootOf(root),
       timeoutMs: timeoutFor(server),
       startupTimeoutMs: startupTimeoutFor(server),
       ...(server.initializationOptions !== undefined ? { initializationOptions: server.initializationOptions } : {}),

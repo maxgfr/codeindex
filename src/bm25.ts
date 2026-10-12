@@ -503,6 +503,13 @@ export function buildTrigramIndex(docs: Doc[]): TrigramIndex {
 // Vocab terms whose trigram Dice similarity to `term` reaches the threshold —
 // the same 2|A∩B| / (|A|+|B|) diceCoefficient computes, with |A∩B| counted
 // along the postings of `term`'s own grams.
+// A near match for a term that matched nothing, and the mechanism that found it.
+interface FuzzyCandidate {
+  term: string;
+  dice: number;
+  via: "stem" | "trigram";
+}
+
 function trigramNeighbours(index: TrigramIndex, term: string): { term: string; dice: number }[] {
   const grams = charTrigrams(term);
   const shared = new Uint32Array(index.terms.length);
@@ -648,7 +655,7 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
   // once, is never expanded. The trigram index of the corpus vocabulary is
   // built lazily, only when at least one term needs it.
   const fuzzyEnabled = opts.fuzzy ?? true;
-  const fuzzyCandidates = new Map<string, { term: string; dice: number }[]>();
+  const fuzzyCandidates = new Map<string, FuzzyCandidate[]>();
   if (fuzzyEnabled) {
     const unmatched = terms.filter((t) => df.get(t) === 0);
     if (unmatched.length) {
@@ -672,7 +679,7 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
         if (viaStem.length) {
           fuzzyCandidates.set(
             t,
-            viaStem.slice(0, FUZZY_CAP).map((term) => ({ term, dice: STEM_WEIGHT })),
+            viaStem.slice(0, FUZZY_CAP).map((term) => ({ term, dice: STEM_WEIGHT, via: "stem" as const })),
           );
         } else stillUnmatched.push(t);
       }
@@ -682,7 +689,7 @@ function runSearch(scan: RepoScan, query: string, opts: SearchOptions = {}): Exp
           const candidates = trigramNeighbours(trigramIndex, t);
           // Deterministic: similarity desc, then vocab term asc.
           candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
-          fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
+          fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP).map((c) => ({ ...c, via: "trigram" as const })));
         }
       }
     }
@@ -840,7 +847,7 @@ function explainOf(
   query: string,
   terms: string[],
   df: Map<string, number>,
-  fuzzyCandidates: Map<string, { term: string; dice: number }[]>,
+  fuzzyCandidates: Map<string, FuzzyCandidate[]>,
   kept: SearchResult[],
   keep: ((raw: string) => boolean) | undefined,
 ): QueryExplanation {
@@ -848,10 +855,10 @@ function explainOf(
     const frequency = df.get(term) ?? 0;
     const candidates = frequency === 0 ? (fuzzyCandidates.get(term) ?? []) : [];
     if (!candidates.length) return { term, df: frequency };
-    // STEM_WEIGHT is a pinned constant, a real Dice score never is — which is
-    // exactly how the two mechanisms tell themselves apart here.
-    const via = candidates[0]!.dice === STEM_WEIGHT ? "stem" : "trigram";
-    return { term, df: frequency, bridge: { via, to: candidates.map((c) => c.term), dice: candidates[0]!.dice } };
+    // Each candidate says which mechanism found it. Telling them apart by
+    // `dice === STEM_WEIGHT` mislabelled a trigram match whose score happened
+    // to be exactly 0.9 (9 of 20 shared grams) as a stem.
+    return { term, df: frequency, bridge: { via: candidates[0]!.via, to: candidates.map((c) => c.term), dice: candidates[0]!.dice } };
   });
 
   const unresolvedTerms = diagnostics
@@ -863,7 +870,17 @@ function explainOf(
   // and the whole identifier is subtokens()'s first output. It is the only term
   // that answers "does the thing I typed exist", and it is precisely the one
   // that vanishes without trace when it matches nothing.
-  const wholeIdentifier = !/\s/.test(query.trim()) && terms.length ? { term: terms[0]!, df: df.get(terms[0]!) ?? 0 } : undefined;
+  // A QUALIFIED name (`README.qqqzzzmissing`, `pkg::Type`, `a/b`) is one
+  // token of several parts, and exists only if every part does: its first
+  // part alone used to stand for it, and `README.qqqzzzmissing` read as a
+  // match on README. The rarest part decides.
+  const single = !/\s/.test(query.trim());
+  const parts = single ? keywords(query, keep).map((k) => subtokens(k)[0]).filter((t): t is string => t !== undefined) : [];
+  const wholeIdentifier = !single || !terms.length
+    ? undefined
+    : parts.length > 1
+      ? { term: query.trim(), df: Math.min(...parts.map((t) => df.get(t) ?? 0)) }
+      : { term: terms[0]!, df: df.get(terms[0]!) ?? 0 };
 
   const bridgedOnlyResults = kept.filter((r) => r.bridgedOnly).length;
   const allBridged = kept.length > 0 && bridgedOnlyResults === kept.length;
@@ -908,7 +925,10 @@ function noteFor(explain: QueryExplanation, missingIdentifier: boolean, allBridg
       .filter((t) => t.term !== wholeIdentifier.term && t.df > 0)
       .map((t) => t.term)
       .join(", ");
-    const near = terms.find((t) => t.term === wholeIdentifier.term)?.bridge?.to ?? [];
+    // A qualified name is not itself a term: its nearest neighbour is that
+    // of its first missing part.
+    const own = terms.find((t) => t.term === wholeIdentifier.term);
+    const near = (own ? own.bridge?.to : terms.find((t) => t.df === 0 && t.bridge)?.bridge?.to) ?? [];
     const because = parts ? ` The ${resultCount} result${resultCount === 1 ? "" : "s"} below match only its parts (${parts}).` : "";
     const suggestion = near.length ? ` Closest indexed name${near.length === 1 ? "" : "s"}: ${near.join(", ")}.` : "";
     return `No file in this index defines or mentions "${wholeIdentifier.term}".${because}${suggestion} If you expected it here, check you are indexing the right branch or commit.`;

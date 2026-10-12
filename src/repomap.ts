@@ -71,6 +71,9 @@ function productionRank(graph: Graph): Map<string, number> {
   return new Map(graph.files.map((f) => [f.rel, pr.get(f.id) ?? 0]));
 }
 
+// Consecutive files that do not fit before the map stops trying (see below).
+const MAX_MISSES = 32;
+
 export function renderRepoMap(scan: RepoScan, graph: Graph, opts: RepoMapOptions = {}): string {
   const budgetChars = (opts.budgetTokens ?? 1024) * CHARS_PER_TOKEN;
   const maxSymbols = opts.maxSymbolsPerFile ?? 8;
@@ -87,6 +90,7 @@ export function renderRepoMap(scan: RepoScan, graph: Graph, opts: RepoMapOptions
 
   let out = opts.bare ? "" : `# repo map — ${graph.fileCount} files\n`;
   let files = 0;
+  let misses = 0;
   for (const node of ranked) {
     const rec = records.get(node.rel);
     if (!rec) continue;
@@ -101,7 +105,14 @@ export function renderRepoMap(scan: RepoScan, graph: Graph, opts: RepoMapOptions
       block += `  ${s.line}: ${sig}\n`;
     }
     if (candidates.length > shown.length) block += `  … ${candidates.length - shown.length} more\n`;
-    if (out.length + block.length > budgetChars) break;
+    // A block that does not fit is skipped, not the end of the map: one
+    // oversized top file used to leave it empty while smaller ones fit. A run
+    // of misses ends it, so a tiny budget does not walk every file.
+    if (out.length + block.length > budgetChars) {
+      if (++misses >= MAX_MISSES) break;
+      continue;
+    }
+    misses = 0;
     out += block;
     files++;
   }

@@ -15,6 +15,12 @@ export interface ShResult {
   errorCode?: string;
 }
 
+// git speaks the user's language on stderr: under fr_FR a missing repository is
+// "fatal : ni ceci ni aucun de ses répertoires parents n'est un dépôt git", so
+// the `fatal: ` prefix the callers strip never matched and every error string
+// depended on the machine. Every git call runs in the C locale.
+export const GIT_LOCALE = { LC_ALL: "C", LANGUAGE: "" } as const;
+
 // Run a command synchronously. Sync keeps the CLI simple and deterministic
 // (mirrors how the engine is structured); the work is I/O-bound git/rg/gh calls
 // where parallelism buys little. `input` feeds stdin; `maxBuffer` is generous
@@ -24,13 +30,14 @@ export function sh(
   args: string[],
   opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined>; maxBufferBytes?: number } = {},
 ): ShResult {
+  const env = opts.env ?? process.env;
   const res = spawnSync(cmd, args, {
     cwd: opts.cwd,
     input: opts.input,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 120_000,
     maxBuffer: opts.maxBufferBytes ?? 64 * 1024 * 1024,
-    env: opts.env ?? process.env,
+    env: cmd === "git" ? { ...env, ...GIT_LOCALE } : env,
   });
   const code = res.error ? (res.error as NodeJS.ErrnoException).code : undefined;
   return {
@@ -126,10 +133,15 @@ export function foldText(s: string): string {
 // `keep` lets a caller that knows better reclaim a token the stopword list
 // would drop — search does, for a stopword the code base declares as a name
 // (gin's `Default`, `Use`). 1-char noise is never reclaimed.
+// Letters and digits of every script: an ASCII-only split dropped every
+// non-Latin word, so `конфигурация` or `日本語` could not be searched, and
+// `Œuvre` lost its first letter.
+const NON_WORD = /[^\p{L}\p{N}_]+/u;
+
 export function keywords(question: string, keep?: (raw: string) => boolean): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
+  for (const raw of foldText(question).split(NON_WORD)) {
     if (!raw) continue;
     const lower = raw.toLowerCase();
     // Keep identifiers as-is (camelCase/snake_case often carry the real signal),
@@ -154,7 +166,7 @@ export function keywords(question: string, keep?: (raw: string) => boolean): str
  */
 export function droppedKeywords(question: string, keep?: (raw: string) => boolean): string[] {
   const out: string[] = [];
-  for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
+  for (const raw of foldText(question).split(NON_WORD)) {
     if (!raw) continue;
     if (raw.length < 2 || (STOPWORDS.has(raw.toLowerCase()) && !keep?.(raw))) out.push(raw);
   }
@@ -209,8 +221,8 @@ export function rrf<T>(
 // dropped as noise; letter↔digit runs stay together ("sha1", "bm25").
 export function subtokens(raw: string): string[] {
   const folded = foldText(raw)
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1 $2")
+    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2");
   const out: string[] = [];
   const seen = new Set<string>();
   const push = (t: string): void => {
@@ -220,8 +232,8 @@ export function subtokens(raw: string): string[] {
   };
   // The whole identifier (lowercased) is a term of its own — but only for
   // single tokens: gluing a prose heading into one mega-token would index junk.
-  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
-  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
+  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ""));
+  for (const part of folded.split(/[^\p{L}\p{N}]+/u)) push(part.toLowerCase());
   return out;
 }
 

@@ -14,6 +14,7 @@
 // message comment.
 
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { ENGINE_VERSION } from "../types.js";
 import type { CodeSymbol, FileRecord } from "../types.js";
 import type { RepoScan } from "../scan.js";
@@ -406,7 +407,9 @@ function goPackageKey(f: FileRecord): string {
 // renderScip — map a RepoScan to a SCIP Index and encode it to bytes.
 // ---------------------------------------------------------------------------
 export function renderScip(scan: RepoScan, opts: RenderScipOptions = {}): Uint8Array {
-  const projectRoot = opts.projectRoot ?? "file://" + scan.root.replace(/\\/g, "/");
+  // A real file URI: a root with a space or a "#" was emitted unescaped, and
+  // a Windows root as "file://C:/…" (two slashes).
+  const projectRoot = opts.projectRoot ?? pathToFileURL(scan.root).href;
   const toolVersion = opts.toolVersion ?? ENGINE_VERSION;
 
   // `<manager> <name> <version>` of the nearest manifest (of the file's

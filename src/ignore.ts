@@ -63,30 +63,10 @@ function patternToRegExpSource(pattern: string): string {
     } else if (c === "?") {
       re += "[^/]";
     } else if (c === "[") {
-      // Character class: consume up to the closing `]` (a leading `]` is
-      // literal, `!` negates). Falls back to a literal `[` when unclosed.
-      let j = i + 1;
-      let body = "";
-      if (pattern[j] === "!") {
-        body += "^";
-        j++;
-      }
-      if (pattern[j] === "]") {
-        body += "\\]";
-        j++;
-      }
-      while (j < pattern.length && pattern[j] !== "]") {
-        const ch = pattern[j]!;
-        body += ch === "\\" || ch === "^" ? "\\" + ch : ch;
-        j++;
-      }
-      if (j < pattern.length && body !== "" && body !== "^") {
-        // A bracket expression never matches `/` in git (wildmatch under
-        // WM_PATHNAME), negated or not: `a[!x]b` leaves `a/b` alone. A bare
-        // `[^x]` crossed the separator, so a floating class pattern could
-        // ignore a path git keeps.
-        re += body.startsWith("^") ? `[^/${body.slice(1)}]` : `(?!/)[${body}]`;
-        i = j;
+      const cls = bracketClass(pattern, i);
+      if (cls) {
+        re += cls.source;
+        i = cls.end;
       } else {
         re += "\\[";
       }
@@ -95,6 +75,75 @@ function patternToRegExpSource(pattern: string): string {
     }
   }
   return re;
+}
+
+// POSIX character classes inside a bracket expression, as git's wildmatch
+// knows them, in a JS class body (case-sensitive: see the header).
+const POSIX_CLASSES: Record<string, string> = {
+  alnum: "A-Za-z0-9",
+  alpha: "A-Za-z",
+  blank: " \\t",
+  cntrl: "\\x00-\\x1f\\x7f",
+  digit: "0-9",
+  graph: "\\x21-\\x7e",
+  lower: "a-z",
+  print: "\\x20-\\x7e",
+  punct: "!-\\/:-@\\[-`{-~",
+  space: " \\t\\n\\r\\f\\v",
+  upper: "A-Z",
+  xdigit: "0-9A-Fa-f",
+};
+
+// The bracket expression opening at pattern[start] ("["), as git's wildmatch
+// reads it: `!` or `^` negates, a `]` first is literal, `\x` escapes,
+// `[:alpha:]` and the other POSIX classes, ranges as written. undefined when it
+// never closes (the `[` is then literal). An unknown POSIX class makes the
+// pattern match nothing, as git does.
+//
+// `^` used to be escaped as a literal, so `x[^a]` ignored `xa` and `x^` and
+// kept `xb` — git's exact opposite — and `[[:digit:]]z` ended at the first
+// `]` and ignored nothing.
+function bracketClass(pattern: string, start: number): { source: string; end: number } | undefined {
+  let j = start + 1;
+  let negated = false;
+  if (pattern[j] === "!" || pattern[j] === "^") {
+    negated = true;
+    j++;
+  }
+  let body = "";
+  let impossible = false;
+  let first = true;
+  for (; j < pattern.length; j++) {
+    const ch = pattern[j]!;
+    if (ch === "]" && !first) break;
+    first = false;
+    if (ch === "\\" && j + 1 < pattern.length) {
+      body += escapeClassChar(pattern[++j]!);
+    } else if (ch === "[" && pattern[j + 1] === ":") {
+      const close = pattern.indexOf(":]", j + 2);
+      if (close === -1) {
+        body += "\\[";
+        continue;
+      }
+      const posix = POSIX_CLASSES[pattern.slice(j + 2, close)];
+      if (posix === undefined) impossible = true;
+      else body += posix;
+      j = close + 1;
+    } else if (ch === "-") {
+      body += "-"; // a range, or a literal at either end — JS reads both alike
+    } else {
+      body += escapeClassChar(ch);
+    }
+  }
+  if (j >= pattern.length) return undefined; // never closed
+  // A bracket expression never matches `/` in git (wildmatch under
+  // WM_PATHNAME), negated or not: `a[!x]b` leaves `a/b` alone.
+  if (impossible) return { source: "(?!)", end: j };
+  return { source: negated ? `[^/${body}]` : `(?!/)[${body}]`, end: j };
+}
+
+function escapeClassChar(ch: string): string {
+  return ch === "\\" || ch === "]" || ch === "^" || ch === "[" || ch === "-" ? "\\" + ch : ch;
 }
 
 // Parse one .gitignore file. `baseRel` is the directory holding the file,

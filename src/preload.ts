@@ -19,7 +19,7 @@
 // complexity, mermaid, rules) rebuilt from scratch on every invocation, so
 // `codeindex search` cost a full tree-sitter pass over the repo every time it
 // ran — 6.3s on a 7k-file repo with a fresh index sitting right next to it.
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ENGINE_VERSION, EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { Graph, SymbolIndex } from "./types.js";
@@ -140,6 +140,16 @@ export type UnusableIndex = "absent" | "unreadable" | "corrupt" | "schema" | "ex
 // `indexDir` is repo-relative, or absolute. The map is returned UNFILTERED:
 // before seeding a scan with it, narrow it with compatibleEntries against
 // meta.extraction, as preloadSession does.
+// Git's "racily clean" rule. A file whose mtime is not older than the
+// cache.json that recorded it may have been edited again within the same
+// timestamp tick — on a filesystem with 1-2 s resolution (HFS+, FAT, some
+// network mounts) or a coarse kernel clock — keeping its size and mtime, so
+// the (size, mtime) match proves nothing: the file is hashed. Anything written
+// before the index was is trusted as before, so a fresh clone costs nothing.
+export function untrustedMtime(mtimeMs: number, cacheWrittenMs: number): boolean {
+  return mtimeMs >= cacheWrittenMs;
+}
+
 export function readPersistedIndex(
   repo: string,
   indexDir: string = INDEX_DIR,
@@ -156,8 +166,11 @@ export function inspectPersistedIndex(
   indexDir: string = INDEX_DIR,
 ): { cacheMap: PersistedCacheMap; meta: PersistedMeta } | { unusable: UnusableIndex } {
   let text: string;
+  let written: number;
   try {
-    text = readFileSync(join(indexDirPath(repo, indexDir), "cache.json"), "utf8");
+    const path = join(indexDirPath(repo, indexDir), "cache.json");
+    text = readFileSync(path, "utf8");
+    written = statSync(path).mtimeMs;
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     return { unusable: code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable" };
@@ -177,6 +190,14 @@ export function inspectPersistedIndex(
   if (parsed.extractorVersion !== EXTRACTOR_VERSION) return { unusable: "extractor" };
   const cacheMap = parseCacheEntries(parsed);
   if (!cacheMap) return { unusable: "corrupt" };
+  // A racily clean entry keeps its record and hash but loses its stat key, so
+  // the scan reads and hashes that file instead of trusting it.
+  for (const [rel, entry] of cacheMap) {
+    if (entry.mtimeMs !== undefined && untrustedMtime(entry.mtimeMs, written)) {
+      const { mtimeMs: _racy, ...rest } = entry;
+      cacheMap.set(rel, rest);
+    }
+  }
   return {
     cacheMap,
     meta: {

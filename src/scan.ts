@@ -160,6 +160,7 @@ export function buildCodeRecord(
     record.importedNames = code.importedNames;
     if (code.importAliases) record.importAliases = code.importAliases;
     record.truncated = code.truncated;
+    if (code.astFallback) record.astFallback = true;
     record.generated = code.generated;
     record.relations = code.relations;
     record.terms = code.terms;
@@ -384,12 +385,16 @@ const isIndexArtifact = (name: string): boolean =>
 // which for an ancestor is outside the repo, so nothing is excluded at all.
 function selfIndexGuard(root: string, out: string | undefined): ((f: WalkedFile) => boolean) | undefined {
   if (!out) return undefined;
-  const up = relative(resolve(out), resolve(root));
+  const dir = resolve(out);
+  const up = relative(dir, resolve(root));
   if (up === "") return (f) => !f.rel.includes("/") && isIndexArtifact(f.rel);
   if (up !== ".." && !up.startsWith(`..${sep}`) && !isAbsolute(up)) return undefined;
-  const dir = out.replace(/\/+$/, "");
-  const prefix = dir + "/";
-  return (f) => f.abs === dir || f.abs.startsWith(prefix);
+  // Compared as a path, not a "/"-joined prefix: Windows walks with "\", and
+  // an --out spelled with "./" or ".." segments never matched either.
+  return (f) => {
+    const inside = relative(dir, f.abs);
+    return inside === "" || (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside));
+  };
 }
 
 // The code files this scan would extract, in the same order scanRepo sees them.

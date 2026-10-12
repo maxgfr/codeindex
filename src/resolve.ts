@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { posix } from "node:path";
 import { join } from "node:path";
 import type { RepoScan } from "./scan.js";
@@ -24,6 +25,7 @@ interface TsPath {
 // NEAREST enclosing config (deepest dir first) rather than a single root config.
 interface TsConfigScope {
   dir: string; // the config's own directory (posix, "" = repo root) — scope test
+  file: string; // tsconfig.json | jsconfig.json | tsconfig.base.json (root only)
   baseUrl: string; // repo-relative posix dir the `targets` resolve against
   // True only when the config (or its extends chain) DECLARES baseUrl: tsc then
   // also resolves a bare name (`components/Card`) against it. `paths` without
@@ -122,6 +124,12 @@ export interface ResolveContext {
   // Optional for the same reason; absent, those imports resolve as external.
   dartPackages?: Map<string, string>; // pubspec.yaml `name` -> its dir
   luaRoots?: string[]; // dirs a Lua `require("a.b")` resolves against, shortest first
+  // Dirs holding a svelte.config.*, deepest first: SvelteKit projects, whose
+  // `$lib` alias is their src/lib and whose `./$types` modules are generated.
+  svelteKitRoots?: string[];
+  // The repository on disk, for a doc link to a file the index does not hold
+  // (an image, a binary): absent in a hand-built context.
+  root?: string;
   elixirModules?: Map<string, string>; // defmodule name -> the byStr-first file declaring it
   warnings: string[]; // build-time config issues (e.g. an unparseable tsconfig)
   // Memo of JS/TS resolutions keyed by "<importing dir>\0<spec>" — resolveJs is
@@ -338,7 +346,11 @@ const CONFIG_DIR = "${configDir}";
 // Nx/Turborepo/lerna layout) still contributes its aliases. baseUrl and paths
 // are each tracked with the dir of the config that DECLARED them (TS resolves
 // them relative to that file, `${configDir}` aside). Cycles are broken via
-// `seen`; a missing relative base is surfaced as a warning.
+// `seen`, the chain of configs being read — not every config read so far: in
+// a diamond (`extends: ["./a", "./b"]`, both extending ./base) the second
+// visit of base is no cycle, and returning nothing there kept a's paths where
+// tsc lets b's inherited ones win. A missing relative base is surfaced as a
+// warning.
 function readTsConfig(
   root: string,
   fileSet: Set<string>,
@@ -349,6 +361,21 @@ function readTsConfig(
 ): TsEffective | undefined {
   if (seen.has(rel)) return undefined;
   seen.add(rel);
+  try {
+    return readTsConfigOnce(root, fileSet, rel, warnings, seen, packages);
+  } finally {
+    seen.delete(rel);
+  }
+}
+
+function readTsConfigOnce(
+  root: string,
+  fileSet: Set<string>,
+  rel: string,
+  warnings: string[],
+  seen: Set<string>,
+  packages: WorkspacePackage[],
+): TsEffective | undefined {
   const cfg = tolerantJsonParse(readText(join(root, rel))) as
     | { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> }; extends?: string | string[] }
     | undefined;
@@ -471,7 +498,9 @@ function matchEntryTargets(entries: ExportEntry[], key: string): string[] | unde
     const post = entry.key.slice(starAt + 1);
     if (!key.startsWith(pre) || !key.endsWith(post) || key.length < pre.length + post.length) continue;
     const fill = key.slice(pre.length, key.length - post.length);
-    return entry.targets.map((t) => t.replace(/\*/g, fill));
+    // A function, never a replacement string: `$&`, `$'` or `$$` in the
+    // specifier are characters of a path, not substitution patterns.
+    return entry.targets.map((t) => t.replace(/\*/g, () => fill));
   }
   return undefined;
 }
@@ -751,10 +780,14 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
       (a, b) => Number(a.star) - Number(b.star) || b.prefix.length - a.prefix.length || byStr(a.prefix, b.prefix),
     );
     if (!tsPaths.length && eff.baseUrl === undefined) continue; // nothing affects resolution
-    tsConfigs.push({ dir, baseUrl, baseUrlSet: eff.baseUrl !== undefined, paths: tsPaths });
+    tsConfigs.push({ dir, file: base, baseUrl, baseUrlSet: eff.baseUrl !== undefined, paths: tsPaths });
   }
   // Nearest-enclosing first: deepest dir wins; the root ("") is the fallback.
-  tsConfigs.sort((a, b) => b.dir.length - a.dir.length);
+  // In one dir the project config wins over the root tsconfig.base.json it
+  // usually extends: the base sorted first and its aliases shadowed the
+  // project's own overrides (tsc compiles tsconfig.json).
+  const fileRank = (f: string): number => (f === "tsconfig.json" ? 0 : f === "jsconfig.json" ? 1 : 2);
+  tsConfigs.sort((a, b) => b.dir.length - a.dir.length || fileRank(a.file) - fileRank(b.file));
   warnings.push(...pkgWarnings);
 
   // Every go.mod, not just the one nearest the root — multi-module repos (a Go
@@ -917,6 +950,11 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     jvm: buildJvmIndex({ filesByDir, javaRoots: javaRootList }, scan.files),
     dartPackages,
     luaRoots: [...luaRoots].sort(byLen),
+    root: scan.root,
+    svelteKitRoots: [...fileSet]
+      .filter((rel) => /(?:^|\/)svelte\.config\.(?:js|ts|mjs|cjs)$/.test(rel))
+      .map((rel) => (rel.includes("/") ? posix.dirname(rel) : ""))
+      .sort((a, b) => b.length - a.length || byStr(a, b)),
     elixirModules,
     pyRoots: [...pyRootSet].sort(byLen),
     workspacePackages,
@@ -950,15 +988,31 @@ export function resolveDocLink(fromRel: string, spec: string, ctx: ResolveContex
   let p = norm(posix.join(base, rooted ? target.slice(1) : target));
   if (p === ".") p = ""; // the repo root itself (`/`, or `./` from a root doc)
   if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
-  const hit = firstExisting(ctx, [
-    p, p + ".md", p + ".mdx",
-    posix.join(p, "README.md"), posix.join(p, "readme.md"),
-    posix.join(p, "index.md"), posix.join(p, "index.mdx"),
-  ]);
+  const probes = (q: string): string[] => [
+    q, q + ".md", q + ".mdx",
+    posix.join(q, "README.md"), posix.join(q, "readme.md"),
+    posix.join(q, "index.md"), posix.join(q, "index.mdx"),
+  ];
+  // A URL path is percent-encoded (`my%20file.md`): the file is probed as
+  // written, then decoded.
+  let decoded = p;
+  try {
+    decoded = norm(decodeURIComponent(p));
+  } catch {
+    // a lone "%": not an encoding, keep the text as written
+  }
+  // Checked again once decoded: `%2e%2e/x.md` climbs out of the repo as
+  // surely as `../x.md`, and must not be probed on disk out there.
+  if (decoded.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
+  const hit = firstExisting(ctx, decoded === p ? probes(p) : [...probes(p), ...probes(decoded)]);
   if (hit) return { kind: "resolved", target: hit };
   // A link to a real directory (even one without a README/index) is valid — it's
   // just not a file-node edge. Don't cry "broken link".
   if (!p || ctx.dirSet.has(p)) return { kind: "external" };
+  // Nor to a file that exists but is not indexed — an image, a PDF, a file the
+  // walk skips: no node to link to, and nothing broken. Every `![…](x.png)`
+  // of a README read as a missing target.
+  if (ctx.root && [p, decoded].some((q) => existsSync(join(ctx.root!, q)))) return { kind: "external" };
   return { kind: "dangling", reason: "missing-target" };
 }
 
@@ -991,12 +1045,19 @@ function resolveJs(fromRel: string, rawSpec: string, ctx: ResolveContext): Resol
   const spec = q === -1 ? rawSpec : rawSpec.slice(0, q);
   if (!spec) return { kind: "external" };
 
+  // The SvelteKit project around the importer, when there is one.
+  const kit = ctx.svelteKitRoots?.find((d) => !d || fromRel.startsWith(d + "/"));
+
   if (spec.startsWith(".")) {
     const base = fromRel.includes("/") ? posix.dirname(fromRel) : "";
     const p = norm(posix.join(base, spec));
     if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
     const hit = tryResolve(p);
-    return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    if (hit) return { kind: "resolved", target: hit };
+    // `import type { PageLoad } from "./$types"`: SvelteKit generates that
+    // module per route, under .svelte-kit/ — never a missing file.
+    if (kit !== undefined && /(?:^|\/)\$types(?:\.d\.ts|\.js)?$/.test(spec)) return { kind: "external" };
+    return { kind: "dangling", reason: "missing-module" };
   }
 
   // tsconfig path aliases (e.g. "@/x" -> "src/x"), nearest enclosing config first.
@@ -1012,7 +1073,7 @@ function resolveJs(fromRel: string, rawSpec: string, ctx: ResolveContext): Resol
       const suffix = tp.star ? spec.slice(tp.prefix.length) : "";
       let targetTreeExists = false;
       for (const t of tp.targets) {
-        const resolved = tp.star ? t.replace(/\*/, suffix) : t;
+        const resolved = tp.star ? t.replace(/\*/, () => suffix) : t; // see matchEntryTargets
         const p = norm(posix.join(cfg.baseUrl, resolved));
         const hit = tryResolve(p);
         if (hit) return { kind: "resolved", target: hit };
@@ -1037,6 +1098,17 @@ function resolveJs(fromRel: string, rawSpec: string, ctx: ResolveContext): Resol
   if (bareBase !== undefined && !spec.startsWith("/")) {
     const hit = tryResolve(norm(posix.join(bareBase, spec)));
     if (hit) return { kind: "resolved", target: hit };
+  }
+
+  // SvelteKit's `$lib` alias: the project's src/lib, unless a tsconfig
+  // `paths` entry above already said otherwise (its generated tsconfig lives
+  // under the uncommitted .svelte-kit/). sveltejs/realworld's every `$lib`
+  // import was external, and no route reached src/lib.
+  if (kit !== undefined && !aliasFallback && (spec === "$lib" || spec.startsWith("$lib/"))) {
+    const p = norm(posix.join(kit, "src/lib", spec.slice("$lib".length)));
+    const hit = tryResolve(p);
+    if (hit) return { kind: "resolved", target: hit };
+    if (ctx.dirSet.has(norm(posix.join(kit, "src/lib")))) return { kind: "dangling", reason: "alias-unresolved" };
   }
 
   // package.json `imports` (`#internal/x`): matched in the nearest package.json
@@ -1099,12 +1171,21 @@ function resolvePython(fromRel: string, spec: string, ctx: ResolveContext): Reso
     const rest = spec.slice(dots);
     const base = fromRel.includes("/") ? posix.dirname(fromRel) : "";
     // 1 dot = current package (the file's dir); each extra dot goes up one.
-    let dir = base;
-    for (let i = 1; i < dots; i++) dir = dir.includes("/") ? posix.dirname(dir) : "";
-    const hit = rest
-      ? probeModule(dir, rest)
-      : firstExisting(ctx, [posix.join(norm(dir), "__init__.py")]);
-    return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    // Past the repository root is Python's "attempted relative import beyond
+    // top-level package", never a file there (the climb used to stop at the
+    // root and resolve `from ... import util` to the root's util.py).
+    const segs = base ? base.split("/") : [];
+    if (dots - 1 > segs.length) return { kind: "dangling", reason: "escapes-repo-root" };
+    const dir = segs.slice(0, segs.length - (dots - 1)).join("/");
+    if (rest) {
+      const hit = probeModule(dir, rest);
+      return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    }
+    // `from . import x` names the package itself: its __init__.py when it has
+    // one, else a PEP 420 namespace package — a directory, no file to link,
+    // and no broken import either.
+    const init = firstExisting(ctx, [posix.join(dir, "__init__.py")]);
+    return init ? { kind: "resolved", target: init } : { kind: "external" };
   }
 
   // Absolute import: only an edge if it resolves inside the repo; otherwise it
@@ -1148,15 +1229,25 @@ function resolveGo(fromRel: string, spec: string, ctx: ResolveContext): Resoluti
       return probePkg(posix.join(r.toDir, sub));
     }
   }
-  // (ii) The home module's own path, then (iii) every other in-repo module —
-  // cross-module imports are the point of a multi-module repo.
-  const ordered = home ? [home, ...ctx.goModules.filter((g) => g !== home)] : ctx.goModules;
-  for (const g of ordered) {
+  // (ii) The in-repo module whose path is the LONGEST prefix of the import —
+  // the go toolchain's rule — the home module breaking a tie. Home first used
+  // to win outright: from a repo whose root module is github.com/org/repo,
+  // `github.com/org/repo/api/v2/types` dangled instead of reaching the nested
+  // api/go.mod module github.com/org/repo/api/v2.
+  let owner: (typeof ctx.goModules)[number] | undefined;
+  for (const g of ctx.goModules) {
     if (spec !== g.module && !spec.startsWith(g.module + "/")) continue;
-    const sub = spec.slice(g.module.length).replace(/^\//, "");
-    return probePkg(posix.join(g.dir, sub));
+    if (!owner || g.module.length > owner.module.length || (g.module.length === owner.module.length && g === home)) owner = g;
   }
-  return { kind: "external" };
+  if (!owner) return { kind: "external" };
+  const pkgDir = norm(posix.join(owner.dir, spec.slice(owner.module.length).replace(/^\//, ""))).replace(/^\.$/, "");
+  // A directory holding its own go.mod is not part of the module above it, so
+  // a path into it through the outer module names no package.
+  const inside = (dir: string, parent: string): boolean => !parent || dir === parent || dir.startsWith(parent + "/");
+  if (ctx.goModules.some((g) => g !== owner && g.dir !== owner!.dir && inside(g.dir, owner!.dir) && inside(pkgDir, g.dir))) {
+    return { kind: "dangling", reason: "missing-package" };
+  }
+  return probePkg(pkgDir);
 }
 
 function resolveRust(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
@@ -1372,12 +1463,28 @@ function resolveJvm(fromRel: string, spec: string, ctx: ResolveContext): Resolut
   return hit ? { kind: "resolved", target: hit } : { kind: "external" };
 }
 
+// The C standard library and POSIX headers: a quoted `#include "stdio.h"`
+// with no local stdio.h falls back to the system directories, as the angle-
+// bracket form does — jq's jv_dtoa.c writes its libc includes that way.
+const SYSTEM_HEADERS = new Set([
+  "assert.h", "complex.h", "ctype.h", "errno.h", "fenv.h", "float.h", "inttypes.h", "iso646.h", "limits.h",
+  "locale.h", "math.h", "setjmp.h", "signal.h", "stdalign.h", "stdarg.h", "stdatomic.h", "stdbool.h", "stddef.h",
+  "stdint.h", "stdio.h", "stdlib.h", "stdnoreturn.h", "string.h", "tgmath.h", "threads.h", "time.h", "uchar.h",
+  "wchar.h", "wctype.h", "unistd.h", "fcntl.h", "pthread.h", "dirent.h", "dlfcn.h", "poll.h", "sched.h",
+  "semaphore.h", "strings.h", "termios.h", "glob.h", "regex.h", "syslog.h", "netdb.h", "pwd.h", "grp.h",
+  "libgen.h", "fnmatch.h", "spawn.h", "utime.h", "windows.h",
+]);
+const SYSTEM_HEADER_DIR = /^(?:sys|arpa|netinet|net)\//;
+
 // C/C++: local `#include "x"` relative to the including file, then each include
-// root. Unresolved quoted includes are dangling (they read as an in-repo intent).
+// root. Unresolved quoted includes are dangling (they read as an in-repo
+// intent), except the system headers above.
 function resolveC(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
   const fromDir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
   const hit = firstExisting(ctx, [posix.join(fromDir, spec), ...ctx.cIncludeRoots.map((r) => posix.join(r, spec))]);
-  return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-include" };
+  if (hit) return { kind: "resolved", target: hit };
+  if (SYSTEM_HEADERS.has(spec) || SYSTEM_HEADER_DIR.test(spec)) return { kind: "external" };
+  return { kind: "dangling", reason: "missing-include" };
 }
 
 // Ruby: `require_relative` (we normalised to a leading "./") resolves against the

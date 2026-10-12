@@ -11,8 +11,11 @@ import { byStr } from "./sort.js";
 import { shortestPaths } from "./paths.js";
 
 // Only these edge kinds carry a real "depends on" relation. A doc-link or a
-// mention says something references the name, not that it would break.
-const DEPENDS_KINDS = new Set(["import", "use", "call"]);
+// mention says something references the name, not that it would break. A
+// subtype depends on its supertype as surely as on an import: two Java classes
+// of one package, one extending the other, are linked by `extends` alone, and
+// without it impact found no dependent at all.
+export const DEPENDS_KINDS: ReadonlySet<string> = new Set(["import", "use", "call", "extends", "implements"]);
 
 // The traversal-relevant fields of an edge list, captured when a derived view
 // is built so a later call can prove the list still describes the same graph.
@@ -164,8 +167,22 @@ const isGoSource = (rel: string): boolean => rel.endsWith(".go") && !rel.endsWit
 // it. adjacencyOf below is the opposite trade — two maps, two sorts and a
 // degree distribution per call — and does earn its cache.
 export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity, opts: ClosureOptions = {}): Map<string, number> {
-  const dependents = new Map<string, Edge[]>(); // target file → incoming depends-on edges
-  const packageImports = new Map<string, Edge[]>(); // Go package dir → imports of it (goPackages)
+  return closureOver(dependentsIndex(edges, opts), seeds, depth);
+}
+
+// Who depends on each file, under one set of ClosureOptions: what every
+// reverse closure walks. Built once and reused by a caller that closes over
+// many seeds — delta used to rebuild it (twice) for each changed file, 4×10⁸
+// edge visits for 2,000 changed files of a 100k-edge graph.
+export interface DependentsIndex {
+  dependents: Map<string, Edge[]>; // target file → incoming depends-on edges
+  packageImports: Map<string, Edge[]>; // Go package dir → imports of it (goPackages)
+  goPackages: boolean;
+}
+
+export function dependentsIndex(edges: Edge[], opts: ClosureOptions = {}): DependentsIndex {
+  const dependents = new Map<string, Edge[]>();
+  const packageImports = new Map<string, Edge[]>();
   const push = (m: Map<string, Edge[]>, key: string, e: Edge): void => {
     const arr = m.get(key);
     if (arr) arr.push(e);
@@ -177,6 +194,12 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity,
     push(dependents, e.to, e);
     if (opts.goPackages && e.kind === "import" && e.to.endsWith(".go")) push(packageImports, dirOf(e.to), e);
   }
+  return { dependents, packageImports, goPackages: opts.goPackages === true };
+}
+
+// The reverse closure of `seeds` over a prebuilt index (see reverseClosure).
+export function closureOver(index: DependentsIndex, seeds: string[], depth = Infinity): Map<string, number> {
+  const { dependents, packageImports, goPackages } = index;
   const depthOf = new Map<string, number>();
   const seen = new Set<string>(seeds);
   let frontier = [...seeds];
@@ -185,7 +208,7 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity,
     for (const node of frontier) {
       let incoming = dependents.get(node) ?? [];
       // A package's importers depend on each of its non-test files.
-      if (opts.goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf(node)) ?? []);
+      if (goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf(node)) ?? []);
       for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);
@@ -384,8 +407,9 @@ export function dependencyPath(
       for (const t of targets) list.push([t, e.kind]);
     }
     // Strongest kind first per target, so the step kind kept is the one
-    // that states the dependency (an import over a call to the same file).
-    const rank = (k: string): number => (k === "import" ? 0 : k === "use" ? 1 : 2);
+    // that states the dependency (an import, then inheritance, over a call to
+    // the same file).
+    const rank = (k: string): number => (k === "import" ? 0 : k === "extends" || k === "implements" ? 1 : k === "use" ? 2 : 3);
     for (const list of out.values()) list.sort((a, b) => byStr(a[0], b[0]) || rank(a[1]) - rank(b[1]));
     return (node) => out.get(node) ?? [];
   };

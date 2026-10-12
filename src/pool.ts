@@ -18,7 +18,7 @@
 // resolve, spawn, or agree returns undefined and the caller scans as before.
 import { existsSync, statSync } from "node:fs";
 import * as os from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { FileRecord } from "./types.js";
@@ -72,10 +72,11 @@ interface WorkerOutput {
 // the caller stays sequential — importing THEIR bundle in a worker would run
 // their top-level code, which is exactly the hazard src/engine.ts:215 warns
 // about.
-function resolveEngineUrl(): string | undefined {
+export function resolveEngineUrl(here: string = fileURLToPath(import.meta.url)): string | undefined {
   try {
-    const here = fileURLToPath(import.meta.url);
-    if (here.endsWith("engine.mjs")) return pathToFileURL(here).href;
+    // The file's NAME, not its ending: a consumer's `my-engine.mjs` bundle
+    // ends with "engine.mjs" too, and importing it in a worker is the hazard.
+    if (basename(here) === "engine.mjs") return pathToFileURL(here).href;
     const adjacent = join(dirname(here), "engine.mjs");
     if (existsSync(adjacent)) return pathToFileURL(adjacent).href;
     return undefined;
@@ -160,10 +161,12 @@ export async function extractInParallel(
   jobs: Job[],
   grammarKeys: string[],
   count: number,
-  opts: { maxCallsPerFile?: number } = {},
+  // `engineUrl` names the engine module workers import, for a caller that
+  // ships engine.mjs somewhere resolveEngineUrl does not look.
+  opts: { maxCallsPerFile?: number; engineUrl?: string } = {},
 ): Promise<Map<string, ExtractedRecord> | undefined> {
   if (count < 2 || jobs.length === 0) return undefined;
-  const engineUrl = resolveEngineUrl();
+  const engineUrl = opts.engineUrl ?? resolveEngineUrl();
   if (!engineUrl) return undefined;
 
   // Ask workers for exactly the grammars the MAIN THREAD has ready — not for
@@ -290,8 +293,11 @@ export async function extractInParallel(
             });
             w.once("error", (e) => settle(() => reject(e)));
             w.once("exit", (code) => {
-              // Already-settled rejects are no-ops; terminate() itself exits non-zero.
-              if (!finished && code !== 0) settle(() => reject(new Error(`extraction worker exited with ${code}`)));
+              // Any exit before the queue drained is a failure, code 0 included:
+              // a worker that quit cleanly mid-run otherwise left Promise.all
+              // waiting out WORKER_TIMEOUT_MS (ten minutes). Once settled, this
+              // is a no-op — terminate() itself exits the worker.
+              if (!finished) settle(() => reject(new Error(`extraction worker exited with ${code} before finishing`)));
             });
           }),
       ),

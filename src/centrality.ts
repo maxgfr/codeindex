@@ -10,7 +10,10 @@ import type { Edge, Graph } from "./types.js";
 
 // PageRank: standard damping, L1-convergence threshold, iteration safety cap.
 const DAMPING = 0.85;
-const MAX_ITERS = 100;
+// 0.85^200 ≈ 8e-15: power iteration reaches CONVERGENCE well inside the cap.
+// 100 left an L1 error near 1.7e-7, enough to move the 4th decimal on a large
+// graph whose ranks mix slowly.
+const MAX_ITERS = 200;
 const CONVERGENCE = 1e-10;
 
 // Brandes betweenness is O(V·E); module graphs are small, but a pathological

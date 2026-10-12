@@ -37,17 +37,37 @@ export function basicTokenize(text: string): string[] {
   return out;
 }
 
+// BERT's max_input_chars_per_word: a longer "word" (a hex blob, base64) is one
+// UNK. Trying every end for every start was cubic in the word's length: 104 s
+// for an 8,000-character run the vocabulary kept matching piece by piece.
+export const MAX_WORD_CHARS = 100;
+
+// The longest piece in a model's vocabulary, "##" not counted: no match can be
+// longer, so the scan for one starts there. Computed once per model.
+const longestPiece = new WeakMap<StaticEmbedModel, number>();
+function maxPieceChars(model: StaticEmbedModel): number {
+  let max = longestPiece.get(model);
+  if (max === undefined) {
+    max = 0;
+    for (const piece of model.vocab.keys()) max = Math.max(max, piece.startsWith("##") ? piece.length - 2 : piece.length);
+    longestPiece.set(model, max);
+  }
+  return max;
+}
+
 // Greedy longest-match wordpiece for ONE word. The first piece is looked up as
 // written; every subsequent piece is looked up with a "##" prefix. If no piece
 // matches at some position the whole word is unresolvable → [unkId] (or [] when
 // the model has no UNK row). Deterministic: longest-match is a fixed scan.
 export function wordpiece(word: string, model: StaticEmbedModel): number[] {
   if (!word) return [];
+  if (word.length > MAX_WORD_CHARS) return model.unkId >= 0 ? [model.unkId] : [];
   const ids: number[] = [];
   let start = 0;
   const n = word.length;
+  const longest = maxPieceChars(model);
   while (start < n) {
-    let end = n;
+    let end = Math.min(n, start + longest);
     let match = -1;
     while (end > start) {
       const piece = start === 0 ? word.slice(start, end) : "##" + word.slice(start, end);

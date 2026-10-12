@@ -15,7 +15,7 @@ import { byStr } from "./sort.js";
 import { IGNORE_DIRS } from "./walk.js";
 import { have, sh, slugify } from "./util.js";
 import { sha1 } from "./hash.js";
-import { impactOf, reverseClosure } from "./traverse.js";
+import { closureOver, dependentsIndex, reverseClosure } from "./traverse.js";
 
 export interface DeltaOptions {
   base?: string;
@@ -352,6 +352,9 @@ export function computeDelta(
   const metricOf = (m: ModuleNode): number => (pagerankKnown ? (m.pagerank ?? 0) : m.degIn + m.degOut);
   const metricValues = graph.modules.map(metricOf);
   const metricName = pagerankKnown ? "pagerank" : "degree";
+  // What impactOf walks (inferred calls counted, not followed; a Go import
+  // reaching its whole package), indexed once for every changed file.
+  const dependents = dependentsIndex(graph.fileEdges, { skipInferred: true, goPackages: true });
 
   const modules: DeltaModule[] = [];
   for (const slug of [...new Set([...byModule.keys(), ...brokenByModule.keys()])].sort(byStr)) {
@@ -404,11 +407,15 @@ export function computeDelta(
       const prev = depthByRel.get(rel);
       if (prev === undefined || d < prev) depthByRel.set(rel, d);
     };
+    // impactOf's closure per changed file, over the index built once above.
     for (const c of moduleChanges) {
-      const imp = impactOf(graph, c.path, depth);
-      if (!imp) continue;
-      for (const f of imp.files) reach(f.rel, f.depth);
-      for (const im of imp.modules) if (im !== slug) impModules.add(im);
+      const seeds = moduleBySlug.get(c.path)?.members ?? (fileByRel.has(c.path) ? [c.path] : undefined);
+      if (!seeds) continue;
+      for (const [rel, d] of closureOver(dependents, seeds, depth)) {
+        reach(rel, d);
+        const im = fileByRel.get(rel)?.module ?? "root";
+        if (im !== c.path && im !== slug) impModules.add(im);
+      }
     }
     const importers = [...new Set(moduleBroken.map((b) => b.from))].sort(byStr);
     if (importers.length && depth >= 1) {

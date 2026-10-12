@@ -1,12 +1,12 @@
 // codeindex — the shared, self-contained repo-indexing engine.
 //
 // This file is the public contract: everything a consumer may import from the
-// vendored bundle is re-exported here, and nothing else. The bundle is dual-use:
-// import it as an ESM library (consumers inline it into their own single-file
-// builds), or run it directly (`node engine.mjs <cmd>`) via the guard at the
-// bottom. Zero runtime dependencies; the tree-sitter AST tier activates only
-// when a grammars/ directory is present next to the bundle (regex tier
-// otherwise — see ast/loader.ts).
+// vendored bundle is re-exported here, and nothing else. The bundle is a pure,
+// side-effect-free ESM library (consumers inline it into their own single-file
+// builds); the command line is the separate scripts/cli.mjs (src/cli-entry.ts),
+// which imports it — `node scripts/cli.mjs <cmd>`. Zero runtime dependencies;
+// the tree-sitter AST tier activates only when a grammars/ directory is present
+// next to the bundle (regex tier otherwise — see ast/loader.ts).
 
 // Version constants — see types.ts for bump rules.
 export { ENGINE_VERSION, SCHEMA_VERSION, EXTRACTOR_VERSION } from "./types.js";
@@ -279,13 +279,13 @@ export {
 export type { BrokenImport, DeltaDiff, DeltaOptions, DeltaResult, DeltaError, DeltaModule, DeltaChange, ChangedSymbol } from "./delta.js";
 export type { RepoMapOptions } from "./repomap.js";
 
-// MCP server over stdio (also reachable as `engine.mjs mcp`).
+// MCP server over stdio (also reachable as `cli.mjs mcp`).
 export { runMcpServer } from "./mcp.js";
 export type { McpServerOptions } from "./mcp.js";
 
 // Command rewriting: an expensive tree-wide search → its indexed equivalent.
 // Exported so a host can decide for itself rather than shelling out to
-// `engine.mjs rewrite` (same conservative refusal semantics either way).
+// `cli.mjs rewrite` (same conservative refusal semantics either way).
 // Only the decision function is public — the tokenizer/quoter are internal
 // details, and `tokenize` is already taken here by the wordpiece tokenizer.
 export { rewriteCommand } from "./rewrite.js";

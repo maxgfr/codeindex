@@ -137,8 +137,10 @@ describe("index with nothing to write", { timeout: 60_000 }, () => {
     index(repo);
     const cacheBytes = (): string => readFileSync(idx(repo, "cache.json"), "utf8");
     const before = cacheBytes();
-    const later = new Date(Date.now() + 5_000);
-    utimesSync(join(repo, "src", "util.ts"), later, later);
+    // Another time, in the past: a stamp at or after the index's own write is
+    // never trusted (racily clean), so a future one would be re-hashed for good.
+    const touchedAt = new Date(Date.now() - 60_000);
+    utimesSync(join(repo, "src", "util.ts"), touchedAt, touchedAt);
     // A touch rewrites cache.json's (size, mtime) keys, and freshness.json with it.
     expect(index(repo)).toContain("(unchanged — artifacts reused)");
     expect(cacheBytes()).not.toBe(before);

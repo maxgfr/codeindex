@@ -42,6 +42,7 @@ import { distToSrcCandidates, resolveImport, tolerantJsonParse, type ResolveCont
 import { isTestPath } from "./tests-map.js";
 import { readText } from "./walk.js";
 import { byStr } from "./sort.js";
+import { codeOnly } from "./complexity.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -304,10 +305,14 @@ function referencedElsewhere(
     const names = new Set(list.map((s) => s.name));
     const token = familyOf(list[0]!.lang) === "js" ? /[A-Za-z_$][\w$]*/g : /[A-Za-z_]\w*/g;
     const linesOf = new Map<string, number[]>();
-    readText(join(scan.root, rel))
+    // Code only: a Go doc comment (`// Reverse returns…`) above its function
+    // named it, and downgraded every documented function to "uncalled".
+    codeOnly(readText(join(scan.root, rel)), list[0]!.lang)
       .split("\n")
       .forEach((text, i) => {
-        for (const m of text.match(token) ?? []) if (names.has(m)) linesOf.set(m, [...(linesOf.get(m) ?? []), i + 1]);
+        // Appended in place: copying the list per occurrence was quadratic in
+        // a generated file that names one helper tens of thousands of times.
+        for (const m of text.match(token) ?? []) if (names.has(m)) (linesOf.get(m) ?? linesOf.set(m, []).get(m)!).push(i + 1);
       });
     for (const s of list) {
       const end = s.endLine ?? s.line;
@@ -368,6 +373,8 @@ export function publicRoots(
     frontier = next;
   }
 
+  for (const k of libraryApi(scan, ctx)) roots.add(k);
+
   // Supertypes of public types, and members of public containers, to a fixpoint.
   const supers = new Map<string, string[]>();
   for (const r of relations) {
@@ -396,6 +403,57 @@ export function publicRoots(
   }
   return roots;
 }
+
+// What a Go or JVM LIBRARY offers its importers, which no file of the repo
+// needs to use: `${name}\0${file}` keys.
+//
+// Go: every exported declaration of a package under a go.mod that another
+// module can import — not a `main` package (one declaring `func main`), not
+// under `internal/`, not a test file. A Go library's `strutil.PadLeft`, used
+// by no file of its own repo, was reported `unreferenced`.
+//
+// JVM: the public top-level types of a module whose build file publishes it
+// (Gradle `java-library` or `maven-publish`, Maven `<distributionManagement>`
+// or a deploy plugin), main sources only; their members follow through the
+// container fixpoint. An application module keeps its candidates.
+function libraryApi(scan: RepoScan, ctx: ResolveContext): string[] {
+  const keys: string[] = [];
+  const mainDirs = new Set<string>();
+  for (const f of scan.files) {
+    if (f.lang === "go" && !f.rel.endsWith("_test.go") && f.symbols.some((s) => s.name === "main" && !s.parent && s.kind === "function")) {
+      mainDirs.add(dirOf(f.rel));
+    }
+  }
+  const libraryDirs: string[] = [];
+  for (const f of scan.files) {
+    const base = f.rel.slice(f.rel.lastIndexOf("/") + 1);
+    if (base !== "build.gradle" && base !== "build.gradle.kts" && base !== "pom.xml") continue;
+    const text = readText(join(scan.root, f.rel));
+    const published =
+      base === "pom.xml"
+        ? /<distributionManagement>|maven-deploy-plugin|central-publishing-maven-plugin|nexus-staging-maven-plugin/.test(text)
+        : /\bjava-library\b|\bmaven-publish\b|com\.vanniktech\.maven\.publish/.test(text);
+    if (published) libraryDirs.push(dirOf(f.rel));
+  }
+  const under = (rel: string, dir: string): boolean => !dir || rel.startsWith(dir + "/");
+  for (const f of scan.files) {
+    if (f.kind !== "code" || isTestPath(f.rel)) continue;
+    if (f.lang === "go") {
+      if (f.rel.endsWith("_test.go")) continue;
+      const mod = ctx.goModules.find((g) => under(f.rel, g.dir)); // deepest first
+      if (!mod) continue;
+      const dir = dirOf(f.rel);
+      const inModule = mod.dir ? dir.slice(mod.dir.length + 1) : dir;
+      if (mainDirs.has(dir) || /(^|\/)internal(\/|$)/.test(inModule)) continue;
+      for (const s of f.symbols) if (s.exported) keys.push(`${s.name}${SEP}${s.file}`);
+    } else if (JVM_LANGS.has(f.lang) && libraryDirs.some((d) => under(f.rel, d)) && !/(^|\/)src\/test\//.test(f.rel)) {
+      for (const s of f.symbols) if (s.exported && !s.parent) keys.push(`${s.name}${SEP}${s.file}`);
+    }
+  }
+  return keys;
+}
+
+const JVM_LANGS = new Set(["java", "kotlin", "scala"]);
 
 // The code files a manifest names as entry points, sorted. A JS entry usually
 // names build output (`./dist/index.js`, or a bundle like `scripts/cli.mjs`),

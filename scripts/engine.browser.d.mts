@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "2.31.5";
 declare const SCHEMA_VERSION = 5;
-declare const EXTRACTOR_VERSION = 15;
+declare const EXTRACTOR_VERSION = 16;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "extends" | "implements" | "use" | "mention";
 type Tier = 0 | 1 | 2;
@@ -77,6 +77,7 @@ interface FileRecord {
     importedNames?: string[];
     importAliases?: ImportAlias[];
     truncated?: true;
+    astFallback?: true;
     generated?: "minified" | "bundle";
     relations?: RawRelation[];
     terms?: string[];
@@ -374,6 +375,7 @@ interface IndexArtifacts {
     scan: RepoScan;
     graph: Graph;
     symbols: SymbolIndex;
+    notes?: string[];
 }
 declare function buildIndexArtifacts(repo: string, opts?: BuildIndexOptions): IndexArtifacts;
 declare function buildArtifactsFromScan(scan: RepoScan, opts?: BuildIndexOptions): IndexArtifacts;
@@ -462,6 +464,7 @@ declare function workerCount(requested?: number): number;
 declare function runExtractWorker(input: WorkerInput, post: (out: WorkerOutput) => void): Promise<void>;
 declare function extractInParallel(jobs: Job[], grammarKeys: string[], count: number, opts?: {
     maxCallsPerFile?: number;
+    engineUrl?: string;
 }): Promise<Map<string, ExtractedRecord> | undefined>;
 declare function scanRepoParallel(root: string, opts?: ScanOptions & {
     workers?: number;
@@ -501,6 +504,7 @@ interface CodeInfo {
     symbols: CodeSymbol[];
     summary?: string;
     truncated?: true;
+    astFallback?: true;
     generated?: GeneratedKind;
     refs: RawRef[];
     pkg?: string;
@@ -574,6 +578,7 @@ declare function extractAst(rel: string, ext: string, content: string, opts?: {
     maxCalls?: number;
     imports?: boolean;
     maxSymbols?: number;
+    onFailure?: (error: unknown) => void;
 }): AstResult | undefined;
 
 /** One definition a tags query captured. */
@@ -663,6 +668,7 @@ interface TsPath {
 }
 interface TsConfigScope {
     dir: string;
+    file: string;
     baseUrl: string;
     baseUrlSet: boolean;
     paths: TsPath[];
@@ -726,6 +732,8 @@ interface ResolveContext {
     csharpPrefix?: Map<string, string>;
     dartPackages?: Map<string, string>;
     luaRoots?: string[];
+    svelteKitRoots?: string[];
+    root?: string;
     elixirModules?: Map<string, string>;
     warnings: string[];
     jsMemo?: Map<string, Resolution>;
@@ -1225,7 +1233,7 @@ declare function searchIndex(scan: RepoScan, query: string, opts?: SearchOptions
  */
 declare function explainQuery(scan: RepoScan, query: string, opts?: SearchOptions): ExplainedSearch;
 
-declare const EMBED_VERSION = 2;
+declare const EMBED_VERSION = 3;
 interface StaticEmbedModel {
     modelId: string;
     dim: number;
@@ -1330,6 +1338,8 @@ interface OnboardBrief {
     brief: string;
     /** Where it was persisted, when it was. */
     memory?: string;
+    /** Why it could not be persisted (a read-only checkout, a symlinked .codeindex). */
+    memoryError?: string;
 }
 /**
  * Compose a project brief from the analyses this engine already computes.
@@ -1386,8 +1396,16 @@ declare function createFramer(): {
 };
 /** `file:///abs/path` for a repo-relative path, percent-encoding each segment. */
 declare function fileUri(root: string, rel: string): string;
-/** The inverse, or undefined when the URI points outside the repository. */
-declare function relFromUri(root: string, uri: string): string | undefined;
+/**
+ * The inverse, or undefined when the URI points outside the repository.
+ *
+ * `root` may be several spellings of one directory: a server reports
+ * realpath'd URIs (tsserver, pyright) while --repo is only resolve()d, so
+ * under /tmp (really /private/tmp on macOS) or a symlinked checkout every
+ * reference read as outside the repo and was dropped. The caller passes the
+ * real path too; this module stays free of the filesystem.
+ */
+declare function relFromUri(root: string | readonly string[], uri: string): string | undefined;
 /**
  * Normalise whatever `textDocument/references` or `textDocument/definition`
  * returned into engine coordinates.
@@ -1401,7 +1419,7 @@ declare function relFromUri(root: string, uri: string): string | undefined;
  * deduped and sorted so an LSP answer is as deterministic as a static one, even
  * though the server's ordering is not guaranteed.
  */
-declare function locationsToRefs(root: string, raw: unknown): LspRef[];
+declare function locationsToRefs(root: string | readonly string[], raw: unknown): LspRef[];
 
 interface LspTransport {
     write(chunk: string): void;
@@ -1417,6 +1435,12 @@ interface LspTransport {
 interface LspSessionOptions {
     /** Absolute repository root; every URI is built against it. */
     root: string;
+    /**
+     * Other spellings of the same root a server may answer with — its real
+     * path, when `root` goes through a symlink (/tmp on macOS). Answers under
+     * any of them are read as the repository's.
+     */
+    rootAliases?: readonly string[];
     timeoutMs?: number;
     startupTimeoutMs?: number;
     initializationOptions?: unknown;
@@ -1464,20 +1488,28 @@ interface LspConfig {
     version: 1;
     servers: LspServerConfig[];
 }
-type LspConfigSource = "env" | "repo" | "cwd" | "none";
+type LspConfigSource = "env" | "repo" | "cwd" | "user" | "none";
 interface ResolvedLspConfigPath {
     path: string | undefined;
     source: LspConfigSource;
+    /** A repo (or cwd) config left unread because it was not trusted. */
+    ignored?: string;
+}
+/** Whether a repository may configure the commands the LSP tier spawns. */
+interface LspTrust {
+    /** `--trust-lsp-config`; CODEINDEX_TRUST_LSP_CONFIG=1 grants it too. */
+    trustRepoConfig?: boolean;
 }
 /**
- * Resolution ladder, mirroring resolveEmbedModelDir: an explicit env var wins
- * outright, then the repo, then the working directory.
+ * Resolution ladder: an explicit env var wins outright; then the repo, then
+ * the working directory — both only when trusted (see TRUST above); then the
+ * per-user config.
  *
  * `CODEINDEX_LSP_CONFIG` set to an empty string, `0` or `off` DISABLES the tier
  * even when a repo config exists — the escape hatch for a CI job that must not
  * spawn anything, without deleting a file the rest of the team relies on.
  */
-declare function resolveLspConfigPath(repo: string): ResolvedLspConfigPath;
+declare function resolveLspConfigPath(repo: string, trust?: LspTrust): ResolvedLspConfigPath;
 /** Validate a parsed payload, throwing with the field that is wrong. */
 declare function parseLspConfig(payload: unknown): LspConfig;
 /**
@@ -1488,7 +1520,7 @@ declare function parseLspConfig(payload: unknown): LspConfig;
  * point someone asked for the tier and silently ignoring their config is worse
  * than failing: they would spend the afternoon wondering why nothing improved.
  */
-declare function loadLspConfig(repo: string): LspConfig | undefined;
+declare function loadLspConfig(repo: string, trust?: LspTrust): LspConfig | undefined;
 /** The server that claims a language, or undefined. First match wins. */
 declare function serverForLang(config: LspConfig, lang: string): LspServerConfig | undefined;
 
@@ -1601,8 +1633,8 @@ declare class LspSessionPool {
     private unhook;
 }
 
-/** How a query reaches its servers. */
-interface LspQueryOptions {
+/** How a query reaches its servers, and whether the repo may configure them. */
+interface LspQueryOptions extends LspTrust {
     /**
      * Reuse sessions across queries (the MCP server passes its own). Without
      * one, each query opens a fresh session and shuts it down before returning.
@@ -1627,6 +1659,11 @@ interface LspStatus {
     mode: "none" | "configured";
     configPath: string | null;
     source: LspConfigSource;
+    /** A repository config left unread because it was not trusted, and why. */
+    ignoredConfig?: {
+        path: string;
+        reason: string;
+    };
     servers: LspServerStatus[];
     /** Languages present in the repo that no configured server claims. */
     unmappedLanguages: string[];
@@ -1639,7 +1676,7 @@ interface LspStatus {
  * capabilities — the analogue of `probeEndpoint` in `embed status`, and like it,
  * the only part that touches the outside world.
  */
-declare function lspStatus(scan: RepoScan, repo: string, probe?: boolean): Promise<LspStatus>;
+declare function lspStatus(scan: RepoScan, repo: string, probe?: boolean, trust?: LspTrust): Promise<LspStatus>;
 /**
  * `findReferences`, annotated by a language server when one can answer.
  *
@@ -1984,10 +2021,11 @@ interface McpServerOptions {
     maxResponseBytes?: number;
     profile?: string;
     watch?: boolean;
+    trustLspConfig?: boolean;
 }
 declare function runMcpServer(opts?: McpServerOptions): Promise<void>;
 
-declare function rewriteCommand(cmd: string, bin?: string): string | undefined;
+declare function rewriteCommand(cmd: string, bin?: string, cwd?: string): string | undefined;
 
 declare function sha1(s: string | Uint8Array): string;
 declare function shortHash(s: string, n?: number): string;

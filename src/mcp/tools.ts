@@ -130,7 +130,7 @@ export const TOOLS = [
           description:
             "Return only name/kind/file/line (plus parent for a member) — drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false).",
         },
-        maxResults: { type: "number", minimum: 1, description: "Cap matches (default 50)" },
+        maxResults: { type: "integer", minimum: 1, description: "Cap matches (default 50)" },
       },
       required: ["repo", "namePath"],
     },
@@ -171,7 +171,7 @@ export const TOOLS = [
   {
     name: "lsp_status",
     description:
-      "Is the optional LSP tier configured, and would it answer? Reports the config path and its source, each server with whether its command is on PATH and how many files in this repo it claims, and the languages no server covers. Opt-in by asset: the tier is active only when <repo>/.codeindex/lsp.json exists (or CODEINDEX_LSP_CONFIG points at one). `probe: true` additionally starts each server to read the capabilities it really advertises. The tier never touches graph.json/symbols.json — it annotates query answers only.",
+      "Is the optional LSP tier configured, and would it answer? Reports the config path and its source, each server with whether its command is on PATH and how many files in this repo it claims, and the languages no server covers. Opt-in by asset: the tier is active only when CODEINDEX_LSP_CONFIG points at a config or ~/.config/codeindex/lsp.json exists; the repo's own <repo>/.codeindex/lsp.json names commands to run, so it is read only when the server was started with --trust-lsp-config (or CODEINDEX_TRUST_LSP_CONFIG=1), and is reported as `ignoredConfig` otherwise. `probe: true` additionally starts each server to read the capabilities it really advertises. The tier never touches graph.json/symbols.json — it annotates query answers only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -189,7 +189,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         ...repoProp,
-        budgetTokens: { type: "number", minimum: 1, description: "Token budget for the key-files section (default 900)" },
+        budgetTokens: { type: "integer", minimum: 1, description: "Token budget for the key-files section (default 900)" },
         remember: { type: "boolean", description: "Persist the brief as the `onboarding` memory (default true)" },
       },
       required: ["repo"],
@@ -201,7 +201,7 @@ export const TOOLS = [
       "Token-budgeted map of the repository: the most central production files (PageRank over the edges production code creates; tests left out) with their public types, functions and methods first, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
     inputSchema: {
       type: "object",
-      properties: { ...repoProp, budgetTokens: { type: "number", minimum: 1, description: "Approximate token budget (default 1024)" } },
+      properties: { ...repoProp, budgetTokens: { type: "integer", minimum: 1, description: "Approximate token budget (default 1024)" } },
       required: ["repo"],
     },
   },
@@ -214,7 +214,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         since: sinceProp,
-        limit: { type: "number", minimum: 1, description: "Max files (default 20)" },
+        limit: { type: "integer", minimum: 1, description: "Max files (default 20)" },
       },
       required: ["repo"],
     },
@@ -229,9 +229,9 @@ export const TOOLS = [
         ...repoProp,
         since: sinceProp,
         hidden: { type: "boolean", description: "Only pairs no graph edge links (default false)" },
-        minTogether: { type: "number", minimum: 1, description: "Commits a pair must share (default 3)" },
-        maxCommitFiles: { type: "number", minimum: 1, description: "Skip commits touching more files, as mass refactors (default 30)" },
-        limit: { type: "number", minimum: 1, description: "Max pairs (default 100)" },
+        minTogether: { type: "integer", minimum: 1, description: "Commits a pair must share (default 3)" },
+        maxCommitFiles: { type: "integer", minimum: 1, description: "Skip commits touching more files, as mass refactors (default 30)" },
+        limit: { type: "integer", minimum: 1, description: "Max pairs (default 100)" },
       },
       required: ["repo"],
     },
@@ -308,7 +308,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         ...scopeProps,
-        limit: { type: "number", minimum: 0, description: "Cap entries (default: all)" },
+        limit: { type: "integer", minimum: 1, description: "Cap entries (default: all)" },
         kinds: { type: "string", enum: ["callable", "all"], description: "Candidate kinds (default callable; all adds types, properties and constants, unreferenced only)" },
         includeTail: { type: "boolean", description: "Also report examples, docs, fixtures and scripts" },
       },
@@ -324,10 +324,10 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         ...scopeProps,
-        minFiles: { type: "number", minimum: 1, description: "Distinct files a value must span (default 2)" },
-        minCount: { type: "number", minimum: 1, description: "Total occurrences required (default 3)" },
+        minFiles: { type: "integer", minimum: 1, description: "Distinct files a value must span (default 2)" },
+        minCount: { type: "integer", minimum: 1, description: "Total occurrences required (default 3)" },
         includeTests: { type: "boolean", description: "Count test files too (default false)" },
-        limit: { type: "number", minimum: 0, description: "Cap duplications (default: all)" },
+        limit: { type: "integer", minimum: 1, description: "Cap duplications (default: all)" },
       },
       required: ["repo"],
     },
@@ -343,7 +343,7 @@ export const TOOLS = [
         file: { type: "string" },
         risk: { type: "boolean", description: "Return complexity × git-churn risk ranking instead" },
         since: { ...sinceProp, description: "Only count risk churn after this ref (tag, branch, sha) or since this date" },
-        top: { type: "number", minimum: 1, description: "Cap ranked symbols" },
+        top: { type: "integer", minimum: 1, description: "Cap ranked symbols" },
       },
       required: ["repo"],
     },
@@ -357,7 +357,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         module: { type: "string", description: "Module slug to focus on" },
-        maxEdges: { type: "number", minimum: 1, description: "Cap rendered edges" },
+        maxEdges: { type: "integer", minimum: 1, description: "Cap rendered edges" },
       },
       required: ["repo"],
     },
@@ -382,7 +382,7 @@ export const TOOLS = [
             "Restrict to matching paths. Rooted at the repo: '*.ts' matches root-level files only, '**/*.ts' any depth; a '!' prefix excludes (exclusion wins)",
         },
         ignoreCase: { type: "boolean" },
-        maxHits: { type: "number", minimum: 1 },
+        maxHits: { type: "integer", minimum: 1 },
         filesWithMatches: {
           type: "boolean",
           description: "One hit per matching file (its first match); maxHits then caps files",
@@ -391,7 +391,7 @@ export const TOOLS = [
           type: "boolean",
           description: "Return { hits, truncated, filesMatched, notes? } instead of the bare hit array",
         },
-        timeoutMs: { type: "number", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" },
+        timeoutMs: { type: "integer", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" },
       },
       required: ["repo", "pattern"],
     },
@@ -406,7 +406,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
+        limit: { type: "integer", minimum: 1, description: "Max results, a whole number (default 20)" },
         fuzzy: {
           type: "boolean",
           description:
@@ -447,7 +447,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         query: { type: "string", description: "Natural-language or identifier query" },
-        limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
+        limit: { type: "integer", minimum: 1, description: "Max results, a whole number (default 20)" },
         fuzzy: { type: "boolean", description: "Stem/trigram fallback for zero-document-frequency terms (default true)" },
         exact: { type: "boolean", description: "Drop results carrying no verbatim term match (default false)" },
       },
@@ -489,7 +489,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         symbol: { type: "string", description: `Symbol to centre on — ${symbolRefDescription}` },
-        depth: { type: "number", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
+        depth: { type: "integer", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
         direction: { type: "string", enum: ["out", "in", "both"], description: "out | in | both (default both)" },
       },
       required: ["repo", "symbol"],
@@ -505,8 +505,8 @@ export const TOOLS = [
         ...repoProp,
         from: { type: "string", description: `Start — ${symbolRefDescription}; a file path with files: true` },
         to: { type: "string", description: `End — ${symbolRefDescription}; a file path with files: true` },
-        depth: { type: "number", minimum: 1, description: "Longest path to look for, in hops (default 8, max 16)" },
-        maxPaths: { type: "number", minimum: 1, description: "Shortest paths to list (default 5)" },
+        depth: { type: "integer", minimum: 1, description: "Longest path to look for, in hops (default 8, max 16)" },
+        maxPaths: { type: "integer", minimum: 1, description: "Shortest paths to list (default 5)" },
         files: { type: "boolean", description: "Walk the file link-graph instead of the symbol graph (default false)" },
         includeInferred: { type: "boolean", description: "files: true only — also step through calls inferred from a name alone (default false)" },
       },
@@ -522,7 +522,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         target: { type: "string", description: "Repo-relative file path or module slug" },
-        depth: { type: "number", minimum: 1, description: "Hops to follow (default: the full closure)" },
+        depth: { type: "integer", minimum: 1, description: "Hops to follow (default: the full closure)" },
         includeInferred: { type: "boolean", description: "Also follow call edges inferred from a name alone (default false)" },
       },
       required: ["repo", "target"],
@@ -537,7 +537,7 @@ export const TOOLS = [
       properties: {
         ...repoProp,
         target: { type: "string", description: "Repo-relative file path or module slug" },
-        depth: { type: "number", minimum: 1, description: "Hops to follow (default 1)" },
+        depth: { type: "integer", minimum: 1, description: "Hops to follow (default 1)" },
         kinds: { type: "array", items: { type: "string" }, description: "Edge kinds to traverse (default all)" },
       },
       required: ["repo", "target"],
@@ -546,7 +546,7 @@ export const TOOLS = [
   {
     name: "check_rules",
     description:
-      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"|"literals"} (module-level import cycles; code files nothing connects to; values with no single source of truth, narrowed by tiers?/minFiles?/minCount?/includeTests?). Unknown keys are rejected; a forbidden rule whose globs match no indexed file comes back as an `unmatched` warning. Returns deterministic violations with severity error|warn — a CI gate.',
+      'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"|"literals"} (module-level import cycles; code files nothing connects to; values with no single source of truth, narrowed by tiers?/minFiles?/minCount?/includeTests?). Unknown keys are rejected; a forbidden rule whose globs match no indexed file comes back as an `unmatched` warning. Returns `{ errors, warnings, violations }`, as the CLI does: deterministic violations with severity error|warn — a CI gate.',
     inputSchema: {
       type: "object",
       properties: {
@@ -572,7 +572,7 @@ export const TOOLS = [
         ...repoProp,
         ...scopeProps,
         lang: { type: "string", description: "Only this language (as scan_summary names it)" },
-        limit: { type: "number", minimum: 1, description: "Entries per top list (default 10)" },
+        limit: { type: "integer", minimum: 1, description: "Entries per top list (default 10)" },
       },
       required: ["repo"],
     },
@@ -594,8 +594,8 @@ export const TOOLS = [
         ...conciseProp,
         base: { type: "string", description: "Branch or ref to review against (default: origin/HEAD, origin/main, origin/master, main, master; else HEAD)" },
         staged: { type: "boolean", description: "Review the staged changeset against HEAD instead (default false)" },
-        depth: { type: "number", minimum: 1, description: "Blast-radius hops (default 2)" },
-        limit: { type: "number", minimum: 1, description: "Max modules, highest score first (default: all)" },
+        depth: { type: "integer", minimum: 1, description: "Blast-radius hops (default 2)" },
+        limit: { type: "integer", minimum: 1, description: "Max modules, highest score first (default: all)" },
         format: { type: "string", enum: ["json", "text"], description: '"text" returns the compact human panel instead of JSON (default "json")' },
       },
       required: ["repo"],
@@ -613,8 +613,7 @@ export const TOOLS = [
 // declared here, because the spec requires structuredContent to be an object and
 // requires it to conform whenever an outputSchema is present. That rules out:
 //
-//   * array responses — symbols_overview, find_symbol, grep, check_rules,
-//     list_memories. Wrapping them in `{ items: [...] }` would make
+//   * array responses — symbols_overview, find_symbol, grep, list_memories. Wrapping them in `{ items: [...] }` would make
 //     structuredContent diverge from the text block, and changing the text block
 //     itself would break every existing client. Omitting the schema is the only
 //     option that breaks neither.
@@ -803,15 +802,21 @@ export const OUTPUT_SCHEMAS: Record<string, Record<string, unknown>> = {
       lspVersion: { type: "number" },
       mode: { type: "string", enum: ["none", "configured"] },
       configPath: { type: ["string", "null"] },
-      source: { type: "string", enum: ["env", "repo", "cwd", "none"] },
+      source: { type: "string", enum: ["env", "repo", "cwd", "user", "none"] },
+      ignoredConfig: { type: "object", properties: { path: { type: "string" }, reason: { type: "string" } }, required: ["path", "reason"] },
       servers: { type: "array", items: anyObj },
       unmappedLanguages: strArr,
     },
     required: ["lspVersion", "mode", "source", "servers", "unmappedLanguages"],
   },
+  check_rules: {
+    type: "object",
+    properties: { errors: { type: "integer" }, warnings: { type: "integer" }, violations: { type: "array", items: anyObj } },
+    required: ["errors", "warnings", "violations"],
+  },
   onboard: {
     type: "object",
-    properties: { brief: { type: "string" }, memory: { type: "string" } },
+    properties: { brief: { type: "string" }, memory: { type: "string" }, memoryError: { type: "string" } },
     required: ["brief"],
   },
   explain_search: {

@@ -1,6 +1,7 @@
 import type { Graph, ModuleNode } from "./types.js";
 import { isTestFile } from "./modules.js";
 import { byStr } from "./sort.js";
+import { DEPENDS_KINDS } from "./traverse.js";
 
 // tests→code mapping, derived from the existing graph — NO new edge kind. The
 // evidence is already there: a test file with a resolved import/call/use edge
@@ -123,7 +124,8 @@ export function computeTestMap(graph: Graph): TestMap {
   };
   for (const e of graph.fileEdges) {
     if (e.dangling) continue;
-    if (e.kind !== "import" && e.kind !== "use" && e.kind !== "call") continue;
+    // A test that subclasses the code it tests covers it too.
+    if (!DEPENDS_KINDS.has(e.kind)) continue;
     if (!testFiles.has(e.from) || testFiles.has(e.to)) continue;
     cover(e.from, e.to);
   }

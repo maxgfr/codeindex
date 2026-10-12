@@ -36,6 +36,8 @@ export interface OnboardBrief {
   brief: string;
   /** Where it was persisted, when it was. */
   memory?: string;
+  /** Why it could not be persisted (a read-only checkout, a symlinked .codeindex). */
+  memoryError?: string;
 }
 
 const README_NAMES = ["README.md", "README.markdown", "README.rst", "README.txt", "README"];
@@ -178,6 +180,12 @@ export function onboardBrief(scan: RepoScan, graph: Graph, opts: OnboardOptions 
   const brief = lines.join("\n");
   if (opts.remember === false) return { brief };
   const memoryName = opts.memoryName ?? "onboarding";
-  writeMemory(scan.root, memoryName, brief);
+  // The brief is the answer; saving it is a convenience. A failed write used
+  // to throw the computed brief away.
+  try {
+    writeMemory(scan.root, memoryName, brief);
+  } catch (e) {
+    return { brief, memoryError: `not saved as the ${memoryName} memory: ${e instanceof Error ? e.message : String(e)}` };
+  }
   return { brief, memory: memoryName };
 }

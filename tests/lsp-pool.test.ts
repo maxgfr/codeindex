@@ -18,6 +18,9 @@ import type { LspSession, LspTransport } from "../src/lsp/client.js";
 import type { OpenResult } from "../src/lsp/pool.js";
 import { findReferences } from "../src/query.js";
 import { scanRepo } from "../src/scan.js";
+import { trustRepoLspConfig } from "./lsp-trust.js";
+
+trustRepoLspConfig();
 
 const MINI = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const FAKE = fileURLToPath(new URL("./fixtures/lsp/fake-server.mjs", import.meta.url));

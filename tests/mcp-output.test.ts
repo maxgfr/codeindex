@@ -133,6 +133,7 @@ const CASES: Record<string, Record<string, unknown>> = {
   embed_status: {},
   resolution_report: {},
   index_status: {},
+  check_rules: { rules: [{ name: "no-cycles", builtin: "cycles" }] },
   write_memory: { name: "schema-probe", content: "x" },
   delete_memory: { name: "schema-probe" },
   // The three symbolic edits share a schema and would mutate the fixture, so
@@ -152,7 +153,9 @@ describe("outputSchema / structuredContent", () => {
     // The tools deliberately left out: array responses, argument-dependent
     // shapes, and plain text. Pinned so a future "just add a schema" does not
     // silently start emitting a structuredContent that cannot conform.
-    for (const name of ["symbols_overview", "find_symbol", "grep", "check_rules", "list_memories", "dead_code", "complexity", "search", "repo_map", "mermaid", "read_memory", "delta"]) {
+    // (check_rules left the list when it took the CLI's {errors, warnings,
+    // violations} object.)
+    for (const name of ["symbols_overview", "find_symbol", "grep", "list_memories", "dead_code", "complexity", "search", "repo_map", "mermaid", "read_memory", "delta"]) {
       expect(OUTPUT_SCHEMAS[name], name).toBeUndefined();
     }
   }, 60_000);
@@ -245,7 +248,7 @@ describe("SDK conformance of the advertised tool list", () => {
   // validateArgs skips a property with no `type`, so an untyped argument
   // would be read with no guard at all — the silent misreads it exists for.
   it("types every input property with a shape validateArgs checks", () => {
-    const checked = new Set(["string", "number", "boolean", "array"]);
+    const checked = new Set(["string", "number", "integer", "boolean", "array"]);
     for (const tool of toolsFor(undefined, "2025-11-25") as { name: string; inputSchema: { properties?: Record<string, { type?: string; enum?: unknown[] }> } }[]) {
       for (const [key, prop] of Object.entries(tool.inputSchema.properties ?? {})) {
         expect(checked.has(prop.type ?? ""), `${tool.name}.${key}: ${prop.type}`).toBe(true);

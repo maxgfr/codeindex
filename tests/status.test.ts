@@ -68,8 +68,10 @@ describe("codeindex status", { timeout: 60_000 }, () => {
   it("names file drift, and agrees with what `index` then does", () => {
     const repo = freshRepo();
     index(repo);
-    const later = new Date(Date.now() + 5_000);
-    utimesSync(join(repo, "src", "util.ts"), later, later); // same content
+    // Another time, in the past: a stamp at or after the index's own write is
+    // never trusted (racily clean), so a future one would be re-hashed for good.
+    const touchedAt = new Date(Date.now() - 60_000);
+    utimesSync(join(repo, "src", "util.ts"), touchedAt, touchedAt); // same content
     let s = status(repo);
     expect(s.files).toMatchObject({ touched: 1, modified: 0 });
     expect([s.artifactsFresh, s.exit]).toEqual([true, 0]); // a touch changes no artifact

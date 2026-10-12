@@ -38,7 +38,7 @@ export interface LspIncomingCall extends LspRef {
 }
 
 /** Incoming call ranges belong to `from.uri`, not to the queried symbol. */
-export function incomingCallsToSites(root: string, raw: unknown): LspIncomingCall[] {
+export function incomingCallsToSites(root: string | readonly string[], raw: unknown): LspIncomingCall[] {
   if (!Array.isArray(raw)) return [];
   const calls: LspIncomingCall[] = [];
   for (const entry of raw) {
@@ -78,6 +78,9 @@ export function uniqueIncomingCalls(calls: LspIncomingCall[]): LspIncomingCall[]
  */
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 
+// The most of an unterminated header block the framer keeps (see push).
+const MAX_HEADER_BYTES = 64 * 1024;
+
 const HEADER_END = "\r\n\r\n";
 
 export function encodeMessage(msg: LspMessage): string {
@@ -103,31 +106,69 @@ export function createFramer(): { push(chunk: Uint8Array | string): LspMessage[]
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = new Uint8Array(0);
+  // Chunks not yet merged into `buffer`, and how many bytes the frame being
+  // read needs before it can be parsed (0: not known yet). Merging every chunk
+  // on arrival copied the whole buffer each time — gigabytes for a 30 MB
+  // references answer read in 64 KB chunks.
+  const pending: Uint8Array[] = [];
+  let pendingBytes = 0;
+  let need = 0;
+  // How far `buffer` is known to hold no header terminator, so a header block
+  // still in flight is not rescanned from its start on every chunk. A dropped
+  // frame's body (one over MAX_FRAME_BYTES) is resynchronised past as if it
+  // were a header block; that cost 24 s for one 48 MB frame.
+  let scanned = 0;
+  const drop = (n: number): void => {
+    buffer = buffer.subarray(n);
+    scanned = 0;
+  };
 
   const append = (chunk: Uint8Array): void => {
-    const next = new Uint8Array(buffer.length + chunk.length);
+    pending.push(chunk);
+    pendingBytes += chunk.length;
+  };
+  const merge = (): void => {
+    if (!pending.length) return;
+    const next = new Uint8Array(buffer.length + pendingBytes);
     next.set(buffer);
-    next.set(chunk, buffer.length);
+    let at = buffer.length;
+    for (const c of pending) {
+      next.set(c, at);
+      at += c.length;
+    }
     buffer = next;
+    pending.length = 0;
+    pendingBytes = 0;
   };
 
   // Index of the header terminator, searched over BYTES so it cannot be fooled
   // by a partially decoded chunk.
   const headerEnd = (): number => {
-    for (let i = 0; i + 3 < buffer.length; i++) {
+    for (let i = scanned; i + 3 < buffer.length; i++) {
       if (buffer[i] === 13 && buffer[i + 1] === 10 && buffer[i + 2] === 13 && buffer[i + 3] === 10) return i;
     }
+    scanned = Math.max(0, buffer.length - 3);
     return -1;
   };
 
   return {
     push(chunk: Uint8Array | string): LspMessage[] {
-      append(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
+      // A caller's chunk is copied: it may reuse that memory for the next read.
+      append(typeof chunk === "string" ? encoder.encode(chunk) : chunk.slice());
       const out: LspMessage[] = [];
+      if (buffer.length + pendingBytes < need) return out; // body still in flight
+      merge();
+      need = 0;
 
       for (;;) {
         const end = headerEnd();
-        if (end < 0) return out;
+        if (end < 0) {
+          // Only a header block's last lines can matter once its terminator
+          // arrives; keeping the whole of a long run of bytes that never ends
+          // one would make every chunk copy it again.
+          if (buffer.length > MAX_HEADER_BYTES) drop(buffer.length - MAX_HEADER_BYTES);
+          return out;
+        }
 
         const headers = decoder.decode(buffer.subarray(0, end));
         // Case-insensitive, and tolerant of headers we do not know (a server is
@@ -137,21 +178,24 @@ export function createFramer(): { push(chunk: Uint8Array | string): LspMessage[]
           // No length in a complete header block: unrecoverable for this frame.
           // Drop it and resynchronise rather than stalling forever on bytes
           // that will never become a message.
-          buffer = buffer.subarray(end + 4);
+          drop(end + 4);
           continue;
         }
 
         const length = Number(match[1]);
         if (!Number.isSafeInteger(length) || length < 0 || length > MAX_FRAME_BYTES) {
-          buffer = buffer.subarray(end + 4);
+          drop(end + 4);
           continue;
         }
 
         const start = end + 4;
-        if (buffer.length < start + length) return out; // body still in flight
+        if (buffer.length < start + length) {
+          need = start + length;
+          return out; // body still in flight
+        }
 
         const body = decoder.decode(buffer.subarray(start, start + length));
-        buffer = buffer.subarray(start + length);
+        drop(start + length);
         try {
           out.push(JSON.parse(body) as LspMessage);
         } catch {
@@ -183,8 +227,23 @@ export function fileUri(root: string, rel: string): string {
   );
 }
 
-/** The inverse, or undefined when the URI points outside the repository. */
-export function relFromUri(root: string, uri: string): string | undefined {
+/**
+ * The inverse, or undefined when the URI points outside the repository.
+ *
+ * `root` may be several spellings of one directory: a server reports
+ * realpath'd URIs (tsserver, pyright) while --repo is only resolve()d, so
+ * under /tmp (really /private/tmp on macOS) or a symlinked checkout every
+ * reference read as outside the repo and was dropped. The caller passes the
+ * real path too; this module stays free of the filesystem.
+ */
+export function relFromUri(root: string | readonly string[], uri: string): string | undefined {
+  if (typeof root !== "string") {
+    for (const r of root) {
+      const rel = relFromUri(r, uri);
+      if (rel !== undefined) return rel;
+    }
+    return undefined;
+  }
   if (!uri.startsWith("file://")) return undefined;
   let path: string;
   try {
@@ -230,7 +289,7 @@ interface RawLocation {
  * deduped and sorted so an LSP answer is as deterministic as a static one, even
  * though the server's ordering is not guaranteed.
  */
-export function locationsToRefs(root: string, raw: unknown): LspRef[] {
+export function locationsToRefs(root: string | readonly string[], raw: unknown): LspRef[] {
   const list: RawLocation[] = Array.isArray(raw) ? (raw as RawLocation[]) : raw && typeof raw === "object" ? [raw as RawLocation] : [];
   const seen = new Set<string>();
   const out: LspRef[] = [];

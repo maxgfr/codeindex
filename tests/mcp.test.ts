@@ -537,8 +537,10 @@ describe("MCP server", () => {
     expect(search.length).toBeGreaterThan(0);
     expect(search[0]!.file).toBe("src/client.ts");
 
-    const violations = JSON.parse(res.get(8)!.result!.content![0]!.text) as unknown[];
-    expect(Array.isArray(violations)).toBe(true);
+    // check_rules answers as the CLI does: the counts, then the violations.
+    const report = JSON.parse(res.get(8)!.result!.content![0]!.text) as { errors: number; warnings: number; violations: unknown[] };
+    expect(Array.isArray(report.violations)).toBe(true);
+    expect(report.errors + report.warnings).toBe(report.violations.length);
 
     // embed_status: no model asset in the fixture repo → present:false, but the
     // tier reports its EMBED_VERSION regardless.

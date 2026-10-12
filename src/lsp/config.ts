@@ -14,8 +14,20 @@
 // answer differently depending on what someone once ran `npm i -g` for.
 // Presence of this file IS the opt-in — the same doctrine as the embedding
 // tier, where a model.json on disk is what turns the tier on.
+//
+// TRUST. A config names a command to SPAWN, with its arguments and its
+// environment. A repository's own `.codeindex/lsp.json` is therefore code the
+// repository runs on the reader's machine: a cloned untrusted repo could commit
+// `{"command": "sh", "args": ["-c", "curl … | sh"]}` and wait for `refs --lsp`
+// or an agent's `find_references` call. So the config inside a repository (or
+// the working directory) is read only when the caller says so —
+// `--trust-lsp-config` or CODEINDEX_TRUST_LSP_CONFIG=1. Without it, only the
+// configs the user put there themselves count: CODEINDEX_LSP_CONFIG and the
+// per-user file (~/.config/codeindex/lsp.json, or under $XDG_CONFIG_HOME). An
+// untrusted repo config is reported as `ignored`, never silently dropped.
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 export interface LspServerConfig {
@@ -43,33 +55,65 @@ export interface LspConfig {
 export const LSP_CONFIG_NAME = "lsp.json";
 export const LSP_CONFIG_DIR = ".codeindex";
 
-export type LspConfigSource = "env" | "repo" | "cwd" | "none";
+export type LspConfigSource = "env" | "repo" | "cwd" | "user" | "none";
 
 export interface ResolvedLspConfigPath {
   path: string | undefined;
   source: LspConfigSource;
+  /** A repo (or cwd) config left unread because it was not trusted. */
+  ignored?: string;
+}
+
+/** Whether a repository may configure the commands the LSP tier spawns. */
+export interface LspTrust {
+  /** `--trust-lsp-config`; CODEINDEX_TRUST_LSP_CONFIG=1 grants it too. */
+  trustRepoConfig?: boolean;
+}
+
+export const LSP_TRUST_HINT =
+  "a repository's lsp.json names commands to run, so it is read only with --trust-lsp-config or CODEINDEX_TRUST_LSP_CONFIG=1";
+
+export function repoLspConfigTrusted(trust: LspTrust = {}): boolean {
+  if (trust.trustRepoConfig === true) return true;
+  const env = (process.env.CODEINDEX_TRUST_LSP_CONFIG ?? "").trim().toLowerCase();
+  return env === "1" || env === "true" || env === "yes";
+}
+
+/** The per-user config: $XDG_CONFIG_HOME/codeindex/lsp.json, else ~/.config/…. */
+export function userLspConfigPath(): string {
+  const xdg = process.env.XDG_CONFIG_HOME?.trim();
+  return join(xdg ? resolve(xdg) : join(homedir(), ".config"), "codeindex", LSP_CONFIG_NAME);
 }
 
 /**
- * Resolution ladder, mirroring resolveEmbedModelDir: an explicit env var wins
- * outright, then the repo, then the working directory.
+ * Resolution ladder: an explicit env var wins outright; then the repo, then
+ * the working directory — both only when trusted (see TRUST above); then the
+ * per-user config.
  *
  * `CODEINDEX_LSP_CONFIG` set to an empty string, `0` or `off` DISABLES the tier
  * even when a repo config exists — the escape hatch for a CI job that must not
  * spawn anything, without deleting a file the rest of the team relies on.
  */
-export function resolveLspConfigPath(repo: string): ResolvedLspConfigPath {
+export function resolveLspConfigPath(repo: string, trust: LspTrust = {}): ResolvedLspConfigPath {
   const env = process.env.CODEINDEX_LSP_CONFIG;
   if (env !== undefined) {
     const trimmed = env.trim();
     if (!trimmed || trimmed === "0" || trimmed.toLowerCase() === "off") return { path: undefined, source: "none" };
     return { path: resolve(trimmed), source: "env" };
   }
+  const trusted = repoLspConfigTrusted(trust);
+  let ignored: string | undefined;
   const inRepo = join(repo, LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (existsSync(inRepo)) return { path: inRepo, source: "repo" };
   const inCwd = join(process.cwd(), LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (inCwd !== inRepo && existsSync(inCwd)) return { path: inCwd, source: "cwd" };
-  return { path: undefined, source: "none" };
+  for (const [path, source] of [[inRepo, "repo"], [inCwd, "cwd"]] as const) {
+    if (source === "cwd" && path === inRepo) continue;
+    if (!existsSync(path)) continue;
+    if (trusted) return { path, source };
+    ignored ??= path;
+  }
+  const user = userLspConfigPath();
+  if (existsSync(user)) return { path: user, source: "user", ...(ignored ? { ignored } : {}) };
+  return { path: undefined, source: "none", ...(ignored ? { ignored } : {}) };
 }
 
 /** Validate a parsed payload, throwing with the field that is wrong. */
@@ -104,12 +148,20 @@ export function parseLspConfig(payload: unknown): LspConfig {
       ...(Array.isArray(s.args) ? { args: s.args as string[] } : {}),
       ...(s.env && typeof s.env === "object" ? { env: s.env as Record<string, string> } : {}),
       ...(s.initializationOptions !== undefined ? { initializationOptions: s.initializationOptions } : {}),
-      ...(typeof s.timeoutMs === "number" ? { timeoutMs: s.timeoutMs } : {}),
-      ...(typeof s.startupTimeoutMs === "number" ? { startupTimeoutMs: s.startupTimeoutMs } : {}),
+      ...(s.timeoutMs !== undefined ? { timeoutMs: positiveMs(s.timeoutMs, `servers[${i}].timeoutMs`) } : {}),
+      ...(s.startupTimeoutMs !== undefined ? { startupTimeoutMs: positiveMs(s.startupTimeoutMs, `servers[${i}].startupTimeoutMs`) } : {}),
     } satisfies LspServerConfig;
   });
 
   return { version: 1, servers };
+}
+
+// A budget of 0 or less timed out every request before it was sent.
+function positiveMs(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`lsp.json: ${field} must be a positive number of milliseconds, got ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
 /**
@@ -120,8 +172,8 @@ export function parseLspConfig(payload: unknown): LspConfig {
  * point someone asked for the tier and silently ignoring their config is worse
  * than failing: they would spend the afternoon wondering why nothing improved.
  */
-export function loadLspConfig(repo: string): LspConfig | undefined {
-  const { path } = resolveLspConfigPath(repo);
+export function loadLspConfig(repo: string, trust: LspTrust = {}): LspConfig | undefined {
+  const { path } = resolveLspConfigPath(repo, trust);
   if (!path || !existsSync(path)) return undefined;
   let payload: unknown;
   try {

@@ -8,6 +8,18 @@
 //   node scripts/cli.mjs mcp
 import { runCli } from "./engine.js";
 
+// A reader that closes the pipe early (`codeindex symbols | head`) is not an
+// error of ours: stop quietly, as a Unix tool does, instead of an unhandled
+// 'error' event and its stack trace.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (e: NodeJS.ErrnoException) => {
+    // The exit code a gate already set (`rules`, `delta --fail-on`) stands:
+    // a failing CI gate must not pass because its output was piped.
+    if (e.code === "EPIPE") process.exit(process.exitCode ?? 0);
+    throw e;
+  });
+}
+
 try {
   await runCli(process.argv.slice(2));
 } catch (e) {

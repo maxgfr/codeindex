@@ -329,10 +329,34 @@ describe("tar extraction + path-traversal guard", () => {
     expect(existsSync(join(dirname(dest), "evil.wasm"))).toBe(false);
   });
 
+  it("refuses a truncated archive instead of installing a short file", () => {
+    const dest = mk("ci-gr-trunc-");
+    const whole = makeTar([{ name: "typescript.wasm", data: Buffer.alloc(2000, 7) }]);
+    const cut = whole.subarray(0, 512 + 1000); // the header, half of the data
+    expect(() => extractTarInto(cut, dest)).toThrow(/truncated grammars archive: typescript.wasm declares 2000 bytes, 1000 remain/);
+    expect(existsSync(join(dest, "typescript.wasm"))).toBe(false);
+  });
+
   it("rejects an absolute-path entry", () => {
     const dest = mk("ci-gr-abs-");
     const tar = makeTar([{ name: "/etc/evil.wasm", data: Buffer.from("x") }]);
     expect(() => extractTarInto(tar, dest)).toThrow(/unsafe tar entry/);
+  });
+});
+
+describe("scripts/fetch-grammars.mjs", () => {
+  it("leaves the committed grammars in place when a package is missing", async () => {
+    const root = mk("ci-fetch-gr-");
+    mkdirSync(join(root, "scripts", "grammars"), { recursive: true });
+    copyFileSync(fileURLToPath(new URL("../scripts/fetch-grammars.mjs", import.meta.url)), join(root, "scripts", "fetch-grammars.mjs"));
+    writeFileSync(join(root, "scripts", "grammars", "typescript.wasm"), "committed");
+    mkdirSync(join(root, "node_modules")); // every grammar package missing
+    const code = await new Promise<number | null>((settle) =>
+      execFile(process.execPath, [join(root, "scripts", "fetch-grammars.mjs")], (err) => settle(err ? ((err as { code?: number }).code ?? 1) : 0)),
+    );
+    expect(code).not.toBe(0);
+    expect(readFileSync(join(root, "scripts", "grammars", "typescript.wasm"), "utf8")).toBe("committed");
+    expect(readdirSync(join(root, "scripts"))).toEqual(["fetch-grammars.mjs", "grammars"]); // no staging left behind
   });
 });
 

@@ -9,6 +9,7 @@ import { buildModules } from "../src/modules.js";
 import { buildGraph } from "../src/graph.js";
 import { buildSymbolIndex, renderSymbolsJson } from "../src/render/symbols-json.js";
 import type { Edge, RawRef } from "../src/types.js";
+import { dependencyPath, impactOf } from "../src/traverse.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 
@@ -204,5 +205,42 @@ describe("buildSymbolIndex", () => {
     const index = JSON.parse(renderSymbolsJson(buildSymbolIndex(scanRepo(root))));
     expect(Object.keys(index.defs)).toEqual(["Weird", "__proto__", "constructor", "toString"]);
     expect(index.defs.__proto__.map((d: { kind: string }) => d.kind).sort()).toEqual(["const", "property"]);
+  });
+});
+
+describe("dependency semantics (review 2026-10)", () => {
+  function graphOf(files: Record<string, string>) {
+    const root = mkdtempSync(join(tmpdir(), "ci-graph-sem-"));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    }
+    const scan = scanRepo(root);
+    const { modules, moduleOf } = buildModules(scan);
+    return buildGraph(scan, buildResolveContext(scan), modules, moduleOf);
+  }
+
+  it("a subclass in the same package depends on its base: extends edge, impact, path", () => {
+    const g = graphOf({
+      "src/main/java/acme/BaseWorker.java": "package acme;\n\npublic class BaseWorker {\n  public void run() {}\n}\n",
+      "src/main/java/acme/FastWorker.java": "package acme;\n\npublic class FastWorker extends BaseWorker {\n  BaseWorker fallback;\n}\n",
+    });
+    expect(has(g.fileEdges, "src/main/java/acme/FastWorker.java", "src/main/java/acme/BaseWorker.java", "extends")).toBe(true);
+    // The relation no longer swallows the pair's use edge.
+    expect(has(g.fileEdges, "src/main/java/acme/FastWorker.java", "src/main/java/acme/BaseWorker.java", "use")).toBe(true);
+    expect(impactOf(g, "src/main/java/acme/BaseWorker.java")?.files.map((f) => f.rel)).toEqual(["src/main/java/acme/FastWorker.java"]);
+    expect(dependencyPath(g, "src/main/java/acme/FastWorker.java", "src/main/java/acme/BaseWorker.java")?.hops).toBe(1);
+  });
+
+  it("a use edge never crosses languages, nor follows a name imported from a package", () => {
+    const g = graphOf({
+      "api/config.py": "class DataLoaderConfig:\n    pass\n",
+      "web/app.ts": 'import { DataLoaderConfig } from "dataloader";\n\nexport const cfg: DataLoaderConfig = { batch: true };\n',
+      "web/other.ts": "export const x: DataLoaderConfig | undefined = undefined;\n",
+      "web/types.ts": "export interface SharedRecordShape {\n  id: string;\n}\n",
+      "web/use.ts": 'export const s: SharedRecordShape = { id: "a" };\n',
+    });
+    expect(g.fileEdges.filter((e) => e.to === "api/config.py")).toEqual([]);
+    expect(has(g.fileEdges, "web/use.ts", "web/types.ts", "use")).toBe(true); // same language, not imported
   });
 });

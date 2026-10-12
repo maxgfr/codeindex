@@ -18,7 +18,7 @@ import { ENGINE_VERSION, EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
 import { extractedAlike, parseExtractionProfile, type ExtractionProfile } from "./cache.js";
 import { grammarReady, resolvableGrammarKeys } from "./ast/loader.js";
 import { classify } from "./classify.js";
-import { indexDirPath, persistedArtifacts, INDEX_DIR, type PersistedArtifacts, type PersistedMeta } from "./preload.js";
+import { indexDirPath, persistedArtifacts, untrustedMtime, INDEX_DIR, type PersistedArtifacts, type PersistedMeta } from "./preload.js";
 import { keptWalkedFiles, type RepoScan, type ScanOptions } from "./scan.js";
 import { readText, type WalkedFile } from "./walk.js";
 import { headCommit } from "./git.js";
@@ -93,7 +93,8 @@ export function renderFreshness(
   extraction: ExtractionProfile,
   cache: { size: number; mtimeMs: number },
 ): string {
-  const files: Record<string, [string, number, number]> = {};
+  // No prototype: a file named `__proto__` set it instead of adding a key.
+  const files: Record<string, [string, number, number]> = Object.create(null);
   for (const f of scan.files) files[f.rel] = [f.hash, f.size, scan.mtimes.get(f.rel)!];
   return (
     JSON.stringify({
@@ -140,7 +141,8 @@ export function readFreshness(repo: string, indexDir: string = INDEX_DIR): Fresh
   const files = new Map<string, FileStamp>();
   for (const [rel, stamp] of Object.entries(value.files as Record<string, unknown>)) {
     if (!Array.isArray(stamp) || !isSha(stamp[0]) || !isCount(stamp[1]) || !isTime(stamp[2])) return undefined;
-    files.set(rel, { hash: stamp[0], size: stamp[1], mtimeMs: stamp[2] });
+    // A racily clean stamp (see untrustedMtime) proves nothing: hashed instead.
+    files.set(rel, untrustedMtime(stamp[2], cacheStat.mtimeMs) ? { hash: stamp[0], size: stamp[1] } : { hash: stamp[0], size: stamp[1], mtimeMs: stamp[2] });
   }
   return {
     meta: {

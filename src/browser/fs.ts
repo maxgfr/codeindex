@@ -327,6 +327,10 @@ export function rmSync(path: string, options?: { recursive?: boolean; force?: bo
     throw enoent(path, "unlink");
   }
   if (entry.kind === "dir") {
+    // As node does: a directory goes only with `recursive`, empty or not.
+    if (!options?.recursive) {
+      throw Object.assign(new Error(`Path is a directory: rm returned EISDIR (is a directory) ${path}`), { code: "ERR_FS_EISDIR" });
+    }
     for (const child of [...entry.children]) rmSync(k === ROOT ? `/${child}` : `${k}/${child}`, options);
   }
   entries.delete(k);
@@ -339,6 +343,9 @@ export function renameSync(from: string, to: string): void {
   const entry = entries.get(fromKey);
   if (!entry) throw enoent(from, "rename");
   const toKey = key(to);
+  // A rename onto itself is a no-op, as in node: the copy-then-remove below
+  // deleted the file.
+  if (toKey === fromKey) return;
   if (entry.kind === "dir") {
     ensureDir(toKey);
     for (const child of [...entry.children]) {
@@ -348,7 +355,7 @@ export function renameSync(from: string, to: string): void {
     ensureDir(dirname(toKey)).children.add(basename(toKey));
     entries.set(toKey, entry);
   }
-  rmSync(fromKey, { force: true });
+  rmSync(fromKey, { recursive: true, force: true });
 }
 
 export function watch(): never {

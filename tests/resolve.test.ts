@@ -559,3 +559,105 @@ describe("resolveDocLink — repo-root-relative links", () => {
     expect(resolveDocLink("docs/doc.md", "/NOPE.md", c)).toEqual({ kind: "dangling", reason: "missing-target" });
   });
 });
+
+describe("real-world campaign findings (2026-10)", () => {
+  it("S-101: a quoted include of a C system header with no local copy is external", () => {
+    const c = scratchCtx({ "src/a.c": '#include "stdio.h"\n#include "sys/types.h"\n#include "own.h"\n', "src/local.h": "", "src/b.c": "" });
+    expect(resolveImport("src/a.c", ".c", "stdio.h", c)).toEqual({ kind: "external" });
+    expect(resolveImport("src/a.c", ".c", "sys/types.h", c)).toEqual({ kind: "external" });
+    expect(resolveImport("src/a.c", ".c", "own.h", c)).toEqual({ kind: "dangling", reason: "missing-include" });
+    expect(resolveImport("src/a.c", ".c", "local.h", c)).toEqual({ kind: "resolved", target: "src/local.h" });
+  });
+
+  it("S-104: a doc link to a file that exists but is not indexed is no broken link", () => {
+    const c = scratchCtx({ "docs/features/e.md": "# e\n", "docs/assets/images/events@2x.png": "\x89PNG", "README.md": "# r\n" });
+    expect(resolveDocLink("docs/features/e.md", "../assets/images/events@2x.png", c)).toEqual({ kind: "external" });
+    expect(resolveDocLink("README.md", "docs/assets/images/events@2x.png", c)).toEqual({ kind: "external" });
+    expect(resolveDocLink("README.md", "docs/assets/images/gone.png", c)).toEqual({ kind: "dangling", reason: "missing-target" });
+  });
+
+  it("S-102: SvelteKit's $lib is src/lib, and ./$types is generated", () => {
+    const c = scratchCtx({
+      "svelte.config.js": "export default {};\n",
+      "src/lib/api.js": "export const get = () => 1;\n",
+      "src/lib/constants.js": "export const page_size = 10;\n",
+      "src/routes/+page.server.js": 'import * as api from "$lib/api.js";\n',
+      "other/a.js": "export {};\n",
+    });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$lib/api.js", c)).toEqual({ kind: "resolved", target: "src/lib/api.js" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$lib/constants", c)).toEqual({ kind: "resolved", target: "src/lib/constants.js" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$lib/missing", c)).toEqual({ kind: "dangling", reason: "alias-unresolved" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "./$types", c)).toEqual({ kind: "external" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$app/navigation", c)).toEqual({ kind: "external" });
+    // Without a svelte.config, neither is SvelteKit's.
+    const plain = scratchCtx({ "src/lib/api.js": "export {};\n", "src/a.js": "export {};\n" });
+    expect(resolveImport("src/a.js", ".js", "$lib/api.js", plain)).toEqual({ kind: "external" });
+    expect(resolveImport("src/a.js", ".js", "./$types", plain)).toEqual({ kind: "dangling", reason: "missing-module" });
+  });
+});
+
+describe("resolution review fixes (2026-10)", () => {
+  it("Go: the module with the longest path prefix owns the import", () => {
+    const c = scratchCtx({
+      "go.mod": "module github.com/org/repo\n\ngo 1.22\n",
+      "main.go": "package main\n",
+      "api/go.mod": "module github.com/org/repo/api/v2\n\ngo 1.22\n",
+      "api/types/types.go": "package types\n",
+    });
+    expect(resolveImport("main.go", ".go", "github.com/org/repo/api/v2/types", c)).toEqual({ kind: "resolved", target: "api/types/types.go" });
+    // The path go would reject: types live in the nested module, not under the root one.
+    expect(resolveImport("main.go", ".go", "github.com/org/repo/api/types", c)).toMatchObject({ kind: "dangling" });
+  });
+
+  it("tsconfig.json wins over the root tsconfig.base.json it extends", () => {
+    const c = scratchCtx({
+      "tsconfig.base.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@app/*": ["libs/app/*"] } } }),
+      "tsconfig.json": JSON.stringify({ extends: "./tsconfig.base.json", compilerOptions: { paths: { "@app/*": ["src/app/*"] } } }),
+      "libs/app/x.ts": "export const lib = 1;\n",
+      "src/app/x.ts": "export const own = 1;\n",
+      "src/main.ts": "export {};\n",
+    });
+    expect(resolveImport("src/main.ts", ".ts", "@app/x", c)).toEqual({ kind: "resolved", target: "src/app/x.ts" });
+  });
+
+  it("tsconfig extends: a diamond reads the shared base on both sides, the later one winning", () => {
+    const c = scratchCtx({
+      "base.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@base/*": ["base/*"] } } }),
+      "a.json": JSON.stringify({ extends: "./base.json", compilerOptions: { paths: { "@a/*": ["a/*"] } } }),
+      "b.json": JSON.stringify({ extends: "./base.json" }),
+      "tsconfig.json": JSON.stringify({ extends: ["./a.json", "./b.json"] }),
+      "base/x.ts": "export const x = 1;\n",
+      "a/y.ts": "export const y = 1;\n",
+      "main.ts": "export {};\n",
+    });
+    // tsc: b (last) wins, and b inherits base's paths — so @base/* resolves.
+    expect(resolveImport("main.ts", ".ts", "@base/x", c)).toEqual({ kind: "resolved", target: "base/x.ts" });
+  });
+
+  it("a path alias substitutes the specifier literally, '$' included", () => {
+    const c = scratchCtx({
+      "tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "~/*": ["src/*"] } } }),
+      "src/$&.ts": "export const odd = 1;\n",
+      "main.ts": "export {};\n",
+    });
+    expect(resolveImport("main.ts", ".ts", "~/$&", c)).toEqual({ kind: "resolved", target: "src/$&.ts" });
+  });
+
+  it("Python: a relative import climbing past the root dangles; a namespace package is no broken import", () => {
+    const c = scratchCtx({ "util.py": "x = 1\n", "pkg/mod.py": "from ... import util\n", "ns/sub/mod.py": "from . import y\n" });
+    expect(resolveImport("pkg/mod.py", ".py", "...", c)).toEqual({ kind: "dangling", reason: "escapes-repo-root" });
+    expect(resolveImport("pkg/mod.py", ".py", "...util", c)).toEqual({ kind: "dangling", reason: "escapes-repo-root" });
+    expect(resolveImport("ns/sub/mod.py", ".py", ".", c)).toEqual({ kind: "external" });
+    expect(resolveImport("pkg/mod.py", ".py", "..util", c)).toEqual({ kind: "resolved", target: "util.py" });
+  });
+
+  it("markdown: a percent-encoded link target and one holding parentheses resolve", () => {
+    const c = scratchCtx({ "my file.md": "# a\n", "docs/a(1).md": "# b\n", "README.md": "# r\n" });
+    expect(resolveDocLink("README.md", "my%20file.md", c)).toEqual({ kind: "resolved", target: "my file.md" });
+    expect(resolveDocLink("README.md", "docs/a(1).md", c)).toEqual({ kind: "resolved", target: "docs/a(1).md" });
+    expect(resolveDocLink("README.md", "100%.md", c)).toEqual({ kind: "dangling", reason: "missing-target" });
+    // An encoded `..` leaves the repo as surely as a plain one.
+    expect(resolveDocLink("README.md", "%2e%2e/outside.md", c)).toEqual({ kind: "dangling", reason: "escapes-repo-root" });
+    expect(resolveDocLink("docs/a(1).md", "..%2f..%2foutside.md", c)).toEqual({ kind: "dangling", reason: "escapes-repo-root" });
+  });
+});
