@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "2.31.7";
 declare const SCHEMA_VERSION = 5;
-declare const EXTRACTOR_VERSION = 16;
+declare const EXTRACTOR_VERSION = 17;
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "extends" | "implements" | "use" | "mention";
 type Tier = 0 | 1 | 2;
@@ -77,6 +77,7 @@ interface FileRecord {
     importedNames?: string[];
     importAliases?: ImportAlias[];
     truncated?: true;
+    callsCapped?: true;
     astFallback?: true;
     generated?: "minified" | "bundle";
     relations?: RawRelation[];
@@ -268,6 +269,10 @@ interface WalkResult {
     files: WalkedFile[];
     capped: boolean;
     excluded: number;
+    oversized?: {
+        rel: string;
+        size: number;
+    }[];
 }
 declare const DEFAULT_MAX_FILES = 20000;
 declare function walk(root: string, opts?: WalkOptions): WalkResult;
@@ -283,6 +288,10 @@ interface RepoScan {
     mtimes: Map<string, number>;
     capped: boolean;
     excluded: number;
+    oversized?: {
+        rel: string;
+        size: number;
+    }[];
     contentUnchanged: boolean;
     cacheDirty: boolean;
 }
@@ -504,6 +513,7 @@ interface CodeInfo {
     symbols: CodeSymbol[];
     summary?: string;
     truncated?: true;
+    callsCapped?: true;
     astFallback?: true;
     generated?: GeneratedKind;
     refs: RawRef[];

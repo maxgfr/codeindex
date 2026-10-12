@@ -181,6 +181,9 @@ export function readReceiver(node: TSNode | null): string | undefined {
     node.childForFieldName("argument") ??
     node.childForFieldName("receiver") ??
     node.childForFieldName("table");
+  // Rust's `crate::f()` and `super::f()` name a module by keyword, a leaf
+  // readName does not take for a name; the binder resolves both to a file.
+  if (obj && (obj.type === "crate" || obj.type === "super")) return obj.type;
   const name = obj ? readName(obj) : undefined;
   return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
 }

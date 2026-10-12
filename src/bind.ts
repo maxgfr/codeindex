@@ -60,7 +60,14 @@ const PACKAGE_DIR = new Set(["go", "java"]);
 // mates (gin calls `debugPrint` from 14 files); Python's leading underscore is
 // a convention, so an import reaches them (`self._find_error_handler` in a
 // subclass file).
-const PRIVATE_REACH: Record<string, "package" | "import"> = { go: "package", java: "package", python: "import" };
+// Rust's private items reach a module's descendants, which name them by path:
+// `crate::helper()` from anywhere in the crate, `super::f()` from a child
+// module — never by a bare name or a `use` of another module (see rustPath).
+const PRIVATE_REACH: Record<string, "package" | "import" | "path"> = { go: "package", java: "package", python: "import", rust: "path" };
+
+// Declarations no call can reach: a module or package is named, never called.
+// Rust's `mod search;` beside `fn search` took every `search()` call in the file.
+const NOT_CALLABLE = new Set(["mod", "module", "package", "namespace"]);
 
 // Receivers that name the enclosing object. JS/TS/Java `this` and Rust `self`
 // never get here (the extractor reads no receiver from them); PHP's `$this`
@@ -496,6 +503,28 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     fnParentsMemo.set(rel, (parents = set ?? noParents));
     return parents;
   };
+  // The file a Rust `crate::` or `super::` path names, read off the module
+  // tree's layout: the crate root is the nearest `lib.rs`/`main.rs` above the
+  // file (ripgrep's is `crates/core/main.rs`), a module's parent the
+  // `mod.rs`, `<dir>.rs` or crate root of the directory above it. Undefined
+  // when the layout says nothing, which leaves the call to the ordinary rules.
+  const indexed = (rel: string): boolean => (byRel ??= new Map(scan.files.map((f) => [f.rel, f]))).has(rel);
+  const firstIndexed = (dir: string, names: string[]): string | undefined =>
+    names.map((n) => (dir ? `${dir}/${n}` : n)).find(indexed);
+  const rustPath = (rel: string, receiver: string): string[] | undefined => {
+    const base = rel.slice(rel.lastIndexOf("/") + 1);
+    let found: string | undefined;
+    if (receiver === "crate") {
+      for (let dir = dirOf(rel); !found; dir = dirOf(dir)) {
+        found = firstIndexed(dir, ["lib.rs", "main.rs"]);
+        if (!dir) break;
+      }
+    } else if (base !== "lib.rs" && base !== "main.rs") {
+      const parent = dirOf(base === "mod.rs" ? dirOf(rel) : rel.slice(0, -".rs".length));
+      found = firstIndexed(parent, ["mod.rs", "lib.rs", "main.rs"]) ?? (parent && indexed(`${parent}.rs`) ? `${parent}.rs` : undefined);
+    }
+    return found === undefined ? undefined : [found];
+  };
   const inFunction = (s: CodeSymbol): boolean => s.parent !== undefined && fnParentsOf(s.file).has(s.parent);
   const isMember = (s: CodeSymbol): boolean => s.parent !== undefined && !fnParentsOf(s.file).has(s.parent);
 
@@ -508,7 +537,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
   for (const f of scan.files) {
     const reach = PRIVATE_REACH[familyOf(f.lang)] !== undefined;
     for (const s of f.symbols) {
-      if (REFERENCE_KINDS.has(s.kind) || (!s.exported && !reach)) continue;
+      if (REFERENCE_KINDS.has(s.kind) || NOT_CALLABLE.has(s.kind) || (!s.exported && !reach)) continue;
       if (only && !only.has(s.name)) continue;
       const list = byName.get(s.name);
       if (list) list.push(s);
@@ -567,7 +596,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const fnParents = fnParentsOf(f.rel);
     const isOwnMember = (s: CodeSymbol): boolean => s.parent !== undefined && !fnParents.has(s.parent);
     for (const s of f.symbols) {
-      if (REFERENCE_KINDS.has(s.kind)) continue;
+      if (REFERENCE_KINDS.has(s.kind) || NOT_CALLABLE.has(s.kind)) continue;
       if (!ownAny.has(s.name)) ownAny.set(s.name, s);
       if (isOwnMember(s)) {
         if (!ownMember.has(s.name)) ownMember.set(s.name, s);
@@ -581,7 +610,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       if (!ownMemberOf) {
         ownMemberOf = new Map();
         for (const s of f.symbols) {
-          if (REFERENCE_KINDS.has(s.kind) || !isOwnMember(s)) continue;
+          if (REFERENCE_KINDS.has(s.kind) || NOT_CALLABLE.has(s.kind) || !isOwnMember(s)) continue;
           const key = `${s.parent}\u0000${s.name}`;
           if (!ownMemberOf.has(key)) ownMemberOf.set(key, s);
         }
@@ -600,12 +629,20 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       return ownTypeByLower.get(receiver.toLowerCase());
     };
     const aliases = scope.aliases(f);
+    // `crate` and `super` as this Rust file's path qualifiers, where they name a file.
+    let rustModules: Map<string, string[]> | undefined;
+    if (family === "rust") {
+      for (const q of ["crate", "super"]) {
+        const files = rustPath(f.rel, q);
+        if (files) (rustModules ??= new Map()).set(q, files);
+      }
+    }
 
     // Cross-file defs of `name` this file reaches by stated evidence.
     const corroborated = (name: string, pool: Pool): CodeSymbol[] => {
       const out = scope.reached(exportedGroup(name, family, pool), f, name);
       const priv = hiddenGroup(name, family, pool);
-      if (priv && hiddenReach) {
+      if (priv && (hiddenReach === "package" || hiddenReach === "import")) {
         const seen = new Set(out.map((d) => d.file));
         for (const d of hiddenReach === "package" ? scope.reached(priv, f, name) : importedDefs(priv, scope.targets(f.rel))) {
           // A package-private def is visible to its own package only.
@@ -654,7 +691,8 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       if (r) return r;
       const self = (t: string | undefined): Reading => reading("self", receiver, t, t);
       if (!SELF_NAMES.has(receiver)) {
-        if (aliases.modules.has(receiver)) r = reading("module", receiver);
+        if (rustModules?.has(receiver)) r = reading("module", receiver);
+        else if (aliases.modules.has(receiver)) r = reading("module", receiver);
         else if (ownTypes.has(receiver)) r = self(receiver); // `Greeter.make()` next to Greeter
         else if (!SHAPED.has(family)) {
           // A variable named after a type this file declares: `store.get()`.
@@ -718,7 +756,9 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       if (shape === "bare") {
         const renamed = aliases.names.get(name);
         if (renamed) ({ name: callee, files: restrict } = renamed);
-      } else if (shape === "module") restrict = aliases.modules.get(receiver!);
+      } else if (shape === "module") restrict = rustModules?.get(receiver!) ?? aliases.modules.get(receiver!);
+      // A Rust path to an ancestor module reaches its private items too.
+      const viaPath = rustModules?.has(receiver!) === true && shape === "module";
       if (only && !only.has(callee)) return null;
       // What the call's shape can reach (SHAPED families): a bare call or a
       // module qualifier a free function or type, a call on an object a
@@ -742,7 +782,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
           if (!recall) return null;
         } else {
           const hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
-          if (hiddenReach === "import") {
+          if (hiddenReach === "import" || viaPath) {
             for (const d of scope.within(hiddenGroup(callee, family, pool), restrict, callee)) if (!hits.includes(d)) hits.push(d);
           }
           const chosen = pickCandidate(f.rel, hits);

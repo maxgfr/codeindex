@@ -46,7 +46,12 @@ export interface AstResult {
 }
 
 const MAX_REF_IDENTS = 512;
-const MAX_CALLS = 512;
+// The per-file call-site cap, on both tiers. It was 512, and a test file that
+// calls the function under test hundreds of times lost the rest without a word:
+// vite's `callers resolveConfig` answered 56 of 68 sites, terraform's
+// `NewContext` 53 of 78. At 8192 the TypeScript repo's index grows by 1% and
+// takes no longer; a file the cap still cuts is flagged (FileRecord.callsCapped).
+export const DEFAULT_MAX_CALLS = 8192;
 const MAX_IMPORTED_NAMES = 256;
 const MAX_SYMBOLS = 2000;
 const MAX_RELATIONS = 256;
@@ -156,7 +161,8 @@ function isStatementString(node: TSNode): boolean {
   return parent !== null && parent.type === "expression_statement" && parent.namedChildCount === 1;
 }
 
-// The call sites a file keeps, sorted by name then line; `sites` is in source
+// The call sites a file keeps, sorted by name, line, then receiver (one line may
+// call the same name on two receivers); `sites` is in source
 // order. Past the cap the survivors are chosen BEFORE that sort: slicing the
 // sorted list kept whatever sorts first, and code-unit order puts every
 // uppercase name ahead of every lowercase one — tsgo's parser.go kept 512 of its
@@ -165,7 +171,7 @@ function isStatementString(node: TSNode): boolean {
 // order, so every name a file calls stays bindable by the caller index, the call
 // edges and dead code; the rest of the budget then goes in source order. Shared
 // with the regex tier, so both keep the same sites.
-export function capCallSites<T extends { name: string; line: number }>(sites: T[], max: number): T[] {
+export function capCallSites<T extends { name: string; line: number; receiver?: string }>(sites: T[], max: number): T[] {
   let kept = sites.slice();
   if (sites.length > max) {
     const keep = new Uint8Array(sites.length);
@@ -185,7 +191,7 @@ export function capCallSites<T extends { name: string; line: number }>(sites: T[
     }
     kept = sites.filter((_, i) => keep[i] === 1);
   }
-  return kept.sort((a, b) => byStr(a.name, b.name) || a.line - b.line);
+  return kept.sort((a, b) => byStr(a.name, b.name) || a.line - b.line || byStr(a.receiver ?? "", b.receiver ?? ""));
 }
 
 function collectAll(
@@ -207,7 +213,9 @@ function collectAll(
   const addCall = (name: string | undefined, node: TSNode, receiver?: string): void => {
     if (!name || name === "_" || !/^[A-Za-z_]\w*$/.test(name)) return;
     const line = node.startPosition.row + 1;
-    const key = `${name} ${line}`;
+    // The receiver is part of the key: `incremental.NewProgram(compiler.NewProgram())`
+    // is two calls to two packages, and keeping one hid the other's caller.
+    const key = `${name} ${line} ${receiver ?? ""}`;
     if (callSeen.has(key)) return;
     callSeen.add(key);
     calls.push(receiver ? { name, line, receiver } : { name, line });
@@ -436,7 +444,7 @@ interface WalkCtx {
 // undefined when no grammar is loaded for the extension (caller falls back to the
 // regex extractor). Walks top-level declarations, type members, and declarations
 // nested up to MAX_FUNC_DEPTH function bodies deep.
-// `opts.maxCalls` overrides the per-file call-site cap (default MAX_CALLS).
+// `opts.maxCalls` overrides the per-file call-site cap (default DEFAULT_MAX_CALLS).
 // `opts.imports` (default true) fills `refs`/`pkg` from extract/imports.ts — the
 // very scan the index runs, so this API and the graph agree on every file;
 // extractCode passes false because it runs that scan itself.
@@ -970,7 +978,7 @@ export function extractAst(
       root,
       spec,
       new Set(symbols.map((s) => s.name)),
-      opts.maxCalls ?? MAX_CALLS,
+      opts.maxCalls ?? DEFAULT_MAX_CALLS,
     );
     const wantImports = opts.imports !== false;
     const refs = wantImports ? extractImports(ext, content) : [];
