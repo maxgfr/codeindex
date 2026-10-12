@@ -94,7 +94,9 @@ export const SCHEMA_VERSION = 5;
 // v17: the per-file call-site cap went from 512 to 8192 and a capped record
 // says so (callsCapped); a line calling one name on two receivers keeps both
 // sites; Rust `crate::`/`super::` calls carry their path as the receiver.
-export const EXTRACTOR_VERSION = 17;
+// v18: a method called on a Go composite literal (`T{…}.M()`) takes the
+// literal's type as its receiver, where it read an identifier inside the body.
+export const EXTRACTOR_VERSION = 18;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

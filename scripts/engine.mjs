@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.8";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 17;
+    EXTRACTOR_VERSION = 18;
   }
 });
 
