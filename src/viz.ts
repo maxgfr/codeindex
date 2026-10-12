@@ -51,9 +51,26 @@ export function moduleSlugFor(graph: Graph, target: string): string | undefined 
   if (byPath) return byPath.slug;
   return graph.files.find((f) => f.rel === target)?.module;
 }
+// A directory name as Mermaid label text. Mermaid's entity codes stand for
+// what it would read as syntax: `"` ends the quoted label, `<`/`>` and `&`
+// are HTML to a renderer with securityLevel "loose" (a directory named
+// `<img src=x onerror=…>` was emitted verbatim), and a backtick run closes the
+// ```mermaid fence. `#` is escaped first, as the entity marker itself. A line
+// break in a path would split the node definition: it becomes a space.
+export function mermaidLabel(text: string): string {
+  return text
+    .replace(/#/g, "#35;")
+    .replace(/"/g, "#quot;")
+    .replace(/&/g, "#38;")
+    .replace(/</g, "#lt;")
+    .replace(/>/g, "#gt;")
+    .replace(/`/g, "#96;")
+    .replace(/[\r\n]+/g, " ");
+}
+
 // The label is the directory as written: a slug is lossy (`données` →
-// `donn-es`). Mermaid ends a quoted label at `"`, so it is swapped for `'`.
-const nodeLabel = (m: ModuleNode): string => `${m.path.replace(/"/g, "'")}${m.tier === 0 ? " (core)" : ""}`;
+// `donn-es`).
+const nodeLabel = (m: ModuleNode): string => `${mermaidLabel(m.path)}${m.tier === 0 ? " (core)" : ""}`;
 
 export function renderMermaid(graph: Graph, opts: MermaidOptions = {}): string {
   const maxEdges = opts.maxEdges ?? 80;
@@ -162,7 +179,7 @@ export function renderMermaidClustered(
     const inTier = shown.filter((m) => m.tier === tier);
     if (!inTier.length) continue;
     lines.push(`  subgraph ${TIER_LABEL[tier]}`);
-    for (const m of inTier) lines.push(`    ${clusterNodeId(m.slug)}["${m.path.replace(/"/g, "'")}"]`);
+    for (const m of inTier) lines.push(`    ${clusterNodeId(m.slug)}["${mermaidLabel(m.path)}"]`);
     lines.push("  end");
   }
 

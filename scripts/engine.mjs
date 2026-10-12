@@ -21010,6 +21010,9 @@ function moduleSlugFor(graph, target) {
   if (byPath) return byPath.slug;
   return graph.files.find((f) => f.rel === target)?.module;
 }
+function mermaidLabel(text) {
+  return text.replace(/#/g, "#35;").replace(/"/g, "#quot;").replace(/&/g, "#38;").replace(/</g, "#lt;").replace(/>/g, "#gt;").replace(/`/g, "#96;").replace(/[\r\n]+/g, " ");
+}
 function renderMermaid(graph, opts = {}) {
   const maxEdges = opts.maxEdges ?? 80;
   const focus = opts.module ? moduleSlugFor(graph, opts.module) : void 0;
@@ -21061,7 +21064,7 @@ function renderMermaidClustered(graph, opts = {}) {
     const inTier = shown.filter((m) => m.tier === tier);
     if (!inTier.length) continue;
     lines.push(`  subgraph ${TIER_LABEL[tier]}`);
-    for (const m of inTier) lines.push(`    ${clusterNodeId(m.slug)}["${m.path.replace(/"/g, "'")}"]`);
+    for (const m of inTier) lines.push(`    ${clusterNodeId(m.slug)}["${mermaidLabel(m.path)}"]`);
     lines.push("  end");
   }
   for (const e of edges) {
@@ -21081,7 +21084,7 @@ var init_viz = __esm({
   "src/viz.ts"() {
     "use strict";
     init_sort();
-    nodeLabel = (m) => `${m.path.replace(/"/g, "'")}${m.tier === 0 ? " (core)" : ""}`;
+    nodeLabel = (m) => `${mermaidLabel(m.path)}${m.tier === 0 ? " (core)" : ""}`;
     TIER_LABEL = { 0: "Foundations", 1: "Features", 2: "Tail" };
     CLUSTER_MAX_MODULES = 40;
     CLUSTER_MAX_EDGES = 80;
@@ -22138,7 +22141,7 @@ var init_watch = __esm({
 // src/mcp/protocol.ts
 import { readFileSync as readFileSync17, statSync as statSync11 } from "fs";
 import { join as join26 } from "path";
-import { pathToFileURL as pathToFileURL2 } from "url";
+import { pathToFileURL as pathToFileURL3 } from "url";
 function validateArgs(schema, args2) {
   const props = schema.properties ?? {};
   for (const key of schema.required ?? []) {
@@ -22240,7 +22243,7 @@ function resourceLinkFor(text, tool) {
   if (parsed2.truncated !== true || typeof parsed2.artifact !== "string") return void 0;
   return {
     type: "resource_link",
-    uri: pathToFileURL2(parsed2.artifact).href,
+    uri: pathToFileURL3(parsed2.artifact).href,
     name: artifactName,
     description: `The full ${tool} result this call was too large to inline.`,
     mimeType: "application/json"
@@ -25303,6 +25306,7 @@ init_derived();
 init_relations();
 init_workspaces();
 import { join as join17 } from "path";
+import { pathToFileURL as pathToFileURL2 } from "url";
 var Bytes = class {
   buf;
   len = 0;
@@ -25591,7 +25595,7 @@ function goPackageKey(f) {
   return `${dirOf5(f.rel)}\0${pkg}`;
 }
 function renderScip(scan2, opts = {}) {
-  const projectRoot = opts.projectRoot ?? "file://" + scan2.root.replace(/\\/g, "/");
+  const projectRoot = opts.projectRoot ?? pathToFileURL2(scan2.root).href;
   const toolVersion = opts.toolVersion ?? ENGINE_VERSION;
   const packageAt2 = /* @__PURE__ */ new Map();
   const packageOf = (dir, manifest) => {
