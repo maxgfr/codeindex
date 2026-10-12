@@ -569,6 +569,13 @@ describe("real-world campaign findings (2026-10)", () => {
     expect(resolveImport("src/a.c", ".c", "local.h", c)).toEqual({ kind: "resolved", target: "src/local.h" });
   });
 
+  it("S-104: a doc link to a file that exists but is not indexed is no broken link", () => {
+    const c = scratchCtx({ "docs/features/e.md": "# e\n", "docs/assets/images/events@2x.png": "\x89PNG", "README.md": "# r\n" });
+    expect(resolveDocLink("docs/features/e.md", "../assets/images/events@2x.png", c)).toEqual({ kind: "external" });
+    expect(resolveDocLink("README.md", "docs/assets/images/events@2x.png", c)).toEqual({ kind: "external" });
+    expect(resolveDocLink("README.md", "docs/assets/images/gone.png", c)).toEqual({ kind: "dangling", reason: "missing-target" });
+  });
+
   it("S-102: SvelteKit's $lib is src/lib, and ./$types is generated", () => {
     const c = scratchCtx({
       "svelte.config.js": "export default {};\n",

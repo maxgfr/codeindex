@@ -140,7 +140,7 @@ export const REPOS: RealRepo[] = [
     // Svelte + SvelteKit: `$lib` alias, generated `./$types`.
     slug: "sveltejs/realworld",
     sha: "df796708040f5200ec572b28ab7f88ecee5794dd",
-    maxDanglingRatio: 0.03, // measured: 1/45 edges (2.2%); 11/27 (40.7%) before $lib and ./$types resolved
+    maxDanglingRatio: 0.01, // measured: 0/44 edges; 11/27 (40.7%) before $lib, ./$types and images resolved
     primaryLang: "svelte",
     crossEdge: [/^src\/routes\//, /^src\/lib\//],
     budgetMs: 120_000,
@@ -158,7 +158,7 @@ export const REPOS: RealRepo[] = [
     // Kotlin-first Gradle multi-project with Java and mkdocs docs.
     slug: "square/okhttp",
     sha: "42e5888d45623662c138ed27e80ea28bbe0aa5cc",
-    maxDanglingRatio: 0.002, // measured baseline: 6/6,032 edges (0.10%)
+    maxDanglingRatio: 0.001, // measured: 1/6,028 edges (a README link to a file that is not there); 6 before S-104
     primaryLang: "kotlin",
     crossEdge: [/^samples\/guide\//, /^okhttp\/src\//],
     budgetMs: 120_000,

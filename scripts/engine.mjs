@@ -11764,6 +11764,7 @@ var init_status = __esm({
 });
 
 // src/resolve.ts
+import { existsSync as existsSync6 } from "fs";
 import { posix as posix2 } from "path";
 import { join as join9 } from "path";
 function filesInDir(ctx, dir, ext) {
@@ -12272,6 +12273,7 @@ function buildResolveContext(scan2) {
     jvm: buildJvmIndex({ filesByDir, javaRoots: javaRootList }, scan2.files),
     dartPackages,
     luaRoots: [...luaRoots].sort(byLen),
+    root: scan2.root,
     svelteKitRoots: [...fileSet].filter((rel2) => /(?:^|\/)svelte\.config\.(?:js|ts|mjs|cjs)$/.test(rel2)).map((rel2) => rel2.includes("/") ? posix2.dirname(rel2) : "").sort((a, b) => b.length - a.length || byStr(a, b)),
     elixirModules,
     pyRoots: [...pyRootSet].sort(byLen),
@@ -12317,6 +12319,7 @@ function resolveDocLink(fromRel, spec, ctx) {
   const hit = firstExisting(ctx, decoded === p ? probes(p) : [...probes(p), ...probes(decoded)]);
   if (hit) return { kind: "resolved", target: hit };
   if (!p || ctx.dirSet.has(p)) return { kind: "external" };
+  if (ctx.root && [p, decoded].some((q) => existsSync6(join9(ctx.root, q)))) return { kind: "external" };
   return { kind: "dangling", reason: "missing-target" };
 }
 function resolveJs(fromRel, rawSpec, ctx) {
@@ -16753,7 +16756,7 @@ var init_memory = __esm({
 });
 
 // src/workspaces.ts
-import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync8 } from "fs";
+import { existsSync as existsSync7, readdirSync as readdirSync3, statSync as statSync8 } from "fs";
 import { join as join16, posix as posix6 } from "path";
 function readJson(path, label, warnings) {
   const raw = readText(path);
@@ -16810,7 +16813,7 @@ function wsGlobToRegExp(pat) {
 }
 function probeNodePkg(root, dir, kind, warnings) {
   const path = join16(root, dir, "package.json");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   const manifest = `${dir}/package.json`;
   const pkg = readJson(path, manifest, warnings);
   const out2 = {
@@ -16824,7 +16827,7 @@ function probeNodePkg(root, dir, kind, warnings) {
 }
 function probeCargo(root, dir) {
   const path = join16(root, dir, "Cargo.toml");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   const body2 = tomlSectionBody(readText(path), "package");
   const out2 = {
     name: tomlString(body2, "name") ?? dir,
@@ -16838,18 +16841,18 @@ function probeCargo(root, dir) {
 }
 function probeGoMod(root, dir) {
   const path = join16(root, dir, "go.mod");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   const name2 = readText(path).match(/^module\s+(\S+)/m)?.[1] ?? dir;
   return { name: name2, dir, kind: "go", manifest: `${dir}/go.mod` };
 }
 function probeMaven(root, dir) {
   const path = join16(root, dir, "pom.xml");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   return { name: ownArtifactId(readText(path)) ?? dir, dir, kind: "maven", manifest: `${dir}/pom.xml` };
 }
 function probePyproject(root, dir) {
   const path = join16(root, dir, "pyproject.toml");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   const toml = readText(path);
   const project = tomlSectionBody(toml, "project");
   const poetry = tomlSectionBody(toml, "tool.poetry");
@@ -16865,7 +16868,7 @@ function probePyproject(root, dir) {
 }
 function probeComposer(root, dir, warnings) {
   const path = join16(root, dir, "composer.json");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   const manifest = `${dir}/composer.json`;
   const pkg = readJson(path, manifest, warnings);
   const out2 = {
@@ -16879,7 +16882,7 @@ function probeComposer(root, dir, warnings) {
 }
 function probeNxProject(root, dir, warnings) {
   const path = join16(root, dir, "project.json");
-  if (!existsSync6(path)) return void 0;
+  if (!existsSync7(path)) return void 0;
   const manifest = `${dir}/project.json`;
   const proj = readJson(path, manifest, warnings);
   return {
@@ -16891,7 +16894,7 @@ function probeNxProject(root, dir, warnings) {
 }
 function probeGradle(root, dir) {
   for (const f of ["build.gradle", "build.gradle.kts"]) {
-    if (existsSync6(join16(root, dir, f))) {
+    if (existsSync7(join16(root, dir, f))) {
       return { name: dir, dir, kind: "gradle", manifest: `${dir}/${f}` };
     }
   }
@@ -17088,7 +17091,7 @@ function goModDirs(root, base, depth, out2) {
 function detectGoWork(root, found, warnings) {
   const gowork = readText(join16(root, "go.work"));
   if (!gowork) {
-    if (existsSync6(join16(root, "go.work"))) return;
+    if (existsSync7(join16(root, "go.work"))) return;
     const dirs2 = [];
     goModDirs(root, "", 0, dirs2);
     for (const dir of dirs2) addPackage(root, dir, found, "go", warnings);
@@ -18416,7 +18419,7 @@ try {
 
 // src/embed/model.ts
 import { createHash as createHash3 } from "crypto";
-import { existsSync as existsSync7, readFileSync as readFileSync11 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync11 } from "fs";
 import { join as join18 } from "path";
 function resolveEmbedModelDir(repo) {
   const env = process.env.CODEINDEX_EMBED_DIR;
@@ -18425,7 +18428,7 @@ function resolveEmbedModelDir(repo) {
   if (repo) candidates.push(join18(repo, ".codeindex", DEFAULT_EMBED_DIRNAME));
   candidates.push(join18(process.cwd(), ".codeindex", DEFAULT_EMBED_DIRNAME));
   for (const c2 of candidates) {
-    if (existsSync7(join18(c2, "model.json"))) return c2;
+    if (existsSync8(join18(c2, "model.json"))) return c2;
   }
   return void 0;
 }
@@ -18459,7 +18462,7 @@ function parseEmbedModel(raw, source) {
 function loadEmbedModel(dir) {
   if (!dir) return void 0;
   const path = join18(dir, "model.json");
-  if (!existsSync7(path)) return void 0;
+  if (!existsSync8(path)) return void 0;
   let raw;
   try {
     raw = JSON.parse(readFileSync11(path, "utf8"));
@@ -19150,7 +19153,7 @@ var init_coupling = __esm({
 });
 
 // src/onboard.ts
-import { existsSync as existsSync8, readFileSync as readFileSync12 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync12 } from "fs";
 import { join as join19, resolve as resolve7 } from "path";
 function taglineFromReadme(text) {
   let level = 0;
@@ -19183,7 +19186,7 @@ function taglineFromReadme(text) {
 function tagline(root) {
   for (const name2 of README_NAMES) {
     const path = join19(root, name2);
-    if (!existsSync8(path)) continue;
+    if (!existsSync9(path)) continue;
     try {
       return taglineFromReadme(readFileSync12(path, "utf8"));
     } catch {
@@ -19255,7 +19258,7 @@ var init_onboard = __esm({
 });
 
 // src/lsp/config.ts
-import { existsSync as existsSync9, readFileSync as readFileSync13 } from "fs";
+import { existsSync as existsSync10, readFileSync as readFileSync13 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join20, resolve as resolve8 } from "path";
 function repoLspConfigTrusted(trust = {}) {
@@ -19280,12 +19283,12 @@ function resolveLspConfigPath(repo, trust = {}) {
   const inCwd = join20(process.cwd(), LSP_CONFIG_DIR, LSP_CONFIG_NAME);
   for (const [path, source] of [[inRepo, "repo"], [inCwd, "cwd"]]) {
     if (source === "cwd" && path === inRepo) continue;
-    if (!existsSync9(path)) continue;
+    if (!existsSync10(path)) continue;
     if (trusted) return { path, source };
     ignored ??= path;
   }
   const user = userLspConfigPath();
-  if (existsSync9(user)) return { path: user, source: "user", ...ignored ? { ignored } : {} };
+  if (existsSync10(user)) return { path: user, source: "user", ...ignored ? { ignored } : {} };
   return { path: void 0, source: "none", ...ignored ? { ignored } : {} };
 }
 function parseLspConfig(payload) {
@@ -19330,7 +19333,7 @@ function positiveMs(value, field) {
 }
 function loadLspConfig(repo, trust = {}) {
   const { path } = resolveLspConfigPath(repo, trust);
-  if (!path || !existsSync9(path)) return void 0;
+  if (!path || !existsSync10(path)) return void 0;
   let payload;
   try {
     payload = JSON.parse(readFileSync13(path, "utf8"));
@@ -22006,7 +22009,7 @@ var init_session = __esm({
 });
 
 // src/mcp/watch.ts
-import { existsSync as existsSync10, mkdtempSync as mkdtempSync3, rmSync as rmSync5, statSync as statSync10, watch as watchFs, writeFileSync as writeFileSync5 } from "fs";
+import { existsSync as existsSync11, mkdtempSync as mkdtempSync3, rmSync as rmSync5, statSync as statSync10, watch as watchFs, writeFileSync as writeFileSync5 } from "fs";
 import { tmpdir } from "os";
 import { join as join25 } from "path";
 function watchRepo(repo, warn, maxDirs = MAX_WATCHED_DIRS) {
@@ -22135,7 +22138,7 @@ var init_watch = __esm({
           }
         });
         const info2 = ".git/info";
-        if (existsSync10(join25(this.repo, info2)) && statSync10(join25(this.repo, info2)).isDirectory()) {
+        if (existsSync11(join25(this.repo, info2)) && statSync10(join25(this.repo, info2)).isDirectory()) {
           visited.add(info2);
           this.add(info2);
         }
@@ -24088,7 +24091,7 @@ __export(rewrite_exports, {
   shellQuote: () => shellQuote,
   tokenize: () => tokenize2
 });
-import { existsSync as existsSync11, readFileSync as readFileSync19 } from "fs";
+import { existsSync as existsSync12, readFileSync as readFileSync19 } from "fs";
 import { dirname as dirname8, join as join28, relative as relative10, resolve as resolve11, sep as sep8 } from "path";
 function lex(line2) {
   const out2 = [];
@@ -24653,7 +24656,7 @@ function toScope(path) {
 function submodulesAround(cwd) {
   for (let dir = resolve11(cwd); ; dir = dirname8(dir)) {
     const modules = join28(dir, ".gitmodules");
-    if (existsSync11(modules)) {
+    if (existsSync12(modules)) {
       let text;
       try {
         text = readFileSync19(modules, "utf8");
@@ -24662,7 +24665,7 @@ function submodulesAround(cwd) {
       }
       return [...text.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)].map((m) => resolve11(dir, m[1]));
     }
-    if (existsSync11(join28(dir, ".git")) || dirname8(dir) === dir) return [];
+    if (existsSync12(join28(dir, ".git")) || dirname8(dir) === dir) return [];
   }
 }
 function rewriteCommand(cmd, bin = "codeindex", cwd) {
@@ -25897,7 +25900,7 @@ init_patharg();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync12, mkdirSync as mkdirSync4, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync4, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
 import { isAbsolute as isAbsolute10, join as join29, resolve as resolve12 } from "path";
 init_pipeline();
 init_hash();
@@ -26592,7 +26595,7 @@ function warnPathFlags(flags2) {
   if (scope === ".." || scope.startsWith("../") || isAbsolute10(scope)) {
     process.stderr.write(`codeindex: warning: --scope ${flags2.scope} is outside --repo ${flags2.repo} \u2014 nothing matches
 `);
-  } else if (scope && !/[*?[]/.test(scope) && !existsSync12(join29(flags2.repo, scope))) {
+  } else if (scope && !/[*?[]/.test(scope) && !existsSync13(join29(flags2.repo, scope))) {
     process.stderr.write(`codeindex: warning: --scope ${flags2.scope} does not exist under ${flags2.repo} \u2014 nothing matches
 `);
   }
@@ -26685,7 +26688,7 @@ function parseMcpFlags(argv) {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
-  if (defaultRepo && !existsSync12(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  if (defaultRepo && !existsSync13(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
   if (defaultRepo && !statSync13(defaultRepo).isDirectory()) throw new Error(`--repo path is not a directory: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
   return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes, profile, watch, ...trustLspConfig ? { trustLspConfig } : {} };
@@ -26792,7 +26795,7 @@ ${HELP}`);
   if ((cmd === "index" || cmd === "embed" && flags2.positional === "build") && flags2.out === "-") {
     throw new Error(`${cmd === "index" ? "index" : "embed build"} writes files: --out needs a directory, not "-"`);
   }
-  if (!existsSync12(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
+  if (!existsSync13(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
   if (!statSync13(flags2.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags2.repo}`);
   warnPathFlags(flags2);
   const scans = (!SCANLESS_COMMANDS.has(cmd) || cmd === "workspaces" && flags2.check === true) && !(cmd === "embed" && flags2.positional !== "build");
@@ -27199,7 +27202,7 @@ ${HELP}`);
       if (endpoint) {
         let fused;
         try {
-          const cacheFile = existsSync12(join29(indexDirPath(flags2.repo, indexDir), "cache.json")) ? join29(indexDirPath(flags2.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
+          const cacheFile = existsSync13(join29(indexDirPath(flags2.repo, indexDir), "cache.json")) ? join29(indexDirPath(flags2.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
           const modelId = cacheFile ? await endpointModelId() : void 0;
           const previous = cacheFile ? readEmbeddingsFile(cacheFile) : void 0;
           const index = await buildEndpointIndex(scan2, { previous, modelId });
@@ -27329,7 +27332,7 @@ ${HELP}`);
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const present = (name2) => info2.dirs.some((d) => existsSync12(join29(d, name2)));
+      const present = (name2) => info2.dirs.some((d) => existsSync13(join29(d, name2)));
       const runtimePresent = present("web-tree-sitter.wasm");
       const target = resolveGrammarsPullTarget();
       const resolvedIn = (keys) => [...keys].filter((k) => present(`${k}.wasm`)).sort();
@@ -27365,7 +27368,7 @@ ${HELP}`);
     }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const configPath = [resolve12(flags2.config), resolve12(flags2.repo, flags2.config)].find((p) => existsSync12(p)) ?? resolve12(flags2.config);
+    const configPath = [resolve12(flags2.config), resolve12(flags2.repo, flags2.config)].find((p) => existsSync13(p)) ?? resolve12(flags2.config);
     const rules = parseRulesText(readFileSync20(configPath, "utf8"), configPath);
     const { scan: scan2, graph } = await readArtifacts();
     const report = rulesReport(checkRules(graph, rules, { scan: scan2 }));

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { posix } from "node:path";
 import { join } from "node:path";
 import type { RepoScan } from "./scan.js";
@@ -126,6 +127,9 @@ export interface ResolveContext {
   // Dirs holding a svelte.config.*, deepest first: SvelteKit projects, whose
   // `$lib` alias is their src/lib and whose `./$types` modules are generated.
   svelteKitRoots?: string[];
+  // The repository on disk, for a doc link to a file the index does not hold
+  // (an image, a binary): absent in a hand-built context.
+  root?: string;
   elixirModules?: Map<string, string>; // defmodule name -> the byStr-first file declaring it
   warnings: string[]; // build-time config issues (e.g. an unparseable tsconfig)
   // Memo of JS/TS resolutions keyed by "<importing dir>\0<spec>" — resolveJs is
@@ -946,6 +950,7 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     jvm: buildJvmIndex({ filesByDir, javaRoots: javaRootList }, scan.files),
     dartPackages,
     luaRoots: [...luaRoots].sort(byLen),
+    root: scan.root,
     svelteKitRoots: [...fileSet]
       .filter((rel) => /(?:^|\/)svelte\.config\.(?:js|ts|mjs|cjs)$/.test(rel))
       .map((rel) => (rel.includes("/") ? posix.dirname(rel) : ""))
@@ -1001,6 +1006,10 @@ export function resolveDocLink(fromRel: string, spec: string, ctx: ResolveContex
   // A link to a real directory (even one without a README/index) is valid — it's
   // just not a file-node edge. Don't cry "broken link".
   if (!p || ctx.dirSet.has(p)) return { kind: "external" };
+  // Nor to a file that exists but is not indexed — an image, a PDF, a file the
+  // walk skips: no node to link to, and nothing broken. Every `![…](x.png)`
+  // of a README read as a missing target.
+  if (ctx.root && [p, decoded].some((q) => existsSync(join(ctx.root!, q)))) return { kind: "external" };
   return { kind: "dangling", reason: "missing-target" };
 }
 

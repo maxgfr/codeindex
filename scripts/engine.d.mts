@@ -733,6 +733,7 @@ interface ResolveContext {
     dartPackages?: Map<string, string>;
     luaRoots?: string[];
     svelteKitRoots?: string[];
+    root?: string;
     elixirModules?: Map<string, string>;
     warnings: string[];
     jsMemo?: Map<string, Resolution>;
