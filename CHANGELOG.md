@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.9](https://github.com/maxgfr/codeindex/compare/v2.31.8...v2.31.9) (2026-10-12)
+
+
+### Bug Fixes
+
+* **bind:** super reaches the base class; Rust variants and paths; Go literal receivers ([#35](https://github.com/maxgfr/codeindex/issues/35)) ([6dfe9f8](https://github.com/maxgfr/codeindex/commit/6dfe9f802370832e8a0029160b4eb0f54513e9b9))
+
 ## [2.31.8](https://github.com/maxgfr/codeindex/compare/v2.31.7...v2.31.8) (2026-10-12)
 
 
