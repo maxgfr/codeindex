@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.6](https://github.com/maxgfr/codeindex/compare/v2.31.5...v2.31.6) (2026-10-12)
+
+
+### Bug Fixes
+
+* harden codeindex against real-world repositories ([#32](https://github.com/maxgfr/codeindex/issues/32)) ([0a0b8f2](https://github.com/maxgfr/codeindex/commit/0a0b8f23d0f3223615a902d1a6c42f3057e8eb13))
+
 ## [2.31.5](https://github.com/maxgfr/codeindex/compare/v2.31.4...v2.31.5) (2026-10-09)
 
 
