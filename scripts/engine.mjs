@@ -19578,6 +19578,13 @@ function fileUri(root, rel2) {
   return "file://" + path.split("/").map((segment, i2) => i2 === 0 || i2 === 1 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)).join("/");
 }
 function relFromUri(root, uri) {
+  if (typeof root !== "string") {
+    for (const r of root) {
+      const rel2 = relFromUri(r, uri);
+      if (rel2 !== void 0) return rel2;
+    }
+    return void 0;
+  }
   if (!uri.startsWith("file://")) return void 0;
   let path;
   try {
@@ -19637,6 +19644,7 @@ async function openLspSession(transport, options) {
   const framer = createFramer();
   const pending = /* @__PURE__ */ new Map();
   const open = /* @__PURE__ */ new Set();
+  const answerRoots = [options.root, ...(options.rootAliases ?? []).filter((r) => r !== options.root)];
   let nextId = 1;
   let dead;
   const failAll = (error) => {
@@ -19728,11 +19736,11 @@ async function openLspSession(transport, options) {
         ...positionOf(rel2, line2, character),
         context: { includeDeclaration: true }
       });
-      return locationsToRefs(options.root, raw);
+      return locationsToRefs(answerRoots, raw);
     },
     async definition(rel2, line2, character) {
       if (!capabilities.definition) return [];
-      return locationsToRefs(options.root, await request("textDocument/definition", positionOf(rel2, line2, character)));
+      return locationsToRefs(answerRoots, await request("textDocument/definition", positionOf(rel2, line2, character)));
     },
     async incomingCalls(rel2, line2, character) {
       if (!capabilities.callHierarchy) return [];
@@ -19742,7 +19750,7 @@ async function openLspSession(transport, options) {
       try {
         for (const item of items) {
           if (!item || typeof item !== "object") continue;
-          calls.push(...incomingCallsToSites(options.root, await request("callHierarchy/incomingCalls", { item })));
+          calls.push(...incomingCallsToSites(answerRoots, await request("callHierarchy/incomingCalls", { item })));
         }
       } catch (error) {
         throw new LspIncomingCallsError(error, uniqueIncomingCalls(calls));
@@ -19925,6 +19933,15 @@ var init_spawn = __esm({
 });
 
 // src/lsp/pool.ts
+import { realpathSync as realpathSync5 } from "fs";
+function realRootOf(root) {
+  try {
+    const real = realpathSync5(root);
+    return real === root ? [] : [real];
+  } catch {
+    return [];
+  }
+}
 async function openServer(server, root) {
   if (!have(server.command)) return { ok: false, reason: `${server.command} is not on PATH` };
   const transport = spawnLspTransport(server, root);
@@ -19932,6 +19949,7 @@ async function openServer(server, root) {
   try {
     const session = await openLspSession(transport, {
       root,
+      rootAliases: realRootOf(root),
       timeoutMs: timeoutFor(server),
       startupTimeoutMs: startupTimeoutFor(server),
       ...server.initializationOptions !== void 0 ? { initializationOptions: server.initializationOptions } : {}
@@ -20411,8 +20429,8 @@ function parseRules(input) {
     const from = glob("from");
     const to = glob("to");
     if (r.kind !== void 0) {
-      const ok = Array.isArray(r.kind) && r.kind.every((k) => EDGE_KINDS2.has(k));
-      if (!ok) throw new Error(`${at} (${r.name}): \`kind\` must be an array of edge kinds (${[...EDGE_KINDS2].join(", ")})`);
+      const ok = Array.isArray(r.kind) && r.kind.length > 0 && r.kind.every((k) => EDGE_KINDS2.has(k));
+      if (!ok) throw new Error(`${at} (${r.name}): \`kind\` must be a non-empty array of edge kinds (${[...EDGE_KINDS2].join(", ")})`);
     }
     return { name: r.name, from, to, kind: r.kind, severity: r.severity, comment: r.comment };
   });
@@ -20560,6 +20578,10 @@ function checkRules(graph, rules, opts = {}) {
   }
   out2.sort((a, b) => byStr(a.rule, b.rule) || byStr(a.from, b.from) || byStr(a.to, b.to) || byStr(a.kind, b.kind));
   return out2;
+}
+function rulesReport(violations) {
+  const errors = violations.filter((v) => v.severity === "error").length;
+  return { errors, warnings: violations.length - errors, violations };
 }
 var EDGE_KIND_TABLE, EDGE_KINDS2, SEVERITIES, BUILTINS, TIERS, COMMON_KEYS, FORBIDDEN_KEYS, BUILTIN_KEYS, LITERALS_KEYS, GATED_TIERS, ENTRYPOINT_STEMS, PACKAGE_DIR_LANGS, dirOf6;
 var init_rules = __esm({
@@ -21693,7 +21715,7 @@ var init_persist = __esm({
 });
 
 // src/mcp/session.ts
-import { realpathSync as realpathSync5, statSync as statSync9 } from "fs";
+import { realpathSync as realpathSync6, statSync as statSync9 } from "fs";
 import { isAbsolute as isAbsolute8, join as join24, relative as relative8, sep as sep6 } from "path";
 function scanFingerprint(scan2) {
   return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
@@ -21756,7 +21778,7 @@ function poison(cacheMap, key, entry2) {
 }
 function realpathOr(path) {
   try {
-    return realpathSync5(path);
+    return realpathSync6(path);
   } catch {
     return path;
   }
@@ -22129,11 +22151,12 @@ function validateArgs(schema, args2) {
     const spec = props[key];
     if (!spec?.type) continue;
     const actual = Array.isArray(value) ? "array" : typeof value;
-    if (spec.type === "number") {
+    if (spec.type === "number" || spec.type === "integer") {
       const numeric = actual === "number" ? value : actual === "string" && value.trim() !== "" ? Number(value) : NaN;
       if (!Number.isFinite(numeric)) {
         return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
       }
+      if (spec.type === "integer" && !Number.isInteger(numeric)) return `\`${key}\` must be a whole number, got ${numeric}`;
       if (spec.minimum !== void 0 && numeric < spec.minimum) return `\`${key}\` must be at least ${spec.minimum}`;
       if (spec.maximum !== void 0 && numeric > spec.maximum) return `\`${key}\` must be at most ${spec.maximum}`;
       continue;
@@ -22181,13 +22204,16 @@ function artifactState(path, text, bytes) {
     return "absent";
   }
 }
-function capResponse(text, tool, repo, maxBytes, wholeRepo = true) {
-  const bytes = Buffer.byteLength(text, "utf8");
+function shellArg(s) {
+  return /^[A-Za-z0-9_\-./=@:]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'";
+}
+function capResponse(text, tool, repo, maxBytes, wholeRepo = true, onWire) {
+  const bytes = onWire ?? Buffer.byteLength(text, "utf8");
   if (bytes <= maxBytes) return text;
   const artifactName = wholeRepo && Object.hasOwn(ARTIFACT_FOR, tool) ? ARTIFACT_FOR[tool] : void 0;
   const artifact = artifactName ? join26(repo, INDEX_DIR, artifactName) : void 0;
   const state = artifact ? artifactState(artifact, text, bytes) : void 0;
-  const refresh = `codeindex index --repo ${repo} --out ${join26(repo, INDEX_DIR)}`;
+  const refresh = `codeindex index --repo ${shellArg(repo)} --out ${shellArg(join26(repo, INDEX_DIR))}`;
   return JSON.stringify(
     {
       truncated: true,
@@ -22220,7 +22246,7 @@ function resourceLinkFor(text, tool) {
     mimeType: "application/json"
   };
 }
-var PROTOCOL_VERSIONS, LATEST_PROTOCOL, ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, PROGRESS_MESSAGE_SINCE, DEFAULT_MAX_RESPONSE_BYTES, NARROWER, ARTIFACT_FOR;
+var PROTOCOL_VERSIONS, LATEST_PROTOCOL, ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, PROGRESS_MESSAGE_SINCE, DEFAULT_MAX_RESPONSE_BYTES, NARROWER, ARTIFACT_FOR, WIRE_ENVELOPE_BYTES;
 var init_protocol2 = __esm({
   "src/mcp/protocol.ts"() {
     "use strict";
@@ -22256,6 +22282,7 @@ var init_protocol2 = __esm({
       delta: 'pass `concise` (drops the hunks), a `limit` on modules, or `format` "text" for the panel'
     };
     ARTIFACT_FOR = { graph: "graph.json", symbols: "symbols.json" };
+    WIRE_ENVELOPE_BYTES = 96;
   }
 });
 
@@ -22422,7 +22449,7 @@ var init_tools = __esm({
               type: "boolean",
               description: "Return only name/kind/file/line (plus parent for a member) \u2014 drop the signature, line span, visibility and language. Roughly 2.5x smaller; use it when you are resolving a path and nothing more (default false)."
             },
-            maxResults: { type: "number", minimum: 1, description: "Cap matches (default 50)" }
+            maxResults: { type: "integer", minimum: 1, description: "Cap matches (default 50)" }
           },
           required: ["repo", "namePath"]
         }
@@ -22476,7 +22503,7 @@ var init_tools = __esm({
           type: "object",
           properties: {
             ...repoProp,
-            budgetTokens: { type: "number", minimum: 1, description: "Token budget for the key-files section (default 900)" },
+            budgetTokens: { type: "integer", minimum: 1, description: "Token budget for the key-files section (default 900)" },
             remember: { type: "boolean", description: "Persist the brief as the `onboarding` memory (default true)" }
           },
           required: ["repo"]
@@ -22487,7 +22514,7 @@ var init_tools = __esm({
         description: "Token-budgeted map of the repository: the most central production files (PageRank over the edges production code creates; tests left out) with their public types, functions and methods first, deterministically rendered to fit `budgetTokens` (default 1024). The densest single read to understand an unfamiliar codebase.",
         inputSchema: {
           type: "object",
-          properties: { ...repoProp, budgetTokens: { type: "number", minimum: 1, description: "Approximate token budget (default 1024)" } },
+          properties: { ...repoProp, budgetTokens: { type: "integer", minimum: 1, description: "Approximate token budget (default 1024)" } },
           required: ["repo"]
         }
       },
@@ -22499,7 +22526,7 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             since: sinceProp,
-            limit: { type: "number", minimum: 1, description: "Max files (default 20)" }
+            limit: { type: "integer", minimum: 1, description: "Max files (default 20)" }
           },
           required: ["repo"]
         }
@@ -22513,9 +22540,9 @@ var init_tools = __esm({
             ...repoProp,
             since: sinceProp,
             hidden: { type: "boolean", description: "Only pairs no graph edge links (default false)" },
-            minTogether: { type: "number", minimum: 1, description: "Commits a pair must share (default 3)" },
-            maxCommitFiles: { type: "number", minimum: 1, description: "Skip commits touching more files, as mass refactors (default 30)" },
-            limit: { type: "number", minimum: 1, description: "Max pairs (default 100)" }
+            minTogether: { type: "integer", minimum: 1, description: "Commits a pair must share (default 3)" },
+            maxCommitFiles: { type: "integer", minimum: 1, description: "Skip commits touching more files, as mass refactors (default 30)" },
+            limit: { type: "integer", minimum: 1, description: "Max pairs (default 100)" }
           },
           required: ["repo"]
         }
@@ -22587,7 +22614,7 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             ...scopeProps,
-            limit: { type: "number", minimum: 0, description: "Cap entries (default: all)" },
+            limit: { type: "integer", minimum: 1, description: "Cap entries (default: all)" },
             kinds: { type: "string", enum: ["callable", "all"], description: "Candidate kinds (default callable; all adds types, properties and constants, unreferenced only)" },
             includeTail: { type: "boolean", description: "Also report examples, docs, fixtures and scripts" }
           },
@@ -22602,10 +22629,10 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             ...scopeProps,
-            minFiles: { type: "number", minimum: 1, description: "Distinct files a value must span (default 2)" },
-            minCount: { type: "number", minimum: 1, description: "Total occurrences required (default 3)" },
+            minFiles: { type: "integer", minimum: 1, description: "Distinct files a value must span (default 2)" },
+            minCount: { type: "integer", minimum: 1, description: "Total occurrences required (default 3)" },
             includeTests: { type: "boolean", description: "Count test files too (default false)" },
-            limit: { type: "number", minimum: 0, description: "Cap duplications (default: all)" }
+            limit: { type: "integer", minimum: 1, description: "Cap duplications (default: all)" }
           },
           required: ["repo"]
         }
@@ -22620,7 +22647,7 @@ var init_tools = __esm({
             file: { type: "string" },
             risk: { type: "boolean", description: "Return complexity \xD7 git-churn risk ranking instead" },
             since: { ...sinceProp, description: "Only count risk churn after this ref (tag, branch, sha) or since this date" },
-            top: { type: "number", minimum: 1, description: "Cap ranked symbols" }
+            top: { type: "integer", minimum: 1, description: "Cap ranked symbols" }
           },
           required: ["repo"]
         }
@@ -22633,7 +22660,7 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             module: { type: "string", description: "Module slug to focus on" },
-            maxEdges: { type: "number", minimum: 1, description: "Cap rendered edges" }
+            maxEdges: { type: "integer", minimum: 1, description: "Cap rendered edges" }
           },
           required: ["repo"]
         }
@@ -22656,7 +22683,7 @@ var init_tools = __esm({
               description: "Restrict to matching paths. Rooted at the repo: '*.ts' matches root-level files only, '**/*.ts' any depth; a '!' prefix excludes (exclusion wins)"
             },
             ignoreCase: { type: "boolean" },
-            maxHits: { type: "number", minimum: 1 },
+            maxHits: { type: "integer", minimum: 1 },
             filesWithMatches: {
               type: "boolean",
               description: "One hit per matching file (its first match); maxHits then caps files"
@@ -22665,7 +22692,7 @@ var init_tools = __esm({
               type: "boolean",
               description: "Return { hits, truncated, filesMatched, notes? } instead of the bare hit array"
             },
-            timeoutMs: { type: "number", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" }
+            timeoutMs: { type: "integer", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" }
           },
           required: ["repo", "pattern"]
         }
@@ -22679,7 +22706,7 @@ var init_tools = __esm({
             ...repoProp,
             ...scopeProps,
             query: { type: "string", description: "Natural-language or identifier query" },
-            limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
+            limit: { type: "integer", minimum: 1, description: "Max results, a whole number (default 20)" },
             fuzzy: {
               type: "boolean",
               description: 'Fallback for query terms with zero document frequency: a morphological stem match first ("caching" finds "cache"), then trigram similarity for typos (default true)'
@@ -22714,7 +22741,7 @@ var init_tools = __esm({
             ...repoProp,
             ...scopeProps,
             query: { type: "string", description: "Natural-language or identifier query" },
-            limit: { type: "number", minimum: 1, description: "Max results, a whole number (default 20)" },
+            limit: { type: "integer", minimum: 1, description: "Max results, a whole number (default 20)" },
             fuzzy: { type: "boolean", description: "Stem/trigram fallback for zero-document-frequency terms (default true)" },
             exact: { type: "boolean", description: "Drop results carrying no verbatim term match (default false)" }
           },
@@ -22752,7 +22779,7 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             symbol: { type: "string", description: `Symbol to centre on \u2014 ${symbolRefDescription}` },
-            depth: { type: "number", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
+            depth: { type: "integer", minimum: 1, maximum: 5, description: "Hops to follow (default 2, max 5)" },
             direction: { type: "string", enum: ["out", "in", "both"], description: "out | in | both (default both)" }
           },
           required: ["repo", "symbol"]
@@ -22767,8 +22794,8 @@ var init_tools = __esm({
             ...repoProp,
             from: { type: "string", description: `Start \u2014 ${symbolRefDescription}; a file path with files: true` },
             to: { type: "string", description: `End \u2014 ${symbolRefDescription}; a file path with files: true` },
-            depth: { type: "number", minimum: 1, description: "Longest path to look for, in hops (default 8, max 16)" },
-            maxPaths: { type: "number", minimum: 1, description: "Shortest paths to list (default 5)" },
+            depth: { type: "integer", minimum: 1, description: "Longest path to look for, in hops (default 8, max 16)" },
+            maxPaths: { type: "integer", minimum: 1, description: "Shortest paths to list (default 5)" },
             files: { type: "boolean", description: "Walk the file link-graph instead of the symbol graph (default false)" },
             includeInferred: { type: "boolean", description: "files: true only \u2014 also step through calls inferred from a name alone (default false)" }
           },
@@ -22783,7 +22810,7 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             target: { type: "string", description: "Repo-relative file path or module slug" },
-            depth: { type: "number", minimum: 1, description: "Hops to follow (default: the full closure)" },
+            depth: { type: "integer", minimum: 1, description: "Hops to follow (default: the full closure)" },
             includeInferred: { type: "boolean", description: "Also follow call edges inferred from a name alone (default false)" }
           },
           required: ["repo", "target"]
@@ -22797,7 +22824,7 @@ var init_tools = __esm({
           properties: {
             ...repoProp,
             target: { type: "string", description: "Repo-relative file path or module slug" },
-            depth: { type: "number", minimum: 1, description: "Hops to follow (default 1)" },
+            depth: { type: "integer", minimum: 1, description: "Hops to follow (default 1)" },
             kinds: { type: "array", items: { type: "string" }, description: "Edge kinds to traverse (default all)" }
           },
           required: ["repo", "target"]
@@ -22805,7 +22832,7 @@ var init_tools = __esm({
       },
       {
         name: "check_rules",
-        description: 'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"|"literals"} (module-level import cycles; code files nothing connects to; values with no single source of truth, narrowed by tiers?/minFiles?/minCount?/includeTests?). Unknown keys are rejected; a forbidden rule whose globs match no indexed file comes back as an `unmatched` warning. Returns deterministic violations with severity error|warn \u2014 a CI gate.',
+        description: 'Validate dependency-cruiser-style architecture rules against the link-graph. Rules (inline JSON array): forbidden edges {name, from, to, kind?, severity?, comment?} with glob paths, plus builtins {name, builtin: "cycles"|"orphans"|"literals"} (module-level import cycles; code files nothing connects to; values with no single source of truth, narrowed by tiers?/minFiles?/minCount?/includeTests?). Unknown keys are rejected; a forbidden rule whose globs match no indexed file comes back as an `unmatched` warning. Returns `{ errors, warnings, violations }`, as the CLI does: deterministic violations with severity error|warn \u2014 a CI gate.',
         inputSchema: {
           type: "object",
           properties: {
@@ -22829,7 +22856,7 @@ var init_tools = __esm({
             ...repoProp,
             ...scopeProps,
             lang: { type: "string", description: "Only this language (as scan_summary names it)" },
-            limit: { type: "number", minimum: 1, description: "Entries per top list (default 10)" }
+            limit: { type: "integer", minimum: 1, description: "Entries per top list (default 10)" }
           },
           required: ["repo"]
         }
@@ -22849,8 +22876,8 @@ var init_tools = __esm({
             ...conciseProp,
             base: { type: "string", description: "Branch or ref to review against (default: origin/HEAD, origin/main, origin/master, main, master; else HEAD)" },
             staged: { type: "boolean", description: "Review the staged changeset against HEAD instead (default false)" },
-            depth: { type: "number", minimum: 1, description: "Blast-radius hops (default 2)" },
-            limit: { type: "number", minimum: 1, description: "Max modules, highest score first (default: all)" },
+            depth: { type: "integer", minimum: 1, description: "Blast-radius hops (default 2)" },
+            limit: { type: "integer", minimum: 1, description: "Max modules, highest score first (default: all)" },
             format: { type: "string", enum: ["json", "text"], description: '"text" returns the compact human panel instead of JSON (default "json")' }
           },
           required: ["repo"]
@@ -23028,6 +23055,11 @@ var init_tools = __esm({
           unmappedLanguages: strArr
         },
         required: ["lspVersion", "mode", "source", "servers", "unmappedLanguages"]
+      },
+      check_rules: {
+        type: "object",
+        properties: { errors: { type: "integer" }, warnings: { type: "integer" }, violations: { type: "array", items: anyObj } },
+        required: ["errors", "warnings", "violations"]
       },
       onboard: {
         type: "object",
@@ -23228,7 +23260,7 @@ __export(mcp_exports, {
   warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
-import { readFileSync as readFileSync18, realpathSync as realpathSync6, statSync as statSync12 } from "fs";
+import { readFileSync as readFileSync18, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
 import { basename as basename5, isAbsolute as isAbsolute9, join as join27, relative as relative9, resolve as resolve10, sep as sep7 } from "path";
 import { createInterface } from "readline";
 function isRpcRequest(value) {
@@ -23456,7 +23488,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
   }
   if (name2 === "dead_code") {
     const dead = findDeadCode(readScan(), { kinds: args2.kinds === "all" ? "all" : "callable", includeTail: args2.includeTail === true });
-    return JSON.stringify(capDeadCode(dead, num(args2.limit)), null, 2);
+    return JSON.stringify(capDeadCode(dead, wholeNum(args2.limit, "limit")), null, 2);
   }
   if (name2 === "duplicated_literals") {
     const report = findLiteralDuplications(readScan(), {
@@ -23464,7 +23496,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       minCount: positiveNum(args2.minCount),
       includeTests: args2.includeTests === true
     });
-    const limit = num(args2.limit);
+    const limit = wholeNum(args2.limit, "limit");
     if (limit === void 0 || report.duplications.length <= limit) return JSON.stringify(report, null, 2);
     return JSON.stringify(
       {
@@ -23698,11 +23730,11 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       const unreadable = new Error(`cannot read rules config ${configPath}`);
       let abs;
       try {
-        abs = realpathSync6(isAbsolute9(configPath) ? configPath : join27(repo, configPath));
+        abs = realpathSync7(isAbsolute9(configPath) ? configPath : join27(repo, configPath));
       } catch {
         throw unreadable;
       }
-      const root = realpathSync6(repo);
+      const root = realpathSync7(repo);
       if (!abs.startsWith(root.endsWith(sep7) ? root : root + sep7)) {
         throw new Error(`rules config must be a file inside the repository: ${configPath}`);
       }
@@ -23715,7 +23747,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       rules = parseRulesText(text, configPath);
     } else throw new Error("`rules` (or `configPath`) is required");
     const { scan: scan2, graph } = readArtifacts();
-    return JSON.stringify(checkRules(graph, rules, { scan: scan2 }), null, 2);
+    return JSON.stringify(rulesReport(checkRules(graph, rules, { scan: scan2 })), null, 2);
   }
   if (name2 === "delta") {
     const diff = readDeltaDiff(repo, { base: str(args2.base), staged: args2.staged === true });
@@ -23883,13 +23915,13 @@ async function runMcpServer(opts = {}) {
       const repo = repoRoot(args2, defaultRepo);
       const raw = await callTool(name2, args2, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig: opts.trustLspConfig });
       const narrowed = str(args2.scope) !== void 0 || strArray(args2.include) !== void 0 || strArray(args2.exclude) !== void 0 || str(args2.name) !== void 0 || args2.concise === true;
-      const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES, !narrowed);
-      const capped = text !== raw;
-      const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name2) : void 0;
-      const structured = version >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name2] !== void 0) : void 0;
-      return {
-        result: {
-          content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
+      const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+      const assemble = (text2) => {
+        const capped = text2 !== raw;
+        const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text2, name2) : void 0;
+        const structured = version >= RICH_TOOLS_SINCE ? structuredContentFor(text2, capped, OUTPUT_SCHEMAS[name2] !== void 0) : void 0;
+        return {
+          content: link ? [{ type: "text", text: text2 }, link] : [{ type: "text", text: text2 }],
           ...structured ? { structuredContent: structured } : {},
           // The withheld-payload notice is a tool execution error: the call
           // did not deliver what was asked, and the notice is exactly the
@@ -23898,8 +23930,15 @@ async function runMcpServer(opts = {}) {
           // cannot conform to it, and SDK clients reject a non-error result
           // that lacks conforming structuredContent.
           ...capped ? { isError: true } : {}
-        }
+        };
       };
+      const text = capResponse(raw, name2, repo, maxBytes, !narrowed);
+      let result = assemble(text);
+      if (text === raw) {
+        const onWire = Buffer.byteLength(JSON.stringify(result), "utf8") + WIRE_ENVELOPE_BYTES;
+        if (onWire > maxBytes) result = assemble(capResponse(raw, name2, repo, maxBytes, !narrowed, onWire));
+      }
+      return { result };
     } catch (e) {
       const text = e instanceof NotFound ? JSON.stringify({ error: e.message }, null, 2) : errMessage(e);
       return { result: { content: [{ type: "text", text }], isError: true } };
@@ -26387,7 +26426,7 @@ function parseFlags(args2) {
     else if (a === "--min-together") flags2.minTogether = num2();
     else if (a === "--max-commit-files") flags2.maxCommitFiles = num2();
     else if (a === "--hidden") flags2.hidden = true;
-    else if (a === "--config") flags2.config = resolve12(next());
+    else if (a === "--config") flags2.config = next();
     else if (a === "--limit") flags2.limit = count2();
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
     else if (a === "--exact") flags2.exact = true;
@@ -27242,12 +27281,12 @@ ${HELP}`);
     }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRulesText(readFileSync20(flags2.config, "utf8"), flags2.config);
+    const configPath = [resolve12(flags2.config), resolve12(flags2.repo, flags2.config)].find((p) => existsSync12(p)) ?? resolve12(flags2.config);
+    const rules = parseRulesText(readFileSync20(configPath, "utf8"), configPath);
     const { scan: scan2, graph } = await readArtifacts();
-    const violations = checkRules(graph, rules, { scan: scan2 });
-    const errors = violations.filter((v) => v.severity === "error").length;
-    emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags2.out);
-    if (errors > 0) process.exitCode = 1;
+    const report = rulesReport(checkRules(graph, rules, { scan: scan2 }));
+    emit(JSON.stringify(report, null, 2) + "\n", flags2.out);
+    if (report.errors > 0) process.exitCode = 1;
   } else if (cmd === "workspaces") {
     const info2 = detectWorkspaces(flags2.repo);
     const check = flags2.check ? checkWorkspaceDeps(info2, (await readArtifacts()).graph) : void 0;

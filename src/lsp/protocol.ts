@@ -38,7 +38,7 @@ export interface LspIncomingCall extends LspRef {
 }
 
 /** Incoming call ranges belong to `from.uri`, not to the queried symbol. */
-export function incomingCallsToSites(root: string, raw: unknown): LspIncomingCall[] {
+export function incomingCallsToSites(root: string | readonly string[], raw: unknown): LspIncomingCall[] {
   if (!Array.isArray(raw)) return [];
   const calls: LspIncomingCall[] = [];
   for (const entry of raw) {
@@ -227,8 +227,23 @@ export function fileUri(root: string, rel: string): string {
   );
 }
 
-/** The inverse, or undefined when the URI points outside the repository. */
-export function relFromUri(root: string, uri: string): string | undefined {
+/**
+ * The inverse, or undefined when the URI points outside the repository.
+ *
+ * `root` may be several spellings of one directory: a server reports
+ * realpath'd URIs (tsserver, pyright) while --repo is only resolve()d, so
+ * under /tmp (really /private/tmp on macOS) or a symlinked checkout every
+ * reference read as outside the repo and was dropped. The caller passes the
+ * real path too; this module stays free of the filesystem.
+ */
+export function relFromUri(root: string | readonly string[], uri: string): string | undefined {
+  if (typeof root !== "string") {
+    for (const r of root) {
+      const rel = relFromUri(r, uri);
+      if (rel !== undefined) return rel;
+    }
+    return undefined;
+  }
   if (!uri.startsWith("file://")) return undefined;
   let path: string;
   try {
@@ -274,7 +289,7 @@ interface RawLocation {
  * deduped and sorted so an LSP answer is as deterministic as a static one, even
  * though the server's ordering is not guaranteed.
  */
-export function locationsToRefs(root: string, raw: unknown): LspRef[] {
+export function locationsToRefs(root: string | readonly string[], raw: unknown): LspRef[] {
   const list: RawLocation[] = Array.isArray(raw) ? (raw as RawLocation[]) : raw && typeof raw === "object" ? [raw as RawLocation] : [];
   const seen = new Set<string>();
   const out: LspRef[] = [];

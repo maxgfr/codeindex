@@ -1394,8 +1394,16 @@ declare function createFramer(): {
 };
 /** `file:///abs/path` for a repo-relative path, percent-encoding each segment. */
 declare function fileUri(root: string, rel: string): string;
-/** The inverse, or undefined when the URI points outside the repository. */
-declare function relFromUri(root: string, uri: string): string | undefined;
+/**
+ * The inverse, or undefined when the URI points outside the repository.
+ *
+ * `root` may be several spellings of one directory: a server reports
+ * realpath'd URIs (tsserver, pyright) while --repo is only resolve()d, so
+ * under /tmp (really /private/tmp on macOS) or a symlinked checkout every
+ * reference read as outside the repo and was dropped. The caller passes the
+ * real path too; this module stays free of the filesystem.
+ */
+declare function relFromUri(root: string | readonly string[], uri: string): string | undefined;
 /**
  * Normalise whatever `textDocument/references` or `textDocument/definition`
  * returned into engine coordinates.
@@ -1409,7 +1417,7 @@ declare function relFromUri(root: string, uri: string): string | undefined;
  * deduped and sorted so an LSP answer is as deterministic as a static one, even
  * though the server's ordering is not guaranteed.
  */
-declare function locationsToRefs(root: string, raw: unknown): LspRef[];
+declare function locationsToRefs(root: string | readonly string[], raw: unknown): LspRef[];
 
 interface LspTransport {
     write(chunk: string): void;
@@ -1425,6 +1433,12 @@ interface LspTransport {
 interface LspSessionOptions {
     /** Absolute repository root; every URI is built against it. */
     root: string;
+    /**
+     * Other spellings of the same root a server may answer with — its real
+     * path, when `root` goes through a symlink (/tmp on macOS). Answers under
+     * any of them are read as the repository's.
+     */
+    rootAliases?: readonly string[];
     timeoutMs?: number;
     startupTimeoutMs?: number;
     initializationOptions?: unknown;

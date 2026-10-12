@@ -66,7 +66,7 @@ export function validateArgs(
     const spec = props[key];
     if (!spec?.type) continue; // undeclared extras stay tolerated
     const actual = Array.isArray(value) ? "array" : typeof value;
-    if (spec.type === "number") {
+    if (spec.type === "number" || spec.type === "integer") {
       // A numeric string is accepted (num() coerces it); anything else is not.
       const numeric = actual === "number"
         ? value as number
@@ -76,6 +76,8 @@ export function validateArgs(
       if (!Number.isFinite(numeric)) {
         return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
       }
+      // A count is whole: `limit: 2.5` returned 2 items while saying shown: 2.5.
+      if (spec.type === "integer" && !Number.isInteger(numeric)) return `\`${key}\` must be a whole number, got ${numeric}`;
       if (spec.minimum !== undefined && numeric < spec.minimum) return `\`${key}\` must be at least ${spec.minimum}`;
       if (spec.maximum !== undefined && numeric > spec.maximum) return `\`${key}\` must be at most ${spec.maximum}`;
       continue;
@@ -208,13 +210,26 @@ function artifactState(path: string, text: string, bytes: number): "identical" |
 // `wholeRepo` is false for a request the artifact cannot answer however
 // fresh it is — a `scope`d graph, one symbol's entry, a concise projection —
 // and then no artifact is mentioned at all.
-export function capResponse(text: string, tool: string, repo: string, maxBytes: number, wholeRepo = true): string {
-  const bytes = Buffer.byteLength(text, "utf8");
+// A path as one shell word.
+function shellArg(s: string): string {
+  return /^[A-Za-z0-9_\-./=@:]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+// What wraps a result on the wire (`{"jsonrpc":"2.0","id":…,"result":…}`):
+// an allowance, so the cap holds for any id a client picks.
+export const WIRE_ENVELOPE_BYTES = 96;
+
+export function capResponse(text: string, tool: string, repo: string, maxBytes: number, wholeRepo = true, onWire?: number): string {
+  // `onWire`: what the response would weigh as sent (see the caller) — the
+  // text JSON-escaped, plus structuredContent repeating it.
+  const bytes = onWire ?? Buffer.byteLength(text, "utf8");
   if (bytes <= maxBytes) return text;
   const artifactName = wholeRepo && Object.hasOwn(ARTIFACT_FOR, tool) ? ARTIFACT_FOR[tool] : undefined;
   const artifact = artifactName ? join(repo, INDEX_DIR, artifactName) : undefined;
   const state = artifact ? artifactState(artifact, text, bytes) : undefined;
-  const refresh = `codeindex index --repo ${repo} --out ${join(repo, INDEX_DIR)}`;
+  // Quoted: a repository path with a space made the suggested command a
+  // broken one.
+  const refresh = `codeindex index --repo ${shellArg(repo)} --out ${shellArg(join(repo, INDEX_DIR))}`;
   return (
     JSON.stringify(
       {

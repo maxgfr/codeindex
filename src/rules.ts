@@ -255,8 +255,10 @@ export function parseRules(input: unknown): ArchRule[] {
     const from = glob("from");
     const to = glob("to");
     if (r.kind !== undefined) {
-      const ok = Array.isArray(r.kind) && r.kind.every((k) => EDGE_KINDS.has(k as string));
-      if (!ok) throw new Error(`${at} (${r.name}): \`kind\` must be an array of edge kinds (${[...EDGE_KINDS].join(", ")})`);
+      // An empty list used to mean "every kind": the opposite of a filter
+      // that keeps nothing, and almost never what was meant.
+      const ok = Array.isArray(r.kind) && r.kind.length > 0 && r.kind.every((k) => EDGE_KINDS.has(k as string));
+      if (!ok) throw new Error(`${at} (${r.name}): \`kind\` must be a non-empty array of edge kinds (${[...EDGE_KINDS].join(", ")})`);
     }
     return { name: r.name, from, to, kind: r.kind, severity: r.severity, comment: r.comment } as ForbiddenEdgeRule;
   });
@@ -430,4 +432,12 @@ export function checkRules(graph: Graph, rules: ArchRule[], opts: CheckRulesOpti
 
   out.sort((a, b) => byStr(a.rule, b.rule) || byStr(a.from, b.from) || byStr(a.to, b.to) || byStr(a.kind, b.kind));
   return out;
+}
+
+// What `codeindex rules` prints and MCP `check_rules` returns: the error and
+// warning counts a gate reads, then the violations. (The MCP tool used to
+// return the bare array.)
+export function rulesReport(violations: RuleViolation[]): { errors: number; warnings: number; violations: RuleViolation[] } {
+  const errors = violations.filter((v) => v.severity === "error").length;
+  return { errors, warnings: violations.length - errors, violations };
 }

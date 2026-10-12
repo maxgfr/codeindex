@@ -60,7 +60,7 @@ import { hierarchyFor, resolveContextFor, symbolGraphFor } from "./derived.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { explainQuery, searchIndex } from "./bm25.js";
-import { checkRules, parseRulesText } from "./rules.js";
+import { checkRules, parseRulesText, rulesReport } from "./rules.js";
 import {
   EMBED_VERSION,
   resolveEmbedModelDir,
@@ -728,7 +728,7 @@ export function parseFlags(args: string[]): CliFlags {
     else if (a === "--min-together") flags.minTogether = num();
     else if (a === "--max-commit-files") flags.maxCommitFiles = num();
     else if (a === "--hidden") flags.hidden = true;
-    else if (a === "--config") flags.config = resolve(next());
+    else if (a === "--config") flags.config = next(); // resolved by `rules`: the cwd, then --repo
     else if (a === "--limit") flags.limit = count();
     else if (a === "--no-fuzzy") flags.fuzzy = false;
     else if (a === "--exact") flags.exact = true;
@@ -1902,12 +1902,15 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     }
   } else if (cmd === "rules") {
     if (!flags.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRulesText(readFileSync(flags.config, "utf8"), flags.config);
+    // Against the working directory, else against --repo — where MCP's
+    // configPath looks: `rules --repo ../other --config codeindex.rules.json`
+    // read the cwd's file, or none.
+    const configPath = [resolve(flags.config), resolve(flags.repo, flags.config)].find((p) => existsSync(p)) ?? resolve(flags.config);
+    const rules = parseRulesText(readFileSync(configPath, "utf8"), configPath);
     const { scan, graph } = await readArtifacts();
-    const violations = checkRules(graph, rules, { scan });
-    const errors = violations.filter((v) => v.severity === "error").length;
-    emit(JSON.stringify({ errors, warnings: violations.length - errors, violations }, null, 2) + "\n", flags.out);
-    if (errors > 0) process.exitCode = 1; // the CI gate
+    const report = rulesReport(checkRules(graph, rules, { scan }));
+    emit(JSON.stringify(report, null, 2) + "\n", flags.out);
+    if (report.errors > 0) process.exitCode = 1; // the CI gate
   } else if (cmd === "workspaces") {
     const info = detectWorkspaces(flags.repo);
     const check = flags.check ? checkWorkspaceDeps(info, (await readArtifacts()).graph) : undefined;

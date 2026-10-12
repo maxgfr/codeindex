@@ -35,6 +35,12 @@ export function withServerError(message: string, transport: LspTransport): strin
 export interface LspSessionOptions {
   /** Absolute repository root; every URI is built against it. */
   root: string;
+  /**
+   * Other spellings of the same root a server may answer with — its real
+   * path, when `root` goes through a symlink (/tmp on macOS). Answers under
+   * any of them are read as the repository's.
+   */
+  rootAliases?: readonly string[];
   timeoutMs?: number;
   startupTimeoutMs?: number;
   initializationOptions?: unknown;
@@ -91,6 +97,7 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
   const framer = createFramer();
   const pending = new Map<number, Pending>();
   const open = new Set<string>();
+  const answerRoots = [options.root, ...(options.rootAliases ?? []).filter((r) => r !== options.root)];
   let nextId = 1;
   let dead: Error | undefined;
 
@@ -206,12 +213,12 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
         ...(positionOf(rel, line, character) as object),
         context: { includeDeclaration: true },
       });
-      return locationsToRefs(options.root, raw);
+      return locationsToRefs(answerRoots, raw);
     },
 
     async definition(rel, line, character) {
       if (!capabilities.definition) return [];
-      return locationsToRefs(options.root, await request("textDocument/definition", positionOf(rel, line, character)));
+      return locationsToRefs(answerRoots, await request("textDocument/definition", positionOf(rel, line, character)));
     },
 
     async incomingCalls(rel, line, character) {
@@ -223,7 +230,7 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
         for (const item of items) {
           if (!item || typeof item !== "object") continue;
           // Send the complete item back: opaque `data` is server-owned state.
-          calls.push(...incomingCallsToSites(options.root, await request("callHierarchy/incomingCalls", { item })));
+          calls.push(...incomingCallsToSites(answerRoots, await request("callHierarchy/incomingCalls", { item })));
         }
       } catch (error) {
         throw new LspIncomingCallsError(error, uniqueIncomingCalls(calls));

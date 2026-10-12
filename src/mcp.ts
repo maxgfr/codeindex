@@ -41,7 +41,7 @@ import { indexStatus } from "./status.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
 import { explainQuery, type RankMode } from "./bm25.js";
-import { checkRules, parseRules, parseRulesText, type ArchRule } from "./rules.js";
+import { checkRules, parseRules, parseRulesText, rulesReport, type ArchRule } from "./rules.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
 import { EMBED_VERSION, resolveEmbedModelDir, tryLoadEmbedModel } from "./embed/model.js";
 import { buildEmbeddingIndex } from "./embed/index.js";
@@ -62,6 +62,7 @@ import {
   resourceLinkFor,
   structuredContentFor,
   validateArgs,
+  WIRE_ENVELOPE_BYTES,
 } from "./mcp/protocol.js";
 import {
   getArtifacts,
@@ -442,7 +443,7 @@ async function callTool(
   if (name === "dead_code") {
     // Additive: without `limit` the payload is exactly what it always was.
     const dead = findDeadCode(readScan(), { kinds: args.kinds === "all" ? "all" : "callable", includeTail: args.includeTail === true });
-    return JSON.stringify(capDeadCode(dead, num(args.limit)), null, 2);
+    return JSON.stringify(capDeadCode(dead, wholeNum(args.limit, "limit")), null, 2);
   }
   if (name === "duplicated_literals") {
     const report = findLiteralDuplications(readScan(), {
@@ -450,7 +451,7 @@ async function callTool(
       minCount: positiveNum(args.minCount),
       includeTests: args.includeTests === true,
     });
-    const limit = num(args.limit);
+    const limit = wholeNum(args.limit, "limit");
     if (limit === undefined || report.duplications.length <= limit) return JSON.stringify(report, null, 2);
     // Truncation says so, same doctrine as dead_code: a capped list that looks
     // complete is worse than a shorter one that admits it.
@@ -758,7 +759,8 @@ async function callTool(
       rules = parseRulesText(text, configPath);
     } else throw new Error("`rules` (or `configPath`) is required");
     const { scan, graph } = readArtifacts();
-    return JSON.stringify(checkRules(graph, rules, { scan }), null, 2);
+    // The CLI's shape: the counts a gate reads, then the violations.
+    return JSON.stringify(rulesReport(checkRules(graph, rules, { scan })), null, 2);
   }
   if (name === "delta") {
     // The CLI's review panel, for an agent that just edited files over this
@@ -1047,23 +1049,24 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
         strArray(args.exclude) !== undefined ||
         str(args.name) !== undefined ||
         args.concise === true;
-      const text = capResponse(raw, name, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES, !narrowed);
-      // A capped whole-repo response points at an artifact already on disk.
-      // From 2025-06-18 the protocol has a content type that says exactly
-      // that, so the client can fetch the bytes instead of re-asking.
-      //
-      // Gated on `text !== raw` — i.e. capResponse actually replaced the
-      // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
-      // every single call just to discover it was not truncated.
-      const capped = text !== raw;
-      const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
-      // Typed, validatable result alongside the text block — for the tools
-      // that declare an outputSchema, and never when the guard replaced the
-      // payload (see structuredContentFor).
-      const structured =
-        version >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined) : undefined;
-      return {
-        result: {
+      const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+      const assemble = (text: string): Record<string, unknown> => {
+        // A capped whole-repo response points at an artifact already on
+        // disk. From 2025-06-18 the protocol has a content type that says
+        // exactly that, so the client can fetch the bytes instead of
+        // re-asking.
+        //
+        // Gated on `text !== raw` — i.e. capResponse actually replaced the
+        // payload. Otherwise a normal 900 KB graph would be JSON.parsed on
+        // every single call just to discover it was not truncated.
+        const capped = text !== raw;
+        const link = capped && version >= RICH_TOOLS_SINCE ? resourceLinkFor(text, name) : undefined;
+        // Typed, validatable result alongside the text block — for the tools
+        // that declare an outputSchema, and never when the guard replaced the
+        // payload (see structuredContentFor).
+        const structured =
+          version >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, OUTPUT_SCHEMAS[name] !== undefined) : undefined;
+        return {
           content: link ? [{ type: "text", text }, link] : [{ type: "text", text }],
           ...(structured ? { structuredContent: structured } : {}),
           // The withheld-payload notice is a tool execution error: the call
@@ -1073,8 +1076,18 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
           // cannot conform to it, and SDK clients reject a non-error result
           // that lacks conforming structuredContent.
           ...(capped ? { isError: true } : {}),
-        },
+        };
       };
+      const text = capResponse(raw, name, repo, maxBytes, !narrowed);
+      let result = assemble(text);
+      if (text === raw) {
+        // The cap bounds what is SENT. The text measured alone went out at
+        // about 1.8x as a JSON-escaped string plus structuredContent: a 990 KB
+        // graph under the 1 MB default left as 1.8 MB.
+        const onWire = Buffer.byteLength(JSON.stringify(result), "utf8") + WIRE_ENVELOPE_BYTES;
+        if (onWire > maxBytes) result = assemble(capResponse(raw, name, repo, maxBytes, !narrowed, onWire));
+      }
+      return { result };
     } catch (e) {
       const text = e instanceof NotFound ? JSON.stringify({ error: e.message }, null, 2) : errMessage(e);
       return { result: { content: [{ type: "text", text }], isError: true } };
