@@ -211,3 +211,93 @@ describe("subtokens' ASCII fast path", () => {
     for (const s of samples) expect(subtokens(s), s).toEqual(reference(s));
   });
 });
+
+// Found by re-running the evaluation on 2.31.8.
+describe("binding regressions of 2.31.8", () => {
+  it("TS: super.method() is bound again (the Rust path receiver is Rust's only)", () => {
+    const ts = repo({
+      "plugin.ts": [
+        "export class Base {",
+        "  addWatchFile(id: string): void {}",
+        "}",
+        "export class Child extends Base {",
+        "  watch(id: string): void {",
+        "    super.addWatchFile(id);",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    expect(lines(callersOf(ts, "addWatchFile"))).toEqual(["plugin.ts:6"]);
+  });
+
+  it("Rust: super:: from a test fn named like its target reaches the module's item", () => {
+    const crate = repo({
+      "Cargo.toml": '[package]\nname = "w"\nversion = "0.1.0"\n',
+      "src/lib.rs": "mod ban;\n",
+      "src/ban.rs": [
+        "pub(crate) fn check(x: u8) -> Result<(), u8> { if x == 0 { Err(x) } else { Ok(()) } }",
+        "",
+        "#[cfg(test)]",
+        "mod tests {",
+        "    fn check(x: u8) -> bool {",
+        "        super::check(x).is_err()",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const entry = callersOf(crate, "check@src/ban.rs");
+    expect(entry?.def.line).toBe(1);
+    expect(lines(entry)).toEqual(["src/ban.rs:6"]);
+  });
+
+  it("Rust: a bare Ok(...) never binds to a local enum's variant; ParseResult::Ok(...) does", () => {
+    const crate = repo({
+      "Cargo.toml": '[package]\nname = "v"\nversion = "0.1.0"\n',
+      "src/lib.rs": "mod parse;\nmod other;\n",
+      "src/parse.rs": [
+        "pub(crate) enum ParseResult<T> {",
+        "    Ok(T),",
+        "    Err(String),",
+        "}",
+        "",
+        "pub(crate) fn parse(s: &str) -> ParseResult<u8> {",
+        "    if s.is_empty() { return ParseResult::Err(String::new()); }",
+        "    ParseResult::Ok(1)",
+        "}",
+        "",
+        "pub(crate) fn wrap() -> ParseResult<u8> {",
+        "    use self::ParseResult::*;",
+        "    Ok(2)",
+        "}",
+        "",
+      ].join("\n"),
+      "src/other.rs": "pub fn f() -> Result<u8, ()> {\n    Ok(1)\n}\n",
+    });
+    // The glob import in its own file brings the variants into scope.
+    expect(lines(callersOf(crate, "Ok"))).toEqual(["src/parse.rs:8", "src/parse.rs:13"]);
+  });
+
+  it("Go: a method called on a struct literal binds to that type's method", () => {
+    const go = repo({
+      "go.mod": "module example.com/m\n\ngo 1.22\n",
+      "addrs/check.go": "package addrs\n\ntype Check struct{ Name string }\n\nfunc (c Check) Absolute() string { return c.Name }\n",
+      "stackaddrs/in_stack.go": 'package stackaddrs\n\ntype InStack struct{}\n\nfunc (s InStack) Absolute() string { return "" }\n',
+      "stackaddrs/plan_test.go": [
+        "package stackaddrs",
+        "",
+        'import "example.com/m/addrs"',
+        "",
+        "func use() string {",
+        "\treturn addrs.Check{",
+        '\t\tName: "x",',
+        "\t}.Absolute()",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    expect(lines(callersOf(go, "Absolute@stackaddrs/in_stack.go"))).toEqual([]);
+    expect(lines(callersOf(go, "Absolute@addrs/check.go"))).toEqual(["stackaddrs/plan_test.go:6"]);
+  });
+});

@@ -8119,7 +8119,12 @@ function readName(node) {
 function readReceiver(node) {
   if (!node || node.namedChildren.length === 0) return void 0;
   const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver") ?? node.childForFieldName("table");
-  if (obj && (obj.type === "crate" || obj.type === "super")) return obj.type;
+  if (obj && node.type === "scoped_identifier" && (obj.type === "crate" || obj.type === "super")) return obj.type;
+  if (obj?.type === "composite_literal") {
+    const type = obj.childForFieldName("type");
+    const name3 = type ? readTypeName(type) : void 0;
+    return name3 && /^[A-Za-z_]\w*$/.test(name3) ? name3 : void 0;
+  }
   const name2 = obj ? readName(obj) : void 0;
   return name2 && /^[A-Za-z_]\w*$/.test(name2) ? name2 : void 0;
 }
@@ -15545,6 +15550,20 @@ function createCallBinder(scan2, pairs, opts = {}) {
       inlineMods = f.symbols.filter((s) => s.kind === "mod" && s.endLine !== void 0 && s.endLine > s.line);
       if (inlineMods.length) (rustModules ??= /* @__PURE__ */ new Map()).set(INLINE_SUPER, [f.rel]);
     }
+    let usedPaths;
+    const variantInScope = (d) => {
+      if (d.file !== f.rel || d.parent === void 0) return false;
+      if (!usedPaths) {
+        usedPaths = /* @__PURE__ */ new Set();
+        for (const r of f.refs) {
+          if (r.kind !== "import") continue;
+          const segs = r.spec.split("::");
+          usedPaths.add(segs[segs.length - 1]);
+          if (segs.length > 1) usedPaths.add(`${segs[segs.length - 2]}::${segs[segs.length - 1]}`);
+        }
+      }
+      return usedPaths.has(d.parent) || usedPaths.has(`${d.parent}::${d.name}`);
+    };
     const corroborated = (name2, pool) => {
       const out2 = scope.reached(exportedGroup(name2, family, pool), f, name2);
       const priv = hiddenGroup(name2, family, pool);
@@ -15613,12 +15632,18 @@ function createCallBinder(scan2, pairs, opts = {}) {
     const resolve13 = (name2, how) => {
       const { shape, receiver, selfType, typeHint } = how;
       if (shape === "outside") return null;
+      const bareRust = family === "rust" && shape === "bare";
+      const inlineSuper = receiver === INLINE_SUPER;
+      const reachable = (d) => !(bareRust && d.kind === "enum-member" && !variantInScope(d)) && !(inlineSuper && d.file === f.rel && inlineMods.some((m) => d.line > m.line && d.line <= m.endLine));
       let local;
       if (recall) local = ownAny.get(name2);
       else if (shape === "bare") local = shaped ? ownFree.get(name2) : ownAny.get(name2);
       else if (shape === "self") {
         local = selfType !== void 0 ? memberOf(selfType, name2) : void 0;
         if (!local && receiver !== void 0 && SELF_NAMES.has(receiver)) local = ownMember.get(name2);
+      }
+      if (local && !reachable(local)) {
+        local = f.symbols.find((s) => s.name === name2 && !REFERENCE_KINDS3.has(s.kind) && !NOT_CALLABLE.has(s.kind) && reachable(s));
       }
       if (local) return only && !only.has(local.name) ? null : { hit: { def: local, corroborated: true }, local: true };
       let restrict;
@@ -15635,24 +15660,27 @@ function createCallBinder(scan2, pairs, opts = {}) {
         if (restrict === null) {
           if (!recall) return null;
         } else {
-          const hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
+          let hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
           if (hiddenReach === "import" || viaPath) {
             for (const d of scope.within(hiddenGroup(callee, family, pool), restrict, callee)) if (!hits.includes(d)) hits.push(d);
           }
+          if (family === "rust") hits = hits.filter(reachable);
           const chosen2 = pickCandidate(f.rel, hits);
           if (chosen2) return { hit: { def: chosen2, corroborated: true }, local: false };
           if (hits.length) return null;
           if (!recall && STRICT.has(family)) return null;
         }
       }
-      const stated = preferParent(corroborated(callee, pool), typeHint, receiver);
+      const reached = corroborated(callee, pool);
+      const stated = preferParent(family === "rust" ? reached.filter(reachable) : reached, typeHint, receiver);
       if (stated.length) {
         const chosen2 = pickCandidate(f.rel, stated);
         return chosen2 ? { hit: { def: chosen2, corroborated: true }, local: false } : null;
       }
       const group = exportedGroup(callee, family, recall ? "any" : guessPool);
       if (!group) return null;
-      const cands = defsOutside(group, f.rel);
+      const outside = defsOutside(group, f.rel);
+      const cands = family === "rust" ? outside.filter(reachable) : outside;
       if (!cands.length) return null;
       let guesses = [...cands];
       if (recall) {

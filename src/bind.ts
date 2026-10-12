@@ -656,6 +656,23 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       inlineMods = f.symbols.filter((s) => s.kind === "mod" && s.endLine !== undefined && s.endLine > s.line);
       if (inlineMods.length) (rustModules ??= new Map()).set(INLINE_SUPER, [f.rel]);
     }
+    // What this Rust file's `use` declarations name, as `E` and `E::V`: inside
+    // an enum's own file, `use self::E::*` (its spec reads "self::E") or
+    // `use self::E::V` brings the variants into scope for a bare call.
+    let usedPaths: Set<string> | undefined;
+    const variantInScope = (d: CodeSymbol): boolean => {
+      if (d.file !== f.rel || d.parent === undefined) return false;
+      if (!usedPaths) {
+        usedPaths = new Set();
+        for (const r of f.refs) {
+          if (r.kind !== "import") continue;
+          const segs = r.spec.split("::");
+          usedPaths.add(segs[segs.length - 1]!);
+          if (segs.length > 1) usedPaths.add(`${segs[segs.length - 2]}::${segs[segs.length - 1]}`);
+        }
+      }
+      return usedPaths.has(d.parent) || usedPaths.has(`${d.parent}::${d.name}`);
+    };
 
     // Cross-file defs of `name` this file reaches by stated evidence.
     const corroborated = (name: string, pool: Pool): CodeSymbol[] => {
@@ -754,6 +771,17 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const resolve = (name: string, how: Reading): Resolved | null => {
       const { shape, receiver, selfType, typeHint } = how;
       if (shape === "outside") return null;
+      // Rust: a tuple variant is reached through its enum (`ParseResult::Ok(…)`,
+      // whose receiver names the enum), bare only where its own file imports
+      // the variants (variantInScope) — elsewhere a bare `Ok(…)`/`Some(…)` is
+      // the prelude's. And `super::` inside an inline `mod tests { … }` names
+      // the file's own items, never those of the block it sits in (a test
+      // helper `fn check` calling `super::check`).
+      const bareRust = family === "rust" && shape === "bare";
+      const inlineSuper = receiver === INLINE_SUPER;
+      const reachable = (d: CodeSymbol): boolean =>
+        !(bareRust && d.kind === "enum-member" && !variantInScope(d)) &&
+        !(inlineSuper && d.file === f.rel && inlineMods!.some((m) => d.line > m.line && d.line <= m.endLine!));
       // 1. The file's own declaration. A bare call reaches a top-level one
       //    (any, where the shape proves nothing), a call on the enclosing
       //    object a member of its type. A call on a module or on some other
@@ -767,6 +795,9 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         // `self.f()` may reach a member a same-file base class declares; a
         // stated or named type is exact.
         if (!local && receiver !== undefined && SELF_NAMES.has(receiver)) local = ownMember.get(name);
+      }
+      if (local && !reachable(local)) {
+        local = f.symbols.find((s) => s.name === name && !REFERENCE_KINDS.has(s.kind) && !NOT_CALLABLE.has(s.kind) && reachable(s));
       }
       if (local) return only && !only.has(local.name) ? null : { hit: { def: local, corroborated: true }, local: true };
 
@@ -801,10 +832,11 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         if (restrict === null) {
           if (!recall) return null;
         } else {
-          const hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
+          let hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
           if (hiddenReach === "import" || viaPath) {
             for (const d of scope.within(hiddenGroup(callee, family, pool), restrict, callee)) if (!hits.includes(d)) hits.push(d);
           }
+          if (family === "rust") hits = hits.filter(reachable);
           const chosen = pickCandidate(f.rel, hits);
           if (chosen) return { hit: { def: chosen, corroborated: true }, local: false };
           if (hits.length) return null; // a proximity tie
@@ -817,7 +849,8 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       }
 
       // 3. Everything the file reaches by stated evidence.
-      const stated = preferParent(corroborated(callee, pool), typeHint, receiver);
+      const reached = corroborated(callee, pool);
+      const stated = preferParent(family === "rust" ? reached.filter(reachable) : reached, typeHint, receiver);
       if (stated.length) {
         const chosen = pickCandidate(f.rel, stated);
         return chosen ? { hit: { def: chosen, corroborated: true }, local: false } : null;
@@ -826,7 +859,8 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       // 4. Inference by name, where the language permits it at all.
       const group = exportedGroup(callee, family, recall ? "any" : guessPool);
       if (!group) return null;
-      const cands = defsOutside(group, f.rel);
+      const outside = defsOutside(group, f.rel);
+      const cands = family === "rust" ? outside.filter(reachable) : outside;
       if (!cands.length) return null;
       let guesses: CodeSymbol[] = [...cands];
       if (recall) {
