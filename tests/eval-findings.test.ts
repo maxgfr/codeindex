@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanRepo, type ScanOptions } from "../src/scan.js";
-import { callerIndexForNames, lookupCallerEntry, rawCallerSitesFor } from "../src/callers.js";
+import { callerIndexForNames, computeImportPairs, lookupCallerEntry, rawCallerSitesFor } from "../src/callers.js";
+import { createCallBinder } from "../src/bind.js";
 
 // What an evaluation on large real repositories (vite, TypeScript's Go port,
 // django, terraform, ripgrep) found an agent would be misled by: answers that
@@ -209,5 +210,176 @@ describe("subtokens' ASCII fast path", () => {
       "getHTTP2Stream", "k8sCluster", "IOError: can't open", "$scope.$apply()", "tab\tseparated\nlines",
     ];
     for (const s of samples) expect(subtokens(s), s).toEqual(reference(s));
+  });
+});
+
+// Found by re-running the evaluation on 2.31.8.
+describe("binding regressions of 2.31.8", () => {
+  it("TS: super.method() is bound again (the Rust path receiver is Rust's only)", () => {
+    const ts = repo({
+      "plugin.ts": [
+        "export class Base {",
+        "  addWatchFile(id: string): void {}",
+        "}",
+        "export class Child extends Base {",
+        "  watch(id: string): void {",
+        "    super.addWatchFile(id);",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    expect(lines(callersOf(ts, "addWatchFile"))).toEqual(["plugin.ts:6"]);
+  });
+
+  it("Rust: super:: from a test fn named like its target reaches the module's item", () => {
+    const crate = repo({
+      "Cargo.toml": '[package]\nname = "w"\nversion = "0.1.0"\n',
+      "src/lib.rs": "mod ban;\n",
+      "src/ban.rs": [
+        "pub(crate) fn check(x: u8) -> Result<(), u8> { if x == 0 { Err(x) } else { Ok(()) } }",
+        "",
+        "#[cfg(test)]",
+        "mod tests {",
+        "    fn check(x: u8) -> bool {",
+        "        super::check(x).is_err()",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const entry = callersOf(crate, "check@src/ban.rs");
+    expect(entry?.def.line).toBe(1);
+    expect(lines(entry)).toEqual(["src/ban.rs:6"]);
+  });
+
+  it("Rust: a bare Ok(...) never binds to a local enum's variant; ParseResult::Ok(...) does", () => {
+    const crate = repo({
+      "Cargo.toml": '[package]\nname = "v"\nversion = "0.1.0"\n',
+      "src/lib.rs": "mod parse;\nmod other;\n",
+      "src/parse.rs": [
+        "pub(crate) enum ParseResult<T> {",
+        "    Ok(T),",
+        "    Err(String),",
+        "    Special(T),",
+        "}",
+        "",
+        "pub(crate) fn parse(s: &str) -> ParseResult<u8> {",
+        "    if s.is_empty() { return ParseResult::Err(String::new()); }",
+        "    ParseResult::Ok(1)",
+        "}",
+        "",
+        "pub(crate) fn wrap() -> ParseResult<u8> {",
+        "    use self::ParseResult::*;",
+        "    Special(2)",
+        "}",
+        "",
+        "pub(crate) fn plain() -> Result<u8, ()> {",
+        "    Ok(3)",
+        "}",
+        "",
+      ].join("\n"),
+      "src/other.rs": "pub fn f() -> Result<u8, ()> {\n    Ok(1)\n}\n",
+    });
+    // A `use` carries no scope in the index, so a prelude name never reads as
+    // the enum's variant bare, even in its own file: `Ok(3)` is std's.
+    expect(lines(callersOf(crate, "Ok"))).toEqual(["src/parse.rs:9"]);
+    // Any other variant: the glob import in its own file brings it into scope.
+    expect(lines(callersOf(crate, "Special"))).toEqual(["src/parse.rs:14"]);
+  });
+
+  it("TS: super.f() in an override reaches the base class's method, not the override", () => {
+    const ts = repo({
+      "base.ts": "export class Base {\n  render(): void {}\n}\n",
+      "child.ts": [
+        'import { Base } from "./base";',
+        "export class Child extends Base {",
+        "  render(): void {",
+        "    super.render();",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+      "same.ts": [
+        "class A {",
+        "  run(): void {}",
+        "}",
+        "class B extends A {",
+        "  run(): void {",
+        "    super.run();",
+        "  }",
+        "}",
+        "class C extends B {",
+        "  stop(): void {}",
+        "}",
+        "class D extends C {",
+        "  run(): void {",
+        "    super.run();",
+        "  }",
+        "}",
+        "class E extends A {",
+        "  go(): void {",
+        "    var later = () => super.run();",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    expect(lines(callersOf(ts, "render@base.ts"))).toEqual(["child.ts:4"]);
+    expect(lines(callersOf(ts, "render@child.ts"))).toEqual([]);
+    // Same-file homonyms share one caller entry, so ask the binder: B's call
+    // reaches A.run (line 2), and D's — C declares no run() — B.run (line 5).
+    const scan = scanRepo(ts);
+    const same = scan.files.find((f) => f.rel === "same.ts")!;
+    const bind = createCallBinder(scan, computeImportPairs(scan)).forFile(same)!;
+    // A const inside E.go (its parent is the method, not E) still reaches A.run.
+    expect(same.calls!.filter((c) => c.name === "run").map((c) => `${c.line}->${bind(c)?.def.line}`)).toEqual(["6->2", "14->5", "19->2"]);
+  });
+
+  it("Rust: super:: in a nested inline mod reaches the enclosing mod's items", () => {
+    const crate = repo({
+      "Cargo.toml": '[package]\nname = "u"\nversion = "0.1.0"\n',
+      "src/lib.rs": "mod m;\n",
+      "src/m.rs": [
+        "pub fn helper() -> u8 { 1 }",
+        "",
+        "mod tests {",
+        "    fn helper() -> u8 { 2 }",
+        "",
+        "    mod inner {",
+        "        fn t() -> u8 {",
+        "            super::helper()",
+        "        }",
+        "    }",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    const entries = callerIndexForNames(scanRepo(crate), ["helper"]);
+    const byLine = (line: number) => [...entries.values()].find((e) => e.def.file === "src/m.rs" && e.def.line === line);
+    expect(byLine(4)?.callers.map((c) => c.line)).toEqual([8]);
+    expect(byLine(1)?.callers ?? []).toEqual([]);
+  });
+
+  it("Go: a method called on a struct literal binds to that type's method", () => {
+    const go = repo({
+      "go.mod": "module example.com/m\n\ngo 1.22\n",
+      "addrs/check.go": "package addrs\n\ntype Check struct{ Name string }\n\nfunc (c Check) Absolute() string { return c.Name }\n",
+      "stackaddrs/in_stack.go": 'package stackaddrs\n\ntype InStack struct{}\n\nfunc (s InStack) Absolute() string { return "" }\n',
+      "stackaddrs/plan_test.go": [
+        "package stackaddrs",
+        "",
+        'import "example.com/m/addrs"',
+        "",
+        "func use() string {",
+        "\treturn addrs.Check{",
+        '\t\tName: "x",',
+        "\t}.Absolute()",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    expect(lines(callersOf(go, "Absolute@stackaddrs/in_stack.go"))).toEqual([]);
+    expect(lines(callersOf(go, "Absolute@addrs/check.go"))).toEqual(["stackaddrs/plan_test.go:6"]);
   });
 });

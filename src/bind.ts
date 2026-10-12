@@ -70,8 +70,16 @@ const PRIVATE_REACH: Record<string, "package" | "import" | "path"> = { go: "pack
 const NOT_CALLABLE = new Set(["mod", "module", "package", "namespace"]);
 
 // The receiver a Rust `super::` takes inside an inline `mod { … }` block, where
-// it names the enclosing file rather than its parent module.
-const INLINE_SUPER = "super\u0000inline";
+// it names a scope of the enclosing file rather than its parent module; the
+// scope's declaration line follows (0: the file's top level).
+const INLINE_SUPER = "super\u0000inline\u0000";
+
+// How far `super.f()` climbs the bases a file declares looking for `f`.
+const MAX_BASE_HOPS = 8;
+
+// The Rust prelude's variant names: a bare call to one is std's unless the
+// file imports a local enum's variant by name.
+const PRELUDE_VARIANTS = new Set(["Ok", "Err", "Some", "None"]);
 
 // Receivers that name the enclosing object. JS/TS/Java `this` and Rust `self`
 // never get here (the extractor reads no receiver from them); PHP's `$this`
@@ -645,8 +653,9 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const aliases = scope.aliases(f);
     // `crate` and `super` as this Rust file's path qualifiers, where they name a file.
     let rustModules: Map<string, string[]> | undefined;
-    // The file's inline `mod name { … }` blocks: inside one, `super::` is the
-    // file itself (`#[cfg(test)] mod tests` calling `super::parse`).
+    // The file's inline `mod name { … }` blocks: inside one, `super::` names
+    // the scope that block sits in — the file's top level for `#[cfg(test)]
+    // mod tests` calling `super::parse`, the outer block for a nested one.
     let inlineMods: CodeSymbol[] | undefined;
     if (family === "rust") {
       for (const q of ["crate", "super"]) {
@@ -654,8 +663,49 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         if (files) (rustModules ??= new Map()).set(q, files);
       }
       inlineMods = f.symbols.filter((s) => s.kind === "mod" && s.endLine !== undefined && s.endLine > s.line);
-      if (inlineMods.length) (rustModules ??= new Map()).set(INLINE_SUPER, [f.rel]);
     }
+    // The innermost inline mod holding `line`, as its declaration line (0: the top level).
+    const modScope = (line: number): number => {
+      let best = 0;
+      for (const m of inlineMods ?? []) if (line > m.line && line <= m.endLine! && m.line > best) best = m.line;
+      return best;
+    };
+    // A JS/TS/Java/Python class's base, as its `extends` relation names it.
+    const baseOf = (cls: string): string | undefined => f.relations?.find((r) => r.kind === "extends" && r.from === cls)?.to;
+    // The class a declaration sits in, for its `super`: its parent when that
+    // states a base, else the innermost class spanning it that does — a
+    // `var x = () => super.f()` in a constructor has the constructor for parent.
+    const classAround = (e: CodeSymbol | undefined): string | undefined => {
+      if (e === undefined) return undefined;
+      if (e.parent !== undefined && baseOf(e.parent) !== undefined) return e.parent;
+      let best: CodeSymbol | undefined;
+      for (const s of f.symbols) {
+        if (s.endLine === undefined || s.line > e.line || e.line > s.endLine || baseOf(s.name) === undefined) continue;
+        if (!best || s.line > best.line) best = s;
+      }
+      return best?.name ?? e.parent;
+    };
+    // What this Rust file's `use` declarations name, as `E` and `E::V`: inside
+    // an enum's own file, `use self::E::*` (its spec reads "self::E") or
+    // `use self::E::V` brings the variants into scope for a bare call.
+    let usedPaths: Set<string> | undefined;
+    const variantInScope = (d: CodeSymbol): boolean => {
+      if (d.file !== f.rel || d.parent === undefined) return false;
+      if (!usedPaths) {
+        usedPaths = new Set();
+        for (const r of f.refs) {
+          if (r.kind !== "import") continue;
+          const segs = r.spec.split("::");
+          usedPaths.add(segs[segs.length - 1]!);
+          if (segs.length > 1) usedPaths.add(`${segs[segs.length - 2]}::${segs[segs.length - 1]}`);
+        }
+      }
+      // A `use` carries no scope here, so the prelude's names are the variant
+      // only when imported by name: a glob in one fn must not turn the file's
+      // every std `Ok(…)` into `E::Ok`.
+      if (PRELUDE_VARIANTS.has(d.name)) return usedPaths.has(`${d.parent}::${d.name}`);
+      return usedPaths.has(d.parent) || usedPaths.has(`${d.parent}::${d.name}`);
+    };
 
     // Cross-file defs of `name` this file reaches by stated evidence.
     const corroborated = (name: string, pool: Pool): CodeSymbol[] => {
@@ -706,11 +756,19 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const read = (c: CallSite, enclosing: CodeSymbol | undefined): Reading => {
       let receiver = c.receiver;
       if (receiver === undefined) return BARE;
-      if (receiver === "super" && inlineMods?.some((m) => c.line > m.line && c.line <= m.endLine!)) receiver = INLINE_SUPER;
+      if (family === "rust" && receiver === "super") {
+        const block = modScope(c.line);
+        if (block) {
+          // The scope the call's block sits in, one reading per such scope.
+          receiver = `${INLINE_SUPER}${modScope(block)}`;
+          if (!rustModules?.has(receiver)) (rustModules ??= new Map()).set(receiver, [f.rel]);
+        }
+      }
       let r = byReceiver.get(receiver);
       if (r) return r;
       const self = (t: string | undefined): Reading => reading("self", receiver, t, t);
-      if (!SELF_NAMES.has(receiver)) {
+      // Outside Rust, `super` depends on the enclosing class: read in scope.
+      if (!SELF_NAMES.has(receiver) && !(receiver === "super" && family !== "rust")) {
         if (rustModules?.has(receiver)) r = reading("module", receiver);
         else if (aliases.modules.has(receiver)) r = reading("module", receiver);
         else if (ownTypes.has(receiver)) r = self(receiver); // `Greeter.make()` next to Greeter
@@ -739,6 +797,14 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     // The part of `read` that depends on the enclosing declaration `e`.
     const readInScope = (receiver: string, e: CodeSymbol | undefined, self: (t: string | undefined) => Reading): Reading => {
       if (SELF_NAMES.has(receiver)) return self(e?.parent);
+      // `super.f()` (Python's `super().f()`): a member of the enclosing class's
+      // base — never the override it is called from. A base this file declares
+      // is read like `self`; one declared elsewhere names the type to prefer.
+      if (receiver === "super") {
+        const cls = classAround(e);
+        const base = cls !== undefined ? baseOf(cls) : undefined;
+        return base !== undefined && ownTypes.has(base) ? self(base) : reading("foreign", receiver, undefined, base);
+      }
       // The enclosing header states the receiver's type: Go's method receiver
       // (`func (c *Context) …`), a parameter (`c *Context`, `app: Flask`).
       if (family === "go" && goReceiverVar(e) === receiver) return self(e!.parent);
@@ -754,6 +820,17 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const resolve = (name: string, how: Reading): Resolved | null => {
       const { shape, receiver, selfType, typeHint } = how;
       if (shape === "outside") return null;
+      // Rust: a tuple variant is reached through its enum (`ParseResult::Ok(…)`,
+      // whose receiver names the enum), bare only where its own file imports
+      // the variants (variantInScope) — elsewhere a bare `Ok(…)`/`Some(…)` is
+      // the prelude's. And `super::` inside an inline `mod tests { … }` names
+      // the file's own items, never those of the block it sits in (a test
+      // helper `fn check` calling `super::check`).
+      const bareRust = family === "rust" && shape === "bare";
+      const scopeLine = receiver?.startsWith(INLINE_SUPER) ? Number(receiver.slice(INLINE_SUPER.length)) : undefined;
+      const reachable = (d: CodeSymbol): boolean =>
+        !(bareRust && d.kind === "enum-member" && !variantInScope(d)) &&
+        !(scopeLine !== undefined && (d.file !== f.rel || modScope(d.line) !== scopeLine));
       // 1. The file's own declaration. A bare call reaches a top-level one
       //    (any, where the shape proves nothing), a call on the enclosing
       //    object a member of its type. A call on a module or on some other
@@ -764,9 +841,22 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       else if (shape === "bare") local = shaped ? ownFree.get(name) : ownAny.get(name);
       else if (shape === "self") {
         local = selfType !== undefined ? memberOf(selfType, name) : undefined;
+        // `super.f()` goes on up the bases this file declares, as far as
+        // one declares `f` (vite's PluginContext → MinimalPluginContext →
+        // BasicMinimalPluginContext.warn). Bounded: a cycle is not code.
+        if (receiver === "super") {
+          for (let t = selfType, hops = 0; !local && t !== undefined && hops < MAX_BASE_HOPS; hops++) {
+            t = baseOf(t);
+            if (t !== undefined && ownTypes.has(t)) local = memberOf(t, name);
+            else break;
+          }
+        }
         // `self.f()` may reach a member a same-file base class declares; a
         // stated or named type is exact.
         if (!local && receiver !== undefined && SELF_NAMES.has(receiver)) local = ownMember.get(name);
+      }
+      if (local && !reachable(local)) {
+        local = f.symbols.find((s) => s.name === name && !REFERENCE_KINDS.has(s.kind) && !NOT_CALLABLE.has(s.kind) && reachable(s));
       }
       if (local) return only && !only.has(local.name) ? null : { hit: { def: local, corroborated: true }, local: true };
 
@@ -801,10 +891,11 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         if (restrict === null) {
           if (!recall) return null;
         } else {
-          const hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
+          let hits = scope.within(exportedGroup(callee, family, pool), restrict, callee);
           if (hiddenReach === "import" || viaPath) {
             for (const d of scope.within(hiddenGroup(callee, family, pool), restrict, callee)) if (!hits.includes(d)) hits.push(d);
           }
+          if (family === "rust") hits = hits.filter(reachable);
           const chosen = pickCandidate(f.rel, hits);
           if (chosen) return { hit: { def: chosen, corroborated: true }, local: false };
           if (hits.length) return null; // a proximity tie
@@ -817,7 +908,8 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       }
 
       // 3. Everything the file reaches by stated evidence.
-      const stated = preferParent(corroborated(callee, pool), typeHint, receiver);
+      const reached = corroborated(callee, pool);
+      const stated = preferParent(family === "rust" ? reached.filter(reachable) : reached, typeHint, receiver);
       if (stated.length) {
         const chosen = pickCandidate(f.rel, stated);
         return chosen ? { hit: { def: chosen, corroborated: true }, local: false } : null;
@@ -826,7 +918,8 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       // 4. Inference by name, where the language permits it at all.
       const group = exportedGroup(callee, family, recall ? "any" : guessPool);
       if (!group) return null;
-      const cands = defsOutside(group, f.rel);
+      const outside = defsOutside(group, f.rel);
+      const cands = family === "rust" ? outside.filter(reachable) : outside;
       if (!cands.length) return null;
       let guesses: CodeSymbol[] = [...cands];
       if (recall) {

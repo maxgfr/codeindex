@@ -181,9 +181,19 @@ export function readReceiver(node: TSNode | null): string | undefined {
     node.childForFieldName("argument") ??
     node.childForFieldName("receiver") ??
     node.childForFieldName("table");
-  // Rust's `crate::f()` and `super::f()` name a module by keyword, a leaf
-  // readName does not take for a name; the binder resolves both to a file.
-  if (obj && (obj.type === "crate" || obj.type === "super")) return obj.type;
+  // `super` and Rust's `crate` are keywords, leaves readName does not take for
+  // a name. Rust's `crate::f()`/`super::f()` name a module the binder resolves
+  // to a file; JS/TS/Java's `super.f()` the enclosing class's base, which the
+  // binder reads off the file's `extends` relations.
+  if (obj?.type === "super" || (obj?.type === "crate" && node.type === "scoped_identifier")) return obj.type;
+  // A method called on a composite literal (Go's `addrs.Check{…}.Absolute()`)
+  // is called on the literal's type; the literal's last child is its body,
+  // whose last identifier is any field value at all.
+  if (obj?.type === "composite_literal") {
+    const type = obj.childForFieldName("type");
+    const name = type ? readTypeName(type) : undefined;
+    return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
+  }
   const name = obj ? readName(obj) : undefined;
   return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
 }
