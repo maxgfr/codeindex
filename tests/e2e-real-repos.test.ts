@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
 import type { Graph, SymbolIndex } from "../src/types.js";
+import { clonePinned, REPOS, type RealRepo } from "./real-repos.js";
 
 // Empirical validation against REAL public repos, pinned by commit. Opt-in
 // (network + minutes of work): `pnpm run test:e2e`. The dangling-rate
@@ -14,7 +15,6 @@ import type { Graph, SymbolIndex } from "../src/types.js";
 // regression fails loudly, while upstream churn can't (the commits are pinned).
 const E2E = !!process.env.CODEINDEX_E2E;
 
-const CACHE = fileURLToPath(new URL("./.e2e-cache", import.meta.url));
 const BUNDLE = fileURLToPath(new URL("../scripts/engine.mjs", import.meta.url));
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
 const KNOWN_REASONS = new Set([
@@ -25,97 +25,6 @@ const KNOWN_REASONS = new Set([
   "missing-include",
   "missing-target",
 ]);
-
-interface RealRepo {
-  slug: string; // owner/name on GitHub
-  sha: string; // pinned commit — re-pin deliberately, never float
-  maxDanglingRatio: number; // ratchet: dangling / total edges must stay below
-  primaryLang: string; // symbols.json must contain defs in this language
-  // A resolved import edge that must exist (from-prefix, to-prefix) — the
-  // regression teeth proving resolution actually worked here.
-  crossEdge?: [RegExp, RegExp];
-  budgetMs: number; // generous wall-clock ceiling for one cold build
-}
-
-const REPOS: RealRepo[] = [
-  {
-    // Yarn workspaces + Next.js app dir (the original adversarial-audit anchor).
-    slug: "socialgouv/code-du-travail-numerique",
-    sha: "886297ad7ce94d6377863d8fbf88e24f696dd3b7",
-    maxDanglingRatio: 0.002,
-    primaryLang: "typescript",
-    crossEdge: [/^packages\/code-du-travail-frontend\//, /^packages\/(?!code-du-travail-frontend\/)/],
-    budgetMs: 120_000,
-  },
-  {
-    // Turborepo + pnpm; packages route subpaths through conditional `exports`.
-    slug: "t3-oss/create-t3-turbo",
-    sha: "8f945b7bb3bfb3ca8358d48b1ff0214079bc11ee",
-    maxDanglingRatio: 0.02,
-    primaryLang: "typescript",
-    crossEdge: [/^apps\//, /^packages\//],
-    budgetMs: 120_000,
-  },
-  {
-    // Canonical Nx layout: root tsconfig.base.json carrying the @org/* aliases.
-    slug: "nrwl/nx-examples",
-    sha: "0808ace9640cdae6fbbc9b000292383ea6d78c9f",
-    maxDanglingRatio: 0.01,
-    primaryLang: "typescript",
-    crossEdge: [/^apps\//, /^libs\//],
-    budgetMs: 120_000,
-  },
-  {
-    // Python: package imports, src layout.
-    slug: "pallets/flask",
-    sha: "36e4a824f340fdee7ed50937ba8e7f6bc7d17f81",
-    maxDanglingRatio: 0.01, // measured baseline: 0/582 edges
-    primaryLang: "python",
-    crossEdge: [/^tests\//, /^src\/flask\//],
-    budgetMs: 120_000,
-  },
-  {
-    // Go: module-rooted imports via go.mod.
-    slug: "gin-gonic/gin",
-    sha: "34dac209ffb6ef85cc78c5d217bbb7ad001d68fd",
-    maxDanglingRatio: 0.03, // measured baseline: 5/267 edges (1.87%)
-    primaryLang: "go",
-    budgetMs: 120_000,
-  },
-  {
-    // Rust: cargo workspace (crates/*), mod/use resolution.
-    slug: "BurntSushi/ripgrep",
-    sha: "59e318f5ace48db54f37bb67c152535bc17fa153",
-    maxDanglingRatio: 0.01, // measured baseline: 0/619 edges
-    primaryLang: "rust",
-    crossEdge: [/^crates\/core\//, /^crates\/(?!core\/)/],
-    budgetMs: 120_000,
-  },
-  {
-    // Large Gradle multi-project: Java + Kotlin across config/core/web modules.
-    // Added after the stabilization audit as an independent real-world proof,
-    // not one of the repositories used to design the fixes.
-    slug: "spring-projects/spring-security",
-    sha: "61feae94a04ab78ede3aa7c5c97b1b0e993cca48",
-    maxDanglingRatio: 0.001, // measured baseline: 0/48,146 edges
-    primaryLang: "java",
-    crossEdge: [/^config\//, /^core\//],
-    budgetMs: 120_000,
-  },
-];
-
-// Shallow-fetch the pinned commit into the cache; re-runs are offline.
-function clonePinned(repo: RealRepo): string {
-  const dir = join(CACHE, `${repo.slug.replace("/", "__")}@${repo.sha.slice(0, 12)}`);
-  if (existsSync(join(dir, ".git"))) return dir;
-  mkdirSync(dir, { recursive: true });
-  const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
-  git("init", "-q");
-  git("remote", "add", "origin", `https://github.com/${repo.slug}`);
-  git("fetch", "-q", "--depth", "1", "origin", repo.sha);
-  git("checkout", "-q", "FETCH_HEAD");
-  return dir;
-}
 
 // Build once per repo per run; every assertion shares the result.
 const built = new Map<string, { graph: Graph; symbols: SymbolIndex; repoDir: string; ms: number }>();
