@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -189,6 +190,63 @@ describe("walk honors .gitignore", () => {
     const rels = scan.files.map((f) => f.rel);
     expect(rels).toContain("pkg/index.ts");
     expect(rels.every((r) => r.startsWith("pkg/"))).toBe(true);
+  });
+});
+
+// The same verdicts as git itself, on the bracket expressions git's wildmatch
+// reads and the parser used to get wrong: `^` negating like `!`, POSIX classes,
+// escapes and literal `]`/`-` inside a class.
+describe("differential against git check-ignore", () => {
+  const PATTERNS = [
+    "x[^a]",
+    "[[:digit:]]z",
+    "y[!b-d]",
+    "[[:alpha:]][[:digit:]]",
+    "w[\\]]",
+    "v[a-c-]",
+    "[[:upper:]]*.md",
+    "u[[:bogus:]]",
+    "t[]]q",
+    "*.py[cod]",
+    "r\\[x",
+    "q[[:space:][:punct:]]",
+    "p[^[:alnum:]]",
+  ];
+  const PATHS = [
+    "xa", "xb", "x^", "1z", "az", "yb", "ye", "a1", "Z9", "w]", "wx", "va", "v-", "vd", "README.md", "readme.md",
+    "ub", "u1", "t]q", "tq", "a.pyc", "a.pyx", "r[x", "rx", "q ", "q!", "qa", "p_", "pa", "p9",
+  ];
+
+  it("ignores exactly the paths git ignores", () => {
+    const repo = mkdtempSync(join(tmpdir(), "ci-ignore-diff-"));
+    execFileSync("git", ["-C", repo, "init", "-q"]);
+    writeFileSync(join(repo, ".gitignore"), PATTERNS.join("\n") + "\n");
+    // Case-sensitive, as the engine always is (see ignore.ts): git defaults to
+    // core.ignorecase=true on a case-insensitive filesystem.
+    const r = spawnSync("git", ["-C", repo, "-c", "core.ignorecase=false", "check-ignore", "--no-index", "--stdin", "-z"], { input: PATHS.join("\0") + "\0" });
+    const theirs = String(r.stdout).split("\0").filter(Boolean).sort();
+    const ours = PATHS.filter((p) => test(parseGitignore(PATTERNS.join("\n"), ""), p)).sort();
+    expect(theirs.length).toBeGreaterThan(0);
+    expect(ours).toEqual(theirs);
+  });
+});
+
+describe("a walk rooted below the top level of a repository", () => {
+  it("honours the .gitignore files above it and .git/info/exclude, like git", () => {
+    const top = mkdtempSync(join(tmpdir(), "ci-ignore-sub-"));
+    execFileSync("git", ["-C", top, "init", "-q"]);
+    writeFileSync(join(top, ".gitignore"), "*.generated.ts\ngen/\n");
+    writeFileSync(join(top, ".git", "info", "exclude"), "local.ts\n");
+    mkdirSync(join(top, "pkg", "gen"), { recursive: true });
+    for (const rel of ["pkg/a.ts", "pkg/b.generated.ts", "pkg/gen/c.ts", "pkg/local.ts"]) writeFileSync(join(top, rel), "x\n");
+    const pkg = join(top, "pkg");
+    const git = String(execFileSync("git", ["-C", pkg, "ls-files", "-co", "--exclude-standard"])).split("\n").filter(Boolean).sort();
+    expect(git).toEqual(["a.ts"]);
+    const skips: WalkSkip[] = [];
+    expect(walk(pkg, { onSkip: (s) => skips.push(s) }).files.map((f) => f.rel)).toEqual(git);
+    // `scan --why` names the deciding rule where it was written.
+    expect(skips.find((s) => s.rel === "local.ts")?.rule).toEqual({ source: "../.git/info/exclude", line: 1, pattern: "local.ts" });
+    expect(skips.find((s) => s.rel === "gen")?.rule).toEqual({ source: "../.gitignore", line: 2, pattern: "gen/" });
   });
 });
 

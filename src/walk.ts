@@ -1,5 +1,5 @@
 import { readdirSync, statSync, lstatSync, readFileSync, realpathSync, existsSync, type Dirent } from "node:fs";
-import { join, resolve, sep, extname } from "node:path";
+import { dirname, join, relative, resolve, sep, extname } from "node:path";
 import { parseGitignore, isIgnored, decidingRule, type IgnoreRule } from "./ignore.js";
 import { readTextEx } from "./text.js";
 import { sh } from "./util.js";
@@ -143,6 +143,50 @@ function readInfoExclude(gitDir: string | undefined): string {
   } catch {
     return "";
   }
+}
+
+// The ignore rules git applies to `root`'s files from ABOVE it, when root is a
+// subdirectory of a worktree: the enclosing repository's info/exclude, then
+// every .gitignore from its top level down to root's parent — git's order.
+// Indexing one package of a monorepo used to ignore none of them, so a root
+// `*.generated.ts` or `gen/` rule left that package's generated files in.
+//
+// Each rule is matched against the path from the top level (`pkg/gen/c.ts`),
+// which is what it was written against; its source is named relative to root
+// (`../.gitignore`) for `scan --why`. Empty when root is itself a top level
+// (its own .git, handled by the walk) or is in no repository.
+function enclosingRules(rootReal: string): IgnoreRule[] {
+  const markerAt = (dir: string): string | undefined => {
+    if (!existsSync(join(dir, GIT_ENTRY))) return undefined; // the common case: one stat
+    try {
+      return gitDirOf(dir, readdirSync(dir, { withFileTypes: true }).filter((e) => e.name === GIT_ENTRY));
+    } catch {
+      return undefined;
+    }
+  };
+  if (markerAt(rootReal)) return [];
+  const above: string[] = []; // root's ancestors, nearest first, up to the top level
+  let gitDir: string | undefined;
+  for (let dir = rootReal, parent = dirname(dir); parent !== dir; dir = parent, parent = dirname(dir)) {
+    above.push(parent);
+    gitDir = markerAt(parent);
+    if (gitDir) break;
+  }
+  if (!gitDir) return [];
+  const top = above[above.length - 1]!;
+  const posix = (p: string): string => p.split(sep).join("/");
+  const fromTop = posix(relative(top, rootReal)) + "/";
+  const fromRoot = (abs: string): string => posix(relative(rootReal, abs));
+  const rules = parseGitignore(readInfoExclude(gitDir), "", fromRoot(join(gitDir, "info", "exclude")));
+  for (const dir of above.reverse()) {
+    const file = join(dir, ".gitignore");
+    if (!existsSync(file)) continue;
+    rules.push(...parseGitignore(readText(file), posix(relative(top, dir)), fromRoot(file)));
+  }
+  return rules.map((r) => ({
+    ...r,
+    test: (rel: string, base: string) => (r.test ? r.test(fromTop + rel, base) : r.re.test(fromTop + rel)),
+  }));
 }
 
 // Lockfiles: huge, machine-generated, and pure noise for a code/docs question —
@@ -308,7 +352,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   // Each frame carries the ignore-rule chain inherited from its ancestors;
   // rules from deeper .gitignore files are appended after (later rules win).
   const stack: { dir: string; rel: string; rules: readonly IgnoreRule[] }[] = [
-    { dir: root, rel: "", rules: [] },
+    { dir: root, rel: "", rules: useGitignore ? enclosingRules(rootReal) : [] },
   ];
   const seenDirs = new Set<string>(); // resolved real dirs already walked
   walking: while (stack.length) {

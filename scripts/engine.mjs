@@ -287,24 +287,10 @@ function patternToRegExpSource(pattern) {
     } else if (c2 === "?") {
       re += "[^/]";
     } else if (c2 === "[") {
-      let j = i2 + 1;
-      let body2 = "";
-      if (pattern[j] === "!") {
-        body2 += "^";
-        j++;
-      }
-      if (pattern[j] === "]") {
-        body2 += "\\]";
-        j++;
-      }
-      while (j < pattern.length && pattern[j] !== "]") {
-        const ch = pattern[j];
-        body2 += ch === "\\" || ch === "^" ? "\\" + ch : ch;
-        j++;
-      }
-      if (j < pattern.length && body2 !== "" && body2 !== "^") {
-        re += body2.startsWith("^") ? `[^/${body2.slice(1)}]` : `(?!/)[${body2}]`;
-        i2 = j;
+      const cls = bracketClass(pattern, i2);
+      if (cls) {
+        re += cls.source;
+        i2 = cls.end;
       } else {
         re += "\\[";
       }
@@ -313,6 +299,45 @@ function patternToRegExpSource(pattern) {
     }
   }
   return re;
+}
+function bracketClass(pattern, start2) {
+  let j = start2 + 1;
+  let negated = false;
+  if (pattern[j] === "!" || pattern[j] === "^") {
+    negated = true;
+    j++;
+  }
+  let body2 = "";
+  let impossible = false;
+  let first = true;
+  for (; j < pattern.length; j++) {
+    const ch = pattern[j];
+    if (ch === "]" && !first) break;
+    first = false;
+    if (ch === "\\" && j + 1 < pattern.length) {
+      body2 += escapeClassChar(pattern[++j]);
+    } else if (ch === "[" && pattern[j + 1] === ":") {
+      const close = pattern.indexOf(":]", j + 2);
+      if (close === -1) {
+        body2 += "\\[";
+        continue;
+      }
+      const posix8 = POSIX_CLASSES[pattern.slice(j + 2, close)];
+      if (posix8 === void 0) impossible = true;
+      else body2 += posix8;
+      j = close + 1;
+    } else if (ch === "-") {
+      body2 += "-";
+    } else {
+      body2 += escapeClassChar(ch);
+    }
+  }
+  if (j >= pattern.length) return void 0;
+  if (impossible) return { source: "(?!)", end: j };
+  return { source: negated ? `[^/${body2}]` : `(?!/)[${body2}]`, end: j };
+}
+function escapeClassChar(ch) {
+  return ch === "\\" || ch === "]" || ch === "^" || ch === "[" || ch === "-" ? "\\" + ch : ch;
 }
 function parseGitignore(content, baseRel, source) {
   const rules = [];
@@ -386,10 +411,25 @@ function decidingRule(rules, rel2, isDir) {
   }
   return void 0;
 }
+var POSIX_CLASSES;
 var init_ignore = __esm({
   "src/ignore.ts"() {
     "use strict";
     init_util();
+    POSIX_CLASSES = {
+      alnum: "A-Za-z0-9",
+      alpha: "A-Za-z",
+      blank: " \\t",
+      cntrl: "\\x00-\\x1f\\x7f",
+      digit: "0-9",
+      graph: "\\x21-\\x7e",
+      lower: "a-z",
+      print: "\\x20-\\x7e",
+      punct: "!-\\/:-@\\[-`{-~",
+      space: " \\t\\n\\r\\f\\v",
+      upper: "A-Z",
+      xdigit: "0-9A-Fa-f"
+    };
   }
 });
 
@@ -531,7 +571,7 @@ var init_text = __esm({
 
 // src/walk.ts
 import { readdirSync, statSync, lstatSync, readFileSync as readFileSync2, realpathSync, existsSync } from "fs";
-import { join, resolve, sep, extname } from "path";
+import { dirname, join, relative, resolve, sep, extname } from "path";
 function trackedBuildOutputDirs(root) {
   const specs = [...BUILD_OUTPUT_DIRS].map((d) => `:(glob)**/${d}/**`);
   const res = sh("git", ["-C", root, "ls-files", "-z", "--", ...specs]);
@@ -578,6 +618,39 @@ function readInfoExclude(gitDir) {
     return "";
   }
 }
+function enclosingRules(rootReal) {
+  const markerAt = (dir) => {
+    if (!existsSync(join(dir, GIT_ENTRY))) return void 0;
+    try {
+      return gitDirOf(dir, readdirSync(dir, { withFileTypes: true }).filter((e) => e.name === GIT_ENTRY));
+    } catch {
+      return void 0;
+    }
+  };
+  if (markerAt(rootReal)) return [];
+  const above = [];
+  let gitDir;
+  for (let dir = rootReal, parent = dirname(dir); parent !== dir; dir = parent, parent = dirname(dir)) {
+    above.push(parent);
+    gitDir = markerAt(parent);
+    if (gitDir) break;
+  }
+  if (!gitDir) return [];
+  const top = above[above.length - 1];
+  const posix8 = (p) => p.split(sep).join("/");
+  const fromTop = posix8(relative(top, rootReal)) + "/";
+  const fromRoot = (abs) => posix8(relative(rootReal, abs));
+  const rules = parseGitignore(readInfoExclude(gitDir), "", fromRoot(join(gitDir, "info", "exclude")));
+  for (const dir of above.reverse()) {
+    const file = join(dir, ".gitignore");
+    if (!existsSync(file)) continue;
+    rules.push(...parseGitignore(readText(file), posix8(relative(top, dir)), fromRoot(file)));
+  }
+  return rules.map((r) => ({
+    ...r,
+    test: (rel2, base) => r.test ? r.test(fromTop + rel2, base) : r.re.test(fromTop + rel2)
+  }));
+}
 function walk(root, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
   const maxFiles = opts.maxFiles ?? Infinity;
@@ -615,7 +688,7 @@ function walk(root, opts = {}) {
   }
   const contained = (real) => real === rootReal || real.startsWith(rootReal + sep);
   const stack = [
-    { dir: root, rel: "", rules: [] }
+    { dir: root, rel: "", rules: useGitignore ? enclosingRules(rootReal) : [] }
   ];
   const seenDirs = /* @__PURE__ */ new Set();
   walking: while (stack.length) {
@@ -7745,7 +7818,7 @@ ${JSON.stringify(symbolNames, null, 2)}`);
 // src/ast/loader.ts
 import { readFileSync as readFileSync4, existsSync as existsSync2, statSync as statSync2 } from "fs";
 import { homedir } from "os";
-import { dirname, join as join2 } from "path";
+import { dirname as dirname2, join as join2 } from "path";
 import { fileURLToPath } from "url";
 function grammarKeyForExt(ext) {
   return EXT_GRAMMAR[ext];
@@ -7774,7 +7847,7 @@ function resolveGrammarsTier(opts = {}) {
   };
   const legacy = process.env.CODEINDEX_GRAMMAR_DIR ?? process.env.ULTRAINDEX_GRAMMAR_DIR;
   if (legacy && legacy.trim() && existsSync2(legacy)) return withDirs("env", legacy, []);
-  const here = opts.moduleDir ?? dirname(fileURLToPath(import.meta.url));
+  const here = opts.moduleDir ?? dirname2(fileURLToPath(import.meta.url));
   const adjacent = [
     join2(here, "grammars"),
     // bundle: <...>/scripts/grammars
@@ -10733,7 +10806,7 @@ var init_config = __esm({
 });
 
 // src/scan.ts
-import { basename, isAbsolute, posix, relative, resolve as resolve3, sep as sep2 } from "path";
+import { basename, isAbsolute, posix, relative as relative2, resolve as resolve3, sep as sep2 } from "path";
 function countLines2(s) {
   if (!s) return 0;
   let n = 1;
@@ -10778,7 +10851,7 @@ function buildCodeRecord(rel2, ext, size, content, hash, lang, opts = {}) {
 function normalizeScope(root, scope) {
   let s = scope.replace(/\\/g, "/");
   if (isAbsolute(s)) {
-    const rel2 = relative(resolve3(root), resolve3(s)).split(sep2).join("/");
+    const rel2 = relative2(resolve3(root), resolve3(s)).split(sep2).join("/");
     if (rel2 === ".." || rel2.startsWith("../") || isAbsolute(rel2)) return s;
     s = rel2;
   }
@@ -10847,11 +10920,11 @@ function* keptFiles(root, opts) {
 function selfIndexGuard(root, out2) {
   if (!out2) return void 0;
   const dir = resolve3(out2);
-  const up = relative(dir, resolve3(root));
+  const up = relative2(dir, resolve3(root));
   if (up === "") return (f) => !f.rel.includes("/") && isIndexArtifact(f.rel);
   if (up !== ".." && !up.startsWith(`..${sep2}`) && !isAbsolute(up)) return void 0;
   return (f) => {
-    const inside = relative(dir, f.abs);
+    const inside = relative2(dir, f.abs);
     return inside === "" || inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute(inside);
   };
 }
@@ -11141,13 +11214,13 @@ var init_cache = __esm({
 // src/pool.ts
 import { existsSync as existsSync3, statSync as statSync3 } from "fs";
 import * as os from "os";
-import { basename as basename2, dirname as dirname2, join as join4 } from "path";
+import { basename as basename2, dirname as dirname3, join as join4 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 import { Worker } from "worker_threads";
 function resolveEngineUrl(here = fileURLToPath2(import.meta.url)) {
   try {
     if (basename2(here) === "engine.mjs") return pathToFileURL(here).href;
-    const adjacent = join4(dirname2(here), "engine.mjs");
+    const adjacent = join4(dirname3(here), "engine.mjs");
     if (existsSync3(adjacent)) return pathToFileURL(adjacent).href;
     return void 0;
   } catch {
@@ -14242,7 +14315,7 @@ var init_centrality = __esm({
 });
 
 // src/complexity.ts
-import { isAbsolute as isAbsolute3, join as join11, posix as posix4, relative as relative3, resolve as resolve6 } from "path";
+import { isAbsolute as isAbsolute3, join as join11, posix as posix4, relative as relative4, resolve as resolve6 } from "path";
 function openerOf2(syn) {
   let re = openers.get(syn);
   if (!re) {
@@ -15929,7 +16002,7 @@ var init_edit_spans = __esm({
 
 // src/edit.ts
 import { chmodSync, mkdtempSync as mkdtempSync2, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync6, writeFileSync as writeFileSync2 } from "fs";
-import { basename as basename4, dirname as dirname4, extname as extname3, isAbsolute as isAbsolute4, join as join14, posix as posix5, relative as relative4 } from "path";
+import { basename as basename4, dirname as dirname5, extname as extname3, isAbsolute as isAbsolute4, join as join14, posix as posix5, relative as relative5 } from "path";
 function resolveUniqueSymbol(scan2, namePath, file, line2) {
   let matches = findSymbol(scan2, namePath, { maxResults: Infinity });
   const rel2 = file === void 0 ? void 0 : repoRelative(scan2.root, file);
@@ -15967,7 +16040,7 @@ function listed(matches) {
   return matches.length > MAX_LISTED ? `${shown}, \u2026 ${matches.length - MAX_LISTED} more` : shown;
 }
 function repoRelative(root, file) {
-  const rel2 = isAbsolute4(file) ? relative4(root, file) : file;
+  const rel2 = isAbsolute4(file) ? relative5(root, file) : file;
   return posix5.normalize(rel2.replace(/\\/g, "/"));
 }
 function readDocument(abs) {
@@ -16024,7 +16097,7 @@ function atomicWrite(abs, content, cleanup = rmSync2) {
   const mode = statSync6(target).mode;
   let tempDir;
   try {
-    tempDir = mkdtempSync2(join14(dirname4(target), ".codeindex-edit-"));
+    tempDir = mkdtempSync2(join14(dirname5(target), ".codeindex-edit-"));
   } catch {
     writeFileSync2(target, content);
     chmodSync(target, mode);
@@ -16210,7 +16283,7 @@ var init_edit = __esm({
 
 // src/memory.ts
 import { lstatSync as lstatSync3, realpathSync as realpathSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync9, rmSync as rmSync3, statSync as statSync7, writeFileSync as writeFileSync3 } from "fs";
-import { dirname as dirname5, join as join15 } from "path";
+import { dirname as dirname6, join as join15 } from "path";
 function sanitize(name2) {
   const clean = name2.replace(/^mem:/, "").replace(/\.md$/, "");
   if (!clean) throw new Error("memory name is empty");
@@ -16242,7 +16315,7 @@ function memoryPath(repo, name2) {
 }
 function writeMemory(repo, name2, content) {
   const path = memoryPath(repo, name2);
-  mkdirSync2(dirname5(path), { recursive: true });
+  mkdirSync2(dirname6(path), { recursive: true });
   memoryPath(repo, name2);
   writeFileSync3(path, content.endsWith("\n") ? content : content + "\n");
   return sanitize(name2);
@@ -20860,7 +20933,7 @@ var init_traverse = __esm({
 });
 
 // src/delta.ts
-import { isAbsolute as isAbsolute6, posix as posix7, relative as relative5, resolve as resolve9, sep as sep5 } from "path";
+import { isAbsolute as isAbsolute6, posix as posix7, relative as relative6, resolve as resolve9, sep as sep5 } from "path";
 function symbolsInHunks(defs, hunks) {
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
@@ -21153,7 +21226,7 @@ function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
   };
 }
 function reviewFilter(repo, indexDir) {
-  const idx = relative5(resolve9(repo), resolve9(repo, indexDir ?? ".codeindex")).split(sep5).join("/");
+  const idx = relative6(resolve9(repo), resolve9(repo, indexDir ?? ".codeindex")).split(sep5).join("/");
   const inIndex = idx && !idx.startsWith("..") && !isAbsolute6(idx) ? (p) => p === idx || p.startsWith(`${idx}/`) : () => false;
   return (path, tracked) => {
     if (inIndex(path)) return false;
@@ -21406,9 +21479,9 @@ var init_resolution = __esm({
 });
 
 // src/patharg.ts
-import { isAbsolute as isAbsolute7, relative as relative6 } from "path";
+import { isAbsolute as isAbsolute7, relative as relative7 } from "path";
 function fileArgReadings(repo, arg) {
-  let rel2 = (isAbsolute7(arg) ? relative6(repo, arg) : arg).replace(/\\/g, "/");
+  let rel2 = (isAbsolute7(arg) ? relative7(repo, arg) : arg).replace(/\\/g, "/");
   while (rel2.startsWith("./")) rel2 = rel2.slice(2);
   return rel2 !== arg && rel2 !== "" && rel2 !== ".." && !rel2.startsWith("../") ? [arg, rel2] : [arg];
 }
@@ -21457,7 +21530,7 @@ var init_concise = __esm({
 
 // src/embed/persist.ts
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync16, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "fs";
-import { dirname as dirname6 } from "path";
+import { dirname as dirname7 } from "path";
 function readEmbeddingsFile(path) {
   try {
     return deserializeEmbeddings(readFileSync16(path));
@@ -21468,7 +21541,7 @@ function readEmbeddingsFile(path) {
 function writeEmbeddingsFileAtomic(path, bytes) {
   const tmp = `${path}.${process.pid}.tmp`;
   try {
-    mkdirSync3(dirname6(path), { recursive: true });
+    mkdirSync3(dirname7(path), { recursive: true });
     writeFileSync4(tmp, bytes);
     renameSync3(tmp, path);
     return true;
@@ -21486,7 +21559,7 @@ var init_persist = __esm({
 
 // src/mcp/session.ts
 import { realpathSync as realpathSync5, statSync as statSync9 } from "fs";
-import { isAbsolute as isAbsolute8, join as join24, relative as relative7, sep as sep6 } from "path";
+import { isAbsolute as isAbsolute8, join as join24, relative as relative8, sep as sep6 } from "path";
 function scanFingerprint(scan2) {
   return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
 }
@@ -21554,7 +21627,7 @@ function realpathOr(path) {
   }
 }
 function relInside(root, abs) {
-  const rel2 = relative7(root, abs);
+  const rel2 = relative8(root, abs);
   if (!rel2 || rel2 === ".." || rel2.startsWith(".." + sep6) || isAbsolute8(rel2)) return void 0;
   return rel2.split(sep6).join("/");
 }
@@ -23020,7 +23093,7 @@ __export(mcp_exports, {
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
 import { readFileSync as readFileSync18, realpathSync as realpathSync6, statSync as statSync12 } from "fs";
-import { basename as basename5, isAbsolute as isAbsolute9, join as join27, relative as relative8, resolve as resolve10, sep as sep7 } from "path";
+import { basename as basename5, isAbsolute as isAbsolute9, join as join27, relative as relative9, resolve as resolve10, sep as sep7 } from "path";
 import { createInterface } from "readline";
 function isRpcRequest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -23058,7 +23131,7 @@ function errMessage(e) {
 function indexedFile(scan2, repo, file) {
   const byRel = fileByRelFor(scan2);
   if (byRel.has(file)) return file;
-  const rel2 = relative8(repo, resolve10(repo, file.replaceAll("\\", "/"))).split(sep7).join("/");
+  const rel2 = relative9(repo, resolve10(repo, file.replaceAll("\\", "/"))).split(sep7).join("/");
   if (rel2 === ".." || rel2.startsWith("../") || isAbsolute9(rel2)) throw new Error(`\`file\` is outside the repository: ${file}`);
   if (byRel.has(rel2)) return rel2;
   const name2 = basename5(rel2);
@@ -24176,7 +24249,7 @@ function bracket(p, i2, dialect) {
     if (c2 === "]" && !first) return [out2 + "]", j];
     if (c2 === "[" && p[j + 1] === ":") {
       const m = /^\[:(\w+):\]/.exec(p.slice(j));
-      const cls = m && POSIX_CLASSES[m[1]];
+      const cls = m && POSIX_CLASSES2[m[1]];
       if (!cls || m[1] === "word" && dialect !== "rust") return void 0;
       out2 += cls;
       j += m[0].length - 1;
@@ -24350,7 +24423,7 @@ function rewriteCommand(cmd, bin = "codeindex") {
   out2.push("--ignore-dir", ".codeindex");
   return out2.join(" ");
 }
-var UNSUPPORTED_GLOB, RG_TYPES, POSIX_CLASSES;
+var UNSUPPORTED_GLOB, RG_TYPES, POSIX_CLASSES2;
 var init_rewrite = __esm({
   "src/rewrite.ts"() {
     "use strict";
@@ -24405,7 +24478,7 @@ var init_rewrite = __esm({
       txt: ["*.txt"],
       yaml: ["*.yaml", "*.yml"]
     };
-    POSIX_CLASSES = {
+    POSIX_CLASSES2 = {
       alpha: "A-Za-z",
       digit: "0-9",
       alnum: "A-Za-z0-9",
@@ -24432,7 +24505,7 @@ init_registry();
 init_scan();
 init_sort();
 import { lstatSync as lstatSync2, realpathSync as realpathSync2 } from "fs";
-import { extname as extname2, isAbsolute as isAbsolute2, join as join3, relative as relative2, sep as sep3 } from "path";
+import { extname as extname2, isAbsolute as isAbsolute2, join as join3, relative as relative3, sep as sep3 } from "path";
 var DEFAULT_MAX_BYTES = 1024 * 1024;
 function scanSkips(root, opts = {}) {
   const skips = [];
@@ -24496,7 +24569,7 @@ function skipDetail(root, opts, rel2, skip) {
     case "symlink-outside-root":
       try {
         const target = realpathSync2(join3(root, skip.rel));
-        const inside = relative2(realpathSync2(root), target);
+        const inside = relative3(realpathSync2(root), target);
         return { target: inside.startsWith("..") || isAbsolute2(inside) ? target : inside.split(sep3).join("/") };
       } catch {
         return {};
@@ -24732,7 +24805,7 @@ init_loader();
 init_types();
 import { createHash as createHash2 } from "crypto";
 import { existsSync as existsSync5, mkdirSync, mkdtempSync, readFileSync as readFileSync8, renameSync, rmSync, writeFileSync } from "fs";
-import { dirname as dirname3, join as join8, resolve as resolve5, sep as sep4 } from "path";
+import { dirname as dirname4, join as join8, resolve as resolve5, sep as sep4 } from "path";
 import { gunzipSync } from "zlib";
 var DEFAULT_GRAMMARS_URL = `https://github.com/maxgfr/codeindex/releases/download/v${ENGINE_VERSION}/grammars-${ENGINE_VERSION}.tar.gz`;
 function resolveGrammarsPullTarget() {
@@ -24813,7 +24886,7 @@ function extractTarInto(rawTar, destDir) {
     if (dest !== root && !dest.startsWith(root + sep4)) {
       throw new Error(`tar entry escapes destination: ${entry2.name}`);
     }
-    mkdirSync(dirname3(dest), { recursive: true });
+    mkdirSync(dirname4(dest), { recursive: true });
     writeFileSync(dest, entry2.data);
     written.push(rel2);
   }
@@ -24825,7 +24898,7 @@ function extractGrammarsTarball(bytes, destDir) {
   return extractTarInto(raw, destDir);
 }
 function installGrammarCacheAtomically(tempDir, cacheDir, markerPath, expectedSha256, rename = renameSync, cleanup = rmSync) {
-  const parent = dirname3(cacheDir);
+  const parent = dirname4(cacheDir);
   const swapDir = mkdtempSync(join8(parent, ".grammars-swap-"));
   const previousCache = join8(swapDir, "previous-cache");
   const previousMarker = join8(swapDir, "previous-marker");
@@ -24896,7 +24969,7 @@ async function pullGrammars(cacheDir, opts = {}) {
     }
   }
   const runtime = join8(cacheDir, "web-tree-sitter.wasm");
-  const markerPath = join8(dirname3(cacheDir), `${ENGINE_VERSION}.sha256`);
+  const markerPath = join8(dirname4(cacheDir), `${ENGINE_VERSION}.sha256`);
   if (existsSync5(runtime) && expected && existsSync5(markerPath)) {
     let marker = "";
     try {
@@ -24924,8 +24997,8 @@ async function pullGrammars(cacheDir, opts = {}) {
   }
   let tmp;
   try {
-    mkdirSync(dirname3(cacheDir), { recursive: true });
-    tmp = mkdtempSync(join8(dirname3(cacheDir), ".grammars-tmp-"));
+    mkdirSync(dirname4(cacheDir), { recursive: true });
+    tmp = mkdtempSync(join8(dirname4(cacheDir), ".grammars-tmp-"));
     extractGrammarsTarball(bytes, tmp);
     if (!existsSync5(join8(tmp, "web-tree-sitter.wasm"))) {
       throw new Error("archive is missing web-tree-sitter.wasm");

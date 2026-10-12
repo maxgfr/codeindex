@@ -200,7 +200,7 @@ describe("adversarial inputs come out right", () => {
     const rules = parseGitignore("x[^a]\n[[:digit:]]z\n", "");
     expect(isIgnored(rules, "xb", false)).toBe(true);
     expect(isIgnored(rules, "xa", false)).toBe(false);
-    expect(isIgnored(rules, "x^", false)).toBe(false);
+    expect(isIgnored(rules, "x^", false)).toBe(true); // `^` is not `a`
     expect(isIgnored(rules, "1z", false)).toBe(true);
     expect(isIgnored(rules, "az", false)).toBe(false);
   });
