@@ -300,7 +300,9 @@ export function findReferences(scan: RepoScan, ref: string): SymbolReferences {
   // doc pattern is compiled once — the loop used to run Array.includes over
   // every code file's identifiers and build a RegExp per doc, per query.
   const idents = identSetsFor(scan);
-  const mention = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+  // Word boundaries that know `$` is part of a name: `\b` has none next to
+  // it, so `$http` or `jQuery$` was never found in a doc.
+  const mention = new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w$])`);
   for (const f of scan.files) {
     if (f.rel === defFile) continue;
     if (f.kind === "code" && idents.get(f.rel)?.has(name)) referencingFiles.add(f.rel);

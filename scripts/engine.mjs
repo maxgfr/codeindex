@@ -82,7 +82,7 @@ function foldText(s) {
 function keywords(question, keep) {
   const seen = /* @__PURE__ */ new Set();
   const out2 = [];
-  for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
+  for (const raw of foldText(question).split(NON_WORD)) {
     if (!raw) continue;
     const lower = raw.toLowerCase();
     if (raw.length < 2) continue;
@@ -95,7 +95,7 @@ function keywords(question, keep) {
 }
 function droppedKeywords(question, keep) {
   const out2 = [];
-  for (const raw of foldText(question).split(/[^A-Za-z0-9_]+/)) {
+  for (const raw of foldText(question).split(NON_WORD)) {
     if (!raw) continue;
     if (raw.length < 2 || STOPWORDS.has(raw.toLowerCase()) && !keep?.(raw)) out2.push(raw);
   }
@@ -125,7 +125,7 @@ function rrf(lists, keyOf2, k = 60) {
   return score;
 }
 function subtokens(raw) {
-  const folded = foldText(raw).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const folded = foldText(raw).replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2");
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
   const push = (t) => {
@@ -133,8 +133,8 @@ function subtokens(raw) {
     seen.add(t);
     out2.push(t);
   };
-  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^a-z0-9_]+/g, ""));
-  for (const part of folded.split(/[^A-Za-z0-9]+/)) push(part.toLowerCase());
+  if (!/\s/.test(raw.trim())) push(foldText(raw).toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, ""));
+  for (const part of folded.split(/[^\p{L}\p{N}]+/u)) push(part.toLowerCase());
   return out2;
 }
 function stemOf(term) {
@@ -150,7 +150,7 @@ function stemOf(term) {
   if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
   return t;
 }
-var GIT_LOCALE, whichCache, STOPWORDS, NON_ASCII;
+var GIT_LOCALE, whichCache, STOPWORDS, NON_ASCII, NON_WORD;
 var init_util = __esm({
   "src/util.ts"() {
     "use strict";
@@ -255,6 +255,7 @@ var init_util = __esm({
       "our"
     ]);
     NON_ASCII = /[^\x00-\x7F]/;
+    NON_WORD = /[^\p{L}\p{N}_]+/u;
   }
 });
 
@@ -14282,7 +14283,7 @@ function runSearch(scan2, query, opts = {}) {
         if (viaStem.length) {
           fuzzyCandidates.set(
             t,
-            viaStem.slice(0, FUZZY_CAP).map((term) => ({ term, dice: STEM_WEIGHT }))
+            viaStem.slice(0, FUZZY_CAP).map((term) => ({ term, dice: STEM_WEIGHT, via: "stem" }))
           );
         } else stillUnmatched.push(t);
       }
@@ -14291,7 +14292,7 @@ function runSearch(scan2, query, opts = {}) {
         for (const t of stillUnmatched) {
           const candidates = trigramNeighbours(trigramIndex, t);
           candidates.sort((a, b) => b.dice - a.dice || byStr(a.term, b.term));
-          fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP));
+          fuzzyCandidates.set(t, candidates.slice(0, FUZZY_CAP).map((c2) => ({ ...c2, via: "trigram" })));
         }
       }
     }
@@ -14386,11 +14387,12 @@ function explainOf(query, terms, df, fuzzyCandidates, kept, keep) {
     const frequency = df.get(term) ?? 0;
     const candidates = frequency === 0 ? fuzzyCandidates.get(term) ?? [] : [];
     if (!candidates.length) return { term, df: frequency };
-    const via = candidates[0].dice === STEM_WEIGHT ? "stem" : "trigram";
-    return { term, df: frequency, bridge: { via, to: candidates.map((c2) => c2.term), dice: candidates[0].dice } };
+    return { term, df: frequency, bridge: { via: candidates[0].via, to: candidates.map((c2) => c2.term), dice: candidates[0].dice } };
   });
   const unresolvedTerms = diagnostics.filter((d) => d.df === 0 && !d.bridge).map((d) => d.term).sort(byStr);
-  const wholeIdentifier = !/\s/.test(query.trim()) && terms.length ? { term: terms[0], df: df.get(terms[0]) ?? 0 } : void 0;
+  const single = !/\s/.test(query.trim());
+  const parts2 = single ? keywords(query, keep).map((k) => subtokens(k)[0]).filter((t) => t !== void 0) : [];
+  const wholeIdentifier = !single || !terms.length ? void 0 : parts2.length > 1 ? { term: query.trim(), df: Math.min(...parts2.map((t) => df.get(t) ?? 0)) } : { term: terms[0], df: df.get(terms[0]) ?? 0 };
   const bridgedOnlyResults = kept.filter((r) => r.bridgedOnly).length;
   const allBridged = kept.length > 0 && bridgedOnlyResults === kept.length;
   const missingIdentifier = wholeIdentifier?.df === 0;
@@ -14418,7 +14420,8 @@ function noteFor(explain, missingIdentifier, allBridged) {
   }
   if (missingIdentifier && wholeIdentifier) {
     const parts2 = terms.filter((t) => t.term !== wholeIdentifier.term && t.df > 0).map((t) => t.term).join(", ");
-    const near = terms.find((t) => t.term === wholeIdentifier.term)?.bridge?.to ?? [];
+    const own = terms.find((t) => t.term === wholeIdentifier.term);
+    const near = (own ? own.bridge?.to : terms.find((t) => t.df === 0 && t.bridge)?.bridge?.to) ?? [];
     const because = parts2 ? ` The ${resultCount} result${resultCount === 1 ? "" : "s"} below match only its parts (${parts2}).` : "";
     const suggestion = near.length ? ` Closest indexed name${near.length === 1 ? "" : "s"}: ${near.join(", ")}.` : "";
     return `No file in this index defines or mentions "${wholeIdentifier.term}".${because}${suggestion} If you expected it here, check you are indexing the right branch or commit.`;
@@ -14583,7 +14586,7 @@ var init_centrality = __esm({
   "src/centrality.ts"() {
     "use strict";
     DAMPING = 0.85;
-    MAX_ITERS = 100;
+    MAX_ITERS = 200;
     CONVERGENCE = 1e-10;
     BETWEENNESS_MAX_NODES = 3e3;
   }
@@ -14591,6 +14594,15 @@ var init_centrality = __esm({
 
 // src/complexity.ts
 import { isAbsolute as isAbsolute3, join as join11, posix as posix4, relative as relative4, resolve as resolve6 } from "path";
+function branchRe(family) {
+  let re = branchRes.get(family);
+  if (!re) {
+    const words = ["if", "for", "while", ...BRANCH_WORDS[family] ?? ANY_LANGUAGE];
+    re = new RegExp(`(?<![.\\w$])(?:${words.join("|")})\\b|&&|\\|\\||(?<![?:])\\?(?![?.:])`, "g");
+    branchRes.set(family, re);
+  }
+  return re;
+}
 function openerOf2(syn) {
   let re = openers.get(syn);
   if (!re) {
@@ -14660,8 +14672,10 @@ function codeOnly(source, lang) {
   return kept === 0 ? source : out2 + source.slice(kept);
 }
 function branches(code, lang) {
-  let count2 = (code.match(BRANCH_RE) ?? []).length;
-  if (lang && WORD_BOOL.has(familyOf(lang))) count2 += (code.match(WORD_BOOL_RE) ?? []).length;
+  const family = lang ? familyOf(lang) : "";
+  let count2 = (code.match(branchRe(family)) ?? []).length;
+  if (family === "python") count2 += (code.match(PY_CASE_RE) ?? []).length;
+  if (WORD_BOOL.has(family)) count2 += (code.match(WORD_BOOL_RE) ?? []).length;
   return count2;
 }
 function complexityOfSource(source, lang) {
@@ -14702,7 +14716,7 @@ function nestedIn(spans, i2, end) {
 }
 function riskHotspots(scan2, churn, top = 20) {
   const complexityByFile = fileComplexityFor(scan2);
-  const out2 = scan2.files.filter((f) => f.kind === "code").map((f) => {
+  const out2 = scan2.files.filter((f) => f.kind === "code" && (churn.get(f.rel) ?? 0) > 0).map((f) => {
     const complexity = complexityByFile.get(f.rel);
     const commits = churn.get(f.rel) ?? 0;
     return { file: f.rel, complexity, commits, score: (commits + 1) * complexity };
@@ -14710,7 +14724,7 @@ function riskHotspots(scan2, churn, top = 20) {
   out2.sort((a, b) => b.score - a.score || byStr(a.file, b.file));
   return out2.slice(0, top);
 }
-var BRANCH_RE, WORD_BOOL_RE, WORD_BOOL, CONTAINER_KINDS, C_LIKE, HASH2, SYNTAX, openers, CHAR_LITERAL2;
+var BRANCH_WORDS, ANY_LANGUAGE, branchRes, PY_CASE_RE, WORD_BOOL_RE, WORD_BOOL, CONTAINER_KINDS, C_LIKE, HASH2, SYNTAX, openers, CHAR_LITERAL2;
 var init_complexity = __esm({
   "src/complexity.ts"() {
     "use strict";
@@ -14718,7 +14732,28 @@ var init_complexity = __esm({
     init_derived();
     init_walk();
     init_sort();
-    BRANCH_RE = /(?<![.\w$])(?:if|elif|elsif|else\s+if|for|foreach|while|until|unless|case|when|match|catch|rescue|except)\b|&&|\|\||(?<![?:])\?(?![?.:])/g;
+    BRANCH_WORDS = {
+      js: ["else\\s+if", "case", "catch"],
+      c: ["else\\s+if", "case"],
+      java: ["else\\s+if", "case", "catch"],
+      csharp: ["else\\s+if", "foreach", "case", "catch"],
+      go: ["else\\s+if", "case"],
+      rust: ["else\\s+if", "match"],
+      kotlin: ["else\\s+if", "when", "catch"],
+      scala: ["else\\s+if", "match", "case", "catch"],
+      swift: ["else\\s+if", "case", "catch", "guard"],
+      php: ["elseif", "else\\s+if", "foreach", "case", "catch"],
+      dart: ["else\\s+if", "case", "catch"],
+      python: ["elif", "except"],
+      ruby: ["elsif", "unless", "until", "when", "rescue"],
+      elixir: ["unless", "case", "cond", "rescue"],
+      lua: ["elseif"],
+      shell: ["elif", "until", "case"],
+      perl: ["elsif", "unless", "until", "foreach"]
+    };
+    ANY_LANGUAGE = ["elif", "elsif", "else\\s+if", "foreach", "until", "unless", "case", "when", "match", "catch", "rescue", "except"];
+    branchRes = /* @__PURE__ */ new Map();
+    PY_CASE_RE = /^[ \t]*case\b[^\n]*:[ \t]*$/gm;
     WORD_BOOL_RE = /(?<![.\w$])(?:and|or)\b/g;
     WORD_BOOL = /* @__PURE__ */ new Set(["python", "ruby", "lua", "perl", "elixir"]);
     CONTAINER_KINDS = /* @__PURE__ */ new Set([
@@ -16005,7 +16040,7 @@ function findReferences(scan2, ref2) {
   const unique = uniqueDefsFor(scan2);
   const defFile = unique.get(name2);
   const idents = identSetsFor(scan2);
-  const mention = new RegExp(`\\b${name2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+  const mention = new RegExp(`(?<![\\w$])${name2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w$])`);
   for (const f of scan2.files) {
     if (f.rel === defFile) continue;
     if (f.kind === "code" && idents.get(f.rel)?.has(name2)) referencingFiles.add(f.rel);
@@ -17834,7 +17869,7 @@ function buildArtifactsFromScan(scan2, opts = {}) {
     const id = communities.get(m.slug);
     if (id !== void 0) m.community = id;
   }
-  applyCentrality(graph);
+  const notes = applyCentrality(graph);
   const testMap = computeTestMap(graph);
   for (const f of graph.files) {
     if (testMap.testFiles.has(f.rel)) f.testFile = true;
@@ -17848,7 +17883,7 @@ function buildArtifactsFromScan(scan2, opts = {}) {
   const { duplications } = findLiteralDuplications(scan2);
   if (duplications.length) graph.literalDuplications = duplications.slice(0, LITERAL_DUPLICATION_CAP);
   const symbols = buildSymbolIndex(scan2, symbolRefsFor(scan2), opts.meta?.schemaVersion);
-  return { scan: scan2, graph, symbols };
+  return notes.length ? { scan: scan2, graph, symbols, notes } : { scan: scan2, graph, symbols };
 }
 var init_pipeline = __esm({
   "src/pipeline.ts"() {
@@ -18879,6 +18914,7 @@ function renderRepoMap(scan2, graph, opts = {}) {
   let out2 = opts.bare ? "" : `# repo map \u2014 ${graph.fileCount} files
 `;
   let files = 0;
+  let misses = 0;
   for (const node of ranked) {
     const rec = records.get(node.rel);
     if (!rec) continue;
@@ -18894,7 +18930,11 @@ ${node.rel}:
     }
     if (candidates.length > shown.length) block += `  \u2026 ${candidates.length - shown.length} more
 `;
-    if (out2.length + block.length > budgetChars) break;
+    if (out2.length + block.length > budgetChars) {
+      if (++misses >= MAX_MISSES) break;
+      continue;
+    }
+    misses = 0;
     out2 += block;
     files++;
   }
@@ -18902,7 +18942,7 @@ ${node.rel}:
 (${files} of ${ranked.length} code files shown, ~${Math.ceil(out2.length / CHARS_PER_TOKEN)} tokens)
 `;
 }
-var CHARS_PER_TOKEN, SKIP_KINDS, TYPE_KINDS3, CALLABLE_KINDS;
+var CHARS_PER_TOKEN, SKIP_KINDS, TYPE_KINDS3, CALLABLE_KINDS, MAX_MISSES;
 var init_repomap = __esm({
   "src/repomap.ts"() {
     "use strict";
@@ -18925,6 +18965,7 @@ var init_repomap = __esm({
       "module"
     ]);
     CALLABLE_KINDS = /* @__PURE__ */ new Set(["function", "def", "fn", "func", "method", "constructor", "macro"]);
+    MAX_MISSES = 32;
   }
 });
 
@@ -20725,7 +20766,7 @@ function referencedElsewhere(scan2, candidates, relations) {
     const names = new Set(list.map((s) => s.name));
     const token = familyOf(list[0].lang) === "js" ? /[A-Za-z_$][\w$]*/g : /[A-Za-z_]\w*/g;
     const linesOf = /* @__PURE__ */ new Map();
-    readText(join23(scan2.root, rel2)).split("\n").forEach((text, i2) => {
+    codeOnly(readText(join23(scan2.root, rel2)), list[0].lang).split("\n").forEach((text, i2) => {
       for (const m of text.match(token) ?? []) if (names.has(m)) (linesOf.get(m) ?? linesOf.set(m, []).get(m)).push(i2 + 1);
     });
     for (const s of list) {
@@ -20770,6 +20811,7 @@ function publicRoots(scan2, pairs, relations) {
     }
     frontier = next;
   }
+  for (const k of libraryApi(scan2, ctx)) roots.add(k);
   const supers = /* @__PURE__ */ new Map();
   for (const r of relations) {
     const k = `${r.from}${SEP4}${r.fromFile}`;
@@ -20796,6 +20838,39 @@ function publicRoots(scan2, pairs, relations) {
     for (const r of reach) if (!roots.has(r)) roots.add(r), queue.push(r);
   }
   return roots;
+}
+function libraryApi(scan2, ctx) {
+  const keys = [];
+  const mainDirs = /* @__PURE__ */ new Set();
+  for (const f of scan2.files) {
+    if (f.lang === "go" && !f.rel.endsWith("_test.go") && f.symbols.some((s) => s.name === "main" && !s.parent && s.kind === "function")) {
+      mainDirs.add(dirOf7(f.rel));
+    }
+  }
+  const libraryDirs = [];
+  for (const f of scan2.files) {
+    const base = f.rel.slice(f.rel.lastIndexOf("/") + 1);
+    if (base !== "build.gradle" && base !== "build.gradle.kts" && base !== "pom.xml") continue;
+    const text = readText(join23(scan2.root, f.rel));
+    const published = base === "pom.xml" ? /<distributionManagement>|maven-deploy-plugin|central-publishing-maven-plugin|nexus-staging-maven-plugin/.test(text) : /\bjava-library\b|\bmaven-publish\b|com\.vanniktech\.maven\.publish/.test(text);
+    if (published) libraryDirs.push(dirOf7(f.rel));
+  }
+  const under = (rel2, dir) => !dir || rel2.startsWith(dir + "/");
+  for (const f of scan2.files) {
+    if (f.kind !== "code" || isTestPath(f.rel)) continue;
+    if (f.lang === "go") {
+      if (f.rel.endsWith("_test.go")) continue;
+      const mod = ctx.goModules.find((g) => under(f.rel, g.dir));
+      if (!mod) continue;
+      const dir = dirOf7(f.rel);
+      const inModule = mod.dir ? dir.slice(mod.dir.length + 1) : dir;
+      if (mainDirs.has(dir) || /(^|\/)internal(\/|$)/.test(inModule)) continue;
+      for (const s of f.symbols) if (s.exported) keys.push(`${s.name}${SEP4}${s.file}`);
+    } else if (JVM_LANGS.has(f.lang) && libraryDirs.some((d) => under(f.rel, d)) && !/(^|\/)src\/test\//.test(f.rel)) {
+      for (const s of f.symbols) if (s.exported && !s.parent) keys.push(`${s.name}${SEP4}${s.file}`);
+    }
+  }
+  return keys;
 }
 function manifestEntries(scan2, ctx, byRel) {
   const out2 = /* @__PURE__ */ new Set();
@@ -20848,7 +20923,7 @@ function capDeadCode(all, limit) {
   if (limit === void 0 || all.length <= limit) return all;
   return { total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) };
 }
-var REFERENCE_KINDS8, CALLABLE_KINDS2, FN_INITIALIZER, PY_LAMBDA, CONTAINER_KINDS2, ENTRY_BASENAME, IDENT_VISIBLE, SEP4, dirOf7;
+var REFERENCE_KINDS8, CALLABLE_KINDS2, FN_INITIALIZER, PY_LAMBDA, CONTAINER_KINDS2, ENTRY_BASENAME, IDENT_VISIBLE, SEP4, dirOf7, JVM_LANGS;
 var init_deadcode = __esm({
   "src/deadcode.ts"() {
     "use strict";
@@ -20861,6 +20936,7 @@ var init_deadcode = __esm({
     init_tests_map();
     init_walk();
     init_sort();
+    init_complexity();
     REFERENCE_KINDS8 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
     CALLABLE_KINDS2 = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator", "class", "macro"]);
     FN_INITIALIZER = /^[\w$]+\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\(|[\w$]+\s*=>)/;
@@ -20870,6 +20946,7 @@ var init_deadcode = __esm({
     IDENT_VISIBLE = /^[A-Za-z_]\w{4,}$/;
     SEP4 = "\0";
     dirOf7 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    JVM_LANGS = /* @__PURE__ */ new Set(["java", "kotlin", "scala"]);
   }
 });
 
@@ -26586,7 +26663,9 @@ async function runCli(rawArgv) {
 `
       );
     } else {
-      const { graph, symbols } = buildArtifactsFromScan(scan2);
+      const { graph, symbols, notes } = buildArtifactsFromScan(scan2);
+      for (const n of notes ?? []) process.stderr.write(`codeindex: note: ${n}
+`);
       const graphJson = renderGraphJson(graph);
       const symbolsJson = renderSymbolsJson(symbols);
       writeArtifact(graphPath, graphJson);

@@ -375,6 +375,7 @@ interface IndexArtifacts {
     scan: RepoScan;
     graph: Graph;
     symbols: SymbolIndex;
+    notes?: string[];
 }
 declare function buildIndexArtifacts(repo: string, opts?: BuildIndexOptions): IndexArtifacts;
 declare function buildArtifactsFromScan(scan: RepoScan, opts?: BuildIndexOptions): IndexArtifacts;

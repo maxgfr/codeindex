@@ -20,8 +20,43 @@ import { fileComplexityFor } from "./derived.js";
 import { readText } from "./walk.js";
 import { byStr } from "./sort.js";
 
-const BRANCH_RE =
-  /(?<![.\w$])(?:if|elif|elsif|else\s+if|for|foreach|while|until|unless|case|when|match|catch|rescue|except)\b|&&|\|\||(?<![?:])\?(?![?.:])/g;
+// The branch keywords of each language family, beyond if/for/while. One list
+// for every language counted a TypeScript `const match = re.exec(s)` or a
+// `when` variable as branches; only the languages that reserve a word (or
+// use it as a branch) count it. A family with no entry keeps the full list.
+const BRANCH_WORDS: Record<string, string[]> = {
+  js: ["else\\s+if", "case", "catch"],
+  c: ["else\\s+if", "case"],
+  java: ["else\\s+if", "case", "catch"],
+  csharp: ["else\\s+if", "foreach", "case", "catch"],
+  go: ["else\\s+if", "case"],
+  rust: ["else\\s+if", "match"],
+  kotlin: ["else\\s+if", "when", "catch"],
+  scala: ["else\\s+if", "match", "case", "catch"],
+  swift: ["else\\s+if", "case", "catch", "guard"],
+  php: ["elseif", "else\\s+if", "foreach", "case", "catch"],
+  dart: ["else\\s+if", "case", "catch"],
+  python: ["elif", "except"],
+  ruby: ["elsif", "unless", "until", "when", "rescue"],
+  elixir: ["unless", "case", "cond", "rescue"],
+  lua: ["elseif"],
+  shell: ["elif", "until", "case"],
+  perl: ["elsif", "unless", "until", "foreach"],
+};
+const ANY_LANGUAGE = ["elif", "elsif", "else\\s+if", "foreach", "until", "unless", "case", "when", "match", "catch", "rescue", "except"];
+const branchRes = new Map<string, RegExp>();
+function branchRe(family: string): RegExp {
+  let re = branchRes.get(family);
+  if (!re) {
+    const words = ["if", "for", "while", ...(BRANCH_WORDS[family] ?? ANY_LANGUAGE)];
+    re = new RegExp(`(?<![.\\w$])(?:${words.join("|")})\\b|&&|\\|\\||(?<![?:])\\?(?![?.:])`, "g");
+    branchRes.set(family, re);
+  }
+  return re;
+}
+// Python's `case` is a soft keyword: a branch only where it opens a clause of
+// a `match` statement, never as a name.
+const PY_CASE_RE = /^[ \t]*case\b[^\n]*:[ \t]*$/gm;
 const WORD_BOOL_RE = /(?<![.\w$])(?:and|or)\b/g;
 const WORD_BOOL = new Set(["python", "ruby", "lua", "perl", "elixir"]);
 
@@ -147,8 +182,10 @@ export function codeOnly(source: string, lang?: string): string {
 
 // Branch tokens in text that is already code only.
 function branches(code: string, lang?: string): number {
-  let count = (code.match(BRANCH_RE) ?? []).length;
-  if (lang && WORD_BOOL.has(familyOf(lang))) count += (code.match(WORD_BOOL_RE) ?? []).length;
+  const family = lang ? familyOf(lang) : "";
+  let count = (code.match(branchRe(family)) ?? []).length;
+  if (family === "python") count += (code.match(PY_CASE_RE) ?? []).length;
+  if (WORD_BOOL.has(family)) count += (code.match(WORD_BOOL_RE) ?? []).length;
   return count;
 }
 
@@ -236,8 +273,11 @@ export function riskHotspots(scan: RepoScan, churn: Map<string, number>, top = 2
   // fileComplexityFor covers exactly the code files filtered below, so the
   // lookup always hits.
   const complexityByFile = fileComplexityFor(scan);
+  // Changed files only, as rankHotspots ranks them: an untouched file is no
+  // risk of the window, and with a short --since complex but untouched files
+  // filled the list.
   const out: RiskHotspot[] = scan.files
-    .filter((f) => f.kind === "code")
+    .filter((f) => f.kind === "code" && (churn.get(f.rel) ?? 0) > 0)
     .map((f) => {
       const complexity = complexityByFile.get(f.rel)!;
       const commits = churn.get(f.rel) ?? 0;

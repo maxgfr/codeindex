@@ -23,6 +23,9 @@ export interface IndexArtifacts {
   scan: RepoScan;
   graph: Graph;
   symbols: SymbolIndex;
+  // What the build left out and should say (a skipped betweenness pass).
+  // Present only when there is something to say.
+  notes?: string[];
 }
 
 // The full deterministic pipeline in one call: scan → resolve → group → graph →
@@ -52,7 +55,7 @@ export function buildArtifactsFromScan(scan: RepoScan, opts: BuildIndexOptions =
     if (id !== undefined) m.community = id;
   }
 
-  applyCentrality(graph);
+  const notes = applyCentrality(graph);
 
   const testMap = computeTestMap(graph);
   for (const f of graph.files) {
@@ -70,5 +73,5 @@ export function buildArtifactsFromScan(scan: RepoScan, opts: BuildIndexOptions =
   if (duplications.length) graph.literalDuplications = duplications.slice(0, LITERAL_DUPLICATION_CAP);
 
   const symbols = buildSymbolIndex(scan, symbolRefsFor(scan), opts.meta?.schemaVersion);
-  return { scan, graph, symbols };
+  return notes.length ? { scan, graph, symbols, notes } : { scan, graph, symbols };
 }

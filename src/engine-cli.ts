@@ -1262,7 +1262,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged at a new commit — graph.json restamped, symbols.json reused)\n`,
       );
     } else {
-      const { graph, symbols } = buildArtifactsFromScan(scan);
+      const { graph, symbols, notes } = buildArtifactsFromScan(scan);
+      for (const n of notes ?? []) process.stderr.write(`codeindex: note: ${n}\n`);
       const graphJson = renderGraphJson(graph);
       const symbolsJson = renderSymbolsJson(symbols);
       writeArtifact(graphPath, graphJson);
