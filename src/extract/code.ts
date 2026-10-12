@@ -54,7 +54,26 @@ const CALL_KEYWORDS = new Set([
 
 // Introducers whose FOLLOWING identifier is a definition, not a call:
 // `function foo(`, `def foo(`, `func foo(`, `fn foo(`, `class Foo(`, `sub foo(`.
-const DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bmacro|\bproc)\s*[*]?\s*$/;
+const DEF_INTRODUCERS = new Set(["function", "def", "func", "fun", "fn", "class", "sub", "macro", "proc"]);
+const SPACE = /\s/;
+const WORD = /\w/;
+
+// Whether the call candidate starting at `index` reads as a definition: the
+// word before it, past whitespace and one optional `*` (`function* gen(`), is
+// an introducer — what `/\bfunction\s*[*]?\s*$/` tested on the line's prefix.
+// Walked back from the match instead: the prefix regex re-read the whole line
+// up to every match, 7.9 s on one line of 120k calls.
+function introducedAt(line: string, index: number): boolean {
+  let i = index;
+  while (i > 0 && SPACE.test(line[i - 1]!)) i--;
+  if (i > 0 && line[i - 1] === "*") {
+    i--;
+    while (i > 0 && SPACE.test(line[i - 1]!)) i--;
+  }
+  let j = i;
+  while (j > 0 && WORD.test(line[j - 1]!)) j--;
+  return j < i && DEF_INTRODUCERS.has(line.slice(j, i));
+}
 
 // Regex-tier call-site collection for files with no AST grammar — a
 // conservative `identifier(` scan so call data exists wasm-free (the AST tier
@@ -113,7 +132,7 @@ export function collectCallsRegex(
     while ((probe = CALL_RE.exec(line)) !== null) {
       const name = probe[2]!;
       const key = `${name} ${i + 1}`;
-      if (ownDefLines.has(key) && DEF_INTRODUCERS.test(line.slice(0, probe.index))) introducerCaught.add(key);
+      if (ownDefLines.has(key) && introducedAt(line, probe.index)) introducerCaught.add(key);
     }
 
     // Pass 2: the real collection. Own-def keys with no introducer occurrence
@@ -125,7 +144,7 @@ export function collectCallsRegex(
       const receiver = m[1];
       const name = m[2]!;
       if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
-      if (DEF_INTRODUCERS.test(line.slice(0, m.index))) continue;
+      if (introducedAt(line, m.index)) continue;
       const key = `${name} ${i + 1}`;
       if (ownDefLines.has(key) && !introducerCaught.has(key)) {
         if (!fallbackExcluded.has(key)) {

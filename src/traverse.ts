@@ -164,8 +164,22 @@ const isGoSource = (rel: string): boolean => rel.endsWith(".go") && !rel.endsWit
 // it. adjacencyOf below is the opposite trade — two maps, two sorts and a
 // degree distribution per call — and does earn its cache.
 export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity, opts: ClosureOptions = {}): Map<string, number> {
-  const dependents = new Map<string, Edge[]>(); // target file → incoming depends-on edges
-  const packageImports = new Map<string, Edge[]>(); // Go package dir → imports of it (goPackages)
+  return closureOver(dependentsIndex(edges, opts), seeds, depth);
+}
+
+// Who depends on each file, under one set of ClosureOptions: what every
+// reverse closure walks. Built once and reused by a caller that closes over
+// many seeds — delta used to rebuild it (twice) for each changed file, 4×10⁸
+// edge visits for 2,000 changed files of a 100k-edge graph.
+export interface DependentsIndex {
+  dependents: Map<string, Edge[]>; // target file → incoming depends-on edges
+  packageImports: Map<string, Edge[]>; // Go package dir → imports of it (goPackages)
+  goPackages: boolean;
+}
+
+export function dependentsIndex(edges: Edge[], opts: ClosureOptions = {}): DependentsIndex {
+  const dependents = new Map<string, Edge[]>();
+  const packageImports = new Map<string, Edge[]>();
   const push = (m: Map<string, Edge[]>, key: string, e: Edge): void => {
     const arr = m.get(key);
     if (arr) arr.push(e);
@@ -177,6 +191,12 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity,
     push(dependents, e.to, e);
     if (opts.goPackages && e.kind === "import" && e.to.endsWith(".go")) push(packageImports, dirOf(e.to), e);
   }
+  return { dependents, packageImports, goPackages: opts.goPackages === true };
+}
+
+// The reverse closure of `seeds` over a prebuilt index (see reverseClosure).
+export function closureOver(index: DependentsIndex, seeds: string[], depth = Infinity): Map<string, number> {
+  const { dependents, packageImports, goPackages } = index;
   const depthOf = new Map<string, number>();
   const seen = new Set<string>(seeds);
   let frontier = [...seeds];
@@ -185,7 +205,7 @@ export function reverseClosure(edges: Edge[], seeds: string[], depth = Infinity,
     for (const node of frontier) {
       let incoming = dependents.get(node) ?? [];
       // A package's importers depend on each of its non-test files.
-      if (opts.goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf(node)) ?? []);
+      if (goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf(node)) ?? []);
       for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);

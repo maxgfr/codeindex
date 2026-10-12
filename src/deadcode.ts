@@ -307,7 +307,9 @@ function referencedElsewhere(
     readText(join(scan.root, rel))
       .split("\n")
       .forEach((text, i) => {
-        for (const m of text.match(token) ?? []) if (names.has(m)) linesOf.set(m, [...(linesOf.get(m) ?? []), i + 1]);
+        // Appended in place: copying the list per occurrence was quadratic in
+        // a generated file that names one helper tens of thousands of times.
+        for (const m of text.match(token) ?? []) if (names.has(m)) (linesOf.get(m) ?? linesOf.set(m, []).get(m)!).push(i + 1);
       });
     for (const s of list) {
       const end = s.endLine ?? s.line;

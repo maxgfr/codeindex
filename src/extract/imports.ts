@@ -657,11 +657,14 @@ export function extractImports(ext: string, content: string): RawRef[] {
     }
     // `mod foo;` declares a child module that MUST exist as a file (an inline
     // `mod foo { … }` body has no `;` and is skipped).
-    const modRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm;
+    // Every `^…` below takes its indentation from one line ([^\S\r\n], i.e.
+    // \s minus newlines): `^\s*` under /gm let each line start of a blank run
+    // rescan the rest of it, 22 s for 100k blank lines ahead of a non-match.
+    const modRe = /^[^\S\r\n]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm;
     while ((m = modRe.exec(content))) if (!pathed.has(m.index + m[0].length)) hard(`mod ${m[1]}`);
     // `use` paths, brace groups expanded. External crates (std, serde, …) are
     // filtered at resolve time, where the in-repo crate list lives.
-    const useRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);/gm;
+    const useRe = /^[^\S\r\n]*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);/gm;
     while ((m = useRe.exec(content))) {
       for (const p of expandUseGroups(m[1]!.trim())) hard(p);
     }
@@ -669,22 +672,22 @@ export function extractImports(ext: string, content: string): RawRef[] {
     // `import com.a.b.C;` / `import static com.a.b.C.method;` — wildcards kept
     // as written; the resolver maps packages onto source roots.
     let m: RegExpExecArray | null;
-    const imp = /^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
+    const imp = /^[^\S\r\n]*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
     while ((m = imp.exec(content))) hard(m[1]!);
   } else if (ext === ".rb" || ext === ".rake") {
     // `require_relative "x"` is relative to the file — emit it as a relative path
     // (leading "./") so the resolver resolves it against the file's dir. `require
     // "x"` is resolved against lib roots or is external (a gem).
     let m: RegExpExecArray | null;
-    const rel = /^\s*require_relative\s+['"]([^'"]+)['"]/gm;
+    const rel = /^[^\S\r\n]*require_relative\s+['"]([^'"]+)['"]/gm;
     while ((m = rel.exec(content))) hard(relSpec(m[1]!));
-    const req = /^\s*require\s+['"]([^'"]+)['"]/gm;
+    const req = /^[^\S\r\n]*require\s+['"]([^'"]+)['"]/gm;
     while ((m = req.exec(content))) hard(m[1]!);
   } else if (C_CPP.has(ext)) {
     // Local `#include "foo.h"` — a real in-repo dependency. `<...>` is a system/
     // third-party header (external) and is deliberately not captured.
     let m: RegExpExecArray | null;
-    const inc = /^\s*#\s*include\s*"([^"]+)"/gm;
+    const inc = /^[^\S\r\n]*#\s*include\s*"([^"]+)"/gm;
     while ((m = inc.exec(content))) hard(m[1]!);
   } else if (ext === ".php") {
     // `use Foo\Bar\Baz;` (namespace, resolved via composer PSR-4) — also the
@@ -719,7 +722,7 @@ export function extractImports(ext: string, content: string): RawRef[] {
     // `using Foo.Bar;` — a namespace import, resolved to files declaring that
     // namespace. Skip alias (`using X = ...`) and resource (`using (...)`) forms.
     let m: RegExpExecArray | null;
-    const using = /^\s*(?:global\s+)?using\s+(?:static\s+)?([A-Za-z_][\w.]*)\s*;/gm;
+    const using = /^[^\S\r\n]*(?:global\s+)?using\s+(?:static\s+)?([A-Za-z_][\w.]*)\s*;/gm;
     while ((m = using.exec(content))) hard(m[1]!);
   } else if (KOTLIN.has(ext)) {
     // `import a.b.C`, `import a.b.*`, `import a.b.C as D` — Java's dotted form

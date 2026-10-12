@@ -2201,25 +2201,25 @@ function extractImports(ext, content) {
       hard(`mod-path ${m[1]}`);
       pathed.add(m.index + m[0].length);
     }
-    const modRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm;
+    const modRe = /^[^\S\r\n]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm;
     while (m = modRe.exec(content)) if (!pathed.has(m.index + m[0].length)) hard(`mod ${m[1]}`);
-    const useRe = /^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);/gm;
+    const useRe = /^[^\S\r\n]*(?:pub(?:\([^)]*\))?\s+)?use\s+([^;]+);/gm;
     while (m = useRe.exec(content)) {
       for (const p of expandUseGroups(m[1].trim())) hard(p);
     }
   } else if (ext === ".java") {
     let m;
-    const imp = /^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
+    const imp = /^[^\S\r\n]*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
     while (m = imp.exec(content)) hard(m[1]);
   } else if (ext === ".rb" || ext === ".rake") {
     let m;
-    const rel2 = /^\s*require_relative\s+['"]([^'"]+)['"]/gm;
+    const rel2 = /^[^\S\r\n]*require_relative\s+['"]([^'"]+)['"]/gm;
     while (m = rel2.exec(content)) hard(relSpec(m[1]));
-    const req = /^\s*require\s+['"]([^'"]+)['"]/gm;
+    const req = /^[^\S\r\n]*require\s+['"]([^'"]+)['"]/gm;
     while (m = req.exec(content)) hard(m[1]);
   } else if (C_CPP.has(ext)) {
     let m;
-    const inc = /^\s*#\s*include\s*"([^"]+)"/gm;
+    const inc = /^[^\S\r\n]*#\s*include\s*"([^"]+)"/gm;
     while (m = inc.exec(content)) hard(m[1]);
   } else if (ext === ".php") {
     let m;
@@ -2244,7 +2244,7 @@ function extractImports(ext, content) {
     }
   } else if (ext === ".cs") {
     let m;
-    const using = /^\s*(?:global\s+)?using\s+(?:static\s+)?([A-Za-z_][\w.]*)\s*;/gm;
+    const using = /^[^\S\r\n]*(?:global\s+)?using\s+(?:static\s+)?([A-Za-z_][\w.]*)\s*;/gm;
     while (m = using.exec(content)) hard(m[1]);
   } else if (KOTLIN.has(ext)) {
     let m;
@@ -3478,7 +3478,7 @@ function extractMarkdown(content) {
   const inline = /!?\[[^\]]*\]\(([^)]+)\)/g;
   let m;
   while (m = inline.exec(scan2)) addRef(m[1]);
-  const refdef = /^\s*\[[^\]]+\]:\s+(\S+)/gm;
+  const refdef = /^[^\S\r\n]*\[[^\]]+\]:\s+(\S+)/gm;
   while (m = refdef.exec(scan2)) addRef(m[1]);
   return { title, summary, headings, refs };
 }
@@ -10433,6 +10433,17 @@ var init_generated = __esm({
 });
 
 // src/extract/code.ts
+function introducedAt(line2, index) {
+  let i2 = index;
+  while (i2 > 0 && SPACE2.test(line2[i2 - 1])) i2--;
+  if (i2 > 0 && line2[i2 - 1] === "*") {
+    i2--;
+    while (i2 > 0 && SPACE2.test(line2[i2 - 1])) i2--;
+  }
+  let j = i2;
+  while (j > 0 && WORD.test(line2[j - 1])) j--;
+  return j < i2 && DEF_INTRODUCERS.has(line2.slice(j, i2));
+}
 function collectCallsRegex(content, symbols = [], maxCalls = 512) {
   const out2 = /* @__PURE__ */ new Map();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
@@ -10448,7 +10459,7 @@ function collectCallsRegex(content, symbols = [], maxCalls = 512) {
     while ((probe = CALL_RE.exec(line2)) !== null) {
       const name2 = probe[2];
       const key = `${name2} ${i2 + 1}`;
-      if (ownDefLines.has(key) && DEF_INTRODUCERS.test(line2.slice(0, probe.index))) introducerCaught.add(key);
+      if (ownDefLines.has(key) && introducedAt(line2, probe.index)) introducerCaught.add(key);
     }
     CALL_RE.lastIndex = 0;
     let m;
@@ -10457,7 +10468,7 @@ function collectCallsRegex(content, symbols = [], maxCalls = 512) {
       const receiver = m[1];
       const name2 = m[2];
       if (name2.length < 2 || CALL_KEYWORDS.has(name2)) continue;
-      if (DEF_INTRODUCERS.test(line2.slice(0, m.index))) continue;
+      if (introducedAt(line2, m.index)) continue;
       const key = `${name2} ${i2 + 1}`;
       if (ownDefLines.has(key) && !introducerCaught.has(key)) {
         if (!fallbackExcluded.has(key)) {
@@ -10595,7 +10606,7 @@ function extractCode(rel2, ext, content, opts = {}) {
     literals: literals?.length ? literals : void 0
   };
 }
-var MAX_FILE_SYMBOLS, CALL_KEYWORDS, DEF_INTRODUCERS, MAX_TERMS2, MAX_LITERAL_LEN3;
+var MAX_FILE_SYMBOLS, CALL_KEYWORDS, DEF_INTRODUCERS, SPACE2, WORD, MAX_TERMS2, MAX_LITERAL_LEN3;
 var init_code = __esm({
   "src/extract/code.ts"() {
     "use strict";
@@ -10645,7 +10656,9 @@ var init_code = __esm({
       "with",
       "loop"
     ]);
-    DEF_INTRODUCERS = /(?:\bfunction|\bdef|\bfunc|\bfun|\bfn|\bclass|\bsub|\bmacro|\bproc)\s*[*]?\s*$/;
+    DEF_INTRODUCERS = /* @__PURE__ */ new Set(["function", "def", "func", "fun", "fn", "class", "sub", "macro", "proc"]);
+    SPACE2 = /\s/;
+    WORD = /\w/;
     MAX_TERMS2 = 512;
     MAX_LITERAL_LEN3 = 80;
   }
@@ -18003,7 +18016,7 @@ var EMBED_VERSION, DEFAULT_EMBED_DIRNAME, DEFAULT_EMBED_URL, EMBED_ASSET_SHA256;
 var init_model = __esm({
   "src/embed/model.ts"() {
     "use strict";
-    EMBED_VERSION = 2;
+    EMBED_VERSION = 3;
     DEFAULT_EMBED_DIRNAME = "models";
     DEFAULT_EMBED_URL = "https://github.com/maxgfr/codeindex/releases/download/embed-model-v1/model.json";
     EMBED_ASSET_SHA256 = "163ad053eab4e9a80d421ed4164f32292c83290f02fbbe6fe4b9b1cd6ea18d34";
@@ -18019,13 +18032,24 @@ function basicTokenize(text) {
   }
   return out2;
 }
+function maxPieceChars(model) {
+  let max = longestPiece.get(model);
+  if (max === void 0) {
+    max = 0;
+    for (const piece of model.vocab.keys()) max = Math.max(max, piece.startsWith("##") ? piece.length - 2 : piece.length);
+    longestPiece.set(model, max);
+  }
+  return max;
+}
 function wordpiece(word, model) {
   if (!word) return [];
+  if (word.length > MAX_WORD_CHARS) return model.unkId >= 0 ? [model.unkId] : [];
   const ids = [];
   let start2 = 0;
   const n = word.length;
+  const longest = maxPieceChars(model);
   while (start2 < n) {
-    let end = n;
+    let end = Math.min(n, start2 + longest);
     let match = -1;
     while (end > start2) {
       const piece = start2 === 0 ? word.slice(start2, end) : "##" + word.slice(start2, end);
@@ -18090,12 +18114,14 @@ function intDot(a, b) {
   for (let i2 = 0; i2 < n; i2++) dot += a[i2] * b[i2];
   return dot;
 }
-var QUANT;
+var QUANT, MAX_WORD_CHARS, longestPiece;
 var init_encode = __esm({
   "src/embed/encode.ts"() {
     "use strict";
     init_util();
     QUANT = 127;
+    MAX_WORD_CHARS = 100;
+    longestPiece = /* @__PURE__ */ new WeakMap();
   }
 });
 
@@ -19035,40 +19061,69 @@ function createFramer() {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = new Uint8Array(0);
+  const pending = [];
+  let pendingBytes = 0;
+  let need = 0;
+  let scanned = 0;
+  const drop = (n) => {
+    buffer = buffer.subarray(n);
+    scanned = 0;
+  };
   const append = (chunk) => {
-    const next = new Uint8Array(buffer.length + chunk.length);
+    pending.push(chunk);
+    pendingBytes += chunk.length;
+  };
+  const merge = () => {
+    if (!pending.length) return;
+    const next = new Uint8Array(buffer.length + pendingBytes);
     next.set(buffer);
-    next.set(chunk, buffer.length);
+    let at = buffer.length;
+    for (const c2 of pending) {
+      next.set(c2, at);
+      at += c2.length;
+    }
     buffer = next;
+    pending.length = 0;
+    pendingBytes = 0;
   };
   const headerEnd = () => {
-    for (let i2 = 0; i2 + 3 < buffer.length; i2++) {
+    for (let i2 = scanned; i2 + 3 < buffer.length; i2++) {
       if (buffer[i2] === 13 && buffer[i2 + 1] === 10 && buffer[i2 + 2] === 13 && buffer[i2 + 3] === 10) return i2;
     }
+    scanned = Math.max(0, buffer.length - 3);
     return -1;
   };
   return {
     push(chunk) {
-      append(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
+      append(typeof chunk === "string" ? encoder.encode(chunk) : chunk.slice());
       const out2 = [];
+      if (buffer.length + pendingBytes < need) return out2;
+      merge();
+      need = 0;
       for (; ; ) {
         const end = headerEnd();
-        if (end < 0) return out2;
+        if (end < 0) {
+          if (buffer.length > MAX_HEADER_BYTES2) drop(buffer.length - MAX_HEADER_BYTES2);
+          return out2;
+        }
         const headers = decoder.decode(buffer.subarray(0, end));
         const match = /content-length:\s*(\d+)/i.exec(headers);
         if (!match) {
-          buffer = buffer.subarray(end + 4);
+          drop(end + 4);
           continue;
         }
         const length = Number(match[1]);
         if (!Number.isSafeInteger(length) || length < 0 || length > MAX_FRAME_BYTES) {
-          buffer = buffer.subarray(end + 4);
+          drop(end + 4);
           continue;
         }
         const start2 = end + 4;
-        if (buffer.length < start2 + length) return out2;
+        if (buffer.length < start2 + length) {
+          need = start2 + length;
+          return out2;
+        }
         const body2 = decoder.decode(buffer.subarray(start2, start2 + length));
-        buffer = buffer.subarray(start2 + length);
+        drop(start2 + length);
         try {
           out2.push(JSON.parse(body2));
         } catch {
@@ -19127,12 +19182,13 @@ function locationsToRefs(root, raw) {
   }
   return out2.sort((a, b) => byStr(a.file, b.file) || a.line - b.line || (a.character ?? 0) - (b.character ?? 0));
 }
-var MAX_FRAME_BYTES, HEADER_END;
+var MAX_FRAME_BYTES, MAX_HEADER_BYTES2, HEADER_END;
 var init_protocol = __esm({
   "src/lsp/protocol.ts"() {
     "use strict";
     init_sort();
     MAX_FRAME_BYTES = 32 * 1024 * 1024;
+    MAX_HEADER_BYTES2 = 64 * 1024;
     HEADER_END = "\r\n\r\n";
   }
 });
@@ -20288,7 +20344,7 @@ function referencedElsewhere(scan2, candidates, relations) {
     const token = familyOf(list[0].lang) === "js" ? /[A-Za-z_$][\w$]*/g : /[A-Za-z_]\w*/g;
     const linesOf = /* @__PURE__ */ new Map();
     readText(join23(scan2.root, rel2)).split("\n").forEach((text, i2) => {
-      for (const m of text.match(token) ?? []) if (names.has(m)) linesOf.set(m, [...linesOf.get(m) ?? [], i2 + 1]);
+      for (const m of text.match(token) ?? []) if (names.has(m)) (linesOf.get(m) ?? linesOf.set(m, []).get(m)).push(i2 + 1);
     });
     for (const s of list) {
       const end = s.endLine ?? s.line;
@@ -20600,6 +20656,9 @@ function hubThreshold(degrees) {
   return Math.max(50, p99);
 }
 function reverseClosure(edges, seeds, depth = Infinity, opts = {}) {
+  return closureOver(dependentsIndex(edges, opts), seeds, depth);
+}
+function dependentsIndex(edges, opts = {}) {
   const dependents = /* @__PURE__ */ new Map();
   const packageImports = /* @__PURE__ */ new Map();
   const push = (m, key, e) => {
@@ -20613,6 +20672,10 @@ function reverseClosure(edges, seeds, depth = Infinity, opts = {}) {
     push(dependents, e.to, e);
     if (opts.goPackages && e.kind === "import" && e.to.endsWith(".go")) push(packageImports, dirOf7(e.to), e);
   }
+  return { dependents, packageImports, goPackages: opts.goPackages === true };
+}
+function closureOver(index, seeds, depth = Infinity) {
+  const { dependents, packageImports, goPackages } = index;
   const depthOf = /* @__PURE__ */ new Map();
   const seen = new Set(seeds);
   let frontier = [...seeds];
@@ -20620,7 +20683,7 @@ function reverseClosure(edges, seeds, depth = Infinity, opts = {}) {
     const next = [];
     for (const node of frontier) {
       let incoming = dependents.get(node) ?? [];
-      if (opts.goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf7(node)) ?? []);
+      if (goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf7(node)) ?? []);
       for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);
@@ -20925,6 +20988,7 @@ function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
   const metricOf = (m) => pagerankKnown ? m.pagerank ?? 0 : m.degIn + m.degOut;
   const metricValues = graph.modules.map(metricOf);
   const metricName = pagerankKnown ? "pagerank" : "degree";
+  const dependents = dependentsIndex(graph.fileEdges, { skipInferred: true, goPackages: true });
   const modules = [];
   for (const slug of [.../* @__PURE__ */ new Set([...byModule.keys(), ...brokenByModule.keys()])].sort(byStr)) {
     const m = moduleBySlug.get(slug);
@@ -20967,10 +21031,13 @@ function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
       if (prev === void 0 || d < prev) depthByRel.set(rel2, d);
     };
     for (const c2 of moduleChanges) {
-      const imp = impactOf(graph, c2.path, depth);
-      if (!imp) continue;
-      for (const f of imp.files) reach(f.rel, f.depth);
-      for (const im of imp.modules) if (im !== slug) impModules.add(im);
+      const seeds = moduleBySlug.get(c2.path)?.members ?? (fileByRel.has(c2.path) ? [c2.path] : void 0);
+      if (!seeds) continue;
+      for (const [rel2, d] of closureOver(dependents, seeds, depth)) {
+        reach(rel2, d);
+        const im = fileByRel.get(rel2)?.module ?? "root";
+        if (im !== c2.path && im !== slug) impModules.add(im);
+      }
     }
     const importers = [...new Set(moduleBroken.map((b) => b.from))].sort(byStr);
     if (importers.length && depth >= 1) {

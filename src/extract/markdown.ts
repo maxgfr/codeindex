@@ -191,7 +191,9 @@ export function extractMarkdown(content: string): MarkdownInfo {
   const inline = /!?\[[^\]]*\]\(([^)]+)\)/g;
   let m: RegExpExecArray | null;
   while ((m = inline.exec(scan))) addRef(m[1]!);
-  const refdef = /^\s*\[[^\]]+\]:\s+(\S+)/gm;
+  // Indentation from its own line only: `^\s*` let every line start of a
+  // whitespace-only run rescan the rest of it.
+  const refdef = /^[^\S\r\n]*\[[^\]]+\]:\s+(\S+)/gm;
   while ((m = refdef.exec(scan))) addRef(m[1]!);
 
   return { title, summary, headings, refs };

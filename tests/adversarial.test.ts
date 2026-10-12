@@ -94,17 +94,30 @@ describe("perf: linear on adversarial input", () => {
     expect(ms).toBeLessThan(1500);
   });
 
-  // Every chunk reallocated and copied the whole buffer.
-  it("perf: a 24 MB LSP response read in 64 KB chunks", () => {
-    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, result: "x".repeat(24 * 1024 * 1024) });
-    const frame = Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+  const frameOf = (result: string, id: number): Buffer => {
+    const body = JSON.stringify({ jsonrpc: "2.0", id, result });
+    return Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+  };
+  const readInChunks = (stream: Buffer, chunk: number): unknown[] => {
     const framer = createFramer();
-    const { value, ms } = timed(() => {
-      const out = [];
-      for (let i = 0; i < frame.length; i += 64 * 1024) out.push(...framer.push(frame.subarray(i, i + 64 * 1024)));
-      return out;
-    });
+    const out = [];
+    for (let i = 0; i < stream.length; i += chunk) out.push(...framer.push(stream.subarray(i, i + chunk)));
+    return out;
+  };
+
+  // Every chunk reallocated and copied the whole buffer.
+  it("perf: a 30 MB LSP response read in 16 KB chunks", () => {
+    const { value, ms } = timed(() => readInChunks(frameOf("x".repeat(30 * 1024 * 1024), 1), 16 * 1024));
     expect(value).toHaveLength(1);
+    expect(ms).toBeLessThan(1500);
+  });
+
+  // A frame over MAX_FRAME_BYTES is dropped; its body was then rescanned for a
+  // header from the start on every chunk.
+  it("perf: a 40 MB LSP frame over the cap is skipped, and the next one read", () => {
+    const stream = Buffer.concat([frameOf("x".repeat(40 * 1024 * 1024), 1), frameOf("ok", 2)]);
+    const { value, ms } = timed(() => readInChunks(stream, 64 * 1024));
+    expect(value).toEqual([{ jsonrpc: "2.0", id: 2, result: "ok" }]);
     expect(ms).toBeLessThan(1500);
   });
 

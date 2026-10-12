@@ -22,7 +22,9 @@ import { join } from "node:path";
 //
 // 2: symbol units carry their doc comment, re-exports get no unit, and each
 // header record carries its unit's text hash (see serializeEmbeddings).
-export const EMBED_VERSION = 2;
+// 3: a word over MAX_WORD_CHARS encodes as UNK (encode.ts), so a vector cached
+// for a unit holding one is not reused.
+export const EMBED_VERSION = 3;
 
 // The default sub-directory a `pull` writes into and a `status` reports.
 export const DEFAULT_EMBED_DIRNAME = "models";
