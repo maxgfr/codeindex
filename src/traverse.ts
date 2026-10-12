@@ -11,8 +11,11 @@ import { byStr } from "./sort.js";
 import { shortestPaths } from "./paths.js";
 
 // Only these edge kinds carry a real "depends on" relation. A doc-link or a
-// mention says something references the name, not that it would break.
-const DEPENDS_KINDS = new Set(["import", "use", "call"]);
+// mention says something references the name, not that it would break. A
+// subtype depends on its supertype as surely as on an import: two Java classes
+// of one package, one extending the other, are linked by `extends` alone, and
+// without it impact found no dependent at all.
+export const DEPENDS_KINDS: ReadonlySet<string> = new Set(["import", "use", "call", "extends", "implements"]);
 
 // The traversal-relevant fields of an edge list, captured when a derived view
 // is built so a later call can prove the list still describes the same graph.
@@ -404,8 +407,9 @@ export function dependencyPath(
       for (const t of targets) list.push([t, e.kind]);
     }
     // Strongest kind first per target, so the step kind kept is the one
-    // that states the dependency (an import over a call to the same file).
-    const rank = (k: string): number => (k === "import" ? 0 : k === "use" ? 1 : 2);
+    // that states the dependency (an import, then inheritance, over a call to
+    // the same file).
+    const rank = (k: string): number => (k === "import" ? 0 : k === "extends" || k === "implements" ? 1 : k === "use" ? 2 : 3);
     for (const list of out.values()) list.sort((a, b) => byStr(a[0], b[0]) || rank(a[1]) - rank(b[1]));
     return (node) => out.get(node) ?? [];
   };

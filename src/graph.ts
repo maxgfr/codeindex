@@ -3,7 +3,7 @@ import type { Edge, FileNode, Graph, ModuleNode, RawRef } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import type { ModuleInfo } from "./modules.js";
 import { resolveDocLink, resolveImport, type ResolveContext } from "./resolve.js";
-import { importTargets, resolveCallEdges } from "./calls.js";
+import { familyOf, importTargets, resolveCallEdges } from "./calls.js";
 import { resolveRelationEdges } from "./relations.js";
 import { docMentionsFor, publishImportPairs, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
@@ -136,12 +136,10 @@ export function buildGraph(
 
   // Inheritance edges: `class S extends BaseWorker` is a dependency no import
   // list distinguishes from any other, and the strongest structural link a repo
-  // has after the import itself. Recorded as a pair set for the same reason
-  // calls are — a subtype relation outranks a bare `use` for the same pair.
-  for (const e of resolveRelationEdges(scan, importPairs, ctx)) {
-    collect(fileEdgeMap, e);
-    callPairs.add(`${e.from}|${e.to}`);
-  }
+  // has after the import itself. They no longer suppress the pair's `use`
+  // edge: before inheritance counted as a dependency (traverse.ts), that left a
+  // subclass with no dependency edge to its base at all.
+  for (const e of resolveRelationEdges(scan, importPairs, ctx)) collect(fileEdgeMap, e);
 
   // Every import in the repo is now resolved; hand the pair set to the derived
   // cache so the caller index / references / dead code do not resolve them all
@@ -170,12 +168,22 @@ export function buildGraph(
       for (const t of (targetsOf ??= importTargets(importPairs)).get(from) ?? []) if (dirOf(t) === dir) return true;
       return false;
     };
+    const langOf = new Map(scan.files.map((f) => [f.rel, f.lang]));
     for (const f of scan.files) {
       if (f.kind !== "code" || !f.idents?.length) continue;
+      // A name the file binds by a named import is that import's: the import
+      // edge carries the dependency when it is in-repo, and when it comes
+      // from a package (`DataLoaderConfig` from npm) a declaration of the same
+      // name elsewhere in the repo is not what the file uses.
+      const imported = new Set([...(f.importedNames ?? []), ...(f.importAliases ?? []).map((a) => a.local)]);
+      const family = familyOf(f.lang);
       const perTarget = new Map<string, number>();
       for (const id of f.idents) {
         const target = unique.get(id);
-        if (!target || target === f.rel) continue;
+        if (!target || target === f.rel || imported.has(id)) continue;
+        // A use is a reference in code: across languages (a TS file naming a
+        // Python class) the shared name is a coincidence, as it is for calls.
+        if (familyOf(langOf.get(target) ?? "") !== family) continue;
         perTarget.set(target, (perTarget.get(target) ?? 0) + 1);
       }
       const go = f.lang === "go";

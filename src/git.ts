@@ -224,7 +224,15 @@ export function diffHunks(dir: string, spec: DiffSpec): Map<string, Hunk[]> {
   ]);
   if (!res.ok) return map;
   let current: Hunk[] | undefined;
+  // Body lines of the hunk being read: the counts its @@ header declares. An
+  // added line reading `++ b/x` shows up as `+++ b/x` — a file header to a
+  // parser that does not count — and moved every later hunk to file `x`.
+  let body = 0;
   for (const line of res.stdout.split("\n")) {
+    if (body > 0) {
+      if (!line.startsWith("\\")) body--; // "\ No newline at end of file" is no line
+      continue;
+    }
     if (line.startsWith("+++ ")) {
       const path = newSidePath(line.slice(4));
       if (path === undefined) {
@@ -233,11 +241,13 @@ export function diffHunks(dir: string, spec: DiffSpec): Map<string, Hunk[]> {
       }
       current = map.get(path) ?? [];
       map.set(path, current);
-    } else if (current && line.startsWith("@@")) {
-      const m = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    } else if (line.startsWith("@@")) {
+      const m = line.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!m) continue;
-      const start = Number(m[1]);
-      const count = m[2] === undefined ? 1 : Number(m[2]);
+      const start = Number(m[2]);
+      const count = m[3] === undefined ? 1 : Number(m[3]);
+      body = (m[1] === undefined ? 1 : Number(m[1])) + count; // counted for every file, kept or not
+      if (!current) continue;
       if (count === 0) current.push({ start: Math.max(start, 1), end: Math.max(start, 1), approx: true });
       else current.push({ start, end: start + count - 1 });
     }

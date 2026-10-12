@@ -1,5 +1,6 @@
 import type { Graph, SurpriseEdge } from "./types.js";
 import { byStr } from "./sort.js";
+import { DEPENDS_KINDS } from "./traverse.js";
 
 // Surprising cross-community coupling: a dependency edge that is one of at most
 // two links between two otherwise-separate subsystems. These are the places
@@ -10,7 +11,8 @@ import { byStr } from "./sort.js";
 export const SURPRISE_CAP = 24;
 const MAX_PAIR_EDGES = 2;
 
-const DEP_KINDS = new Set(["import", "call", "use"]);
+// The kinds that state a dependency (traverse.ts), inheritance included.
+const DEP_KINDS = DEPENDS_KINDS;
 
 // One O(E) pass over the module edges. Deterministic: candidates keep the
 // stored edge order until the final (pairEdges asc, from, to) sort.

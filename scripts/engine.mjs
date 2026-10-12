@@ -1054,7 +1054,12 @@ function diffHunks(dir, spec) {
   ]);
   if (!res.ok) return map;
   let current;
+  let body2 = 0;
   for (const line2 of res.stdout.split("\n")) {
+    if (body2 > 0) {
+      if (!line2.startsWith("\\")) body2--;
+      continue;
+    }
     if (line2.startsWith("+++ ")) {
       const path = newSidePath(line2.slice(4));
       if (path === void 0) {
@@ -1063,11 +1068,13 @@ function diffHunks(dir, spec) {
       }
       current = map.get(path) ?? [];
       map.set(path, current);
-    } else if (current && line2.startsWith("@@")) {
-      const m = line2.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    } else if (line2.startsWith("@@")) {
+      const m = line2.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!m) continue;
-      const start2 = Number(m[1]);
-      const count2 = m[2] === void 0 ? 1 : Number(m[2]);
+      const start2 = Number(m[2]);
+      const count2 = m[3] === void 0 ? 1 : Number(m[3]);
+      body2 = (m[1] === void 0 ? 1 : Number(m[1])) + count2;
+      if (!current) continue;
       if (count2 === 0) current.push({ start: Math.max(start2, 1), end: Math.max(start2, 1), approx: true });
       else current.push({ start: start2, end: start2 + count2 - 1 });
     }
@@ -13656,6 +13663,235 @@ var init_symbolgraph = __esm({
   }
 });
 
+// src/traverse.ts
+function snapshot(edges) {
+  const snap = new Array(edges.length * FIELDS);
+  for (let i2 = 0; i2 < edges.length; i2++) {
+    const e = edges[i2];
+    const o = i2 * FIELDS;
+    snap[o] = e.from;
+    snap[o + 1] = e.to;
+    snap[o + 2] = e.kind;
+    snap[o + 3] = e.weight;
+    snap[o + 4] = e.dangling;
+    snap[o + 5] = e.confidence;
+  }
+  return snap;
+}
+function unchanged(edges, snap) {
+  if (snap.length !== edges.length * FIELDS) return false;
+  for (let i2 = 0; i2 < edges.length; i2++) {
+    const e = edges[i2];
+    const o = i2 * FIELDS;
+    if (snap[o] !== e.from || snap[o + 1] !== e.to || snap[o + 2] !== e.kind || snap[o + 3] !== e.weight || snap[o + 4] !== e.dangling || snap[o + 5] !== e.confidence) {
+      return false;
+    }
+  }
+  return true;
+}
+function adjacencyOf(edges, kinds2) {
+  const viewKey = kinds2 ? [...kinds2].sort(byStr).join(",") : "*";
+  let entry2 = adjacencyMemo.get(edges);
+  if (!entry2 || !unchanged(edges, entry2.snap)) {
+    adjacencyMemo.set(edges, entry2 = { snap: snapshot(edges), views: /* @__PURE__ */ new Map() });
+  }
+  const cached = entry2.views.get(viewKey);
+  if (cached) return cached;
+  const out2 = /* @__PURE__ */ new Map();
+  const inn = /* @__PURE__ */ new Map();
+  const degree = /* @__PURE__ */ new Map();
+  for (const e of edges) {
+    if (e.dangling) continue;
+    if (kinds2 && !kinds2.has(e.kind)) continue;
+    (out2.get(e.from) ?? out2.set(e.from, []).get(e.from)).push(e);
+    (inn.get(e.to) ?? inn.set(e.to, []).get(e.to)).push(e);
+    degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+    degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+  }
+  for (const arr of out2.values()) arr.sort((a, b) => byStr(a.to, b.to));
+  for (const arr of inn.values()) arr.sort((a, b) => byStr(a.from, b.from));
+  const adj = { out: out2, inn, degree, threshold: hubThreshold([...degree.values()]) };
+  entry2.views.set(viewKey, adj);
+  return adj;
+}
+function hubThreshold(degrees) {
+  const sorted = degrees.slice().sort((a, b) => a - b);
+  const n = sorted.length;
+  const p99 = n === 0 ? 0 : sorted[Math.min(n - 1, Math.floor(0.99 * n))];
+  return Math.max(50, p99);
+}
+function reverseClosure(edges, seeds, depth = Infinity, opts = {}) {
+  return closureOver(dependentsIndex(edges, opts), seeds, depth);
+}
+function dependentsIndex(edges, opts = {}) {
+  const dependents = /* @__PURE__ */ new Map();
+  const packageImports = /* @__PURE__ */ new Map();
+  const push = (m, key, e) => {
+    const arr = m.get(key);
+    if (arr) arr.push(e);
+    else m.set(key, [e]);
+  };
+  for (const e of edges) {
+    if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
+    if (opts.skipInferred && e.confidence === "inferred") continue;
+    push(dependents, e.to, e);
+    if (opts.goPackages && e.kind === "import" && e.to.endsWith(".go")) push(packageImports, dirOf2(e.to), e);
+  }
+  return { dependents, packageImports, goPackages: opts.goPackages === true };
+}
+function closureOver(index, seeds, depth = Infinity) {
+  const { dependents, packageImports, goPackages } = index;
+  const depthOf = /* @__PURE__ */ new Map();
+  const seen = new Set(seeds);
+  let frontier = [...seeds];
+  for (let d = 1; d <= depth && frontier.length; d++) {
+    const next = [];
+    for (const node of frontier) {
+      let incoming = dependents.get(node) ?? [];
+      if (goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf2(node)) ?? []);
+      for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
+        if (seen.has(e.from)) continue;
+        seen.add(e.from);
+        depthOf.set(e.from, d);
+        next.push(e.from);
+      }
+    }
+    frontier = next;
+  }
+  return depthOf;
+}
+function impactOf(graph, target, depth = Infinity, opts = {}) {
+  const moduleOf = new Map(graph.files.map((f) => [f.rel, f.module]));
+  const mod = graph.modules.find((m) => m.slug === target);
+  const file = mod ? void 0 : graph.files.find((f) => f.rel === target);
+  if (!mod && !file) return void 0;
+  const seeds = mod ? mod.members : [file.rel];
+  const includeInferred = opts.includeInferred === true;
+  const depthOf = reverseClosure(graph.fileEdges, seeds, depth, { skipInferred: !includeInferred, goPackages: true });
+  const files = [...depthOf.entries()].map(([rel2, d]) => ({ rel: rel2, module: moduleOf.get(rel2) ?? "root", depth: d })).sort((a, b) => a.depth - b.depth || byStr(a.rel, b.rel));
+  const modules = [...new Set(files.map((f) => f.module).filter((m) => m !== target))].sort(byStr);
+  const result = { target, scope: mod ? "module" : "file", seeds, files, modules };
+  if (!includeInferred) {
+    const extra = reverseClosure(graph.fileEdges, seeds, depth, { goPackages: true }).size - depthOf.size;
+    if (extra > 0) result.inferredDependents = extra;
+  }
+  return result;
+}
+function linkRank(l) {
+  if (l.kind === "call") return l.confidence === "inferred" ? 4 : 1;
+  if (l.kind === "import" || l.kind === "extends" || l.kind === "implements") return 0;
+  if (l.kind === "use") return 2;
+  return 3;
+}
+function bfs(edges, start2, depth, kinds2) {
+  const { out: out2, inn, degree, threshold } = adjacencyOf(edges, kinds2);
+  const seen = /* @__PURE__ */ new Set([start2]);
+  const links = [];
+  let frontier = [start2];
+  for (let d = 1; d <= depth; d++) {
+    const reached = /* @__PURE__ */ new Map();
+    const link = (node, direction, e) => {
+      let own = reached.get(node);
+      if (!own) {
+        if (seen.has(node)) return;
+        seen.add(node);
+        reached.set(node, own = []);
+      }
+      if (own.some((l) => l.direction === direction && l.kind === e.kind)) return;
+      own.push({ node, direction, kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
+    };
+    for (const node of frontier) {
+      if (node !== start2 && (degree.get(node) ?? 0) >= threshold) continue;
+      for (const e of out2.get(node) ?? []) link(e.to, "out", e);
+      for (const e of inn.get(node) ?? []) link(e.from, "in", e);
+    }
+    for (const own of reached.values()) {
+      own.sort(
+        (a, b) => linkRank(a) - linkRank(b) || Number(a.direction === "in") - Number(b.direction === "in") || byStr(a.kind, b.kind)
+      );
+      links.push(...own);
+    }
+    frontier = [...reached.keys()];
+  }
+  return links;
+}
+function neighborsOf(graph, target, depth = 1, kinds2) {
+  const mod = graph.modules.find((m) => m.slug === target);
+  if (mod) {
+    return { target, scope: "module", links: bfs(graph.moduleEdges, target, depth, kinds2), members: mod.members };
+  }
+  const file = graph.files.find((f) => f.rel === target);
+  if (file) {
+    return { target, scope: "file", links: bfs(graph.fileEdges, target, depth, kinds2) };
+  }
+  return void 0;
+}
+function dependencyPath(graph, from, to, opts = {}) {
+  const files = new Set(graph.files.map((f) => f.rel));
+  if (!files.has(from) || !files.has(to)) return void 0;
+  const requested = opts.depth ?? DEP_PATH_DEFAULT_DEPTH;
+  const maxHops = Math.max(1, Math.min(requested, DEP_PATH_MAX_DEPTH));
+  const maxPaths = Math.max(1, opts.maxPaths ?? 5);
+  const goPackage = /* @__PURE__ */ new Map();
+  for (const rel2 of [...files].sort(byStr)) {
+    if (!isGoSource(rel2)) continue;
+    const dir = dirOf2(rel2);
+    const members = goPackage.get(dir);
+    if (members) members.push(rel2);
+    else goPackage.set(dir, [rel2]);
+  }
+  const successors = (withInferred) => {
+    const out2 = /* @__PURE__ */ new Map();
+    for (const e of graph.fileEdges) {
+      if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
+      if (!withInferred && e.confidence === "inferred") continue;
+      const targets = e.kind === "import" && isGoSource(e.to) && goPackage.get(dirOf2(e.to)) || [e.to];
+      const list = out2.get(e.from) ?? out2.set(e.from, []).get(e.from);
+      for (const t of targets) list.push([t, e.kind]);
+    }
+    const rank = (k) => k === "import" ? 0 : k === "extends" || k === "implements" ? 1 : k === "use" ? 2 : 3;
+    for (const list of out2.values()) list.sort((a, b) => byStr(a[0], b[0]) || rank(a[1]) - rank(b[1]));
+    return (node) => out2.get(node) ?? [];
+  };
+  const includeInferred = opts.includeInferred === true;
+  const next = successors(includeInferred);
+  const found = shortestPaths([from], /* @__PURE__ */ new Set([to]), next, maxHops, maxPaths);
+  const result = {
+    from,
+    to,
+    hops: found.hops,
+    paths: found.paths.map((p) => p.map((h) => h.via ? { file: h.node, via: h.via } : { file: h.node })),
+    pathCount: found.pathCount,
+    ...found.paths.length < found.pathCount ? { truncated: true } : {},
+    ...requested > DEP_PATH_MAX_DEPTH ? { depthClamped: DEP_PATH_MAX_DEPTH } : {}
+  };
+  if (found.hops === null) {
+    const back = shortestPaths([to], /* @__PURE__ */ new Set([from]), next, maxHops, 0);
+    if (back.hops !== null) result.reverseHops = back.hops;
+    if (!includeInferred) {
+      const inferred = shortestPaths([from], /* @__PURE__ */ new Set([to]), successors(true), maxHops, 0);
+      if (inferred.hops !== null) result.inferredHops = inferred.hops;
+    }
+  }
+  return result;
+}
+var DEPENDS_KINDS, FIELDS, adjacencyMemo, dirOf2, isGoSource, EDGE_KINDS, DEP_PATH_DEFAULT_DEPTH, DEP_PATH_MAX_DEPTH;
+var init_traverse = __esm({
+  "src/traverse.ts"() {
+    "use strict";
+    init_sort();
+    init_paths();
+    DEPENDS_KINDS = /* @__PURE__ */ new Set(["import", "use", "call", "extends", "implements"]);
+    FIELDS = 6;
+    adjacencyMemo = /* @__PURE__ */ new WeakMap();
+    dirOf2 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    isGoSource = (rel2) => rel2.endsWith(".go") && !rel2.endsWith("_test.go");
+    EDGE_KINDS = ["import", "call", "use", "extends", "implements", "doc-link", "mention", "contains"];
+    DEP_PATH_DEFAULT_DEPTH = 8;
+    DEP_PATH_MAX_DEPTH = 16;
+  }
+});
+
 // src/tests-map.ts
 function isTestPath(rel2) {
   return TEST_DIR.test(rel2) || isTestCaseFile(rel2);
@@ -13720,7 +13956,7 @@ function computeTestMap(graph) {
   };
   for (const e of graph.fileEdges) {
     if (e.dangling) continue;
-    if (e.kind !== "import" && e.kind !== "use" && e.kind !== "call") continue;
+    if (!DEPENDS_KINDS.has(e.kind)) continue;
     if (!testFiles.has(e.from) || testFiles.has(e.to)) continue;
     cover(e.from, e.to);
   }
@@ -13760,6 +13996,7 @@ var init_tests_map = __esm({
     "use strict";
     init_modules();
     init_sort();
+    init_traverse();
     BASENAME_PATTERNS = [
       /^test_.*\.py$/i,
       /_test\.py$/i,
@@ -13788,7 +14025,7 @@ function addTerms(doc, field, text) {
 }
 function emptyFields() {
   const out2 = {};
-  for (const f of FIELDS) out2[f] = { tf: /* @__PURE__ */ new Map(), len: 0 };
+  for (const f of FIELDS2) out2[f] = { tf: /* @__PURE__ */ new Map(), len: 0 };
   return out2;
 }
 function buildDocs(scan2) {
@@ -13881,7 +14118,7 @@ function avgLenOf(docs) {
   let avg = AVG_LEN.get(docs);
   if (avg) return avg;
   avg = {};
-  for (const f of FIELDS) {
+  for (const f of FIELDS2) {
     let total = 0;
     for (const d of docs) total += d.fields[f].len;
     avg[f] = total / docs.length || 1;
@@ -14081,7 +14318,7 @@ function runSearch(scan2, query, opts = {}) {
     let exactNameHit = false;
     const weightedTf = (term) => {
       let wtf = 0;
-      for (const f of FIELDS) {
+      for (const f of FIELDS2) {
         const fd = d.fields[f];
         const tf = fd.tf.get(term);
         if (!tf) continue;
@@ -14135,7 +14372,7 @@ function resultOf({ d, score, matched, matchedFields, symbolTerms, fuzzyHit }) {
     matchedTerms: matched.sort(byStr),
     topSymbols: hits.map((h) => h.name)
   };
-  if (matchedFields.size) result.matchedFields = FIELDS.filter((f) => matchedFields.has(f));
+  if (matchedFields.size) result.matchedFields = FIELDS2.filter((f) => matchedFields.has(f));
   if (hits.length) {
     result.symbolHits = hits;
     result.line = Math.min(...hits.map((h) => h.line));
@@ -14193,7 +14430,7 @@ function noteFor(explain, missingIdentifier, allBridged) {
   }
   return void 0;
 }
-var K1, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP, STEM_WEIGHT, FIELDS, FIELD_WEIGHT, FIELD_B, EXACT_NAME_BOOST, REEXPORT_KINDS, TEST_DEMOTION, TEST_INTENT, FIXTURE_DEMOTION, FIXTURE_DIR, GRAPH_PRIOR_WEIGHT, COMPOUND_MIN, COMPOUND_MAX, PIECE_MIN, PLAIN_TERM, AVG_LEN;
+var K1, DEFAULT_LIMIT, TOP_SYMBOLS, FUZZY_DICE_THRESHOLD, FUZZY_CAP, STEM_WEIGHT, FIELDS2, FIELD_WEIGHT, FIELD_B, EXACT_NAME_BOOST, REEXPORT_KINDS, TEST_DEMOTION, TEST_INTENT, FIXTURE_DEMOTION, FIXTURE_DIR, GRAPH_PRIOR_WEIGHT, COMPOUND_MIN, COMPOUND_MAX, PIECE_MIN, PLAIN_TERM, AVG_LEN;
 var init_bm25 = __esm({
   "src/bm25.ts"() {
     "use strict";
@@ -14207,7 +14444,7 @@ var init_bm25 = __esm({
     FUZZY_DICE_THRESHOLD = 0.6;
     FUZZY_CAP = 3;
     STEM_WEIGHT = 0.9;
-    FIELDS = ["name", "path", "heading", "summary", "doc", "body"];
+    FIELDS2 = ["name", "path", "heading", "summary", "doc", "body"];
     FIELD_WEIGHT = { name: 3, path: 2, heading: 1.5, summary: 1.5, doc: 1.6, body: 0.7 };
     FIELD_B = { name: 0.75, path: 0.75, heading: 0.75, summary: 0.75, doc: 0.75, body: 0.4 };
     EXACT_NAME_BOOST = 1.35;
@@ -14861,7 +15098,7 @@ function createBindScope(scan2, pairs, ctxIn) {
       for (const f of scan2.files) {
         const fam = familyOf(f.lang);
         if (!PACKAGE_DIR.has(fam) || f.kind !== "code") continue;
-        const key = `${fam}\0${dirOf2(f.rel)}`;
+        const key = `${fam}\0${dirOf3(f.rel)}`;
         let list = pkgFiles.get(key);
         if (!list) pkgFiles.set(key, list = []);
         list.push(f);
@@ -14875,10 +15112,10 @@ function createBindScope(scan2, pairs, ctxIn) {
     if (!PACKAGE_DIR.has(family)) return null;
     let mates = mateMemo.get(f.rel);
     if (mates !== void 0) return mates;
-    const own = dirOf2(f.rel);
+    const own = dirOf3(f.rel);
     const imported = /* @__PURE__ */ new Set();
     if (family === "go") {
-      for (const t of targetsOf.get(f.rel) ?? []) if (t.endsWith(".go") && dirOf2(t) !== own) imported.add(dirOf2(t));
+      for (const t of targetsOf.get(f.rel) ?? []) if (t.endsWith(".go") && dirOf3(t) !== own) imported.add(dirOf3(t));
     }
     mateMemo.set(f.rel, mates = { own, test: isGoTest(f.rel), imported });
     return mates;
@@ -14890,14 +15127,14 @@ function createBindScope(scan2, pairs, ctxIn) {
       if (dir === m.own ? m.test || !isGoTest(d.file) : m.imported.has(dir) && !isGoTest(d.file)) seen.add(d.file), out2.push(d);
     };
     if (group.list.length <= m.imported.size + 1) {
-      for (const d of group.list) take(d, dirOf2(d.file));
+      for (const d of group.list) take(d, dirOf3(d.file));
       return;
     }
     let idx = byDirMemo.get(group);
     if (!idx) {
       idx = /* @__PURE__ */ new Map();
       for (const d of group.list) {
-        const dir = dirOf2(d.file);
+        const dir = dirOf3(d.file);
         const list = idx.get(dir);
         if (list) list.push(d);
         else idx.set(dir, [d]);
@@ -14992,7 +15229,7 @@ function createBindScope(scan2, pairs, ctxIn) {
       for (const ref2 of f.refs) {
         if (ref2.kind !== "import") continue;
         const t = resolved(ref2.spec);
-        const dir = t === null ? void 0 : dirOf2(t);
+        const dir = t === null ? void 0 : dirOf3(t);
         const local = explicit.get(ref2.spec) ?? (dir !== void 0 ? goPackageName(dir) : void 0) ?? goExternalName(ref2.spec);
         addModule(local, dir !== void 0 ? packageOf("go", dir).filter((m) => !isGoTest(m.rel)).map((m) => m.rel) : null);
       }
@@ -15099,7 +15336,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
   const tailMemo = /* @__PURE__ */ new Map();
   const isTail2 = (rel2) => {
     let t = tailMemo.get(rel2);
-    if (t === void 0) tailMemo.set(rel2, t = isTestPath(rel2) || tierForPath(dirOf2(rel2) || "(root)") === 2);
+    if (t === void 0) tailMemo.set(rel2, t = isTestPath(rel2) || tierForPath(dirOf3(rel2) || "(root)") === 2);
     return t;
   };
   const forFile = (f) => {
@@ -15154,7 +15391,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
       if (priv && hiddenReach) {
         const seen = new Set(out2.map((d) => d.file));
         for (const d of hiddenReach === "package" ? scope.reached(priv, f, name2) : importedDefs(priv, scope.targets(f.rel))) {
-          if (hiddenReach === "package" && dirOf2(d.file) !== dirOf2(f.rel)) continue;
+          if (hiddenReach === "package" && dirOf3(d.file) !== dirOf3(f.rel)) continue;
           if (d.file !== f.rel && !seen.has(d.file)) seen.add(d.file), out2.push(d);
         }
       }
@@ -15276,7 +15513,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
   };
   return { forFile };
 }
-var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf2, isGoTest, declaredRe, aliasMemo, newTables;
+var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, dirOf3, isGoTest, declaredRe, aliasMemo, newTables;
 var init_bind = __esm({
   "src/bind.ts"() {
     "use strict";
@@ -15296,7 +15533,7 @@ var init_bind = __esm({
     FUNCTION_KINDS2 = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator"]);
     MAX_HOPS = 3;
     NO_ALIASES = { modules: /* @__PURE__ */ new Map(), names: /* @__PURE__ */ new Map() };
-    dirOf2 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    dirOf3 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
     isGoTest = (rel2) => rel2.endsWith("_test.go");
     declaredRe = /* @__PURE__ */ new Map();
     aliasMemo = /* @__PURE__ */ new WeakMap();
@@ -15483,32 +15720,33 @@ function buildGraph(scan2, ctx, modules, moduleOf, meta) {
     collect(fileEdgeMap, e);
     callPairs.add(`${e.from}|${e.to}`);
   }
-  for (const e of resolveRelationEdges(scan2, importPairs, ctx)) {
-    collect(fileEdgeMap, e);
-    callPairs.add(`${e.from}|${e.to}`);
-  }
+  for (const e of resolveRelationEdges(scan2, importPairs, ctx)) collect(fileEdgeMap, e);
   publishImportPairs(scan2, ctx, importPairs);
   const unique = uniqueDefsFor(scan2);
   if (unique.size) {
     let targetsOf;
     const goImportsPackage = (from, target) => {
-      const dir = dirOf3(target);
-      for (const t of (targetsOf ??= importTargets(importPairs)).get(from) ?? []) if (dirOf3(t) === dir) return true;
+      const dir = dirOf4(target);
+      for (const t of (targetsOf ??= importTargets(importPairs)).get(from) ?? []) if (dirOf4(t) === dir) return true;
       return false;
     };
+    const langOf = new Map(scan2.files.map((f) => [f.rel, f.lang]));
     for (const f of scan2.files) {
       if (f.kind !== "code" || !f.idents?.length) continue;
+      const imported = /* @__PURE__ */ new Set([...f.importedNames ?? [], ...(f.importAliases ?? []).map((a) => a.local)]);
+      const family = familyOf(f.lang);
       const perTarget = /* @__PURE__ */ new Map();
       for (const id of f.idents) {
         const target = unique.get(id);
-        if (!target || target === f.rel) continue;
+        if (!target || target === f.rel || imported.has(id)) continue;
+        if (familyOf(langOf.get(target) ?? "") !== family) continue;
         perTarget.set(target, (perTarget.get(target) ?? 0) + 1);
       }
       const go2 = f.lang === "go";
       for (const [target, count2] of perTarget) {
         const pair = `${f.rel}|${target}`;
         if (importPairs.has(pair) || callPairs.has(pair)) continue;
-        if (go2 && target.endsWith(".go") && dirOf3(target) !== dirOf3(f.rel) && !goImportsPackage(f.rel, target)) continue;
+        if (go2 && target.endsWith(".go") && dirOf4(target) !== dirOf4(f.rel) && !goImportsPackage(f.rel, target)) continue;
         collect(fileEdgeMap, { from: f.rel, to: target, kind: "use", weight: Math.min(count2, 5) });
       }
     }
@@ -15610,7 +15848,7 @@ function buildGraph(scan2, ctx, modules, moduleOf, meta) {
     moduleEdges
   };
 }
-var dirOf3, REFERENCE_KINDS4, SEP3, keyOf;
+var dirOf4, REFERENCE_KINDS4, SEP3, keyOf;
 var init_graph = __esm({
   "src/graph.ts"() {
     "use strict";
@@ -15620,7 +15858,7 @@ var init_graph = __esm({
     init_relations();
     init_derived();
     init_sort();
-    dirOf3 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    dirOf4 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
     REFERENCE_KINDS4 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
     SEP3 = "\0";
     keyOf = (from, to, kind) => `${from}${SEP3}${to}${SEP3}${kind}`;
@@ -17407,9 +17645,10 @@ var init_surprise = __esm({
   "src/surprise.ts"() {
     "use strict";
     init_sort();
+    init_traverse();
     SURPRISE_CAP = 24;
     MAX_PAIR_EDGES = 2;
-    DEP_KINDS = /* @__PURE__ */ new Set(["import", "call", "use"]);
+    DEP_KINDS = DEPENDS_KINDS;
   }
 });
 
@@ -20030,13 +20269,13 @@ function findOrphans(graph) {
   const connectedPackages = /* @__PURE__ */ new Set();
   for (const f of graph.files) {
     if (!PACKAGE_DIR_LANGS.has(f.lang)) continue;
-    if (f.degIn > 0 || f.degOut > 0 && !f.testFile) connectedPackages.add(`${f.lang}\0${dirOf5(f.rel)}`);
+    if (f.degIn > 0 || f.degOut > 0 && !f.testFile) connectedPackages.add(`${f.lang}\0${dirOf6(f.rel)}`);
   }
   const out2 = [];
   for (const f of graph.files) {
     if (f.fileKind !== "code" || f.degIn !== 0 || f.degOut !== 0) continue;
     if (f.testFile || !importable.has(f.lang) || isEntrypointLike(f.rel)) continue;
-    if (PACKAGE_DIR_LANGS.has(f.lang) && connectedPackages.has(`${f.lang}\0${dirOf5(f.rel)}`)) continue;
+    if (PACKAGE_DIR_LANGS.has(f.lang) && connectedPackages.has(`${f.lang}\0${dirOf6(f.rel)}`)) continue;
     out2.push(f.rel);
   }
   return out2;
@@ -20121,8 +20360,8 @@ function parseRules(input) {
     const from = glob("from");
     const to = glob("to");
     if (r.kind !== void 0) {
-      const ok = Array.isArray(r.kind) && r.kind.every((k) => EDGE_KINDS.has(k));
-      if (!ok) throw new Error(`${at} (${r.name}): \`kind\` must be an array of edge kinds (${[...EDGE_KINDS].join(", ")})`);
+      const ok = Array.isArray(r.kind) && r.kind.every((k) => EDGE_KINDS2.has(k));
+      if (!ok) throw new Error(`${at} (${r.name}): \`kind\` must be an array of edge kinds (${[...EDGE_KINDS2].join(", ")})`);
     }
     return { name: r.name, from, to, kind: r.kind, severity: r.severity, comment: r.comment };
   });
@@ -20271,7 +20510,7 @@ function checkRules(graph, rules, opts = {}) {
   out2.sort((a, b) => byStr(a.rule, b.rule) || byStr(a.from, b.from) || byStr(a.to, b.to) || byStr(a.kind, b.kind));
   return out2;
 }
-var EDGE_KIND_TABLE, EDGE_KINDS, SEVERITIES, BUILTINS, TIERS, COMMON_KEYS, FORBIDDEN_KEYS, BUILTIN_KEYS, LITERALS_KEYS, GATED_TIERS, ENTRYPOINT_STEMS, PACKAGE_DIR_LANGS, dirOf5;
+var EDGE_KIND_TABLE, EDGE_KINDS2, SEVERITIES, BUILTINS, TIERS, COMMON_KEYS, FORBIDDEN_KEYS, BUILTIN_KEYS, LITERALS_KEYS, GATED_TIERS, ENTRYPOINT_STEMS, PACKAGE_DIR_LANGS, dirOf6;
 var init_rules = __esm({
   "src/rules.ts"() {
     "use strict";
@@ -20288,7 +20527,7 @@ var init_rules = __esm({
       use: true,
       mention: true
     };
-    EDGE_KINDS = new Set(Object.keys(EDGE_KIND_TABLE));
+    EDGE_KINDS2 = new Set(Object.keys(EDGE_KIND_TABLE));
     SEVERITIES = /* @__PURE__ */ new Set(["error", "warn"]);
     BUILTINS = /* @__PURE__ */ new Set(["cycles", "orphans", "literals"]);
     TIERS = /* @__PURE__ */ new Set(["competing", "bypassed", "uncentralized"]);
@@ -20318,14 +20557,14 @@ var init_rules = __esm({
       "manage"
     ]);
     PACKAGE_DIR_LANGS = /* @__PURE__ */ new Set(["go", "java", "kotlin", "scala"]);
-    dirOf5 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    dirOf6 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
   }
 });
 
 // src/deadcode.ts
 import { join as join23 } from "path";
 function isTail(rel2) {
-  return tierForPath(dirOf6(rel2) || "(root)") === 2 || /(^|\/)testdata\//.test(rel2);
+  return tierForPath(dirOf7(rel2) || "(root)") === 2 || /(^|\/)testdata\//.test(rel2);
 }
 function isCallable(s) {
   if (CALLABLE_KINDS2.has(s.kind)) return true;
@@ -20564,7 +20803,7 @@ function manifestEntries(scan2, ctx, byRel) {
   const isCode2 = (rel2) => byRel.get(rel2)?.kind === "code";
   for (const f of scan2.files) {
     const base = f.rel.slice(f.rel.lastIndexOf("/") + 1);
-    const dir = dirOf6(f.rel);
+    const dir = dirOf7(f.rel);
     if (base === "package.json") {
       const pkg = tolerantJsonParse(readText(join23(scan2.root, f.rel)));
       if (!pkg || typeof pkg !== "object") continue;
@@ -20609,7 +20848,7 @@ function capDeadCode(all, limit) {
   if (limit === void 0 || all.length <= limit) return all;
   return { total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) };
 }
-var REFERENCE_KINDS8, CALLABLE_KINDS2, FN_INITIALIZER, PY_LAMBDA, CONTAINER_KINDS2, ENTRY_BASENAME, IDENT_VISIBLE, SEP4, dirOf6;
+var REFERENCE_KINDS8, CALLABLE_KINDS2, FN_INITIALIZER, PY_LAMBDA, CONTAINER_KINDS2, ENTRY_BASENAME, IDENT_VISIBLE, SEP4, dirOf7;
 var init_deadcode = __esm({
   "src/deadcode.ts"() {
     "use strict";
@@ -20630,7 +20869,7 @@ var init_deadcode = __esm({
     ENTRY_BASENAME = /(^|\/)(index|main|cli|mod|lib|__main__)\.[a-z]+$/;
     IDENT_VISIBLE = /^[A-Za-z_]\w{4,}$/;
     SEP4 = "\0";
-    dirOf6 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    dirOf7 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
   }
 });
 
@@ -20738,235 +20977,6 @@ var init_viz = __esm({
     CLUSTER_MAX_MODULES = 40;
     CLUSTER_MAX_EDGES = 80;
     degreeOf = (m) => m.degIn + m.degOut;
-  }
-});
-
-// src/traverse.ts
-function snapshot(edges) {
-  const snap = new Array(edges.length * FIELDS2);
-  for (let i2 = 0; i2 < edges.length; i2++) {
-    const e = edges[i2];
-    const o = i2 * FIELDS2;
-    snap[o] = e.from;
-    snap[o + 1] = e.to;
-    snap[o + 2] = e.kind;
-    snap[o + 3] = e.weight;
-    snap[o + 4] = e.dangling;
-    snap[o + 5] = e.confidence;
-  }
-  return snap;
-}
-function unchanged(edges, snap) {
-  if (snap.length !== edges.length * FIELDS2) return false;
-  for (let i2 = 0; i2 < edges.length; i2++) {
-    const e = edges[i2];
-    const o = i2 * FIELDS2;
-    if (snap[o] !== e.from || snap[o + 1] !== e.to || snap[o + 2] !== e.kind || snap[o + 3] !== e.weight || snap[o + 4] !== e.dangling || snap[o + 5] !== e.confidence) {
-      return false;
-    }
-  }
-  return true;
-}
-function adjacencyOf(edges, kinds2) {
-  const viewKey = kinds2 ? [...kinds2].sort(byStr).join(",") : "*";
-  let entry2 = adjacencyMemo.get(edges);
-  if (!entry2 || !unchanged(edges, entry2.snap)) {
-    adjacencyMemo.set(edges, entry2 = { snap: snapshot(edges), views: /* @__PURE__ */ new Map() });
-  }
-  const cached = entry2.views.get(viewKey);
-  if (cached) return cached;
-  const out2 = /* @__PURE__ */ new Map();
-  const inn = /* @__PURE__ */ new Map();
-  const degree = /* @__PURE__ */ new Map();
-  for (const e of edges) {
-    if (e.dangling) continue;
-    if (kinds2 && !kinds2.has(e.kind)) continue;
-    (out2.get(e.from) ?? out2.set(e.from, []).get(e.from)).push(e);
-    (inn.get(e.to) ?? inn.set(e.to, []).get(e.to)).push(e);
-    degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
-    degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
-  }
-  for (const arr of out2.values()) arr.sort((a, b) => byStr(a.to, b.to));
-  for (const arr of inn.values()) arr.sort((a, b) => byStr(a.from, b.from));
-  const adj = { out: out2, inn, degree, threshold: hubThreshold([...degree.values()]) };
-  entry2.views.set(viewKey, adj);
-  return adj;
-}
-function hubThreshold(degrees) {
-  const sorted = degrees.slice().sort((a, b) => a - b);
-  const n = sorted.length;
-  const p99 = n === 0 ? 0 : sorted[Math.min(n - 1, Math.floor(0.99 * n))];
-  return Math.max(50, p99);
-}
-function reverseClosure(edges, seeds, depth = Infinity, opts = {}) {
-  return closureOver(dependentsIndex(edges, opts), seeds, depth);
-}
-function dependentsIndex(edges, opts = {}) {
-  const dependents = /* @__PURE__ */ new Map();
-  const packageImports = /* @__PURE__ */ new Map();
-  const push = (m, key, e) => {
-    const arr = m.get(key);
-    if (arr) arr.push(e);
-    else m.set(key, [e]);
-  };
-  for (const e of edges) {
-    if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
-    if (opts.skipInferred && e.confidence === "inferred") continue;
-    push(dependents, e.to, e);
-    if (opts.goPackages && e.kind === "import" && e.to.endsWith(".go")) push(packageImports, dirOf7(e.to), e);
-  }
-  return { dependents, packageImports, goPackages: opts.goPackages === true };
-}
-function closureOver(index, seeds, depth = Infinity) {
-  const { dependents, packageImports, goPackages } = index;
-  const depthOf = /* @__PURE__ */ new Map();
-  const seen = new Set(seeds);
-  let frontier = [...seeds];
-  for (let d = 1; d <= depth && frontier.length; d++) {
-    const next = [];
-    for (const node of frontier) {
-      let incoming = dependents.get(node) ?? [];
-      if (goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf7(node)) ?? []);
-      for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
-        if (seen.has(e.from)) continue;
-        seen.add(e.from);
-        depthOf.set(e.from, d);
-        next.push(e.from);
-      }
-    }
-    frontier = next;
-  }
-  return depthOf;
-}
-function impactOf(graph, target, depth = Infinity, opts = {}) {
-  const moduleOf = new Map(graph.files.map((f) => [f.rel, f.module]));
-  const mod = graph.modules.find((m) => m.slug === target);
-  const file = mod ? void 0 : graph.files.find((f) => f.rel === target);
-  if (!mod && !file) return void 0;
-  const seeds = mod ? mod.members : [file.rel];
-  const includeInferred = opts.includeInferred === true;
-  const depthOf = reverseClosure(graph.fileEdges, seeds, depth, { skipInferred: !includeInferred, goPackages: true });
-  const files = [...depthOf.entries()].map(([rel2, d]) => ({ rel: rel2, module: moduleOf.get(rel2) ?? "root", depth: d })).sort((a, b) => a.depth - b.depth || byStr(a.rel, b.rel));
-  const modules = [...new Set(files.map((f) => f.module).filter((m) => m !== target))].sort(byStr);
-  const result = { target, scope: mod ? "module" : "file", seeds, files, modules };
-  if (!includeInferred) {
-    const extra = reverseClosure(graph.fileEdges, seeds, depth, { goPackages: true }).size - depthOf.size;
-    if (extra > 0) result.inferredDependents = extra;
-  }
-  return result;
-}
-function linkRank(l) {
-  if (l.kind === "call") return l.confidence === "inferred" ? 4 : 1;
-  if (l.kind === "import" || l.kind === "extends" || l.kind === "implements") return 0;
-  if (l.kind === "use") return 2;
-  return 3;
-}
-function bfs(edges, start2, depth, kinds2) {
-  const { out: out2, inn, degree, threshold } = adjacencyOf(edges, kinds2);
-  const seen = /* @__PURE__ */ new Set([start2]);
-  const links = [];
-  let frontier = [start2];
-  for (let d = 1; d <= depth; d++) {
-    const reached = /* @__PURE__ */ new Map();
-    const link = (node, direction, e) => {
-      let own = reached.get(node);
-      if (!own) {
-        if (seen.has(node)) return;
-        seen.add(node);
-        reached.set(node, own = []);
-      }
-      if (own.some((l) => l.direction === direction && l.kind === e.kind)) return;
-      own.push({ node, direction, kind: e.kind, weight: e.weight, depth: d, confidence: e.confidence });
-    };
-    for (const node of frontier) {
-      if (node !== start2 && (degree.get(node) ?? 0) >= threshold) continue;
-      for (const e of out2.get(node) ?? []) link(e.to, "out", e);
-      for (const e of inn.get(node) ?? []) link(e.from, "in", e);
-    }
-    for (const own of reached.values()) {
-      own.sort(
-        (a, b) => linkRank(a) - linkRank(b) || Number(a.direction === "in") - Number(b.direction === "in") || byStr(a.kind, b.kind)
-      );
-      links.push(...own);
-    }
-    frontier = [...reached.keys()];
-  }
-  return links;
-}
-function neighborsOf(graph, target, depth = 1, kinds2) {
-  const mod = graph.modules.find((m) => m.slug === target);
-  if (mod) {
-    return { target, scope: "module", links: bfs(graph.moduleEdges, target, depth, kinds2), members: mod.members };
-  }
-  const file = graph.files.find((f) => f.rel === target);
-  if (file) {
-    return { target, scope: "file", links: bfs(graph.fileEdges, target, depth, kinds2) };
-  }
-  return void 0;
-}
-function dependencyPath(graph, from, to, opts = {}) {
-  const files = new Set(graph.files.map((f) => f.rel));
-  if (!files.has(from) || !files.has(to)) return void 0;
-  const requested = opts.depth ?? DEP_PATH_DEFAULT_DEPTH;
-  const maxHops = Math.max(1, Math.min(requested, DEP_PATH_MAX_DEPTH));
-  const maxPaths = Math.max(1, opts.maxPaths ?? 5);
-  const goPackage = /* @__PURE__ */ new Map();
-  for (const rel2 of [...files].sort(byStr)) {
-    if (!isGoSource(rel2)) continue;
-    const dir = dirOf7(rel2);
-    const members = goPackage.get(dir);
-    if (members) members.push(rel2);
-    else goPackage.set(dir, [rel2]);
-  }
-  const successors = (withInferred) => {
-    const out2 = /* @__PURE__ */ new Map();
-    for (const e of graph.fileEdges) {
-      if (e.dangling || !DEPENDS_KINDS.has(e.kind)) continue;
-      if (!withInferred && e.confidence === "inferred") continue;
-      const targets = e.kind === "import" && isGoSource(e.to) && goPackage.get(dirOf7(e.to)) || [e.to];
-      const list = out2.get(e.from) ?? out2.set(e.from, []).get(e.from);
-      for (const t of targets) list.push([t, e.kind]);
-    }
-    const rank = (k) => k === "import" ? 0 : k === "use" ? 1 : 2;
-    for (const list of out2.values()) list.sort((a, b) => byStr(a[0], b[0]) || rank(a[1]) - rank(b[1]));
-    return (node) => out2.get(node) ?? [];
-  };
-  const includeInferred = opts.includeInferred === true;
-  const next = successors(includeInferred);
-  const found = shortestPaths([from], /* @__PURE__ */ new Set([to]), next, maxHops, maxPaths);
-  const result = {
-    from,
-    to,
-    hops: found.hops,
-    paths: found.paths.map((p) => p.map((h) => h.via ? { file: h.node, via: h.via } : { file: h.node })),
-    pathCount: found.pathCount,
-    ...found.paths.length < found.pathCount ? { truncated: true } : {},
-    ...requested > DEP_PATH_MAX_DEPTH ? { depthClamped: DEP_PATH_MAX_DEPTH } : {}
-  };
-  if (found.hops === null) {
-    const back = shortestPaths([to], /* @__PURE__ */ new Set([from]), next, maxHops, 0);
-    if (back.hops !== null) result.reverseHops = back.hops;
-    if (!includeInferred) {
-      const inferred = shortestPaths([from], /* @__PURE__ */ new Set([to]), successors(true), maxHops, 0);
-      if (inferred.hops !== null) result.inferredHops = inferred.hops;
-    }
-  }
-  return result;
-}
-var DEPENDS_KINDS, FIELDS2, adjacencyMemo, dirOf7, isGoSource, EDGE_KINDS2, DEP_PATH_DEFAULT_DEPTH, DEP_PATH_MAX_DEPTH;
-var init_traverse = __esm({
-  "src/traverse.ts"() {
-    "use strict";
-    init_sort();
-    init_paths();
-    DEPENDS_KINDS = /* @__PURE__ */ new Set(["import", "use", "call"]);
-    FIELDS2 = 6;
-    adjacencyMemo = /* @__PURE__ */ new WeakMap();
-    dirOf7 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
-    isGoSource = (rel2) => rel2.endsWith(".go") && !rel2.endsWith("_test.go");
-    EDGE_KINDS2 = ["import", "call", "use", "extends", "implements", "doc-link", "mention", "contains"];
-    DEP_PATH_DEFAULT_DEPTH = 8;
-    DEP_PATH_MAX_DEPTH = 16;
   }
 });
 
@@ -23581,8 +23591,8 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
     let kinds2;
     if (name2 === "neighbors" && args2.kinds !== void 0) {
       const list = strArray(args2.kinds) ?? [];
-      const bad = list.filter((k) => !EDGE_KINDS2.includes(k));
-      if (!list.length || bad.length) throw new Error(`\`kinds\` expects edge kinds among ${EDGE_KINDS2.join("|")}, got ${JSON.stringify(bad.length ? bad : args2.kinds)}`);
+      const bad = list.filter((k) => !EDGE_KINDS.includes(k));
+      if (!list.length || bad.length) throw new Error(`\`kinds\` expects edge kinds among ${EDGE_KINDS.join("|")}, got ${JSON.stringify(bad.length ? bad : args2.kinds)}`);
       kinds2 = new Set(list);
     }
     const { graph } = readArtifacts();
@@ -25405,10 +25415,10 @@ function findWord(line2, name2) {
   }
 }
 var endOf = (d) => d.sym.endLine ?? d.sym.line;
-var dirOf4 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+var dirOf5 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
 function goPackageKey(f) {
   const pkg = f.symbols.find((s) => s.kind === "package")?.name ?? "";
-  return `${dirOf4(f.rel)}\0${pkg}`;
+  return `${dirOf5(f.rel)}\0${pkg}`;
 }
 function renderScip(scan2, opts = {}) {
   const projectRoot = opts.projectRoot ?? "file://" + scan2.root.replace(/\\/g, "/");
@@ -25419,14 +25429,14 @@ function renderScip(scan2, opts = {}) {
     let hit = packageAt2.get(key);
     if (hit === void 0) {
       const c2 = manifestCoordinates(scan2.root, dir, manifest);
-      hit = c2 ? `${packageField(c2.manager)} ${packageField(c2.name)} ${packageField(c2.version)}` : dir ? packageOf(dirOf4(dir), manifest) : NO_PACKAGE;
+      hit = c2 ? `${packageField(c2.manager)} ${packageField(c2.name)} ${packageField(c2.version)}` : dir ? packageOf(dirOf5(dir), manifest) : NO_PACKAGE;
       packageAt2.set(key, hit);
     }
     return hit;
   };
   const prefixOf = (f) => {
     const manifest = PACKAGE_MANIFEST.get(f.lang);
-    return `${SCHEME} ${manifest ? packageOf(dirOf4(f.rel), manifest) : NO_PACKAGE} ${fileNamespace(f.rel)}`;
+    return `${SCHEME} ${manifest ? packageOf(dirOf5(f.rel), manifest) : NO_PACKAGE} ${fileNamespace(f.rel)}`;
   };
   const docs = scan2.files.filter((f) => f.kind === "code" && f.symbols.length > 0);
   const docDefs = /* @__PURE__ */ new Map();
@@ -26144,8 +26154,8 @@ function parseFlags(args2) {
     else if (a === "--kind") {
       const v = next();
       const kinds2 = v.split(",").map((k) => k.trim()).filter(Boolean);
-      const bad = kinds2.filter((k) => !EDGE_KINDS2.includes(k));
-      if (!kinds2.length || bad.length) throw new Error(`--kind expects a comma-separated list of ${EDGE_KINDS2.join("|")}, got "${bad.join(",") || v}"`);
+      const bad = kinds2.filter((k) => !EDGE_KINDS.includes(k));
+      if (!kinds2.length || bad.length) throw new Error(`--kind expects a comma-separated list of ${EDGE_KINDS.join("|")}, got "${bad.join(",") || v}"`);
       flags2.kind = kinds2.join(",");
     } else if (a === "--rank") {
       const v = next();
