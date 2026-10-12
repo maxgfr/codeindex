@@ -14,6 +14,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   utimesSync,
@@ -318,7 +319,9 @@ describe.skipIf(!existsSync(join(EXTENDED, "kotlin.wasm")))("pulled EXTENDED gra
       extended: { missing: string[] };
     };
     expect(status.tier).toBe("adjacent");
-    expect(status.dirs).toEqual([join(pkg, "grammars"), cache]);
+    // The adjacent dir is found from the module's own URL, which node gives as
+    // a real path: the temp dir's /var is /private/var on macOS.
+    expect(status.dirs).toEqual([join(realpathSync(pkg), "grammars"), cache]);
     expect(status.pullNeeded).toBe(false);
     expect(status.extended.missing).not.toContain("kotlin");
     expect(status.extendedPullNeeded).toBe(true); // the other five are still missing
