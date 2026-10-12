@@ -112,7 +112,7 @@ export const REPOS: RealRepo[] = [
     // the build system holds (missing-include, a documented limit).
     slug: "jqlang/jq",
     sha: "80fc7a169d3a3942a07f587abc4346d119fc525d",
-    maxDanglingRatio: 0.05, // measured baseline: 12/259 edges (4.63%)
+    maxDanglingRatio: 0.025, // measured: 5/252 edges (1.98%) — generated .inc files and -I vendor paths
     primaryLang: "c",
     crossEdge: [/^src\/.*\.c$/, /^src\/.*\.h$/],
     budgetMs: 120_000,

@@ -560,6 +560,16 @@ describe("resolveDocLink — repo-root-relative links", () => {
   });
 });
 
+describe("real-world campaign findings (2026-10)", () => {
+  it("S-101: a quoted include of a C system header with no local copy is external", () => {
+    const c = scratchCtx({ "src/a.c": '#include "stdio.h"\n#include "sys/types.h"\n#include "own.h"\n', "src/local.h": "", "src/b.c": "" });
+    expect(resolveImport("src/a.c", ".c", "stdio.h", c)).toEqual({ kind: "external" });
+    expect(resolveImport("src/a.c", ".c", "sys/types.h", c)).toEqual({ kind: "external" });
+    expect(resolveImport("src/a.c", ".c", "own.h", c)).toEqual({ kind: "dangling", reason: "missing-include" });
+    expect(resolveImport("src/a.c", ".c", "local.h", c)).toEqual({ kind: "resolved", target: "src/local.h" });
+  });
+});
+
 describe("resolution review fixes (2026-10)", () => {
   it("Go: the module with the longest path prefix owns the import", () => {
     const c = scratchCtx({

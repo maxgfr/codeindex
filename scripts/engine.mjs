@@ -12611,7 +12611,9 @@ function resolveJvm(fromRel, spec, ctx) {
 function resolveC(fromRel, spec, ctx) {
   const fromDir = fromRel.includes("/") ? posix2.dirname(fromRel) : "";
   const hit = firstExisting(ctx, [posix2.join(fromDir, spec), ...ctx.cIncludeRoots.map((r) => posix2.join(r, spec))]);
-  return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-include" };
+  if (hit) return { kind: "resolved", target: hit };
+  if (SYSTEM_HEADERS.has(spec) || SYSTEM_HEADER_DIR.test(spec)) return { kind: "external" };
+  return { kind: "dangling", reason: "missing-include" };
 }
 function resolveRuby(fromRel, spec, ctx) {
   if (spec.startsWith(".")) {
@@ -12734,7 +12736,7 @@ function resolveImport(fromRel, ext, spec, ctx) {
   }
   return { kind: "external" };
 }
-var ASSET_EXT, JS_EXT_PROBES, JS_INDEX, JS_TS2, SFC_HTML, PY2, C_CPP2, KOTLIN2, SCALA2, JVM_OTHER, SHELL2, BUILD_DIRS, CONFIG_DIR, CONDITION_PRIORITY, MAX_EXPORT_TARGETS, RESOLVER_EXTS;
+var ASSET_EXT, JS_EXT_PROBES, JS_INDEX, JS_TS2, SFC_HTML, PY2, C_CPP2, KOTLIN2, SCALA2, JVM_OTHER, SHELL2, BUILD_DIRS, CONFIG_DIR, CONDITION_PRIORITY, MAX_EXPORT_TARGETS, SYSTEM_HEADERS, SYSTEM_HEADER_DIR, RESOLVER_EXTS;
 var init_resolve = __esm({
   "src/resolve.ts"() {
     "use strict";
@@ -12796,6 +12798,59 @@ var init_resolve = __esm({
     CONFIG_DIR = "${configDir}";
     CONDITION_PRIORITY = ["source", "ts", "import", "module", "require", "node", "default"];
     MAX_EXPORT_TARGETS = 8;
+    SYSTEM_HEADERS = /* @__PURE__ */ new Set([
+      "assert.h",
+      "complex.h",
+      "ctype.h",
+      "errno.h",
+      "fenv.h",
+      "float.h",
+      "inttypes.h",
+      "iso646.h",
+      "limits.h",
+      "locale.h",
+      "math.h",
+      "setjmp.h",
+      "signal.h",
+      "stdalign.h",
+      "stdarg.h",
+      "stdatomic.h",
+      "stdbool.h",
+      "stddef.h",
+      "stdint.h",
+      "stdio.h",
+      "stdlib.h",
+      "stdnoreturn.h",
+      "string.h",
+      "tgmath.h",
+      "threads.h",
+      "time.h",
+      "uchar.h",
+      "wchar.h",
+      "wctype.h",
+      "unistd.h",
+      "fcntl.h",
+      "pthread.h",
+      "dirent.h",
+      "dlfcn.h",
+      "poll.h",
+      "sched.h",
+      "semaphore.h",
+      "strings.h",
+      "termios.h",
+      "glob.h",
+      "regex.h",
+      "syslog.h",
+      "netdb.h",
+      "pwd.h",
+      "grp.h",
+      "libgen.h",
+      "fnmatch.h",
+      "spawn.h",
+      "utime.h",
+      "windows.h"
+    ]);
+    SYSTEM_HEADER_DIR = /^(?:sys|arpa|netinet|net)\//;
     RESOLVER_EXTS = /* @__PURE__ */ new Set([".go", ".rs", ".java", ".rb", ".rake", ".php", ".cs", ".dart", ".lua", ".ex", ".exs"]);
   }
 });

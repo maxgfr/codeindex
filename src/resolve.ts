@@ -1426,12 +1426,28 @@ function resolveJvm(fromRel: string, spec: string, ctx: ResolveContext): Resolut
   return hit ? { kind: "resolved", target: hit } : { kind: "external" };
 }
 
+// The C standard library and POSIX headers: a quoted `#include "stdio.h"`
+// with no local stdio.h falls back to the system directories, as the angle-
+// bracket form does — jq's jv_dtoa.c writes its libc includes that way.
+const SYSTEM_HEADERS = new Set([
+  "assert.h", "complex.h", "ctype.h", "errno.h", "fenv.h", "float.h", "inttypes.h", "iso646.h", "limits.h",
+  "locale.h", "math.h", "setjmp.h", "signal.h", "stdalign.h", "stdarg.h", "stdatomic.h", "stdbool.h", "stddef.h",
+  "stdint.h", "stdio.h", "stdlib.h", "stdnoreturn.h", "string.h", "tgmath.h", "threads.h", "time.h", "uchar.h",
+  "wchar.h", "wctype.h", "unistd.h", "fcntl.h", "pthread.h", "dirent.h", "dlfcn.h", "poll.h", "sched.h",
+  "semaphore.h", "strings.h", "termios.h", "glob.h", "regex.h", "syslog.h", "netdb.h", "pwd.h", "grp.h",
+  "libgen.h", "fnmatch.h", "spawn.h", "utime.h", "windows.h",
+]);
+const SYSTEM_HEADER_DIR = /^(?:sys|arpa|netinet|net)\//;
+
 // C/C++: local `#include "x"` relative to the including file, then each include
-// root. Unresolved quoted includes are dangling (they read as an in-repo intent).
+// root. Unresolved quoted includes are dangling (they read as an in-repo
+// intent), except the system headers above.
 function resolveC(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
   const fromDir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
   const hit = firstExisting(ctx, [posix.join(fromDir, spec), ...ctx.cIncludeRoots.map((r) => posix.join(r, spec))]);
-  return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-include" };
+  if (hit) return { kind: "resolved", target: hit };
+  if (SYSTEM_HEADERS.has(spec) || SYSTEM_HEADER_DIR.test(spec)) return { kind: "external" };
+  return { kind: "dangling", reason: "missing-include" };
 }
 
 // Ruby: `require_relative` (we normalised to a leading "./") resolves against the
