@@ -1231,7 +1231,7 @@ that problem, so — same doctrine as the embedding tier — you can point one a
 the repository and get its answer *alongside* the static one:
 
 ```jsonc
-// <repo>/.codeindex/lsp.json — presence of this file IS the opt-in
+// ~/.config/codeindex/lsp.json — presence of this file IS the opt-in
 {
   "version": 1,
   "servers": [{
@@ -1256,6 +1256,17 @@ override both for every server and take precedence over `lsp.json`, so a CI
 job or a slow machine can retune them without editing a shared file.
 `CODEINDEX_LSP_CONFIG` points at a config elsewhere; set to `off`, `0` or an
 empty string, it disables the tier even when the repository has one.
+
+**A repository's own config needs your consent.** A config names commands to
+spawn, so `<repo>/.codeindex/lsp.json` is code that repository would run on
+your machine. It is read only with `--trust-lsp-config` (on `lsp status`,
+`callers --lsp`, `refs --lsp` and `codeindex mcp`) or
+`CODEINDEX_TRUST_LSP_CONFIG=1`. Without either, only the configs you put there
+yourself count — `CODEINDEX_LSP_CONFIG`, then `~/.config/codeindex/lsp.json`
+(`$XDG_CONFIG_HOME/codeindex/lsp.json` when set) — and `lsp status` reports the
+repository's file as `ignoredConfig`, while an `lsp: true` query says why it
+stayed static. A `timeoutMs` or `startupTimeoutMs` that is not a positive
+number is rejected.
 
 The TypeScript example disables its separate syntax server because a CLI
 query opens a short-lived session. Otherwise an early reference request can be

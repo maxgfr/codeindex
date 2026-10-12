@@ -27,6 +27,9 @@ import { scanRepo } from "../src/scan.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
 import { renderSymbolsJson } from "../src/render/symbols-json.js";
+import { trustRepoLspConfig } from "./lsp-trust.js";
+
+trustRepoLspConfig();
 
 const MINI = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const FAKE = fileURLToPath(new URL("./fixtures/lsp/fake-server.mjs", import.meta.url));

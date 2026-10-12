@@ -15,6 +15,12 @@ export interface ShResult {
   errorCode?: string;
 }
 
+// git speaks the user's language on stderr: under fr_FR a missing repository is
+// "fatal : ni ceci ni aucun de ses répertoires parents n'est un dépôt git", so
+// the `fatal: ` prefix the callers strip never matched and every error string
+// depended on the machine. Every git call runs in the C locale.
+export const GIT_LOCALE = { LC_ALL: "C", LANGUAGE: "" } as const;
+
 // Run a command synchronously. Sync keeps the CLI simple and deterministic
 // (mirrors how the engine is structured); the work is I/O-bound git/rg/gh calls
 // where parallelism buys little. `input` feeds stdin; `maxBuffer` is generous
@@ -24,13 +30,14 @@ export function sh(
   args: string[],
   opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined>; maxBufferBytes?: number } = {},
 ): ShResult {
+  const env = opts.env ?? process.env;
   const res = spawnSync(cmd, args, {
     cwd: opts.cwd,
     input: opts.input,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 120_000,
     maxBuffer: opts.maxBufferBytes ?? 64 * 1024 * 1024,
-    env: opts.env ?? process.env,
+    env: cmd === "git" ? { ...env, ...GIT_LOCALE } : env,
   });
   const code = res.error ? (res.error as NodeJS.ErrnoException).code : undefined;
   return {

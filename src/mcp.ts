@@ -34,7 +34,7 @@ import { symbolsOverview, findSymbol, findReferences, explainNoCallers, rawCalle
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { formatSymbolRef } from "./symref.js";
-import { lspStatus, referencesWithLsp, callersWithLsp, LspSessionPool } from "./lsp/index.js";
+import { lspStatus, referencesWithLsp, callersWithLsp, LspSessionPool, type LspQueryOptions } from "./lsp/index.js";
 import { conciseCaller, conciseDelta, conciseReferences, conciseSymbolIndex, symbolLocation } from "./mcp/concise.js";
 import { onboardBrief } from "./onboard.js";
 import { indexStatus } from "./status.js";
@@ -226,14 +226,15 @@ function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
 // `progress` reports phase boundaries of a scan-needing call (see toolsCall).
 // `walkRepo` supplies the call's walk: the --watch oracle's for the pinned
 // repository, a plain walk otherwise.
-// `lspPool` keeps language servers warm across the calls of one server session.
+// `lsp` keeps language servers warm across the calls of one server session
+// (its pool), and says whether a repo's own lsp.json may name them.
 async function callTool(
   name: string,
   args: Record<string, unknown>,
   repo: string,
   progress?: (message: string) => void,
   walkRepo: (repo: string) => Promise<{ walked: WalkResult; reused: boolean }> = async (r) => ({ walked: walk(r, {}), reused: false }),
-  lspPool?: LspSessionPool,
+  lsp: LspQueryOptions = {},
 ): Promise<string> {
   const scanOpts = { scope: str(args.scope), include: strArray(args.include), exclude: strArray(args.exclude) };
   // `search`'s optional structural prior. The schema's enum has already
@@ -320,7 +321,7 @@ async function callTool(
       const found = lookupCallerEntry(index, lookup);
       const entry = found && sited(found);
       if (entry) {
-        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry, { pool: lspPool }) : entry;
+        const result = args.lsp === true ? await callersWithLsp(scan, repo, lspRef, entry, lsp) : entry;
         return JSON.stringify(args.concise === true ? conciseCaller(result) : result, null, 2);
       }
       // A symbol that exists but binds no site says how many sites name it
@@ -333,7 +334,7 @@ async function callTool(
           `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : ""),
         );
       }
-      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent, { pool: lspPool }) : absent, null, 2);
+      return JSON.stringify(args.lsp === true ? await callersWithLsp(scan, repo, lspRef, absent, lsp) : absent, null, 2);
     }
     const obj: Record<string, unknown> = {};
     for (const [k, v] of index) obj[k] = args.concise === true ? conciseCaller(sited(v)) : sited(v);
@@ -379,7 +380,7 @@ async function callTool(
     // The tier locates the declared NAME on its line: pass the name a
     // qualified ref (`name@file`, `file#Parent/name`) resolved to.
     const leaf = resolveSymbolRef(scan, symName)?.reading.name ?? symName;
-    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik, { pool: lspPool }) : statik;
+    const result = args.lsp === true ? await referencesWithLsp(scan, repo, leaf, statik, lsp) : statik;
     return JSON.stringify(args.concise === true ? conciseReferences(result) : result, null, 2);
   }
   if (name === "symbol_at") {
@@ -394,7 +395,7 @@ async function callTool(
     return JSON.stringify(symbolAt(scan, rel, line), null, 2);
   }
   if (name === "lsp_status") {
-    return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true), null, 2);
+    return JSON.stringify(await lspStatus(readScan(), repo, args.probe === true, lsp), null, 2);
   }
   if (name === "replace_symbol_body" || name === "insert_after_symbol" || name === "insert_before_symbol") {
     const namePath = str(args.namePath);
@@ -810,6 +811,10 @@ export interface McpServerOptions {
   // elsewhere it only invalidates eagerly. Whenever it cannot prove freshness
   // a call walks exactly as without it.
   watch?: boolean;
+  // Let a repository's own .codeindex/lsp.json name the language servers the
+  // `lsp: true` calls spawn (`codeindex mcp --trust-lsp-config`). Off by
+  // default: that file is a command line the repository runs (src/lsp/config.ts).
+  trustLspConfig?: boolean;
 }
 
 export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
@@ -1033,7 +1038,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   ): Promise<Record<string, unknown>> {
     try {
       const repo = repoRoot(args, defaultRepo);
-      const raw = await callTool(name, args, repo, progress, walkRepo, lspPool);
+      const raw = await callTool(name, args, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig: opts.trustLspConfig });
       // Narrowed or projected, the answer is not what a whole-repo artifact
       // holds, so the size guard must not point at one.
       const narrowed =

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { byStr } from "./sort.js";
-import { sh } from "./util.js";
+import { GIT_LOCALE, sh } from "./util.js";
 
 // The short HEAD commit of a working tree, when it is a git repo. Recorded in
 // the manifest so an index is pinned to an exact revision. Returns undefined
@@ -71,6 +71,12 @@ export interface DiffSpec {
 }
 
 const gitArgs = (dir: string): string[] => ["-C", dir, ...GIT_CONFIG];
+
+// A user-supplied ref that git would read as an OPTION: `--output=/tmp/x` as a
+// delta base or a changedSince ref made `git diff` write a file. No branch, tag
+// or sha starts with "-", so such a ref is refused before git sees it; the diff
+// call also passes --end-of-options ahead of it.
+const optionLike = (ref: string): boolean => ref.startsWith("-");
 const rangeArgs = (spec: DiffSpec): string[] => (spec.staged ? ["--cached"] : [spec.mergeBase!]);
 
 // The review base of a repository with no commit yet. Everything in it is new,
@@ -108,7 +114,7 @@ export function resolveBaseRef(
   };
 
   if (base) {
-    if (!verify(base)) return { error: `base ref "${base}" not found (tried git rev-parse --verify)` };
+    if (optionLike(base) || !verify(base)) return { error: `base ref "${base}" not found (tried git rev-parse --verify)` };
     const mb = mergeBase(base);
     if (!mb) return { error: `no merge-base between "${base}" and HEAD` };
     return { ref: base, mergeBase: mb };
@@ -359,7 +365,12 @@ export function readHistory(dir: string, since?: string): HistoryResult {
   // commit. --full-history keeps side-branch commits that default history
   // simplification hides behind a merge TREESAME to one parent.
   if (prefix) args.push("--full-history", "--full-diff", "--", ".");
-  const res = spawnSync("git", args, { input: revs.join("\n") + "\n", maxBuffer: LOG_MAX_BYTES, timeout: 600_000 });
+  const res = spawnSync("git", args, {
+    input: revs.join("\n") + "\n",
+    maxBuffer: LOG_MAX_BYTES,
+    timeout: 600_000,
+    env: { ...process.env, ...GIT_LOCALE },
+  });
   if (res.error) {
     const code = (res.error as NodeJS.ErrnoException).code;
     const error =
@@ -381,8 +392,8 @@ export function readHistory(dir: string, since?: string): HistoryResult {
 function resolveWindow(dir: string, since: string | undefined): { exclude: string[]; args: string[] } {
   if (!since) return { exclude: [], args: [] };
   // A ref wins over a date reading of the same text (a tag named 2024-01-01).
-  const ref = sh("git", [...gitArgs(dir), "rev-parse", "--verify", "--quiet", `${since}^{commit}`]);
-  if (ref.ok) return { exclude: [`^${ref.stdout.trim()}`], args: [] };
+  const ref = optionLike(since) ? undefined : sh("git", [...gitArgs(dir), "rev-parse", "--verify", "--quiet", `${since}^{commit}`]);
+  if (ref?.ok) return { exclude: [`^${ref.stdout.trim()}`], args: [] };
   if (SINCE_DATE.test(since.trim())) {
     // Resolved to the timestamp git itself would use, so the memo key moves
     // with a relative date ("6 months ago" is a different window tomorrow).
@@ -510,7 +521,8 @@ function firstLine(text: string): string {
 // I touch". Returns an empty set outside a git repo.
 export function changedSince(dir: string, ref: string): Set<string> {
   const out = new Set<string>();
-  const diff = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", ref, "--"]);
+  if (optionLike(ref)) return out;
+  const diff = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref, "--"]);
   if (diff.ok) for (const p of diff.stdout.split("\0")) if (p) out.add(p);
   for (const p of untrackedFiles(dir)) out.add(p);
   return out;

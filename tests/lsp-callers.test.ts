@@ -7,6 +7,9 @@ import { scanRepo } from "../src/scan.js";
 import { findReferences } from "../src/query.js";
 import { createFramer, encodeMessage, type LspMessage } from "../src/lsp/protocol.js";
 import { openLspSession, LspIncomingCallsError, type LspTransport } from "../src/lsp/client.js";
+import { trustRepoLspConfig } from "./lsp-trust.js";
+
+trustRepoLspConfig();
 
 function transportFor(answer: (message: LspMessage) => unknown): LspTransport {
   const framer = createFramer();

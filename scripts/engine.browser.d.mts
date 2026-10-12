@@ -1464,20 +1464,28 @@ interface LspConfig {
     version: 1;
     servers: LspServerConfig[];
 }
-type LspConfigSource = "env" | "repo" | "cwd" | "none";
+type LspConfigSource = "env" | "repo" | "cwd" | "user" | "none";
 interface ResolvedLspConfigPath {
     path: string | undefined;
     source: LspConfigSource;
+    /** A repo (or cwd) config left unread because it was not trusted. */
+    ignored?: string;
+}
+/** Whether a repository may configure the commands the LSP tier spawns. */
+interface LspTrust {
+    /** `--trust-lsp-config`; CODEINDEX_TRUST_LSP_CONFIG=1 grants it too. */
+    trustRepoConfig?: boolean;
 }
 /**
- * Resolution ladder, mirroring resolveEmbedModelDir: an explicit env var wins
- * outright, then the repo, then the working directory.
+ * Resolution ladder: an explicit env var wins outright; then the repo, then
+ * the working directory — both only when trusted (see TRUST above); then the
+ * per-user config.
  *
  * `CODEINDEX_LSP_CONFIG` set to an empty string, `0` or `off` DISABLES the tier
  * even when a repo config exists — the escape hatch for a CI job that must not
  * spawn anything, without deleting a file the rest of the team relies on.
  */
-declare function resolveLspConfigPath(repo: string): ResolvedLspConfigPath;
+declare function resolveLspConfigPath(repo: string, trust?: LspTrust): ResolvedLspConfigPath;
 /** Validate a parsed payload, throwing with the field that is wrong. */
 declare function parseLspConfig(payload: unknown): LspConfig;
 /**
@@ -1488,7 +1496,7 @@ declare function parseLspConfig(payload: unknown): LspConfig;
  * point someone asked for the tier and silently ignoring their config is worse
  * than failing: they would spend the afternoon wondering why nothing improved.
  */
-declare function loadLspConfig(repo: string): LspConfig | undefined;
+declare function loadLspConfig(repo: string, trust?: LspTrust): LspConfig | undefined;
 /** The server that claims a language, or undefined. First match wins. */
 declare function serverForLang(config: LspConfig, lang: string): LspServerConfig | undefined;
 
@@ -1601,8 +1609,8 @@ declare class LspSessionPool {
     private unhook;
 }
 
-/** How a query reaches its servers. */
-interface LspQueryOptions {
+/** How a query reaches its servers, and whether the repo may configure them. */
+interface LspQueryOptions extends LspTrust {
     /**
      * Reuse sessions across queries (the MCP server passes its own). Without
      * one, each query opens a fresh session and shuts it down before returning.
@@ -1627,6 +1635,11 @@ interface LspStatus {
     mode: "none" | "configured";
     configPath: string | null;
     source: LspConfigSource;
+    /** A repository config left unread because it was not trusted, and why. */
+    ignoredConfig?: {
+        path: string;
+        reason: string;
+    };
     servers: LspServerStatus[];
     /** Languages present in the repo that no configured server claims. */
     unmappedLanguages: string[];
@@ -1639,7 +1652,7 @@ interface LspStatus {
  * capabilities — the analogue of `probeEndpoint` in `embed status`, and like it,
  * the only part that touches the outside world.
  */
-declare function lspStatus(scan: RepoScan, repo: string, probe?: boolean): Promise<LspStatus>;
+declare function lspStatus(scan: RepoScan, repo: string, probe?: boolean, trust?: LspTrust): Promise<LspStatus>;
 /**
  * `findReferences`, annotated by a language server when one can answer.
  *
@@ -1984,6 +1997,7 @@ interface McpServerOptions {
     maxResponseBytes?: number;
     profile?: string;
     watch?: boolean;
+    trustLspConfig?: boolean;
 }
 declare function runMcpServer(opts?: McpServerOptions): Promise<void>;
 

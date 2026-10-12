@@ -11,6 +11,7 @@ import { findSymbol, type SymbolReferences } from "../query.js";
 import { have } from "../util.js";
 import type { LspCapabilities } from "./client.js";
 import {
+  LSP_TRUST_HINT,
   loadLspConfig,
   resolveLspConfigPath,
   serverForLang,
@@ -18,6 +19,7 @@ import {
   type LspConfig,
   type LspConfigSource,
   type LspServerConfig,
+  type LspTrust,
 } from "./config.js";
 import { agreementOf, annotateWithLsp, lspUnavailable, type LspReferences } from "./refs.js";
 import { callersAgreement, callersUnavailable, collectIncomingCalls, type LspCallers } from "./callers.js";
@@ -31,8 +33,8 @@ export type { LspRef, LspIncomingCall } from "./protocol.js";
 export type { LspCallers, LspCallersBlock } from "./callers.js";
 export { LspSessionPool } from "./pool.js";
 
-/** How a query reaches its servers. */
-export interface LspQueryOptions {
+/** How a query reaches its servers, and whether the repo may configure them. */
+export interface LspQueryOptions extends LspTrust {
   /**
    * Reuse sessions across queries (the MCP server passes its own). Without
    * one, each query opens a fresh session and shuts it down before returning.
@@ -59,6 +61,8 @@ export interface LspStatus {
   mode: "none" | "configured";
   configPath: string | null;
   source: LspConfigSource;
+  /** A repository config left unread because it was not trusted, and why. */
+  ignoredConfig?: { path: string; reason: string };
   servers: LspServerStatus[];
   /** Languages present in the repo that no configured server claims. */
   unmappedLanguages: string[];
@@ -72,10 +76,11 @@ export interface LspStatus {
  * capabilities — the analogue of `probeEndpoint` in `embed status`, and like it,
  * the only part that touches the outside world.
  */
-export async function lspStatus(scan: RepoScan, repo: string, probe = false): Promise<LspStatus> {
-  const { path, source } = resolveLspConfigPath(repo);
-  const config = loadLspConfig(repo); // throws only on a malformed file — see loadLspConfig
-  if (!config) return { lspVersion: 1, mode: "none", configPath: path ?? null, source, servers: [], unmappedLanguages: [] };
+export async function lspStatus(scan: RepoScan, repo: string, probe = false, trust: LspTrust = {}): Promise<LspStatus> {
+  const { path, source, ignored } = resolveLspConfigPath(repo, trust);
+  const ignoredConfig = ignored ? { ignoredConfig: { path: ignored, reason: LSP_TRUST_HINT } } : {};
+  const config = loadLspConfig(repo, trust); // throws only on a malformed file — see loadLspConfig
+  if (!config) return { lspVersion: 1, mode: "none", configPath: path ?? null, source, ...ignoredConfig, servers: [], unmappedLanguages: [] };
 
   const counts = new Map<string, number>();
   for (const file of scan.files) counts.set(file.lang, (counts.get(file.lang) ?? 0) + 1);
@@ -107,7 +112,7 @@ export async function lspStatus(scan: RepoScan, repo: string, probe = false): Pr
   const claimed = new Set(config.servers.flatMap((s) => s.languages));
   const unmappedLanguages = [...counts.keys()].filter((lang) => !claimed.has(lang) && lang !== "other").sort();
 
-  return { lspVersion: 1, mode: "configured", configPath: path ?? null, source, servers, unmappedLanguages };
+  return { lspVersion: 1, mode: "configured", configPath: path ?? null, source, ...ignoredConfig, servers, unmappedLanguages };
 }
 
 /**
@@ -128,13 +133,19 @@ export async function referencesWithLsp(
 ): Promise<LspReferences> {
   let config: LspConfig | undefined;
   try {
-    config = loadLspConfig(repo);
+    config = loadLspConfig(repo, options);
   } catch (e) {
     // A malformed config is worth saying out loud, but not worth failing a read
     // command over: the static answer is still correct and complete.
     return { ...statik, lsp: lspUnavailable("(config)", e instanceof Error ? e.message : String(e)) };
   }
-  if (!config) return statik; // tier not asked for — no block at all, byte-compat
+  if (!config) {
+    // A repo config that was there but not trusted is named: the caller asked
+    // for the tier and would otherwise never learn why it stayed silent.
+    const ignored = resolveLspConfigPath(repo, options).ignored;
+    if (ignored) return { ...statik, lsp: lspUnavailable("(config)", `${ignored} ignored: ${LSP_TRUST_HINT}`) };
+    return statik; // tier not asked for — no block at all, byte-compat
+  }
 
   if (!statik.defs.length) return { ...statik, lsp: lspUnavailable("(none)", `no declaration of ${name} to anchor a request on`) };
   const { groups, reasons } = declarationServers(config, statik.defs);
@@ -193,11 +204,14 @@ export async function callersWithLsp<T extends object>(
 ): Promise<LspCallers<T>> {
   let config: LspConfig | undefined;
   try {
-    config = loadLspConfig(repo);
+    config = loadLspConfig(repo, options);
   } catch (error) {
     return { ...statik, lsp: callersUnavailable("(config)", error instanceof Error ? error.message : String(error)) };
   }
-  if (!config) return { ...statik, lsp: callersUnavailable("(none)", "no LSP server configured") };
+  if (!config) {
+    const ignored = resolveLspConfigPath(repo, options).ignored;
+    return { ...statik, lsp: callersUnavailable("(none)", ignored ? `${ignored} ignored: ${LSP_TRUST_HINT}` : "no LSP server configured") };
+  }
 
   const separator = name.indexOf("@");
   const target = separator < 0 ? name : name.slice(0, separator);

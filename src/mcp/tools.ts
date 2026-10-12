@@ -171,7 +171,7 @@ export const TOOLS = [
   {
     name: "lsp_status",
     description:
-      "Is the optional LSP tier configured, and would it answer? Reports the config path and its source, each server with whether its command is on PATH and how many files in this repo it claims, and the languages no server covers. Opt-in by asset: the tier is active only when <repo>/.codeindex/lsp.json exists (or CODEINDEX_LSP_CONFIG points at one). `probe: true` additionally starts each server to read the capabilities it really advertises. The tier never touches graph.json/symbols.json — it annotates query answers only.",
+      "Is the optional LSP tier configured, and would it answer? Reports the config path and its source, each server with whether its command is on PATH and how many files in this repo it claims, and the languages no server covers. Opt-in by asset: the tier is active only when CODEINDEX_LSP_CONFIG points at a config or ~/.config/codeindex/lsp.json exists; the repo's own <repo>/.codeindex/lsp.json names commands to run, so it is read only when the server was started with --trust-lsp-config (or CODEINDEX_TRUST_LSP_CONFIG=1), and is reported as `ignoredConfig` otherwise. `probe: true` additionally starts each server to read the capabilities it really advertises. The tier never touches graph.json/symbols.json — it annotates query answers only.",
     inputSchema: {
       type: "object",
       properties: {

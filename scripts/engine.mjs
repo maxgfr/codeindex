@@ -28,13 +28,14 @@ var init_types = __esm({
 // src/util.ts
 import { spawnSync } from "child_process";
 function sh(cmd, args2, opts = {}) {
+  const env = opts.env ?? process.env;
   const res = spawnSync(cmd, args2, {
     cwd: opts.cwd,
     input: opts.input,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 12e4,
     maxBuffer: opts.maxBufferBytes ?? 64 * 1024 * 1024,
-    env: opts.env ?? process.env
+    env: cmd === "git" ? { ...env, ...GIT_LOCALE } : env
   });
   const code = res.error ? res.error.code : void 0;
   return {
@@ -149,10 +150,11 @@ function stemOf(term) {
   if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
   return t;
 }
-var whichCache, STOPWORDS, NON_ASCII;
+var GIT_LOCALE, whichCache, STOPWORDS, NON_ASCII;
 var init_util = __esm({
   "src/util.ts"() {
     "use strict";
+    GIT_LOCALE = { LC_ALL: "C", LANGUAGE: "" };
     whichCache = /* @__PURE__ */ new Map();
     STOPWORDS = /* @__PURE__ */ new Set([
       "the",
@@ -880,7 +882,7 @@ function resolveBaseRef(dir, base) {
     return mb.ok ? mb.stdout.trim() : void 0;
   };
   if (base) {
-    if (!verify(base)) return { error: `base ref "${base}" not found (tried git rev-parse --verify)` };
+    if (optionLike(base) || !verify(base)) return { error: `base ref "${base}" not found (tried git rev-parse --verify)` };
     const mb = mergeBase(base);
     if (!mb) return { error: `no merge-base between "${base}" and HEAD` };
     return { ref: base, mergeBase: mb };
@@ -1047,7 +1049,12 @@ function readHistory(dir, since) {
   }
   const args2 = [...gitArgs(dir), "log", "--no-color", "--no-renames", ...window2.args, "--pretty=format:%x1e", "--name-only", "-z", "--stdin"];
   if (prefix) args2.push("--full-history", "--full-diff", "--", ".");
-  const res = spawnSync2("git", args2, { input: revs.join("\n") + "\n", maxBuffer: LOG_MAX_BYTES, timeout: 6e5 });
+  const res = spawnSync2("git", args2, {
+    input: revs.join("\n") + "\n",
+    maxBuffer: LOG_MAX_BYTES,
+    timeout: 6e5,
+    env: { ...process.env, ...GIT_LOCALE }
+  });
   if (res.error) {
     const code = res.error.code;
     const error = code === "ENOBUFS" ? `git log output exceeds ${LOG_MAX_BYTES / 1024 / 1024} MiB \u2014 bound the window with since` : code === "ENOENT" ? "git was not found on PATH" : res.error.message;
@@ -1061,8 +1068,8 @@ function readHistory(dir, since) {
 }
 function resolveWindow(dir, since) {
   if (!since) return { exclude: [], args: [] };
-  const ref2 = sh("git", [...gitArgs(dir), "rev-parse", "--verify", "--quiet", `${since}^{commit}`]);
-  if (ref2.ok) return { exclude: [`^${ref2.stdout.trim()}`], args: [] };
+  const ref2 = optionLike(since) ? void 0 : sh("git", [...gitArgs(dir), "rev-parse", "--verify", "--quiet", `${since}^{commit}`]);
+  if (ref2?.ok) return { exclude: [`^${ref2.stdout.trim()}`], args: [] };
   if (SINCE_DATE.test(since.trim())) {
     const date = sh("git", [...gitArgs(dir), "rev-parse", `--since=${since}`]);
     const m = /^--max-age=(-?\d+)$/m.exec(date.stdout);
@@ -1148,14 +1155,15 @@ function firstLine(text) {
 }
 function changedSince(dir, ref2) {
   const out2 = /* @__PURE__ */ new Set();
-  const diff = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", ref2, "--"]);
+  if (optionLike(ref2)) return out2;
+  const diff = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref2, "--"]);
   if (diff.ok) {
     for (const p of diff.stdout.split("\0")) if (p) out2.add(p);
   }
   for (const p of untrackedFiles(dir)) out2.add(p);
   return out2;
 }
-var COMMIT_CHARS, GIT_CONFIG, gitArgs, rangeArgs, NO_COMMITS_REF, C_ESCAPES, LOG_MAX_BYTES, SINCE_DATE, LOG_MEMO, LOG_MEMO_MAX;
+var COMMIT_CHARS, GIT_CONFIG, gitArgs, optionLike, rangeArgs, NO_COMMITS_REF, C_ESCAPES, LOG_MAX_BYTES, SINCE_DATE, LOG_MEMO, LOG_MEMO_MAX;
 var init_git = __esm({
   "src/git.ts"() {
     "use strict";
@@ -1181,6 +1189,7 @@ var init_git = __esm({
       "log.showRoot=true"
     ];
     gitArgs = (dir) => ["-C", dir, ...GIT_CONFIG];
+    optionLike = (ref2) => ref2.startsWith("-");
     rangeArgs = (spec) => spec.staged ? ["--cached"] : [spec.mergeBase];
     NO_COMMITS_REF = "(no commits)";
     C_ESCAPES = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13 };
@@ -18723,19 +18732,37 @@ var init_onboard = __esm({
 
 // src/lsp/config.ts
 import { existsSync as existsSync9, readFileSync as readFileSync13 } from "fs";
+import { homedir as homedir2 } from "os";
 import { join as join20, resolve as resolve8 } from "path";
-function resolveLspConfigPath(repo) {
+function repoLspConfigTrusted(trust = {}) {
+  if (trust.trustRepoConfig === true) return true;
+  const env = (process.env.CODEINDEX_TRUST_LSP_CONFIG ?? "").trim().toLowerCase();
+  return env === "1" || env === "true" || env === "yes";
+}
+function userLspConfigPath() {
+  const xdg = process.env.XDG_CONFIG_HOME?.trim();
+  return join20(xdg ? resolve8(xdg) : join20(homedir2(), ".config"), "codeindex", LSP_CONFIG_NAME);
+}
+function resolveLspConfigPath(repo, trust = {}) {
   const env = process.env.CODEINDEX_LSP_CONFIG;
   if (env !== void 0) {
     const trimmed = env.trim();
     if (!trimmed || trimmed === "0" || trimmed.toLowerCase() === "off") return { path: void 0, source: "none" };
     return { path: resolve8(trimmed), source: "env" };
   }
+  const trusted = repoLspConfigTrusted(trust);
+  let ignored;
   const inRepo = join20(repo, LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (existsSync9(inRepo)) return { path: inRepo, source: "repo" };
   const inCwd = join20(process.cwd(), LSP_CONFIG_DIR, LSP_CONFIG_NAME);
-  if (inCwd !== inRepo && existsSync9(inCwd)) return { path: inCwd, source: "cwd" };
-  return { path: void 0, source: "none" };
+  for (const [path, source] of [[inRepo, "repo"], [inCwd, "cwd"]]) {
+    if (source === "cwd" && path === inRepo) continue;
+    if (!existsSync9(path)) continue;
+    if (trusted) return { path, source };
+    ignored ??= path;
+  }
+  const user = userLspConfigPath();
+  if (existsSync9(user)) return { path: user, source: "user", ...ignored ? { ignored } : {} };
+  return { path: void 0, source: "none", ...ignored ? { ignored } : {} };
 }
 function parseLspConfig(payload) {
   if (!payload || typeof payload !== "object") throw new Error("lsp.json must be a JSON object");
@@ -18765,14 +18792,20 @@ function parseLspConfig(payload) {
       ...Array.isArray(s.args) ? { args: s.args } : {},
       ...s.env && typeof s.env === "object" ? { env: s.env } : {},
       ...s.initializationOptions !== void 0 ? { initializationOptions: s.initializationOptions } : {},
-      ...typeof s.timeoutMs === "number" ? { timeoutMs: s.timeoutMs } : {},
-      ...typeof s.startupTimeoutMs === "number" ? { startupTimeoutMs: s.startupTimeoutMs } : {}
+      ...s.timeoutMs !== void 0 ? { timeoutMs: positiveMs(s.timeoutMs, `servers[${i2}].timeoutMs`) } : {},
+      ...s.startupTimeoutMs !== void 0 ? { startupTimeoutMs: positiveMs(s.startupTimeoutMs, `servers[${i2}].startupTimeoutMs`) } : {}
     };
   });
   return { version: 1, servers };
 }
-function loadLspConfig(repo) {
-  const { path } = resolveLspConfigPath(repo);
+function positiveMs(value, field) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`lsp.json: ${field} must be a positive number of milliseconds, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+function loadLspConfig(repo, trust = {}) {
+  const { path } = resolveLspConfigPath(repo, trust);
   if (!path || !existsSync9(path)) return void 0;
   let payload;
   try {
@@ -18797,12 +18830,13 @@ function positiveEnv(name2) {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : void 0;
 }
-var LSP_CONFIG_NAME, LSP_CONFIG_DIR, DEFAULT_TIMEOUT_MS2, DEFAULT_STARTUP_TIMEOUT_MS;
+var LSP_CONFIG_NAME, LSP_CONFIG_DIR, LSP_TRUST_HINT, DEFAULT_TIMEOUT_MS2, DEFAULT_STARTUP_TIMEOUT_MS;
 var init_config2 = __esm({
   "src/lsp/config.ts"() {
     "use strict";
     LSP_CONFIG_NAME = "lsp.json";
     LSP_CONFIG_DIR = ".codeindex";
+    LSP_TRUST_HINT = "a repository's lsp.json names commands to run, so it is read only with --trust-lsp-config or CODEINDEX_TRUST_LSP_CONFIG=1";
     DEFAULT_TIMEOUT_MS2 = 5e3;
     DEFAULT_STARTUP_TIMEOUT_MS = 15e3;
   }
@@ -19582,10 +19616,11 @@ var init_pool2 = __esm({
 });
 
 // src/lsp/index.ts
-async function lspStatus(scan2, repo, probe = false) {
-  const { path, source } = resolveLspConfigPath(repo);
-  const config = loadLspConfig(repo);
-  if (!config) return { lspVersion: 1, mode: "none", configPath: path ?? null, source, servers: [], unmappedLanguages: [] };
+async function lspStatus(scan2, repo, probe = false, trust = {}) {
+  const { path, source, ignored } = resolveLspConfigPath(repo, trust);
+  const ignoredConfig = ignored ? { ignoredConfig: { path: ignored, reason: LSP_TRUST_HINT } } : {};
+  const config = loadLspConfig(repo, trust);
+  if (!config) return { lspVersion: 1, mode: "none", configPath: path ?? null, source, ...ignoredConfig, servers: [], unmappedLanguages: [] };
   const counts = /* @__PURE__ */ new Map();
   for (const file of scan2.files) counts.set(file.lang, (counts.get(file.lang) ?? 0) + 1);
   const servers = [];
@@ -19612,16 +19647,20 @@ async function lspStatus(scan2, repo, probe = false) {
   }
   const claimed = new Set(config.servers.flatMap((s) => s.languages));
   const unmappedLanguages = [...counts.keys()].filter((lang) => !claimed.has(lang) && lang !== "other").sort();
-  return { lspVersion: 1, mode: "configured", configPath: path ?? null, source, servers, unmappedLanguages };
+  return { lspVersion: 1, mode: "configured", configPath: path ?? null, source, ...ignoredConfig, servers, unmappedLanguages };
 }
 async function referencesWithLsp(scan2, repo, name2, statik, options = {}) {
   let config;
   try {
-    config = loadLspConfig(repo);
+    config = loadLspConfig(repo, options);
   } catch (e) {
     return { ...statik, lsp: lspUnavailable("(config)", e instanceof Error ? e.message : String(e)) };
   }
-  if (!config) return statik;
+  if (!config) {
+    const ignored = resolveLspConfigPath(repo, options).ignored;
+    if (ignored) return { ...statik, lsp: lspUnavailable("(config)", `${ignored} ignored: ${LSP_TRUST_HINT}`) };
+    return statik;
+  }
   if (!statik.defs.length) return { ...statik, lsp: lspUnavailable("(none)", `no declaration of ${name2} to anchor a request on`) };
   const { groups, reasons } = declarationServers(config, statik.defs);
   const notes = [];
@@ -19672,11 +19711,14 @@ async function referencesWithLsp(scan2, repo, name2, statik, options = {}) {
 async function callersWithLsp(scan2, repo, name2, statik, options = {}) {
   let config;
   try {
-    config = loadLspConfig(repo);
+    config = loadLspConfig(repo, options);
   } catch (error) {
     return { ...statik, lsp: callersUnavailable("(config)", error instanceof Error ? error.message : String(error)) };
   }
-  if (!config) return { ...statik, lsp: callersUnavailable("(none)", "no LSP server configured") };
+  if (!config) {
+    const ignored = resolveLspConfigPath(repo, options).ignored;
+    return { ...statik, lsp: callersUnavailable("(none)", ignored ? `${ignored} ignored: ${LSP_TRUST_HINT}` : "no LSP server configured") };
+  }
   const separator = name2.indexOf("@");
   const target = separator < 0 ? name2 : name2.slice(0, separator);
   const file = separator < 0 ? void 0 : name2.slice(separator + 1);
@@ -22110,7 +22152,7 @@ var init_tools = __esm({
       },
       {
         name: "lsp_status",
-        description: "Is the optional LSP tier configured, and would it answer? Reports the config path and its source, each server with whether its command is on PATH and how many files in this repo it claims, and the languages no server covers. Opt-in by asset: the tier is active only when <repo>/.codeindex/lsp.json exists (or CODEINDEX_LSP_CONFIG points at one). `probe: true` additionally starts each server to read the capabilities it really advertises. The tier never touches graph.json/symbols.json \u2014 it annotates query answers only.",
+        description: "Is the optional LSP tier configured, and would it answer? Reports the config path and its source, each server with whether its command is on PATH and how many files in this repo it claims, and the languages no server covers. Opt-in by asset: the tier is active only when CODEINDEX_LSP_CONFIG points at a config or ~/.config/codeindex/lsp.json exists; the repo's own <repo>/.codeindex/lsp.json names commands to run, so it is read only when the server was started with --trust-lsp-config (or CODEINDEX_TRUST_LSP_CONFIG=1), and is reported as `ignoredConfig` otherwise. `probe: true` additionally starts each server to read the capabilities it really advertises. The tier never touches graph.json/symbols.json \u2014 it annotates query answers only.",
         inputSchema: {
           type: "object",
           properties: {
@@ -22937,7 +22979,7 @@ function repoRoot(args2, defaultRepo) {
   }
   return repo;
 }
-async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({ walked: walk(r, {}), reused: false }), lspPool) {
+async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({ walked: walk(r, {}), reused: false }), lsp = {}) {
   const scanOpts = { scope: str(args2.scope), include: strArray(args2.include), exclude: strArray(args2.exclude) };
   const rankArg = str(args2.rank);
   const rankOpt = rankArg === "graph" || rankArg === "lexical" ? { rank: rankArg } : {};
@@ -23000,7 +23042,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       const found = lookupCallerEntry(index, lookup);
       const entry2 = found && sited(found);
       if (entry2) {
-        const result = args2.lsp === true ? await callersWithLsp(scan2, repo, lspRef, entry2, { pool: lspPool }) : entry2;
+        const result = args2.lsp === true ? await callersWithLsp(scan2, repo, lspRef, entry2, lsp) : entry2;
         return JSON.stringify(args2.concise === true ? conciseCaller(result) : result, null, 2);
       }
       const absent = explainNoCallers(scan2, lookup, index);
@@ -23010,7 +23052,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
           `no symbol named "${lookup}" in the index` + (named ? ` (${named} call site(s) use the name; raw:true lists them)` : "")
         );
       }
-      return JSON.stringify(args2.lsp === true ? await callersWithLsp(scan2, repo, lspRef, absent, { pool: lspPool }) : absent, null, 2);
+      return JSON.stringify(args2.lsp === true ? await callersWithLsp(scan2, repo, lspRef, absent, lsp) : absent, null, 2);
     }
     const obj = {};
     for (const [k, v] of index) obj[k] = args2.concise === true ? conciseCaller(sited(v)) : sited(v);
@@ -23051,7 +23093,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
     const scan2 = readScan();
     const statik = findReferences(scan2, symName);
     const leaf = resolveSymbolRef(scan2, symName)?.reading.name ?? symName;
-    const result = args2.lsp === true ? await referencesWithLsp(scan2, repo, leaf, statik, { pool: lspPool }) : statik;
+    const result = args2.lsp === true ? await referencesWithLsp(scan2, repo, leaf, statik, lsp) : statik;
     return JSON.stringify(args2.concise === true ? conciseReferences(result) : result, null, 2);
   }
   if (name2 === "symbol_at") {
@@ -23066,7 +23108,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
     return JSON.stringify(symbolAt(scan2, rel2, line2), null, 2);
   }
   if (name2 === "lsp_status") {
-    return JSON.stringify(await lspStatus(readScan(), repo, args2.probe === true), null, 2);
+    return JSON.stringify(await lspStatus(readScan(), repo, args2.probe === true, lsp), null, 2);
   }
   if (name2 === "replace_symbol_body" || name2 === "insert_after_symbol" || name2 === "insert_before_symbol") {
     const namePath = str(args2.namePath);
@@ -23531,7 +23573,7 @@ async function runMcpServer(opts = {}) {
   async function callResult(name2, args2, version, progress) {
     try {
       const repo = repoRoot(args2, defaultRepo);
-      const raw = await callTool(name2, args2, repo, progress, walkRepo, lspPool);
+      const raw = await callTool(name2, args2, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig: opts.trustLspConfig });
       const narrowed = str(args2.scope) !== void 0 || strArray(args2.include) !== void 0 || strArray(args2.exclude) !== void 0 || str(args2.name) !== void 0 || args2.concise === true;
       const text = capResponse(raw, name2, repo, opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES, !narrowed);
       const capped = text !== raw;
@@ -25543,9 +25585,13 @@ Commands:
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
   lsp         Optional LSP tier (opt-in by asset \u2014 the tier is active only when
-              <repo>/.codeindex/lsp.json exists, or CODEINDEX_LSP_CONFIG points
-              at one; CODEINDEX_LSP_CONFIG=off disables it). It annotates QUERY
-              answers only and never touches graph.json/symbols.json.
+              CODEINDEX_LSP_CONFIG points at a config, or
+              ~/.config/codeindex/lsp.json exists; the repo's own
+              <repo>/.codeindex/lsp.json names commands to run, so it is read
+              only with --trust-lsp-config or CODEINDEX_TRUST_LSP_CONFIG=1, and
+              reported as ignoredConfig otherwise; CODEINDEX_LSP_CONFIG=off
+              disables the tier). It annotates QUERY answers only and never
+              touches graph.json/symbols.json.
               CODEINDEX_LSP_TIMEOUT_MS / CODEINDEX_LSP_STARTUP_TIMEOUT_MS
               override every server's timeoutMs / startupTimeoutMs:
                 lsp status     Config path and source, each server with whether
@@ -25665,7 +25711,9 @@ Commands:
               context on EVERY turn, and a tool left out is still answerable
               when called by name; --watch watches the pinned repo so a call
               skips the whole-tree walk when nothing changed since the last one
-              (Linux; elsewhere it only invalidates eagerly)
+              (Linux; elsewhere it only invalidates eagerly);
+              --trust-lsp-config lets a repo's .codeindex/lsp.json name the
+              servers \`lsp: true\` calls spawn
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -25759,6 +25807,9 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --run               \`embed serve\`: run the docker command instead of printing it
   --probe             \`lsp status\`: start each server and read the capabilities
                       it really advertises (default: no spawn)
+  --trust-lsp-config  \`lsp\`, \`callers --lsp\`, \`refs --lsp\` (and \`mcp\`): read the
+                      repository's own .codeindex/lsp.json, which names commands
+                      to spawn. Also CODEINDEX_TRUST_LSP_CONFIG=1
   --lsp               \`callers <name>\`: append incoming calls from a configured
                       language server; requires a symbol target. \`refs\`: append
                       the server's references and an agreement matrix
@@ -25872,6 +25923,7 @@ function parseFlags(args2) {
     else if (a === "--explain") flags2.explain = true;
     else if (a === "--semantic") flags2.semantic = true;
     else if (a === "--lsp") flags2.lsp = true;
+    else if (a === "--trust-lsp-config") flags2.trustLspConfig = true;
     else if (a === "--recall") flags2.recall = true;
     else if (a === "--raw") flags2.raw = true;
     else if (a === "--run") flags2.run = true;
@@ -26008,6 +26060,7 @@ function parseMcpFlags(argv) {
   let maxResponseBytes;
   let profile;
   let watch = false;
+  let trustLspConfig = false;
   for (let i2 = 0; i2 < argv.length; i2++) {
     const a = argv[i2];
     if (a === "--repo") {
@@ -26030,13 +26083,15 @@ function parseMcpFlags(argv) {
       profile = v === "all" ? void 0 : v;
     } else if (a === "--watch") {
       watch = true;
+    } else if (a === "--trust-lsp-config") {
+      trustLspConfig = true;
     } else {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
   if (defaultRepo && !existsSync11(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
-  return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes, profile, watch };
+  return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes, profile, watch, ...trustLspConfig ? { trustLspConfig } : {} };
 }
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--repo",
@@ -26400,7 +26455,7 @@ async function runCli(rawArgv) {
         );
       }
       const reading = resolveSymbolRef(scan2, ref2)?.reading;
-      const result = flags2.lsp ? await callersWithLsp(scan2, flags2.repo, reading ? formatSymbolRef(reading) : ref2, answer) : answer;
+      const result = flags2.lsp ? await callersWithLsp(scan2, flags2.repo, reading ? formatSymbolRef(reading) : ref2, answer, { trustRepoConfig: flags2.trustLspConfig }) : answer;
       emit(JSON.stringify(result, null, 2) + "\n", flags2.out);
     } else {
       const index = buildCallerIndex(scan2, void 0, { recall: flags2.recall });
@@ -26462,7 +26517,7 @@ async function runCli(rawArgv) {
     } else if (cmd === "refs") {
       const statik = findReferences(scan2, flags2.positional);
       const leaf = resolveSymbolRef(scan2, flags2.positional)?.reading.name ?? flags2.positional;
-      const refs = flags2.lsp ? await referencesWithLsp(scan2, flags2.repo, leaf, statik) : statik;
+      const refs = flags2.lsp ? await referencesWithLsp(scan2, flags2.repo, leaf, statik, { trustRepoConfig: flags2.trustLspConfig }) : statik;
       result = flags2.concise ? conciseReferences(refs) : refs;
     } else {
       const known = new Set(scan2.files.map((f) => f.rel));
@@ -26646,7 +26701,7 @@ async function runCli(rawArgv) {
   } else if (cmd === "lsp") {
     const sub = flags2.positional;
     if (sub !== "status") throw new Error("lsp needs a subcommand: status");
-    emit(JSON.stringify(await lspStatus(await readScan(), flags2.repo, flags2.probe === true), null, 2) + "\n", flags2.out);
+    emit(JSON.stringify(await lspStatus(await readScan(), flags2.repo, flags2.probe === true, { trustRepoConfig: flags2.trustLspConfig }), null, 2) + "\n", flags2.out);
   } else if (cmd === "grammars") {
     const sub = flags2.positional;
     const cacheDir = sharedGrammarsCacheDir();

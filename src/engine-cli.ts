@@ -189,9 +189,13 @@ Commands:
                 embed serve    Print (or --run) the docker command that starts the
                                containerized embedding server (rich tier)
   lsp         Optional LSP tier (opt-in by asset — the tier is active only when
-              <repo>/.codeindex/lsp.json exists, or CODEINDEX_LSP_CONFIG points
-              at one; CODEINDEX_LSP_CONFIG=off disables it). It annotates QUERY
-              answers only and never touches graph.json/symbols.json.
+              CODEINDEX_LSP_CONFIG points at a config, or
+              ~/.config/codeindex/lsp.json exists; the repo's own
+              <repo>/.codeindex/lsp.json names commands to run, so it is read
+              only with --trust-lsp-config or CODEINDEX_TRUST_LSP_CONFIG=1, and
+              reported as ignoredConfig otherwise; CODEINDEX_LSP_CONFIG=off
+              disables the tier). It annotates QUERY answers only and never
+              touches graph.json/symbols.json.
               CODEINDEX_LSP_TIMEOUT_MS / CODEINDEX_LSP_STARTUP_TIMEOUT_MS
               override every server's timeoutMs / startupTimeoutMs:
                 lsp status     Config path and source, each server with whether
@@ -311,7 +315,9 @@ Commands:
               context on EVERY turn, and a tool left out is still answerable
               when called by name; --watch watches the pinned repo so a call
               skips the whole-tree walk when nothing changed since the last one
-              (Linux; elsewhere it only invalidates eagerly)
+              (Linux; elsewhere it only invalidates eagerly);
+              --trust-lsp-config lets a repo's .codeindex/lsp.json name the
+              servers \`lsp: true\` calls spawn
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -405,6 +411,9 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --run               \`embed serve\`: run the docker command instead of printing it
   --probe             \`lsp status\`: start each server and read the capabilities
                       it really advertises (default: no spawn)
+  --trust-lsp-config  \`lsp\`, \`callers --lsp\`, \`refs --lsp\` (and \`mcp\`): read the
+                      repository's own .codeindex/lsp.json, which names commands
+                      to spawn. Also CODEINDEX_TRUST_LSP_CONFIG=1
   --lsp               \`callers <name>\`: append incoming calls from a configured
                       language server; requires a symbol target. \`refs\`: append
                       the server's references and an agreement matrix
@@ -489,6 +498,7 @@ interface CliFlags {
   explain?: boolean; // search: emit { results, explain } instead of a bare array
   semantic: boolean; // search: RRF-fuse the static-embedding tier (default false)
   lsp?: boolean; // callers: append language-server incoming calls
+  trustLspConfig?: boolean; // lsp/callers/refs: read the repo's own .codeindex/lsp.json
   recall?: boolean; // callers: recall-oriented binding
   raw?: boolean; // callers: unresolved call sites by name
   run?: boolean; // `embed serve`: actually run the docker command (default: print)
@@ -589,6 +599,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--explain") flags.explain = true;
     else if (a === "--semantic") flags.semantic = true;
     else if (a === "--lsp") flags.lsp = true;
+    else if (a === "--trust-lsp-config") flags.trustLspConfig = true;
     else if (a === "--recall") flags.recall = true;
     else if (a === "--raw") flags.raw = true;
     else if (a === "--run") flags.run = true;
@@ -796,12 +807,14 @@ export function parseMcpFlags(argv: string[]): {
   maxResponseBytes?: number;
   profile?: string;
   watch?: boolean;
+  trustLspConfig?: boolean;
 } {
   let defaultRepo: string | undefined;
   let name: string | undefined;
   let maxResponseBytes: number | undefined;
   let profile: string | undefined;
   let watch = false;
+  let trustLspConfig = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--repo") {
@@ -826,13 +839,15 @@ export function parseMcpFlags(argv: string[]): {
       profile = v === "all" ? undefined : v;
     } else if (a === "--watch") {
       watch = true;
+    } else if (a === "--trust-lsp-config") {
+      trustLspConfig = true;
     } else {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
   if (defaultRepo && !existsSync(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
-  return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes, profile, watch };
+  return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes, profile, watch, ...(trustLspConfig ? { trustLspConfig } : {}) };
 }
 
 // Flags that consume the following argv element. Needed to hoist leading flags
@@ -1355,7 +1370,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // The LSP tier parses `Parent/name@file`; hand it that spelling of
       // whichever ref form was used.
       const reading = resolveSymbolRef(scan, ref)?.reading;
-      const result = flags.lsp ? await callersWithLsp(scan, flags.repo, reading ? formatSymbolRef(reading) : ref, answer) : answer;
+      const result = flags.lsp ? await callersWithLsp(scan, flags.repo, reading ? formatSymbolRef(reading) : ref, answer, { trustRepoConfig: flags.trustLspConfig }) : answer;
       emit(JSON.stringify(result, null, 2) + "\n", flags.out);
     } else {
       const index = buildCallerIndex(scan, undefined, { recall: flags.recall });
@@ -1422,7 +1437,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // out-of-repo symbol (`useState`), which is exactly what one asks here.
       const statik = findReferences(scan, flags.positional);
       const leaf = resolveSymbolRef(scan, flags.positional)?.reading.name ?? flags.positional;
-      const refs = flags.lsp ? await referencesWithLsp(scan, flags.repo, leaf, statik) : statik;
+      const refs = flags.lsp ? await referencesWithLsp(scan, flags.repo, leaf, statik, { trustRepoConfig: flags.trustLspConfig }) : statik;
       result = flags.concise ? conciseReferences(refs) : refs;
     } else {
       // A file with no symbols answers []; one the index does not hold is an
@@ -1654,7 +1669,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // A MALFORMED config is the one case that exits 1: here the config IS the
     // question being asked, so swallowing the parse error would answer it
     // wrongly. Everywhere else an unusable tier degrades on exit 0.
-    emit(JSON.stringify(await lspStatus(await readScan(), flags.repo, flags.probe === true), null, 2) + "\n", flags.out);
+    emit(JSON.stringify(await lspStatus(await readScan(), flags.repo, flags.probe === true, { trustRepoConfig: flags.trustLspConfig }), null, 2) + "\n", flags.out);
   } else if (cmd === "grammars") {
     const sub = flags.positional;
     const cacheDir = sharedGrammarsCacheDir();
