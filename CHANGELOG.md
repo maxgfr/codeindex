@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.8](https://github.com/maxgfr/codeindex/compare/v2.31.7...v2.31.8) (2026-10-12)
+
+
+### Bug Fixes
+
+* say what an answer could not see; bind Rust paths and same-line calls ([#34](https://github.com/maxgfr/codeindex/issues/34)) ([dc6b0a8](https://github.com/maxgfr/codeindex/commit/dc6b0a841c4fbc096e1a51b19c6fafbe9ccb6d22))
+
 ## [2.31.7](https://github.com/maxgfr/codeindex/compare/v2.31.6...v2.31.7) (2026-10-12)
 
 
