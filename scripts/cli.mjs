@@ -4,7 +4,7 @@
 import { runCli } from "./engine.mjs";
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (e) => {
-    if (e.code === "EPIPE") process.exit(0);
+    if (e.code === "EPIPE") process.exit(process.exitCode ?? 0);
     throw e;
   });
 }

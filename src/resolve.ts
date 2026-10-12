@@ -997,10 +997,13 @@ export function resolveDocLink(fromRel: string, spec: string, ctx: ResolveContex
   // written, then decoded.
   let decoded = p;
   try {
-    decoded = decodeURIComponent(p);
+    decoded = norm(decodeURIComponent(p));
   } catch {
     // a lone "%": not an encoding, keep the text as written
   }
+  // Checked again once decoded: `%2e%2e/x.md` climbs out of the repo as
+  // surely as `../x.md`, and must not be probed on disk out there.
+  if (decoded.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
   const hit = firstExisting(ctx, decoded === p ? probes(p) : [...probes(p), ...probes(decoded)]);
   if (hit) return { kind: "resolved", target: hit };
   // A link to a real directory (even one without a README/index) is valid — it's

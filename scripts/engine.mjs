@@ -12313,9 +12313,10 @@ function resolveDocLink(fromRel, spec, ctx) {
   ];
   let decoded = p;
   try {
-    decoded = decodeURIComponent(p);
+    decoded = norm(decodeURIComponent(p));
   } catch {
   }
+  if (decoded.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
   const hit = firstExisting(ctx, decoded === p ? probes(p) : [...probes(p), ...probes(decoded)]);
   if (hit) return { kind: "resolved", target: hit };
   if (!p || ctx.dirSet.has(p)) return { kind: "external" };
@@ -22279,11 +22280,12 @@ function shellArg(s) {
   return /^[A-Za-z0-9_\-./=@:]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'";
 }
 function capResponse(text, tool, repo, maxBytes, wholeRepo = true, onWire) {
-  const bytes = onWire ?? Buffer.byteLength(text, "utf8");
+  const textBytes = Buffer.byteLength(text, "utf8");
+  const bytes = onWire ?? textBytes;
   if (bytes <= maxBytes) return text;
   const artifactName = wholeRepo && Object.hasOwn(ARTIFACT_FOR, tool) ? ARTIFACT_FOR[tool] : void 0;
   const artifact = artifactName ? join26(repo, INDEX_DIR, artifactName) : void 0;
-  const state = artifact ? artifactState(artifact, text, bytes) : void 0;
+  const state = artifact ? artifactState(artifact, text, textBytes) : void 0;
   const refresh = `codeindex index --repo ${shellArg(repo)} --out ${shellArg(join26(repo, INDEX_DIR))}`;
   return JSON.stringify(
     {
@@ -25900,7 +25902,7 @@ init_patharg();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync13, mkdirSync as mkdirSync4, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
 import { isAbsolute as isAbsolute10, join as join29, resolve as resolve12 } from "path";
 init_pipeline();
 init_hash();
@@ -26572,6 +26574,14 @@ function emit(content, out2) {
   else process.stdout.write(content);
 }
 function writeArtifact(path, data) {
+  try {
+    const st = lstatSync4(path);
+    if (!st.isFile()) {
+      writeFileSync6(path, data);
+      return;
+    }
+  } catch {
+  }
   const temp = `${path}.tmp-${process.pid}`;
   try {
     writeFileSync6(temp, data);

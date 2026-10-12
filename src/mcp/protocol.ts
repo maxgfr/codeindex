@@ -222,11 +222,12 @@ export const WIRE_ENVELOPE_BYTES = 96;
 export function capResponse(text: string, tool: string, repo: string, maxBytes: number, wholeRepo = true, onWire?: number): string {
   // `onWire`: what the response would weigh as sent (see the caller) — the
   // text JSON-escaped, plus structuredContent repeating it.
-  const bytes = onWire ?? Buffer.byteLength(text, "utf8");
+  const textBytes = Buffer.byteLength(text, "utf8");
+  const bytes = onWire ?? textBytes;
   if (bytes <= maxBytes) return text;
   const artifactName = wholeRepo && Object.hasOwn(ARTIFACT_FOR, tool) ? ARTIFACT_FOR[tool] : undefined;
   const artifact = artifactName ? join(repo, INDEX_DIR, artifactName) : undefined;
-  const state = artifact ? artifactState(artifact, text, bytes) : undefined;
+  const state = artifact ? artifactState(artifact, text, textBytes) : undefined;
   // Quoted: a repository path with a space made the suggested command a
   // broken one.
   const refresh = `codeindex index --repo ${shellArg(repo)} --out ${shellArg(join(repo, INDEX_DIR))}`;

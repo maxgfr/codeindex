@@ -42,6 +42,17 @@ describe("the response cap bounds what goes on the wire", () => {
     expect(capped.wireBytes).toBeLessThanOrEqual(cap);
   });
 
+  it("a response withheld for its wire size still points at the fresh artifact", { timeout: 60_000 }, async () => {
+    const repo = join(mkdtempSync(join(tmpdir(), "ci-mcp-wire-")), "repo");
+    cpSync(REPO, repo, { recursive: true });
+    expect(spawnSync(process.execPath, [CLI, "index", "--repo", repo, "--out", join(repo, ".codeindex")]).status).toBe(0);
+    const full = await oneCall(["--repo", repo], "graph", {});
+    const cap = Math.floor((Buffer.byteLength(full.text) + full.wireBytes) / 2);
+    const capped = await oneCall(["--repo", repo, "--max-response-bytes", String(cap)], "graph", {});
+    expect(capped.isError).toBe(true);
+    expect(JSON.parse(capped.text)).toMatchObject({ artifact: join(repo, ".codeindex", "graph.json") });
+  });
+
   it("quotes a repository path with a space in the command it suggests", { timeout: 60_000 }, async () => {
     const repo = join(mkdtempSync(join(tmpdir(), "ci-mcp cap-")), "my repo");
     cpSync(REPO, repo, { recursive: true });

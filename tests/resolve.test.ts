@@ -656,5 +656,8 @@ describe("resolution review fixes (2026-10)", () => {
     expect(resolveDocLink("README.md", "my%20file.md", c)).toEqual({ kind: "resolved", target: "my file.md" });
     expect(resolveDocLink("README.md", "docs/a(1).md", c)).toEqual({ kind: "resolved", target: "docs/a(1).md" });
     expect(resolveDocLink("README.md", "100%.md", c)).toEqual({ kind: "dangling", reason: "missing-target" });
+    // An encoded `..` leaves the repo as surely as a plain one.
+    expect(resolveDocLink("README.md", "%2e%2e/outside.md", c)).toEqual({ kind: "dangling", reason: "escapes-repo-root" });
+    expect(resolveDocLink("docs/a(1).md", "..%2f..%2foutside.md", c)).toEqual({ kind: "dangling", reason: "escapes-repo-root" });
   });
 });

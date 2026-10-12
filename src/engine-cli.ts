@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord, type Graph } from "./types.js";
@@ -828,6 +828,18 @@ function emit(content: string | Uint8Array, out?: string): void {
 // or the rename is refused (a Windows reader holding the target open), fall
 // back to the historical in-place write rather than failing the index.
 function writeArtifact(path: string, data: string | Uint8Array): void {
+  // A symlink, a device (/dev/stdout, /dev/null) or a fifo is written
+  // THROUGH: renaming a temp file over it replaced the link or the device
+  // with a regular file and the output never reached its target.
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile()) {
+      writeFileSync(path, data);
+      return;
+    }
+  } catch {
+    // absent: a new regular file, written atomically below
+  }
   const temp = `${path}.tmp-${process.pid}`;
   try {
     writeFileSync(temp, data);

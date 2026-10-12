@@ -13,7 +13,9 @@ import { runCli } from "./engine.js";
 // 'error' event and its stack trace.
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (e: NodeJS.ErrnoException) => {
-    if (e.code === "EPIPE") process.exit(0);
+    // The exit code a gate already set (`rules`, `delta --fail-on`) stands:
+    // a failing CI gate must not pass because its output was piped.
+    if (e.code === "EPIPE") process.exit(process.exitCode ?? 0);
     throw e;
   });
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +94,25 @@ describe("output", () => {
     expect(JSON.parse(r.out).fileCount).toBeGreaterThan(0);
     expect(readdirSync(cwd)).toEqual([]);
     expect(cli(["index", "--repo", REPO, "--out", "-"], cwd).status).toBe(2);
+  });
+
+  it("a failing gate still exits 1 when its reader closes the pipe", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "ci-gate-pipe-"));
+    cpSync(REPO, repo, { recursive: true });
+    writeFileSync(join(repo, "rules.json"), JSON.stringify([{ name: "no-src-to-src", from: "src/**", to: "src/**" }]));
+    const child = spawn(process.execPath, [CLI, "rules", "--repo", repo, "--config", join(repo, "rules.json")], { stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.destroy(); // the reader is gone before a byte is written
+    const code = await new Promise<number | null>((settle) => child.on("close", settle));
+    expect(code).toBe(1);
+  });
+
+  it("--out writes through a symlink instead of replacing it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-out-link-"));
+    writeFileSync(join(dir, "real.json"), "old\n");
+    symlinkSync(join(dir, "real.json"), join(dir, "link.json"));
+    expect(cli(["graph", "--repo", REPO, "--out", join(dir, "link.json")]).status).toBe(0);
+    expect(lstatSync(join(dir, "link.json")).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, "real.json"), "utf8")).fileCount).toBeGreaterThan(0);
   });
 
   it("mcp --repo must be a directory", () => {
