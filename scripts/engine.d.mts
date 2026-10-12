@@ -77,6 +77,7 @@ interface FileRecord {
     importedNames?: string[];
     importAliases?: ImportAlias[];
     truncated?: true;
+    astFallback?: true;
     generated?: "minified" | "bundle";
     relations?: RawRelation[];
     terms?: string[];
@@ -462,6 +463,7 @@ declare function workerCount(requested?: number): number;
 declare function runExtractWorker(input: WorkerInput, post: (out: WorkerOutput) => void): Promise<void>;
 declare function extractInParallel(jobs: Job[], grammarKeys: string[], count: number, opts?: {
     maxCallsPerFile?: number;
+    engineUrl?: string;
 }): Promise<Map<string, ExtractedRecord> | undefined>;
 declare function scanRepoParallel(root: string, opts?: ScanOptions & {
     workers?: number;
@@ -501,6 +503,7 @@ interface CodeInfo {
     symbols: CodeSymbol[];
     summary?: string;
     truncated?: true;
+    astFallback?: true;
     generated?: GeneratedKind;
     refs: RawRef[];
     pkg?: string;
@@ -574,6 +577,7 @@ declare function extractAst(rel: string, ext: string, content: string, opts?: {
     maxCalls?: number;
     imports?: boolean;
     maxSymbols?: number;
+    onFailure?: (error: unknown) => void;
 }): AstResult | undefined;
 
 /** One definition a tags query captured. */

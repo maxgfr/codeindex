@@ -313,6 +313,11 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   const seenDirs = new Set<string>(); // resolved real dirs already walked
   walking: while (stack.length) {
     const frame = stack.pop()!;
+    // This directory's subdirectories, pushed once it is listed, LAST first:
+    // the stack is LIFO, so they then come off in name order. Pushed as met,
+    // they were walked in reverse (c/ before b/ before a/), and a --max-files
+    // cap kept the end of the alphabet.
+    const subdirs: { dir: string; rel: string; rules: readonly IgnoreRule[] }[] = [];
     // Cycle guard: a directory symlink pointing at an ancestor would otherwise
     // make walk() loop, flooding the index with phantom duplicate files. Resolve
     // the real path and skip any directory we've already descended into.
@@ -405,7 +410,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         if (isLink) { skip(rel, "directory-symlink", true); continue; }
         if (useGitignore && rules.length && isIgnored(rules, rel, true)) { skipIgnored(rel, rules, true); continue; }
         if (opts.filter && !opts.filter({ rel, abs, directory: true })) { skip(rel, "filter", true); continue; }
-        stack.push({ dir: abs, rel, rules });
+        subdirs.push({ dir: abs, rel, rules });
         continue;
       }
       if (!st.isFile()) continue;
@@ -451,6 +456,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       }
       out.push({ rel: rel.split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
     }
+    for (let i = subdirs.length - 1; i >= 0; i--) stack.push(subdirs[i]!);
   }
   return { files: out, capped, excluded };
 }

@@ -49,9 +49,9 @@ describe("--max-files counts files in scope", () => {
 
   it("so does an include-filtered one, and scanSummary agrees", () => {
     const root = fixture();
-    // (The walk is depth-first from a stack, so src/other is entered before
-    // src/flask — deterministic, just not rel order.)
-    expect(rels(root, { include: ["src/**"], maxFiles: 2 })).toEqual(["src/README.md", "src/other/x.py"]);
+    // (Depth-first, a directory's files before its subdirectories, these in
+    // name order: src/flask is entered before src/other.)
+    expect(rels(root, { include: ["src/**"], maxFiles: 2 })).toEqual(["src/README.md", "src/flask/app.py"]);
     const summary = scanSummary(root, { include: ["src/**"], maxFiles: 2 });
     expect([summary.fileCount, summary.capped]).toEqual([2, true]);
   });

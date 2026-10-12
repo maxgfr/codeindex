@@ -160,6 +160,7 @@ export function buildCodeRecord(
     record.importedNames = code.importedNames;
     if (code.importAliases) record.importAliases = code.importAliases;
     record.truncated = code.truncated;
+    if (code.astFallback) record.astFallback = true;
     record.generated = code.generated;
     record.relations = code.relations;
     record.terms = code.terms;

@@ -620,6 +620,7 @@ function walk(root, opts = {}) {
   const seenDirs = /* @__PURE__ */ new Set();
   walking: while (stack.length) {
     const frame = stack.pop();
+    const subdirs = [];
     let real;
     try {
       real = realpathSync(frame.dir);
@@ -687,7 +688,7 @@ function walk(root, opts = {}) {
           skip(rel2, "filter", true);
           continue;
         }
-        stack.push({ dir: abs, rel: rel2, rules });
+        subdirs.push({ dir: abs, rel: rel2, rules });
         continue;
       }
       if (!st.isFile()) continue;
@@ -726,6 +727,7 @@ function walk(root, opts = {}) {
       }
       out2.push({ rel: rel2.split(sep).join("/"), abs, size: st.size, ext, mtimeMs: st.mtimeMs });
     }
+    for (let i2 = subdirs.length - 1; i2 >= 0; i2--) stack.push(subdirs[i2]);
   }
   return { files: out2, capped, excluded };
 }
@@ -7941,10 +7943,12 @@ var init_loader = __esm({
 
 // src/ast/node.ts
 function findFirst(node, pred) {
-  for (const c2 of node.namedChildren) {
+  const stack = [...node.namedChildren].reverse();
+  while (stack.length) {
+    const c2 = stack.pop();
     if (pred(c2)) return c2;
-    const deep = findFirst(c2, pred);
-    if (deep) return deep;
+    const kids = c2.namedChildren;
+    for (let i2 = kids.length - 1; i2 >= 0; i2--) stack.push(kids[i2]);
   }
   return void 0;
 }
@@ -9685,7 +9689,9 @@ function collectAll(root, spec, defNames, maxCalls) {
   const literals = new LiteralCollector();
   const wantNames = spec.imports?.import_statement !== void 0;
   const namesFound = /* @__PURE__ */ new Set();
-  const visit = (node) => {
+  const stack = [root];
+  while (stack.length) {
+    const node = stack.pop();
     const type = node.type;
     const kids = node.namedChildren;
     const flags2 = typeFlagsOf(type);
@@ -9736,9 +9742,8 @@ function collectAll(root, spec, defNames, maxCalls) {
         }
       }
     }
-    for (const c2 of kids) visit(c2);
-  };
-  visit(root);
+    for (let i2 = kids.length - 1; i2 >= 0; i2--) stack.push(kids[i2]);
+  }
   return {
     idents: [...identsFound].slice(0, MAX_REF_IDENTS).sort(),
     calls: capCallSites(calls, maxCalls),
@@ -9917,7 +9922,17 @@ function extractAst(rel2, ext, content, opts = {}) {
       collectRelations(value, name2, value.type === "class" ? "class_declaration" : value.type);
       walkBody(value, bodyCtx(name2, kind, ctx.parentPath, ctx, exported));
     };
+    let walkDepth = 0;
     const walk2 = (node, ctx) => {
+      if (walkDepth >= MAX_WALK_DEPTH) return;
+      walkDepth++;
+      try {
+        walkNode(node, ctx);
+      } finally {
+        walkDepth--;
+      }
+    };
+    const walkNode = (node, ctx) => {
       if (ctx.funcDepth > MAX_FUNC_DEPTH) return;
       const type = node.type;
       const isExportMarker = spec.exportMarkers?.has(type) === true;
@@ -10177,13 +10192,14 @@ function extractAst(rel2, ext, content, opts = {}) {
       literals,
       ...symbols.length >= maxSymbols ? { truncated: true } : {}
     };
-  } catch {
+  } catch (error) {
+    opts.onFailure?.(error);
     return void 0;
   } finally {
     tree?.delete();
   }
 }
-var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_TERMS, MAX_LITERAL_LEN2, MAX_FUNC_DEPTH, NESTED_TYPE_KINDS, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, STRING_NODE, NUMBER_NODE, REGEX_NODE, STRING_PART, PROSE_PART, T_REF_IDENT, T_COMMENT, T_STRING, T_NUMBER, T_REGEX, typeFlags, NAME_SEARCH_SKIP;
+var MAX_REF_IDENTS, MAX_CALLS, MAX_IMPORTED_NAMES, MAX_SYMBOLS, MAX_RELATIONS, MAX_TERMS, MAX_LITERAL_LEN2, MAX_FUNC_DEPTH, MAX_WALK_DEPTH, NESTED_TYPE_KINDS, ANON_DEFAULT_FN, ANON_DEFAULT_CLASS, REF_IDENT_TYPE, REF_IDENT_TEXT, STRING_NODE, NUMBER_NODE, REGEX_NODE, STRING_PART, PROSE_PART, T_REF_IDENT, T_COMMENT, T_STRING, T_NUMBER, T_REGEX, typeFlags, NAME_SEARCH_SKIP;
 var init_extract = __esm({
   "src/ast/extract.ts"() {
     "use strict";
@@ -10206,6 +10222,7 @@ var init_extract = __esm({
     MAX_TERMS = 512;
     MAX_LITERAL_LEN2 = 80;
     MAX_FUNC_DEPTH = 2;
+    MAX_WALK_DEPTH = 256;
     NESTED_TYPE_KINDS = /* @__PURE__ */ new Set(["class", "struct", "enum", "interface", "trait", "type", "record", "union"]);
     ANON_DEFAULT_FN = /* @__PURE__ */ new Set([
       "function",
@@ -10570,7 +10587,8 @@ function extractCode(rel2, ext, content, opts = {}) {
   const sfc = sfcParts(ext, content);
   const code = sfc ? sfc.script : content;
   const codeExt = sfc ? sfc.ext : ext;
-  const ast = extractAst(rel2, codeExt, code, { maxCalls: opts.maxCallsPerFile, imports: false });
+  let astFallback = false;
+  const ast = extractAst(rel2, codeExt, code, { maxCalls: opts.maxCallsPerFile, imports: false, onFailure: () => astFallback = true });
   const raw = ast ? ast.symbols : extractSymbols(rel2, codeExt, code);
   const kept = raw.slice(0, MAX_FILE_SYMBOLS);
   const symbols = sfc ? kept.map((s) => ({
@@ -10591,6 +10609,7 @@ function extractCode(rel2, ext, content, opts = {}) {
     // looks complete while hiding names is the failure the walk's `capped` flag
     // exists to prevent.
     ...ast?.truncated || raw.length > symbols.length || reexports.length >= MAX_REEXPORTS ? { truncated: true } : {},
+    ...astFallback ? { astFallback: true } : {},
     summary: fileSummary(ext, content),
     refs,
     pkg: extractPackage(ext, content),
@@ -10746,6 +10765,7 @@ function buildCodeRecord(rel2, ext, size, content, hash, lang, opts = {}) {
     record2.importedNames = code.importedNames;
     if (code.importAliases) record2.importAliases = code.importAliases;
     record2.truncated = code.truncated;
+    if (code.astFallback) record2.astFallback = true;
     record2.generated = code.generated;
     record2.relations = code.relations;
     record2.terms = code.terms;
@@ -11052,7 +11072,7 @@ function optionalArray(value, valid) {
   return value === void 0 || Array.isArray(value) && value.every(valid);
 }
 function record(v, rel2) {
-  return object(v) && v.rel === rel2 && string(v.ext) && count(v.size) && count(v.lines) && sha(v.hash) && string(v.kind) && kinds.has(v.kind) && string(v.lang) && optionalFields(v, fileText, string) && optionalFields(v, fileLists, strings) && strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel2)) && Array.isArray(v.refs) && v.refs.every(ref) && optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) && (v.truncated === void 0 || v.truncated === true) && (v.generated === void 0 || v.generated === "minified" || v.generated === "bundle");
+  return object(v) && v.rel === rel2 && string(v.ext) && count(v.size) && count(v.lines) && sha(v.hash) && string(v.kind) && kinds.has(v.kind) && string(v.lang) && optionalFields(v, fileText, string) && optionalFields(v, fileLists, strings) && strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel2)) && Array.isArray(v.refs) && v.refs.every(ref) && optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) && (v.truncated === void 0 || v.truncated === true) && (v.astFallback === void 0 || v.astFallback === true) && (v.generated === void 0 || v.generated === "minified" || v.generated === "bundle");
 }
 function entry(v, rel2) {
   return object(v) && sha(v.hash) && record(v.record, rel2) && v.hash === v.record.hash && (v.size === void 0 || count(v.size) && v.size === v.record.size) && (v.mtimeMs === void 0 || typeof v.mtimeMs === "number" && Number.isFinite(v.mtimeMs));
@@ -11121,13 +11141,12 @@ var init_cache = __esm({
 // src/pool.ts
 import { existsSync as existsSync3, statSync as statSync3 } from "fs";
 import * as os from "os";
-import { dirname as dirname2, join as join4 } from "path";
+import { basename as basename2, dirname as dirname2, join as join4 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 import { Worker } from "worker_threads";
-function resolveEngineUrl() {
+function resolveEngineUrl(here = fileURLToPath2(import.meta.url)) {
   try {
-    const here = fileURLToPath2(import.meta.url);
-    if (here.endsWith("engine.mjs")) return pathToFileURL(here).href;
+    if (basename2(here) === "engine.mjs") return pathToFileURL(here).href;
     const adjacent = join4(dirname2(here), "engine.mjs");
     if (existsSync3(adjacent)) return pathToFileURL(adjacent).href;
     return void 0;
@@ -11176,7 +11195,7 @@ async function runExtractWorker(input, post) {
 }
 async function extractInParallel(jobs, grammarKeys, count2, opts = {}) {
   if (count2 < 2 || jobs.length === 0) return void 0;
-  const engineUrl = resolveEngineUrl();
+  const engineUrl = opts.engineUrl ?? resolveEngineUrl();
   if (!engineUrl) return void 0;
   const wanted = grammarKeys.filter((k) => grammarReady(k)).sort();
   const workers = Math.min(count2, jobs.length);
@@ -11262,7 +11281,7 @@ runExtractWorker({ ...base, jobs: [] }, post).then(() => {
           });
           w.once("error", (e) => settle2(() => reject(e)));
           w.once("exit", (code) => {
-            if (!finished && code !== 0) settle2(() => reject(new Error(`extraction worker exited with ${code}`)));
+            if (!finished) settle2(() => reject(new Error(`extraction worker exited with ${code} before finishing`)));
           });
         })
       )
@@ -15910,7 +15929,7 @@ var init_edit_spans = __esm({
 
 // src/edit.ts
 import { chmodSync, mkdtempSync as mkdtempSync2, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync6, writeFileSync as writeFileSync2 } from "fs";
-import { basename as basename3, dirname as dirname4, extname as extname3, isAbsolute as isAbsolute4, join as join14, posix as posix5, relative as relative4 } from "path";
+import { basename as basename4, dirname as dirname4, extname as extname3, isAbsolute as isAbsolute4, join as join14, posix as posix5, relative as relative4 } from "path";
 function resolveUniqueSymbol(scan2, namePath, file, line2) {
   let matches = findSymbol(scan2, namePath, { maxResults: Infinity });
   const rel2 = file === void 0 ? void 0 : repoRelative(scan2.root, file);
@@ -16011,7 +16030,7 @@ function atomicWrite(abs, content, cleanup = rmSync2) {
     chmodSync(target, mode);
     return;
   }
-  const tempFile = join14(tempDir, basename3(target));
+  const tempFile = join14(tempDir, basename4(target));
   try {
     writeFileSync2(tempFile, content);
     chmodSync(tempFile, mode);
@@ -23001,7 +23020,7 @@ __export(mcp_exports, {
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
 import { readFileSync as readFileSync18, realpathSync as realpathSync6, statSync as statSync12 } from "fs";
-import { basename as basename4, isAbsolute as isAbsolute9, join as join27, relative as relative8, resolve as resolve10, sep as sep7 } from "path";
+import { basename as basename5, isAbsolute as isAbsolute9, join as join27, relative as relative8, resolve as resolve10, sep as sep7 } from "path";
 import { createInterface } from "readline";
 function isRpcRequest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -23042,8 +23061,8 @@ function indexedFile(scan2, repo, file) {
   const rel2 = relative8(repo, resolve10(repo, file.replaceAll("\\", "/"))).split(sep7).join("/");
   if (rel2 === ".." || rel2.startsWith("../") || isAbsolute9(rel2)) throw new Error(`\`file\` is outside the repository: ${file}`);
   if (byRel.has(rel2)) return rel2;
-  const name2 = basename4(rel2);
-  const near = scan2.files.filter((f) => basename4(f.rel) === name2).map((f) => f.rel).sort(byStr).slice(0, 5);
+  const name2 = basename5(rel2);
+  const near = scan2.files.filter((f) => basename5(f.rel) === name2).map((f) => f.rel).sort(byStr).slice(0, 5);
   throw new Error(
     `file not in the index: ${file}` + (near.length ? ` \u2014 did you mean ${near.join(", ")}?` : " (paths are repo-relative, as symbols_overview and find_symbol report them)")
   );
@@ -24496,7 +24515,7 @@ init_ignore();
 init_classify();
 
 // src/categorize.ts
-import { basename as basename2 } from "path";
+import { basename as basename3 } from "path";
 var CODE_EXTS = /* @__PURE__ */ new Set([
   ".ts",
   ".tsx",
@@ -24607,7 +24626,7 @@ var CONFIG_BASES = /* @__PURE__ */ new Set([
 ]);
 function categorize(rel2, ext) {
   const lower = rel2.toLowerCase();
-  const base = basename2(lower);
+  const base = basename3(lower);
   const segments = lower.split("/");
   const inDir = (names) => names.some((n) => segments.includes(n));
   if (inDir(I18N_DIRS) && I18N_EXTS.has(ext)) return "i18n";

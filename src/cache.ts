@@ -64,7 +64,8 @@ function record(v: unknown, rel: string): v is FileRecord {
     strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel)) &&
     Array.isArray(v.refs) && v.refs.every(ref) &&
     optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) &&
-    (v.truncated === undefined || v.truncated === true) && (v.generated === undefined || v.generated === "minified" || v.generated === "bundle");
+    (v.truncated === undefined || v.truncated === true) &&
+    (v.astFallback === undefined || v.astFallback === true) && (v.generated === undefined || v.generated === "minified" || v.generated === "bundle");
 }
 
 function entry(v: unknown, rel: string): v is PersistedCacheEntry {

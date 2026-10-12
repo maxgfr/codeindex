@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { cpSync, mkdtempSync, rmSync, readFileSync, statSync, utimesSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanRepo } from "../src/scan.js";
-import { runExtractWorker, scanRepoParallel, workerCount } from "../src/pool.js";
+import { extractInParallel, resolveEngineUrl, runExtractWorker, scanRepoParallel, workerCount } from "../src/pool.js";
 import { sha1 } from "../src/hash.js";
 import { buildIndexArtifacts, buildArtifactsFromScan } from "../src/pipeline.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -256,5 +256,25 @@ describe("workerCount", () => {
     const n = withEnv(undefined, () => workerCount());
     expect(n).toBeGreaterThanOrEqual(0);
     expect(n).toBeLessThanOrEqual(8);
+  });
+});
+
+describe("worker engine and lifetime", () => {
+  it("only a module NAMED engine.mjs is the engine a worker may import", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-engine-url-"));
+    expect(resolveEngineUrl(join(dir, "engine.mjs"))).toBe(pathToFileURL(join(dir, "engine.mjs")).href);
+    // A consumer's own bundle: importing it in a worker would run its code.
+    expect(resolveEngineUrl(join(dir, "my-engine.mjs"))).toBeUndefined();
+  });
+
+  it("a worker that exits with code 0 before answering fails the run at once", { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-exit-0-"));
+    const engine = join(dir, "engine.mjs");
+    writeFileSync(engine, "export async function runExtractWorker() { process.exit(0); }\n");
+    writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+    const t0 = performance.now();
+    const res = await extractInParallel([{ abs: join(dir, "a.ts"), rel: "a.ts", ext: ".ts" }], [], 2, { engineUrl: pathToFileURL(engine).href });
+    expect(res).toBeUndefined(); // the caller scans sequentially
+    expect(performance.now() - t0).toBeLessThan(10_000);
   });
 });

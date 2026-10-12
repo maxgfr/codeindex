@@ -20,6 +20,9 @@ export interface CodeInfo {
   summary?: string;
   // A cap truncated `symbols` — propagated onto the FileRecord.
   truncated?: true;
+  // The AST tier failed on a file it has a grammar for — propagated onto the
+  // FileRecord.
+  astFallback?: true;
   // Build output (minified code, a bundle): only the summary and imports were
   // extracted (see extract/generated.ts) — propagated onto the FileRecord.
   generated?: GeneratedKind;
@@ -291,7 +294,8 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // extractors. Imports/pkg come from extract/imports.ts on both tiers.
   // `imports: false` because extractAst would only compute the same refs/pkg
   // again, for this function to discard.
-  const ast = extractAst(rel, codeExt, code, { maxCalls: opts.maxCallsPerFile, imports: false });
+  let astFallback = false;
+  const ast = extractAst(rel, codeExt, code, { maxCalls: opts.maxCallsPerFile, imports: false, onFailure: () => (astFallback = true) });
   const raw = ast ? ast.symbols : extractSymbols(rel, codeExt, code);
   const kept = raw.slice(0, MAX_FILE_SYMBOLS);
   const symbols = sfc
@@ -334,6 +338,7 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
     ...(ast?.truncated || raw.length > symbols.length || reexports.length >= MAX_REEXPORTS
       ? { truncated: true as const }
       : {}),
+    ...(astFallback ? { astFallback: true as const } : {}),
     summary: fileSummary(ext, content),
     refs,
     pkg: extractPackage(ext, content),

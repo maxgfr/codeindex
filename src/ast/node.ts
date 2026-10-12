@@ -44,10 +44,14 @@ export const IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
 export const COMMENT_NODE = /(^|_)comment$/;
 
 export function findFirst(node: TSNode, pred: (n: TSNode) => boolean): TSNode | undefined {
-  for (const c of node.namedChildren) {
+  // Pre-order over an explicit stack (children pushed last-first), the order
+  // the recursive search had: recursion overflowed on deep nesting.
+  const stack = [...node.namedChildren].reverse();
+  while (stack.length) {
+    const c = stack.pop()!;
     if (pred(c)) return c;
-    const deep = findFirst(c, pred);
-    if (deep) return deep;
+    const kids = c.namedChildren;
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!);
   }
   return undefined;
 }

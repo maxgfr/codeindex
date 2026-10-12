@@ -254,6 +254,10 @@ export interface FileRecord {
   // A per-file extraction cap truncated this record's symbols. Same doctrine as
   // the walk's `capped`: a bounded result says so instead of looking complete.
   truncated?: true;
+  // A grammar was loaded for this file but its parse or walk failed, so the
+  // record comes from the regex tier: fewer spans, no idents. Said rather than
+  // silent, since the extraction profile claims the AST tier for the language.
+  astFallback?: true;
   // Build output detected from the content, whatever the file is named:
   // "minified" JavaScript or a "bundle" (esbuild, webpack). The record keeps its
   // summary and imports, but no symbols, calls or vocabulary — one-letter noise

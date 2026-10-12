@@ -64,6 +64,14 @@ const MAX_LITERAL_LEN = 80;
 // bundle could otherwise walk arbitrarily deep.
 const MAX_FUNC_DEPTH = 2;
 
+// How many nested declarations and containers deep the declaration walk goes,
+// whatever they are (blocks, parentheses, object literals…). The walk recurses
+// once per level; unbounded, a few thousand levels overflowed the stack, and a
+// worker thread (another stack size) then extracted the same file at the AST
+// tier while the main thread fell back to regex. A FIXED bound decides the
+// same way on every thread. Real code nests a few dozen levels at most.
+const MAX_WALK_DEPTH = 256;
+
 // Declaration kinds that stay worth indexing inside a function body. A `const`
 // there is a local; a `struct` there is a type someone can name.
 const NESTED_TYPE_KINDS = new Set(["class", "struct", "enum", "interface", "trait", "type", "record", "union"]);
@@ -222,7 +230,15 @@ function collectAll(
   const wantNames = spec.imports?.import_statement !== undefined;
   const namesFound = new Set<string>();
 
-  const visit = (node: TSNode): void => {
+  // Pre-order over an explicit stack, children pushed last-first so they come
+  // off in source order — the order the recursive visit had. Recursion
+  // overflowed the stack on deep nesting (a 2,000-level array literal), and a
+  // worker thread's larger stack then extracted the same file at the AST tier
+  // while the main thread fell back to regex: the index depended on how many
+  // workers ran.
+  const stack: TSNode[] = [root];
+  while (stack.length) {
+    const node = stack.pop()!;
     const type = node.type;
     const kids = node.namedChildren;
     // The five type-class tests below are pure functions of the node type, and
@@ -324,9 +340,8 @@ function collectAll(
       }
     }
 
-    for (const c of kids) visit(c);
-  };
-  visit(root);
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!);
+  }
 
   // Every capped list below is truncated in SOURCE order (Set insertion order)
   // and only then sorted — see MAX_TERMS and capCallSites.
@@ -429,7 +444,7 @@ export function extractAst(
   rel: string,
   ext: string,
   content: string,
-  opts: { maxCalls?: number; imports?: boolean; maxSymbols?: number } = {},
+  opts: { maxCalls?: number; imports?: boolean; maxSymbols?: number; onFailure?: (error: unknown) => void } = {},
 ): AstResult | undefined {
   const key = grammarKeyFor(ext, content);
   if (!key || !grammarReady(key)) return undefined;
@@ -622,7 +637,18 @@ export function extractAst(
       walkBody(value, bodyCtx(name, kind, ctx.parentPath, ctx, exported));
     };
 
+    let walkDepth = 0;
     const walk = (node: TSNode, ctx: WalkCtx): void => {
+      if (walkDepth >= MAX_WALK_DEPTH) return;
+      walkDepth++;
+      try {
+        walkNode(node, ctx);
+      } finally {
+        walkDepth--;
+      }
+    };
+
+    const walkNode = (node: TSNode, ctx: WalkCtx): void => {
       if (ctx.funcDepth > MAX_FUNC_DEPTH) return;
       const type = node.type;
 
@@ -963,8 +989,11 @@ export function extractAst(
       literals,
       ...(symbols.length >= maxSymbols ? { truncated: true as const } : {}),
     };
-  } catch {
-    return undefined; // any parse/walk failure → regex fallback
+  } catch (error) {
+    // Any parse/walk failure → regex fallback, said to a caller that asks
+    // (extractCode records it as FileRecord.astFallback).
+    opts.onFailure?.(error);
+    return undefined;
   } finally {
     tree?.delete(); // free wasm-side memory every file (not GC'd otherwise)
   }
