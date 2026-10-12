@@ -547,6 +547,19 @@ decided it, its size against `--max-bytes`, the
 `--scope`/`--include`/`--exclude` that filtered it out, or the skipped
 directory above it.
 
+Every command checks its arguments. A flag it does not read (`grep --limit`,
+whose cap is `--max-hits`), an unknown single-dash token (`grep -n`: a pattern
+that starts with `-` goes after `--`) or an argument too many (`scan extra`)
+exits `2` with what the command takes and the closest flag it knows; an
+unknown command is refused before any walk. `codeindex <command> --help` (or
+`-h`) prints that command's help and the flags it reads. The flags of the
+walk (`--repo`, `--out`, `--include`, `--exclude`, `--scope`, `--index`, …) are
+accepted by every command, and may come before it (`codeindex --repo . grep
+foo`). Number flags take whole numbers. `--out -` writes to stdout, and every
+file a command writes (`--out`, `scip`, `embed pull`) is replaced atomically.
+Piping output into a reader that stops early (`| head`) ends the command
+quietly with exit `0`.
+
 ### Naming a symbol
 
 `callers`, `hierarchy`, `implementations`, `callgraph`, `callpath` and `refs`
@@ -1561,7 +1574,7 @@ its indexed equivalent, for agent harnesses that intercept shell commands
 $ codeindex rewrite 'grep -rn TODO src'
 codeindex grep TODO --scope src --ignore-dir .codeindex
 $ codeindex rewrite "rg -tpy -w 'def main'"
-codeindex grep '\bdef main\b' --include '**/*.py' --include '**/*.pyi' --ignore-dir .codeindex
+codeindex grep '\bdef main\b' --include '**/*.py' --include '**/*.pyi' --exclude '**/.*' --exclude '**/.*/**' --ignore-dir .codeindex
 ```
 
 It prints the replacement and exits `0`. When it has no opinion, it exits `1`
@@ -1575,16 +1588,22 @@ understands recursive `grep`/`egrep`, `rg` and `git grep`:
   `--include`/`-g` base-name glob becomes `**/<glob>`, and `-t` becomes the
   globs of that ripgrep type. `--ignore-dir .codeindex` turns off the default
   vendor/build/out/tmp skips, which none of these tools make. Gitignored files,
-  lockfiles and binaries are still left out, on purpose.
+  lockfiles and binaries are still left out, on purpose. A plain `rg` skips
+  hidden files and directories, so its rewrite excludes them too (`--hidden` or
+  `-uu` keeps them).
 - **The flags.** `-l` becomes `--files-with-matches`, and a pattern that starts
   with `-` goes behind `--`.
 
 The parser is deliberately conservative. The rewrite is refused when the line
 contains shell syntax outside single quotes (pipe, redirect, substitution,
 chaining, braces, an unquoted glob in a path), an unrecognized or
-output-changing flag (`rg -r` is `--replace`), a non-recursive `grep`, a path
-outside the tree, more than one path, include/exclude rules whose order
-matters, or regex syntax that cannot be translated exactly. A refusal costs
+output-changing flag (`rg -r` is `--replace`, `grep -R` follows symlinks the
+engine never does), a non-recursive `grep`, a path outside the tree, more than
+one path, include/exclude rules whose order matters, regex syntax that cannot
+be translated exactly, or a searched tree holding a git submodule (grep and rg
+search it, the engine stops at it). The command line is ONE argument:
+`codeindex rewrite grep -r foo` exits `1`, and flags given to codeindex before
+`rewrite` are not part of it. A refusal costs
 nothing, while a wrong rewrite would silently change what the agent asked for.
 The test suite runs each supported form through the real tool and through its
 rewrite, and checks that both find the same lines.

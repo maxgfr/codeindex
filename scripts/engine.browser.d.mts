@@ -2009,7 +2009,7 @@ interface McpServerOptions {
 }
 declare function runMcpServer(opts?: McpServerOptions): Promise<void>;
 
-declare function rewriteCommand(cmd: string, bin?: string): string | undefined;
+declare function rewriteCommand(cmd: string, bin?: string, cwd?: string): string | undefined;
 
 declare function sha1(s: string | Uint8Array): string;
 declare function shortHash(s: string, n?: number): string;

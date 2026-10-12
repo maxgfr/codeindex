@@ -146,7 +146,7 @@ describe("CLI find / refs / outline", () => {
 
   it("refuses a missing argument, a stray second one, and --lsp outside refs", () => {
     expect(cli("find").err).toMatch(/find needs an argument/);
-    expect(cli("outline", "src/a.ts", "src/b.ts").err).toMatch(/unknown flag: src\/b\.ts/);
+    expect(cli("outline", "src/a.ts", "src/b.ts").err).toMatch(/unexpected argument "src\/b\.ts": outline takes one/);
     expect(cli("find", "backoff", "--lsp").status).toBe(2);
   });
 

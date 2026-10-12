@@ -2,6 +2,12 @@
 
 // src/cli-entry.ts
 import { runCli } from "./engine.mjs";
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (e) => {
+    if (e.code === "EPIPE") process.exit(0);
+    throw e;
+  });
+}
 try {
   await runCli(process.argv.slice(2));
 } catch (e) {

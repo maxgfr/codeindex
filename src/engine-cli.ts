@@ -520,10 +520,143 @@ interface CliFlags {
   concise?: boolean; // find/refs/outline: name/kind/file/line only
   files?: boolean; // callpath: walk the file graph instead of the symbol graph
   withCaller?: boolean; // callers: name each site's enclosing symbol
+  given: string[]; // every flag as written, in order — checked against the command
 }
 
-function parseFlags(args: string[]): CliFlags {
-  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false, positionals: [] };
+// Flags every scanning command accepts: where the repo is, where output goes,
+// and what the scan keeps. Accepted by the others too, so a host that passes
+// the same --repo/--index to every command keeps working.
+const GLOBAL_FLAGS: ReadonlySet<string> = new Set([
+  "--repo", "--out", "--include", "--exclude", "--scope", "--no-gitignore", "--ignore-dir", "--max-files",
+  "--max-bytes", "--max-calls", "--no-ast", "--workers", "--index", "--no-index-cache", "--full-hash",
+]);
+
+// Every command, the flags it reads beyond the global ones, and the most
+// positionals it takes (each command says what a missing one should be). A
+// flag or a positional a command does not read used to be accepted and
+// ignored: `grep import --limit 1` returned 7 hits (grep's cap is --max-hits),
+// and `scan extra` scanned. Both exit 2 now, with what the command takes.
+export const COMMAND_FLAGS: Readonly<Record<string, { flags: readonly string[]; positionals: number }>> = {
+  index: { flags: [], positionals: 0 },
+  scan: { flags: ["--why", "--skipped"], positionals: 0 },
+  status: { flags: ["--check"], positionals: 0 },
+  graph: { flags: [], positionals: 0 },
+  symbols: { flags: [], positionals: 0 },
+  scip: { flags: ["--project-root"], positionals: 0 },
+  callers: { flags: ["--lsp", "--trust-lsp-config", "--recall", "--raw", "--with-caller"], positionals: 1 },
+  hierarchy: { flags: [], positionals: 1 },
+  implementations: { flags: [], positionals: 1 },
+  callgraph: { flags: ["--depth", "--direction"], positionals: 1 },
+  callpath: { flags: ["--depth", "--limit", "--files", "--include-inferred"], positionals: 2 },
+  find: { flags: ["--substring", "--include-body", "--concise", "--limit"], positionals: 1 },
+  refs: { flags: ["--lsp", "--trust-lsp-config", "--concise"], positionals: 1 },
+  outline: { flags: ["--concise"], positionals: 1 },
+  "symbol-at": { flags: [], positionals: 1 },
+  workspaces: { flags: ["--check"], positionals: 0 },
+  churn: { flags: ["--since"], positionals: 0 },
+  grep: { flags: ["--ignore-case", "--max-hits", "--files-with-matches", "--timeout-ms"], positionals: 1 },
+  search: { flags: ["--limit", "--no-fuzzy", "--exact", "--explain", "--rank", "--semantic"], positionals: 1 },
+  embed: { flags: ["--run"], positionals: 1 },
+  lsp: { flags: ["--probe", "--trust-lsp-config"], positionals: 1 },
+  grammars: { flags: [], positionals: 1 },
+  rules: { flags: ["--config"], positionals: 0 },
+  repomap: { flags: ["--budget-tokens"], positionals: 0 },
+  hotspots: { flags: ["--since", "--limit"], positionals: 0 },
+  coupling: { flags: ["--since", "--limit", "--min-together", "--max-commit-files", "--hidden"], positionals: 0 },
+  literals: { flags: ["--min-files", "--min-count", "--include-tests"], positionals: 0 },
+  deadcode: { flags: ["--kinds", "--include-tail", "--limit"], positionals: 0 },
+  complexity: { flags: ["--limit"], positionals: 1 },
+  risk: { flags: ["--since", "--limit"], positionals: 0 },
+  delta: { flags: ["--base", "--staged", "--depth", "--json", "--fail-on"], positionals: 0 },
+  impact: { flags: ["--depth", "--include-inferred"], positionals: 1 },
+  neighbors: { flags: ["--depth", "--kind"], positionals: 1 },
+  resolution: { flags: ["--lang", "--limit"], positionals: 0 },
+  mermaid: { flags: [], positionals: 1 },
+};
+
+// Single-dash spellings people reach for, and what codeindex calls them.
+const SHORT_FLAGS: Readonly<Record<string, string>> = {
+  "-i": "--ignore-case",
+  "-l": "--files-with-matches",
+  "-o": "--out",
+  "-h": "--help",
+  "-v": "--version",
+};
+
+// Levenshtein distance, for "did you mean" (short strings, a handful of them).
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length]!;
+}
+
+function closest(word: string, candidates: Iterable<string>): string | undefined {
+  let best: string | undefined;
+  let bestDistance = Infinity;
+  for (const c of [...candidates].sort()) {
+    const d = editDistance(word, c);
+    if (d < bestDistance) [best, bestDistance] = [c, d];
+  }
+  return best !== undefined && bestDistance <= Math.max(2, Math.floor(word.length / 3)) ? best : undefined;
+}
+
+const ALL_FLAGS = (): Set<string> => new Set([...GLOBAL_FLAGS, ...Object.values(COMMAND_FLAGS).flatMap((c) => c.flags)]);
+
+function unknownFlag(flag: string): Error {
+  const hint = SHORT_FLAGS[flag] ?? closest(flag, ALL_FLAGS());
+  return new Error(`unknown flag: ${flag}${hint ? ` (did you mean ${hint}?)` : ""}`);
+}
+
+// The flags and positionals `cmd` was given that it does not read.
+function checkCommandFlags(cmd: string, flags: CliFlags): void {
+  const spec = COMMAND_FLAGS[cmd];
+  if (!spec) return;
+  for (const flag of flags.given) {
+    if (GLOBAL_FLAGS.has(flag) || spec.flags.includes(flag)) continue;
+    const hint = closest(flag, spec.flags);
+    throw new Error(
+      `${flag} does not apply to ${cmd}` +
+        (hint ? ` (did you mean ${hint}?)` : spec.flags.length ? ` (it takes ${spec.flags.join(", ")})` : "") +
+        ` — codeindex ${cmd} --help`,
+    );
+  }
+  if (flags.positionals.length > spec.positionals) {
+    const extra = flags.positionals[spec.positionals]!;
+    throw new Error(
+      spec.positionals === 0
+        ? `${cmd} takes no argument, got "${extra}" — codeindex ${cmd} --help`
+        : `unexpected argument "${extra}": ${cmd} takes ${spec.positionals === 1 ? "one" : spec.positionals} — codeindex ${cmd} --help`,
+    );
+  }
+}
+
+// `<cmd> --help`: the command's own section of HELP and the help of the flags
+// it reads.
+export function commandHelp(cmd: string): string {
+  const lines = HELP.split("\n");
+  const block = (start: number): string[] => {
+    const out = [lines[start]!];
+    for (let i = start + 1; i < lines.length && /^ {3,}\S/.test(lines[i]!) && !/^ {2}--/.test(lines[i]!); i++) out.push(lines[i]!);
+    return out;
+  };
+  const at = lines.findIndex((l) => l.startsWith(`  ${cmd} `));
+  const spec = COMMAND_FLAGS[cmd];
+  const out = [`codeindex ${cmd}`, "", ...(at === -1 ? [] : block(at))];
+  const flagLines = (spec?.flags ?? []).flatMap((f) => {
+    const i = lines.findIndex((l) => l.startsWith(`  ${f} `) || l === `  ${f}`);
+    return i === -1 ? [] : block(i);
+  });
+  if (flagLines.length) out.push("", "Flags:", ...flagLines);
+  out.push("", `Global flags: ${[...GLOBAL_FLAGS].join(", ")} (codeindex --help)`, "");
+  return out.join("\n");
+}
+
+export function parseFlags(args: string[]): CliFlags {
+  const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false, positionals: [], given: [] };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const next = (): string => {
@@ -531,19 +664,22 @@ function parseFlags(args: string[]): CliFlags {
       if (v === undefined) throw new Error(`missing value for ${a}`);
       return v;
     };
-    const num = (): number => {
-      const raw = next();
-      const n = Number(raw);
-      if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
-      return n;
-    };
-    // A count of results: 2.5 used to be accepted and silently act as 2.
+    // Every number flag is a count, a size or a duration in whole units:
+    // --depth 0.5 or --max-files 2.5 used to be accepted and silently
+    // truncated, and Number("") is 0.
     const count = (): number => {
       const raw = next();
-      const n = Number(raw);
+      const n = raw.trim() === "" ? NaN : Number(raw);
       if (!Number.isInteger(n) || n <= 0) throw new Error(`${a} expects a positive whole number, got "${raw}"`);
       return n;
     };
+    const num = (): number => {
+      const raw = next();
+      const n = raw.trim() === "" ? NaN : Number(raw);
+      if (!Number.isInteger(n) || n <= 0) throw new Error(`${a} expects a positive number, a whole one, got "${raw}"`);
+      return n;
+    };
+    if (a.startsWith("--") && a !== "--") flags.given.push(a);
     if (a === "--repo") flags.repo = resolve(next());
     else if (a === "--out") {
       const v = next();
@@ -584,7 +720,7 @@ function parseFlags(args: string[]): CliFlags {
     else if (a === "--workers") {
       // 0 is meaningful here (force sequential), so this cannot use num().
       const raw = next();
-      const n = Number(raw);
+      const n = raw.trim() === "" ? NaN : Number(raw);
       if (!Number.isInteger(n) || n < 0) throw new Error(`--workers expects a non-negative integer, got "${raw}"`);
       flags.workers = n;
     }
@@ -649,16 +785,22 @@ function parseFlags(args: string[]): CliFlags {
       const v = next();
       flags.positionals.push(v);
       flags.positional = v;
-    } else if (!a.startsWith("--") && flags.positionals.length < 2) {
+    } else if (a.startsWith("-") && a !== "-") {
+      // `-n` was read as a search pattern and `-i foo` as the pattern "-i";
+      // a positional that starts with "-" goes after `--`.
+      throw unknownFlag(a);
+    } else if (!a.startsWith("--")) {
       flags.positionals.push(a);
       flags.positional ??= a;
-    } else throw new Error(`unknown flag: ${a}`);
+    } else throw unknownFlag(a);
   }
   return flags;
 }
 
+// To --out (replaced atomically, as the index artifacts are), or stdout —
+// `--out -` included: it used to create a file named "-".
 function emit(content: string | Uint8Array, out?: string): void {
-  if (out) writeFileSync(out, content);
+  if (out && out !== "-") writeArtifact(out, content);
   else process.stdout.write(content);
 }
 
@@ -846,6 +988,8 @@ export function parseMcpFlags(argv: string[]): {
     }
   }
   if (defaultRepo && !existsSync(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  // A file passed here started a server that then failed every call.
+  if (defaultRepo && !statSync(defaultRepo).isDirectory()) throw new Error(`--repo path is not a directory: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
   return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes, profile, watch, ...(trustLspConfig ? { trustLspConfig } : {}) };
 }
@@ -853,7 +997,7 @@ export function parseMcpFlags(argv: string[]): {
 // Flags that consume the following argv element. Needed to hoist leading flags
 // past the subcommand without mistaking a flag's VALUE for the command name
 // (`--repo /x scan`: `/x` must not be read as the command).
-const VALUE_FLAGS = new Set([
+export const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--repo",
   "--out",
   "--project-root",
@@ -887,6 +1031,7 @@ const VALUE_FLAGS = new Set([
   "--direction",
   "--lang",
   "--why",
+  "--kinds",
 ]);
 
 // Accept global flags BEFORE the subcommand as well as after, so
@@ -935,8 +1080,20 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // is nothing, argv is ONE full command line, stdout is the command to run
     // instead, and the exit code says whether to use it. Exit 1 = "no opinion,
     // run the original" — the overwhelmingly common, deliberately cheap case.
+    //
+    // Exactly one argument, taken from after the command itself: flags hoisted
+    // from before it are codeindex's, not the command line's (`--max-hits 40
+    // rewrite '…'` folded them into the command and refused it), and several
+    // words were joined into a DIFFERENT command (`rewrite grep -r 'foo bar'`
+    // searched for foo in directory bar).
+    const line = rawArgv.slice(rawArgv.indexOf("rewrite") + 1);
+    if (line.length !== 1) {
+      process.stderr.write("codeindex: rewrite takes the command line as ONE argument: codeindex rewrite '<command line>'\n");
+      process.exitCode = 1;
+      return;
+    }
     const { rewriteCommand } = await import("./rewrite.js");
-    const rewritten = rewriteCommand(rest.join(" "));
+    const rewritten = rewriteCommand(line[0]!, "codeindex", process.cwd());
     if (!rewritten) {
       process.exitCode = 1;
       return;
@@ -955,8 +1112,24 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     return;
   }
 
+  // Known command first: a mistyped one used to walk the whole tree (and warm
+  // the grammars) before saying so.
+  if (!(cmd in COMMAND_FLAGS)) {
+    const hint = closest(cmd, Object.keys(COMMAND_FLAGS));
+    process.stderr.write(`unknown command: ${cmd}${hint ? ` (did you mean ${hint}?)` : ""}\n\n${HELP}`);
+    process.exitCode = 2;
+    return;
+  }
+  const dashDash = rest.indexOf("--");
+  if ((dashDash === -1 ? rest : rest.slice(0, dashDash)).some((a) => a === "--help" || a === "-h")) {
+    process.stdout.write(commandHelp(cmd));
+    return;
+  }
   const flags = parseFlags(rest);
-  if (flags.positionals.length > 1 && cmd !== "callpath") throw new Error(`unknown flag: ${flags.positionals[1]}`);
+  checkCommandFlags(cmd, flags);
+  if ((cmd === "index" || (cmd === "embed" && flags.positional === "build")) && flags.out === "-") {
+    throw new Error(`${cmd === "index" ? "index" : "embed build"} writes files: --out needs a directory, not "-"`);
+  }
   if (!existsSync(flags.repo)) throw new Error(`--repo path does not exist: ${flags.repo}`);
   if (!statSync(flags.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags.repo}`);
   warnPathFlags(flags);
@@ -1339,7 +1512,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     const out = flags.out ?? resolve("index.scip");
     if (out === "-") process.stdout.write(Buffer.from(bytes));
     else {
-      writeFileSync(out, bytes);
+      writeArtifact(out, bytes);
       process.stderr.write(`codeindex: SCIP index → ${out} (${bytes.length} bytes)\n`);
     }
   } else if (cmd === "callers") {
@@ -1664,7 +1837,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      writeFileSync(join(destDir, "model.json"), body);
+      // Atomically: an interrupted pull left a torn model.json behind.
+      writeArtifact(join(destDir, "model.json"), body);
       process.stderr.write(`codeindex: model written to ${join(destDir, "model.json")}\n`);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");

@@ -25,6 +25,8 @@
 // searched. What it must NOT change: which committed text files are searched
 // (hence `--ignore-dir .codeindex`, which lifts the default vendor/build/out/tmp
 // skips none of grep, rg or git grep make) and what the pattern matches.
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { compilePattern } from "./grep.js";
 import { escapeRegExp } from "./util.js";
 
@@ -124,6 +126,9 @@ interface Parsed {
   recursive: boolean;
   filesOnly: boolean;
   noGitignore: boolean;
+  // rg without --hidden/-uu skips dotfiles and dot-directories; the engine
+  // searches them.
+  skipHidden: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +200,7 @@ function fresh(dialect: Dialect, recursive: boolean): Parsed {
     recursive,
     filesOnly: false,
     noGitignore: false,
+    skipHidden: false,
   };
 }
 
@@ -245,11 +251,13 @@ function parseGrep(bin: string, args: string[]): Parsed | undefined {
   for (const { name, value } of split.flags) {
     switch (name) {
       case "-r":
-      case "-R":
       case "--recursive":
-      case "--dereference-recursive":
         p.recursive = true;
         break;
+      // -R follows symlinks; the engine never does, so it would search less.
+      case "-R":
+      case "--dereference-recursive":
+        return undefined;
       case "-i":
       case "-y":
       case "--ignore-case":
@@ -322,6 +330,7 @@ function parseRg(args: string[]): Parsed | undefined {
   if (!split) return undefined;
   const p = fresh("rust", true);
   let unrestricted = 0;
+  let hidden = false;
   const pending: { glob: string; negated: boolean }[] = [];
   for (const { name, value } of split.flags) {
     switch (name) {
@@ -380,10 +389,15 @@ function parseRg(args: string[]): Parsed | undefined {
         break;
       case "-u":
       case "--unrestricted":
-        // -u lifts ignore files; -uu also hidden files (the engine searches
-        // those anyway); -uuu adds binaries, which the engine never searches.
+        // -u lifts ignore files; -uu also hidden files; -uuu adds binaries,
+        // which the engine never searches.
         if (++unrestricted > 2) return undefined;
         p.noGitignore = true;
+        if (unrestricted === 2) hidden = true;
+        break;
+      case "--hidden":
+      case "-.":
+        hidden = true;
         break;
       case "--sort":
         if (value !== "path") return undefined; // hits are always sorted by path
@@ -401,8 +415,6 @@ function parseRg(args: string[]): Parsed | undefined {
       case "--column":
       case "-p":
       case "--pretty":
-      case "--hidden":
-      case "-.":
       case "--sort-files":
       case "-j":
       case "--threads":
@@ -422,6 +434,7 @@ function parseRg(args: string[]): Parsed | undefined {
     const g = rgGlob(glob, p.paths.length === 0);
     if (!(negated ? exclude(p, g) : include(p, g))) return undefined;
   }
+  p.skipHidden = !hidden;
   return p;
 }
 
@@ -604,15 +617,22 @@ function bracket(p: string, i: number, dialect: Dialect): [string, number] | und
 function fromPosix(p: string, ere: boolean): string | undefined {
   let out = "";
   // Where a `*` is a literal and a `^` an anchor: at the start of the pattern
-  // or of a group/alternative.
-  const atStart = (): boolean => out === "" || out.endsWith("(") || out.endsWith("|") || out === "^";
+  // or of a group/alternative, and right after a leading `^`. A flag the
+  // operators themselves set: reading it off the output's last character took
+  // the `(` of an escaped LITERAL paren (`a\(*b` in ERE, `a(*b` in BRE) for a
+  // group, and mistranslated the `*` or `^` after it.
+  let atStart = true;
   for (let i = 0; i < p.length; i++) {
     const c = p[i]!;
+    const wasAtStart: boolean = atStart;
+    atStart = false; // unless this token opens a group or an alternative
     if (c === "\\") {
       const n = p[++i];
       if (n === undefined) return undefined;
-      if (!ere && "()|+?".includes(n)) out += n;
-      else if (!ere && n === "{") {
+      if (!ere && "()|+?".includes(n)) {
+        out += n;
+        atStart = n === "(" || n === "|";
+      } else if (!ere && n === "{") {
         const m = /^\\\{(\d*)(,?)(\d*)\\\}/.exec(p.slice(i - 1));
         if (!m || (m[1] === "" && m[2] === "")) return undefined;
         out += `{${m[1] || "0"}${m[2]}${m[3]}}`;
@@ -629,9 +649,10 @@ function fromPosix(p: string, ere: boolean): string | undefined {
       out += b[0];
       i = b[1];
     } else if (c === "*") {
-      out += atStart() ? "\\*" : "*";
+      out += wasAtStart ? "\\*" : "*";
     } else if (c === "^") {
-      out += ere || atStart() ? "^" : "\\^";
+      out += ere || wasAtStart ? "^" : "\\^";
+      atStart = wasAtStart; // `^*`: still at the start
     } else if (c === "$") {
       const rest = p.slice(i + 1);
       out += ere || rest === "" || rest.startsWith("\\)") || rest.startsWith("\\|") ? "$" : "\\$";
@@ -645,9 +666,12 @@ function fromPosix(p: string, ere: boolean): string | undefined {
       } else out += "\\{";
     } else if (ere && c === "}") {
       out += "\\}";
-    } else if (ere && (c === "+" || c === "?" || c === "*") && atStart()) {
+    } else if (ere && (c === "+" || c === "?" || c === "*") && wasAtStart) {
       return undefined; // a leading repetition: implementation-defined
-    } else out += c;
+    } else {
+      out += c;
+      atStart = ere && (c === "(" || c === "|");
+    }
   }
   return out;
 }
@@ -738,7 +762,33 @@ function toScope(path: string): string | undefined {
 // Rewrite `cmd` to its codeindex equivalent, or return undefined to leave it
 // alone. `bin` is the codeindex executable name to emit (the host may have it
 // on PATH under a mount point of its choosing).
-export function rewriteCommand(cmd: string, bin = "codeindex"): string | undefined {
+// The git submodules declared by the repository holding `cwd`, as absolute
+// paths: other repositories inside the tree, which grep and rg search and the
+// engine's walk stops at (git grep stops there too).
+function submodulesAround(cwd: string): string[] {
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    const modules = join(dir, ".gitmodules");
+    if (existsSync(modules)) {
+      let text: string;
+      try {
+        text = readFileSync(modules, "utf8");
+      } catch {
+        return [];
+      }
+      return [...text.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)].map((m) => resolve(dir, m[1]!));
+    }
+    if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return [];
+  }
+}
+
+const within = (path: string, dir: string): boolean => {
+  const r = relative(dir, path);
+  return r === "" || (r !== ".." && !r.startsWith(`..${sep}`) && !r.startsWith("/"));
+};
+
+// `cwd`, when given, is where the original command would run: a search over a
+// tree holding a git submodule is refused, since the rewrite would leave it out.
+export function rewriteCommand(cmd: string, bin = "codeindex", cwd?: string): string | undefined {
   const lexed = lex(cmd.trim());
   if (!lexed || lexed.length < 2) return undefined;
   // An unquoted glob in a path or pattern is expanded by the shell against the
@@ -765,6 +815,13 @@ export function rewriteCommand(cmd: string, bin = "codeindex"): string | undefin
   // the engine lets exclusion win. Only an exclude-before-include order can
   // tell the two apart.
   if (p.orderSensitive) return undefined;
+  // rg searches a hidden path it is pointed at, and skips the rest: a scope
+  // that is itself hidden cannot be said with the exclusions below.
+  if (p.skipHidden && scope.split("/").some((seg) => seg.startsWith("."))) return undefined;
+  if (cwd !== undefined && head !== "git") {
+    const root = resolve(cwd, scope || ".");
+    if (submodulesAround(cwd).some((m) => within(m, root) || within(root, m))) return undefined;
+  }
 
   const upper = (s: string): boolean => (p.fixed ? s !== s.toLowerCase() : hasUpperLiteral(s));
   const ignoreCase = p.smartCase ? !p.patterns.some(upper) : p.ignoreCase;
@@ -782,6 +839,8 @@ export function rewriteCommand(cmd: string, bin = "codeindex"): string | undefin
   if (scope) out.push("--scope", shellQuote(scope));
   for (const g of p.includes) out.push("--include", shellQuote(g));
   for (const g of [...p.excludes, ...p.excludeDirs]) out.push("--exclude", shellQuote(g));
+  // Plain rg skips dotfiles and everything under a dot-directory.
+  if (p.skipHidden) out.push("--exclude", shellQuote("**/.*"), "--exclude", shellQuote("**/.*/**"));
   if (ignoreCase) out.push("--ignore-case");
   if (p.filesOnly) out.push("--files-with-matches");
   if (p.noGitignore) out.push("--no-gitignore");

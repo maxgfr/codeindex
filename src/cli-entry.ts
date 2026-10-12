@@ -8,6 +8,16 @@
 //   node scripts/cli.mjs mcp
 import { runCli } from "./engine.js";
 
+// A reader that closes the pipe early (`codeindex symbols | head`) is not an
+// error of ours: stop quietly, as a Unix tool does, instead of an unhandled
+// 'error' event and its stack trace.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code === "EPIPE") process.exit(0);
+    throw e;
+  });
+}
+
 try {
   await runCli(process.argv.slice(2));
 } catch (e) {

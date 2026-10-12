@@ -4008,13 +4008,13 @@ async function Module2(moduleArg = {}) {
       }
       readAsync = /* @__PURE__ */ __name(async (url) => {
         if (isFileURI(url)) {
-          return new Promise((resolve12, reject) => {
+          return new Promise((resolve13, reject) => {
             var xhr = new XMLHttpRequest();
             xhr.open("GET", url, true);
             xhr.responseType = "arraybuffer";
             xhr.onload = () => {
               if (xhr.status == 200 || xhr.status == 0 && xhr.response) {
-                resolve12(xhr.response);
+                resolve13(xhr.response);
                 return;
               }
               reject(xhr.status);
@@ -4210,9 +4210,9 @@ async function Module2(moduleArg = {}) {
     __name(receiveInstantiationResult, "receiveInstantiationResult");
     var info2 = getWasmImports();
     if (Module["instantiateWasm"]) {
-      return new Promise((resolve12, reject) => {
+      return new Promise((resolve13, reject) => {
         Module["instantiateWasm"](info2, (mod, inst) => {
-          resolve12(receiveInstance(mod, inst));
+          resolve13(receiveInstance(mod, inst));
         });
       });
     }
@@ -5545,8 +5545,8 @@ async function Module2(moduleArg = {}) {
   if (runtimeInitialized) {
     moduleRtn = Module;
   } else {
-    moduleRtn = new Promise((resolve12, reject) => {
-      readyPromiseResolve = resolve12;
+    moduleRtn = new Promise((resolve13, reject) => {
+      readyPromiseResolve = resolve13;
       readyPromiseReject = reject;
     });
   }
@@ -11321,7 +11321,7 @@ runExtractWorker({ ...base, jobs: [] }, post).then(() => {
     await Promise.all(
       Array.from(
         { length: workers },
-        () => new Promise((resolve12, reject) => {
+        () => new Promise((resolve13, reject) => {
           const w = new Worker(bootstrap, {
             eval: true,
             workerData: { input: { jobs: [], grammarKeys: wanted, maxCallsPerFile: opts.maxCallsPerFile } }
@@ -11367,7 +11367,7 @@ runExtractWorker({ ...base, jobs: [] }, post).then(() => {
             else inflight--;
             dispatch();
             if (inflight === 0) {
-              settle2(() => resolve12());
+              settle2(() => resolve13());
               w.postMessage({ done: true });
               void w.terminate();
               return;
@@ -12063,7 +12063,7 @@ function buildRustCrates(root, fileSet) {
   }
   const packages = manifests.filter((m) => m.packageName !== void 0);
   const byDir = new Map(packages.map((m) => [m.dir, m]));
-  const within = (dir, anc) => !anc || dir === anc || dir.startsWith(anc + "/");
+  const within2 = (dir, anc) => !anc || dir === anc || dir.startsWith(anc + "/");
   const crates = [];
   for (const m of packages) {
     const defaultSrc = norm(posix2.join(m.dir, "src")).replace(/^\.$/, "");
@@ -12071,7 +12071,7 @@ function buildRustCrates(root, fileSet) {
     const lib = libPath && !libPath.startsWith("..") && fileSet.has(libPath) ? libPath : void 0;
     const srcDir = lib ? lib.includes("/") ? posix2.dirname(lib) : "" : defaultSrc;
     const rootFile = lib ?? firstThat(fileSet, [posix2.join(defaultSrc, "lib.rs"), posix2.join(defaultSrc, "main.rs")]);
-    const ws = manifests.filter((w) => w.workspaceDeps && within(m.dir, w.dir)).sort((a, b) => b.dir.length - a.dir.length)[0];
+    const ws = manifests.filter((w) => w.workspaceDeps && within2(m.dir, w.dir)).sort((a, b) => b.dir.length - a.dir.length)[0];
     const renames = /* @__PURE__ */ new Map();
     for (const [alias, dep] of [...m.deps].sort((a, b) => byStr(a[0], b[0]))) {
       const src = dep.workspace ? ws?.workspaceDeps?.get(alias) : dep;
@@ -14916,8 +14916,8 @@ function importPagerankFor(scan2) {
     const ids = scan2.files.map((f) => f.rel);
     const edges = [];
     for (const pair of importPairsFor(scan2)) {
-      const sep8 = pair.indexOf("|");
-      edges.push({ from: pair.slice(0, sep8), to: pair.slice(sep8 + 1), kind: "import", weight: 1 });
+      const sep9 = pair.indexOf("|");
+      edges.push({ from: pair.slice(0, sep9), to: pair.slice(sep9 + 1), kind: "import", weight: 1 });
     }
     c2.importPagerank = pagerankOf(ids, edges);
   }
@@ -15216,7 +15216,7 @@ function createBindScope(scan2, pairs, ctxIn) {
     if (mates) defsInMates(group, f, mates, out2, seen);
     return out2;
   };
-  const within = (group, files, name2) => {
+  const within2 = (group, files, name2) => {
     if (!group) return [];
     const out2 = [];
     const seen = /* @__PURE__ */ new Set();
@@ -15291,7 +15291,7 @@ function createBindScope(scan2, pairs, ctxIn) {
     files.set(f.rel, a);
     return a;
   };
-  return { targets: (rel2) => targetsOf.get(rel2), reached, within, aliases };
+  return { targets: (rel2) => targetsOf.get(rel2), reached, within: within2, aliases };
 }
 function addTo(t, s, member) {
   addDef(t.any, s.name, s);
@@ -15483,7 +15483,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
       if (named) return self(named);
       return reading("foreign", receiver, void 0, d?.type ?? aliases.names.get(receiver)?.name ?? receiver);
     };
-    const resolve12 = (name2, how) => {
+    const resolve13 = (name2, how) => {
       const { shape, receiver, selfType, typeHint } = how;
       if (shape === "outside") return null;
       let local;
@@ -15540,7 +15540,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
     return (c2, enclosing) => {
       const how = read(c2, enclosing);
       let r = how.results.get(c2.name);
-      if (r === void 0) how.results.set(c2.name, r = resolve12(c2.name, how));
+      if (r === void 0) how.results.set(c2.name, r = resolve13(c2.name, how));
       if (!r) return void 0;
       if (r.local && r.hit.def.line === c2.line) return void 0;
       return r.hit;
@@ -19666,13 +19666,13 @@ async function openLspSession(transport, options) {
   const request = (method, params, budget = timeoutMs) => {
     if (dead) return Promise.reject(dead);
     const id = nextId++;
-    return new Promise((resolve12, reject) => {
+    return new Promise((resolve13, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new LspTimeout(method, budget));
       }, budget);
       timer.unref?.();
-      pending.set(id, { resolve: resolve12, reject, timer });
+      pending.set(id, { resolve: resolve13, reject, timer });
       transport.write(encodeMessage({ jsonrpc: "2.0", id, method, params }));
     });
   };
@@ -20269,7 +20269,7 @@ async function settle(lease, server, ask, classify2, staticUses) {
     if (!staticUses || lease.warm) return { answer, partial: false };
     if (delay > budget) break;
     budget -= delay;
-    await new Promise((resolve12) => setTimeout(resolve12, delay));
+    await new Promise((resolve13) => setTimeout(resolve13, delay));
     answer = await ask();
   }
   return { answer, partial: true };
@@ -23981,6 +23981,8 @@ __export(rewrite_exports, {
   shellQuote: () => shellQuote,
   tokenize: () => tokenize2
 });
+import { existsSync as existsSync11, readFileSync as readFileSync19 } from "fs";
+import { dirname as dirname8, join as join28, relative as relative10, resolve as resolve11, sep as sep8 } from "path";
 function lex(line2) {
   const out2 = [];
   let cur = "";
@@ -24094,7 +24096,8 @@ function fresh(dialect, recursive) {
     paths: [],
     recursive,
     filesOnly: false,
-    noGitignore: false
+    noGitignore: false,
+    skipHidden: false
   };
 }
 function include(p, glob) {
@@ -24129,11 +24132,13 @@ function parseGrep(bin, args2) {
   for (const { name: name2, value } of split.flags) {
     switch (name2) {
       case "-r":
-      case "-R":
       case "--recursive":
-      case "--dereference-recursive":
         p.recursive = true;
         break;
+      // -R follows symlinks; the engine never does, so it would search less.
+      case "-R":
+      case "--dereference-recursive":
+        return void 0;
       case "-i":
       case "-y":
       case "--ignore-case":
@@ -24204,6 +24209,7 @@ function parseRg(args2) {
   if (!split) return void 0;
   const p = fresh("rust", true);
   let unrestricted = 0;
+  let hidden = false;
   const pending = [];
   for (const { name: name2, value } of split.flags) {
     switch (name2) {
@@ -24262,6 +24268,11 @@ function parseRg(args2) {
       case "--unrestricted":
         if (++unrestricted > 2) return void 0;
         p.noGitignore = true;
+        if (unrestricted === 2) hidden = true;
+        break;
+      case "--hidden":
+      case "-.":
+        hidden = true;
         break;
       case "--sort":
         if (value !== "path") return void 0;
@@ -24279,8 +24290,6 @@ function parseRg(args2) {
       case "--column":
       case "-p":
       case "--pretty":
-      case "--hidden":
-      case "-.":
       case "--sort-files":
       case "-j":
       case "--threads":
@@ -24298,6 +24307,7 @@ function parseRg(args2) {
     const g = rgGlob(glob, p.paths.length === 0);
     if (!(negated ? exclude(p, g) : include(p, g))) return void 0;
   }
+  p.skipHidden = !hidden;
   return p;
 }
 function parseGitGrep(args2) {
@@ -24411,14 +24421,18 @@ function bracket(p, i2, dialect) {
 }
 function fromPosix(p, ere) {
   let out2 = "";
-  const atStart = () => out2 === "" || out2.endsWith("(") || out2.endsWith("|") || out2 === "^";
+  let atStart = true;
   for (let i2 = 0; i2 < p.length; i2++) {
     const c2 = p[i2];
+    const wasAtStart = atStart;
+    atStart = false;
     if (c2 === "\\") {
       const n = p[++i2];
       if (n === void 0) return void 0;
-      if (!ere && "()|+?".includes(n)) out2 += n;
-      else if (!ere && n === "{") {
+      if (!ere && "()|+?".includes(n)) {
+        out2 += n;
+        atStart = n === "(" || n === "|";
+      } else if (!ere && n === "{") {
         const m = /^\\\{(\d*)(,?)(\d*)\\\}/.exec(p.slice(i2 - 1));
         if (!m || m[1] === "" && m[2] === "") return void 0;
         out2 += `{${m[1] || "0"}${m[2]}${m[3]}}`;
@@ -24435,9 +24449,10 @@ function fromPosix(p, ere) {
       out2 += b[0];
       i2 = b[1];
     } else if (c2 === "*") {
-      out2 += atStart() ? "\\*" : "*";
+      out2 += wasAtStart ? "\\*" : "*";
     } else if (c2 === "^") {
-      out2 += ere || atStart() ? "^" : "\\^";
+      out2 += ere || wasAtStart ? "^" : "\\^";
+      atStart = wasAtStart;
     } else if (c2 === "$") {
       const rest = p.slice(i2 + 1);
       out2 += ere || rest === "" || rest.startsWith("\\)") || rest.startsWith("\\|") ? "$" : "\\$";
@@ -24451,9 +24466,12 @@ function fromPosix(p, ere) {
       } else out2 += "\\{";
     } else if (ere && c2 === "}") {
       out2 += "\\}";
-    } else if (ere && (c2 === "+" || c2 === "?" || c2 === "*") && atStart()) {
+    } else if (ere && (c2 === "+" || c2 === "?" || c2 === "*") && wasAtStart) {
       return void 0;
-    } else out2 += c2;
+    } else {
+      out2 += c2;
+      atStart = ere && (c2 === "(" || c2 === "|");
+    }
   }
   return out2;
 }
@@ -24525,7 +24543,22 @@ function toScope(path) {
   if (s.split("/").some((seg) => seg === "..")) return void 0;
   return s === "" || s === "." ? "" : s;
 }
-function rewriteCommand(cmd, bin = "codeindex") {
+function submodulesAround(cwd) {
+  for (let dir = resolve11(cwd); ; dir = dirname8(dir)) {
+    const modules = join28(dir, ".gitmodules");
+    if (existsSync11(modules)) {
+      let text;
+      try {
+        text = readFileSync19(modules, "utf8");
+      } catch {
+        return [];
+      }
+      return [...text.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)].map((m) => resolve11(dir, m[1]));
+    }
+    if (existsSync11(join28(dir, ".git")) || dirname8(dir) === dir) return [];
+  }
+}
+function rewriteCommand(cmd, bin = "codeindex", cwd) {
   const lexed = lex(cmd.trim());
   if (!lexed || lexed.length < 2) return void 0;
   if (lexed.some((t) => t.globbed && !t.value.startsWith("-"))) return void 0;
@@ -24540,6 +24573,11 @@ function rewriteCommand(cmd, bin = "codeindex") {
   const scope = p.paths.length ? toScope(p.paths[0]) : "";
   if (scope === void 0) return void 0;
   if (p.orderSensitive) return void 0;
+  if (p.skipHidden && scope.split("/").some((seg) => seg.startsWith("."))) return void 0;
+  if (cwd !== void 0 && head !== "git") {
+    const root = resolve11(cwd, scope || ".");
+    if (submodulesAround(cwd).some((m) => within(m, root) || within(root, m))) return void 0;
+  }
   const upper2 = (s) => p.fixed ? s !== s.toLowerCase() : hasUpperLiteral(s);
   const ignoreCase = p.smartCase ? !p.patterns.some(upper2) : p.ignoreCase;
   const pattern = toPattern(p);
@@ -24553,13 +24591,14 @@ function rewriteCommand(cmd, bin = "codeindex") {
   if (scope) out2.push("--scope", shellQuote(scope));
   for (const g of p.includes) out2.push("--include", shellQuote(g));
   for (const g of [...p.excludes, ...p.excludeDirs]) out2.push("--exclude", shellQuote(g));
+  if (p.skipHidden) out2.push("--exclude", shellQuote("**/.*"), "--exclude", shellQuote("**/.*/**"));
   if (ignoreCase) out2.push("--ignore-case");
   if (p.filesOnly) out2.push("--files-with-matches");
   if (p.noGitignore) out2.push("--no-gitignore");
   out2.push("--ignore-dir", ".codeindex");
   return out2.join(" ");
 }
-var UNSUPPORTED_GLOB, RG_TYPES, POSIX_CLASSES2;
+var UNSUPPORTED_GLOB, RG_TYPES, POSIX_CLASSES2, within;
 var init_rewrite = __esm({
   "src/rewrite.ts"() {
     "use strict";
@@ -24625,6 +24664,10 @@ var init_rewrite = __esm({
       xdigit: "0-9A-Fa-f",
       punct: "!-\\/:-@\\[-`{-~",
       word: "A-Za-z0-9_"
+    };
+    within = (path, dir) => {
+      const r = relative10(dir, path);
+      return r === "" || r !== ".." && !r.startsWith(`..${sep8}`) && !r.startsWith("/");
     };
   }
 });
@@ -25745,8 +25788,8 @@ init_patharg();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync11, mkdirSync as mkdirSync4, readFileSync as readFileSync19, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
-import { isAbsolute as isAbsolute10, join as join28, resolve as resolve11 } from "path";
+import { existsSync as existsSync12, mkdirSync as mkdirSync4, readFileSync as readFileSync20, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
+import { isAbsolute as isAbsolute10, join as join29, resolve as resolve12 } from "path";
 init_pipeline();
 init_hash();
 init_graph_json();
@@ -26160,8 +26203,127 @@ Flags (accepted before OR after the subcommand: '--repo X scan' and
   --with-caller       \`callers\`: add "caller" to each site, the symbol id of the
                       declaration the call sits in (a callgraph node)
 `;
+var GLOBAL_FLAGS = /* @__PURE__ */ new Set([
+  "--repo",
+  "--out",
+  "--include",
+  "--exclude",
+  "--scope",
+  "--no-gitignore",
+  "--ignore-dir",
+  "--max-files",
+  "--max-bytes",
+  "--max-calls",
+  "--no-ast",
+  "--workers",
+  "--index",
+  "--no-index-cache",
+  "--full-hash"
+]);
+var COMMAND_FLAGS = {
+  index: { flags: [], positionals: 0 },
+  scan: { flags: ["--why", "--skipped"], positionals: 0 },
+  status: { flags: ["--check"], positionals: 0 },
+  graph: { flags: [], positionals: 0 },
+  symbols: { flags: [], positionals: 0 },
+  scip: { flags: ["--project-root"], positionals: 0 },
+  callers: { flags: ["--lsp", "--trust-lsp-config", "--recall", "--raw", "--with-caller"], positionals: 1 },
+  hierarchy: { flags: [], positionals: 1 },
+  implementations: { flags: [], positionals: 1 },
+  callgraph: { flags: ["--depth", "--direction"], positionals: 1 },
+  callpath: { flags: ["--depth", "--limit", "--files", "--include-inferred"], positionals: 2 },
+  find: { flags: ["--substring", "--include-body", "--concise", "--limit"], positionals: 1 },
+  refs: { flags: ["--lsp", "--trust-lsp-config", "--concise"], positionals: 1 },
+  outline: { flags: ["--concise"], positionals: 1 },
+  "symbol-at": { flags: [], positionals: 1 },
+  workspaces: { flags: ["--check"], positionals: 0 },
+  churn: { flags: ["--since"], positionals: 0 },
+  grep: { flags: ["--ignore-case", "--max-hits", "--files-with-matches", "--timeout-ms"], positionals: 1 },
+  search: { flags: ["--limit", "--no-fuzzy", "--exact", "--explain", "--rank", "--semantic"], positionals: 1 },
+  embed: { flags: ["--run"], positionals: 1 },
+  lsp: { flags: ["--probe", "--trust-lsp-config"], positionals: 1 },
+  grammars: { flags: [], positionals: 1 },
+  rules: { flags: ["--config"], positionals: 0 },
+  repomap: { flags: ["--budget-tokens"], positionals: 0 },
+  hotspots: { flags: ["--since", "--limit"], positionals: 0 },
+  coupling: { flags: ["--since", "--limit", "--min-together", "--max-commit-files", "--hidden"], positionals: 0 },
+  literals: { flags: ["--min-files", "--min-count", "--include-tests"], positionals: 0 },
+  deadcode: { flags: ["--kinds", "--include-tail", "--limit"], positionals: 0 },
+  complexity: { flags: ["--limit"], positionals: 1 },
+  risk: { flags: ["--since", "--limit"], positionals: 0 },
+  delta: { flags: ["--base", "--staged", "--depth", "--json", "--fail-on"], positionals: 0 },
+  impact: { flags: ["--depth", "--include-inferred"], positionals: 1 },
+  neighbors: { flags: ["--depth", "--kind"], positionals: 1 },
+  resolution: { flags: ["--lang", "--limit"], positionals: 0 },
+  mermaid: { flags: [], positionals: 1 }
+};
+var SHORT_FLAGS = {
+  "-i": "--ignore-case",
+  "-l": "--files-with-matches",
+  "-o": "--out",
+  "-h": "--help",
+  "-v": "--version"
+};
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i2 = 1; i2 <= a.length; i2++) {
+    const cur = [i2];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i2 - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+function closest(word, candidates) {
+  let best;
+  let bestDistance = Infinity;
+  for (const c2 of [...candidates].sort()) {
+    const d = editDistance(word, c2);
+    if (d < bestDistance) [best, bestDistance] = [c2, d];
+  }
+  return best !== void 0 && bestDistance <= Math.max(2, Math.floor(word.length / 3)) ? best : void 0;
+}
+var ALL_FLAGS = () => /* @__PURE__ */ new Set([...GLOBAL_FLAGS, ...Object.values(COMMAND_FLAGS).flatMap((c2) => c2.flags)]);
+function unknownFlag(flag) {
+  const hint = SHORT_FLAGS[flag] ?? closest(flag, ALL_FLAGS());
+  return new Error(`unknown flag: ${flag}${hint ? ` (did you mean ${hint}?)` : ""}`);
+}
+function checkCommandFlags(cmd, flags2) {
+  const spec = COMMAND_FLAGS[cmd];
+  if (!spec) return;
+  for (const flag of flags2.given) {
+    if (GLOBAL_FLAGS.has(flag) || spec.flags.includes(flag)) continue;
+    const hint = closest(flag, spec.flags);
+    throw new Error(
+      `${flag} does not apply to ${cmd}` + (hint ? ` (did you mean ${hint}?)` : spec.flags.length ? ` (it takes ${spec.flags.join(", ")})` : "") + ` \u2014 codeindex ${cmd} --help`
+    );
+  }
+  if (flags2.positionals.length > spec.positionals) {
+    const extra = flags2.positionals[spec.positionals];
+    throw new Error(
+      spec.positionals === 0 ? `${cmd} takes no argument, got "${extra}" \u2014 codeindex ${cmd} --help` : `unexpected argument "${extra}": ${cmd} takes ${spec.positionals === 1 ? "one" : spec.positionals} \u2014 codeindex ${cmd} --help`
+    );
+  }
+}
+function commandHelp(cmd) {
+  const lines = HELP.split("\n");
+  const block = (start2) => {
+    const out3 = [lines[start2]];
+    for (let i2 = start2 + 1; i2 < lines.length && /^ {3,}\S/.test(lines[i2]) && !/^ {2}--/.test(lines[i2]); i2++) out3.push(lines[i2]);
+    return out3;
+  };
+  const at = lines.findIndex((l) => l.startsWith(`  ${cmd} `));
+  const spec = COMMAND_FLAGS[cmd];
+  const out2 = [`codeindex ${cmd}`, "", ...at === -1 ? [] : block(at)];
+  const flagLines = (spec?.flags ?? []).flatMap((f) => {
+    const i2 = lines.findIndex((l) => l.startsWith(`  ${f} `) || l === `  ${f}`);
+    return i2 === -1 ? [] : block(i2);
+  });
+  if (flagLines.length) out2.push("", "Flags:", ...flagLines);
+  out2.push("", `Global flags: ${[...GLOBAL_FLAGS].join(", ")} (codeindex --help)`, "");
+  return out2.join("\n");
+}
 function parseFlags(args2) {
-  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false, positionals: [] };
+  const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false, positionals: [], given: [] };
   for (let i2 = 0; i2 < args2.length; i2++) {
     const a = args2[i2];
     const next = () => {
@@ -26169,22 +26331,23 @@ function parseFlags(args2) {
       if (v === void 0) throw new Error(`missing value for ${a}`);
       return v;
     };
-    const num2 = () => {
-      const raw = next();
-      const n = Number(raw);
-      if (!Number.isFinite(n) || n <= 0) throw new Error(`${a} expects a positive number, got "${raw}"`);
-      return n;
-    };
     const count2 = () => {
       const raw = next();
-      const n = Number(raw);
+      const n = raw.trim() === "" ? NaN : Number(raw);
       if (!Number.isInteger(n) || n <= 0) throw new Error(`${a} expects a positive whole number, got "${raw}"`);
       return n;
     };
-    if (a === "--repo") flags2.repo = resolve11(next());
+    const num2 = () => {
+      const raw = next();
+      const n = raw.trim() === "" ? NaN : Number(raw);
+      if (!Number.isInteger(n) || n <= 0) throw new Error(`${a} expects a positive number, a whole one, got "${raw}"`);
+      return n;
+    };
+    if (a.startsWith("--") && a !== "--") flags2.given.push(a);
+    if (a === "--repo") flags2.repo = resolve12(next());
     else if (a === "--out") {
       const v = next();
-      flags2.out = v === "-" ? "-" : resolve11(v);
+      flags2.out = v === "-" ? "-" : resolve12(v);
     } else if (a === "--project-root") flags2.projectRoot = next();
     else if (a === "--include") flags2.include.push(next());
     else if (a === "--exclude") flags2.exclude.push(next());
@@ -26217,14 +26380,14 @@ function parseFlags(args2) {
     else if (a === "--skipped") flags2.skipped = true;
     else if (a === "--workers") {
       const raw = next();
-      const n = Number(raw);
+      const n = raw.trim() === "" ? NaN : Number(raw);
       if (!Number.isInteger(n) || n < 0) throw new Error(`--workers expects a non-negative integer, got "${raw}"`);
       flags2.workers = n;
     } else if (a === "--since") flags2.since = next();
     else if (a === "--min-together") flags2.minTogether = num2();
     else if (a === "--max-commit-files") flags2.maxCommitFiles = num2();
     else if (a === "--hidden") flags2.hidden = true;
-    else if (a === "--config") flags2.config = resolve11(next());
+    else if (a === "--config") flags2.config = resolve12(next());
     else if (a === "--limit") flags2.limit = count2();
     else if (a === "--no-fuzzy") flags2.fuzzy = false;
     else if (a === "--exact") flags2.exact = true;
@@ -26269,15 +26432,17 @@ function parseFlags(args2) {
       const v = next();
       flags2.positionals.push(v);
       flags2.positional = v;
-    } else if (!a.startsWith("--") && flags2.positionals.length < 2) {
+    } else if (a.startsWith("-") && a !== "-") {
+      throw unknownFlag(a);
+    } else if (!a.startsWith("--")) {
       flags2.positionals.push(a);
       flags2.positional ??= a;
-    } else throw new Error(`unknown flag: ${a}`);
+    } else throw unknownFlag(a);
   }
   return flags2;
 }
 function emit(content, out2) {
-  if (out2) writeFileSync6(out2, content);
+  if (out2 && out2 !== "-") writeArtifact(out2, content);
   else process.stdout.write(content);
 }
 function writeArtifact(path, data) {
@@ -26304,7 +26469,7 @@ function warnPathFlags(flags2) {
   if (scope === ".." || scope.startsWith("../") || isAbsolute10(scope)) {
     process.stderr.write(`codeindex: warning: --scope ${flags2.scope} is outside --repo ${flags2.repo} \u2014 nothing matches
 `);
-  } else if (scope && !/[*?[]/.test(scope) && !existsSync11(join28(flags2.repo, scope))) {
+  } else if (scope && !/[*?[]/.test(scope) && !existsSync12(join29(flags2.repo, scope))) {
     process.stderr.write(`codeindex: warning: --scope ${flags2.scope} does not exist under ${flags2.repo} \u2014 nothing matches
 `);
   }
@@ -26374,7 +26539,7 @@ function parseMcpFlags(argv) {
     if (a === "--repo") {
       const v = argv[++i2];
       if (!v) throw new Error("--repo requires a directory");
-      defaultRepo = resolve11(v);
+      defaultRepo = resolve12(v);
     } else if (a === "--server-name") {
       const v = argv[++i2];
       if (!v) throw new Error("--server-name requires a value");
@@ -26397,7 +26562,8 @@ function parseMcpFlags(argv) {
       throw new Error(`unknown flag for \`mcp\`: ${a}`);
     }
   }
-  if (defaultRepo && !existsSync11(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  if (defaultRepo && !existsSync12(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
+  if (defaultRepo && !statSync13(defaultRepo).isDirectory()) throw new Error(`--repo path is not a directory: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
   return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes, profile, watch, ...trustLspConfig ? { trustLspConfig } : {} };
 }
@@ -26434,7 +26600,8 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "--rank",
   "--direction",
   "--lang",
-  "--why"
+  "--why",
+  "--kinds"
 ]);
 function hoistLeadingFlags(argv) {
   const lead = [];
@@ -26464,8 +26631,14 @@ async function runCli(rawArgv) {
     return;
   }
   if (cmd === "rewrite") {
+    const line2 = rawArgv.slice(rawArgv.indexOf("rewrite") + 1);
+    if (line2.length !== 1) {
+      process.stderr.write("codeindex: rewrite takes the command line as ONE argument: codeindex rewrite '<command line>'\n");
+      process.exitCode = 1;
+      return;
+    }
     const { rewriteCommand: rewriteCommand2 } = await Promise.resolve().then(() => (init_rewrite(), rewrite_exports));
-    const rewritten = rewriteCommand2(rest.join(" "));
+    const rewritten = rewriteCommand2(line2[0], "codeindex", process.cwd());
     if (!rewritten) {
       process.exitCode = 1;
       return;
@@ -26478,9 +26651,25 @@ async function runCli(rawArgv) {
     await runMcpServer2(parseMcpFlags(rest));
     return;
   }
+  if (!(cmd in COMMAND_FLAGS)) {
+    const hint = closest(cmd, Object.keys(COMMAND_FLAGS));
+    process.stderr.write(`unknown command: ${cmd}${hint ? ` (did you mean ${hint}?)` : ""}
+
+${HELP}`);
+    process.exitCode = 2;
+    return;
+  }
+  const dashDash = rest.indexOf("--");
+  if ((dashDash === -1 ? rest : rest.slice(0, dashDash)).some((a) => a === "--help" || a === "-h")) {
+    process.stdout.write(commandHelp(cmd));
+    return;
+  }
   const flags2 = parseFlags(rest);
-  if (flags2.positionals.length > 1 && cmd !== "callpath") throw new Error(`unknown flag: ${flags2.positionals[1]}`);
-  if (!existsSync11(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
+  checkCommandFlags(cmd, flags2);
+  if ((cmd === "index" || cmd === "embed" && flags2.positional === "build") && flags2.out === "-") {
+    throw new Error(`${cmd === "index" ? "index" : "embed build"} writes files: --out needs a directory, not "-"`);
+  }
+  if (!existsSync12(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
   if (!statSync13(flags2.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags2.repo}`);
   warnPathFlags(flags2);
   const scans = (!SCANLESS_COMMANDS.has(cmd) || cmd === "workspaces" && flags2.check === true) && !(cmd === "embed" && flags2.positional !== "build");
@@ -26572,18 +26761,18 @@ async function runCli(rawArgv) {
     if (!flags2.out) throw new Error("index needs --out <dir>");
     const outDir = flags2.out;
     mkdirSync4(outDir, { recursive: true });
-    const cachePath = join28(outDir, "cache.json");
+    const cachePath = join29(outDir, "cache.json");
     await warmPresentGrammars();
     const modelDir = resolveEmbedModelDir(flags2.repo);
     const { model, error: modelError } = tryLoadEmbedModel(modelDir);
     if (modelError) process.stderr.write(`codeindex: ${modelError} \u2014 embeddings.bin skipped; re-run \`codeindex embed pull\`
 `);
-    const graphPath = join28(outDir, "graph.json");
-    const symbolsPath = join28(outDir, "symbols.json");
-    const embedPath = join28(outDir, "embeddings.bin");
+    const graphPath = join29(outDir, "graph.json");
+    const symbolsPath = join29(outDir, "symbols.json");
+    const embedPath = join29(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
-        return sha1(readFileSync19(path));
+        return sha1(readFileSync20(path));
       } catch {
         return void 0;
       }
@@ -26612,7 +26801,7 @@ async function runCli(rawArgv) {
     });
     const extraction = extractionProfile(scan2.files, flags2.maxCalls, grammarReady);
     if (scan2.files.length === 0) warnEmptyScan(flags2);
-    const freshnessPath = join28(outDir, FRESHNESS_FILE);
+    const freshnessPath = join29(outDir, FRESHNESS_FILE);
     const writeFreshness = (out2) => {
       let cacheStat;
       try {
@@ -26623,7 +26812,7 @@ async function runCli(rawArgv) {
       const text = renderFreshness(scan2, out2, extraction, { size: cacheStat.size, mtimeMs: cacheStat.mtimeMs });
       let current;
       try {
-        current = readFileSync19(freshnessPath, "utf8");
+        current = readFileSync20(freshnessPath, "utf8");
       } catch {
         current = void 0;
       }
@@ -26732,10 +26921,10 @@ async function runCli(rawArgv) {
   } else if (cmd === "scip") {
     const scan2 = await readScan();
     const bytes = renderScip(scan2, { projectRoot: flags2.projectRoot });
-    const out2 = flags2.out ?? resolve11("index.scip");
+    const out2 = flags2.out ?? resolve12("index.scip");
     if (out2 === "-") process.stdout.write(Buffer.from(bytes));
     else {
-      writeFileSync6(out2, bytes);
+      writeArtifact(out2, bytes);
       process.stderr.write(`codeindex: SCIP index \u2192 ${out2} (${bytes.length} bytes)
 `);
     }
@@ -26887,7 +27076,7 @@ async function runCli(rawArgv) {
       if (endpoint) {
         let fused;
         try {
-          const cacheFile = existsSync11(join28(indexDirPath(flags2.repo, indexDir), "cache.json")) ? join28(indexDirPath(flags2.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
+          const cacheFile = existsSync12(join29(indexDirPath(flags2.repo, indexDir), "cache.json")) ? join29(indexDirPath(flags2.repo, indexDir), "embed-cache", `endpoint-${sha1(embedEndpointUrl(endpoint)).slice(0, 12)}.bin`) : void 0;
           const modelId = cacheFile ? await endpointModelId() : void 0;
           const previous = cacheFile ? readEmbeddingsFile(cacheFile) : void 0;
           const index = await buildEndpointIndex(scan2, { previous, modelId });
@@ -26911,7 +27100,7 @@ async function runCli(rawArgv) {
           );
           lexical();
         } else {
-          const previous = readEmbeddingsFile(join28(indexDirPath(flags2.repo, indexDir), "embeddings.bin"));
+          const previous = readEmbeddingsFile(join29(indexDirPath(flags2.repo, indexDir), "embeddings.bin"));
           const index = buildEmbeddingIndex(scan2, model, { previous });
           answer(explainSemantic(scan2, flags2.positional, index, { ...searchOpts, model }));
         }
@@ -26973,15 +27162,15 @@ async function runCli(rawArgv) {
       const model = loadEmbedModel(modelDir);
       mkdirSync4(flags2.out, { recursive: true });
       const scan2 = await readScan();
-      const index = buildEmbeddingIndex(scan2, model, { previous: readEmbeddingsFile(join28(flags2.out, "embeddings.bin")) });
-      writeArtifact(join28(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
+      const index = buildEmbeddingIndex(scan2, model, { previous: readEmbeddingsFile(join29(flags2.out, "embeddings.bin")) });
+      writeArtifact(join29(flags2.out, "embeddings.bin"), serializeEmbeddings(index));
       process.stderr.write(`codeindex: ${index.records.length} embedding records \u2192 ${flags2.out}/embeddings.bin (model ${model.modelId})
 `);
     } else if (sub === "pull") {
       const { url, sha256 } = resolveEmbedPullUrl();
-      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join28(flags2.repo, ".codeindex", "models");
+      const destDir = process.env.CODEINDEX_EMBED_DIR ?? join29(flags2.repo, ".codeindex", "models");
       mkdirSync4(destDir, { recursive: true });
-      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join28(destDir, "model.json")}
+      process.stderr.write(`codeindex: fetching model from ${url} \u2192 ${join29(destDir, "model.json")}
 `);
       let body2;
       try {
@@ -27002,8 +27191,8 @@ async function runCli(rawArgv) {
         process.exitCode = 1;
         return;
       }
-      writeFileSync6(join28(destDir, "model.json"), body2);
-      process.stderr.write(`codeindex: model written to ${join28(destDir, "model.json")}
+      writeArtifact(join29(destDir, "model.json"), body2);
+      process.stderr.write(`codeindex: model written to ${join29(destDir, "model.json")}
 `);
     } else {
       throw new Error("embed needs a subcommand: status | build | pull | serve");
@@ -27017,7 +27206,7 @@ async function runCli(rawArgv) {
     const cacheDir = sharedGrammarsCacheDir();
     if (sub === "status") {
       const info2 = resolveGrammarsTier();
-      const present = (name2) => info2.dirs.some((d) => existsSync11(join28(d, name2)));
+      const present = (name2) => info2.dirs.some((d) => existsSync12(join29(d, name2)));
       const runtimePresent = present("web-tree-sitter.wasm");
       const target = resolveGrammarsPullTarget();
       const resolvedIn = (keys) => [...keys].filter((k) => present(`${k}.wasm`)).sort();
@@ -27053,7 +27242,7 @@ async function runCli(rawArgv) {
     }
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
-    const rules = parseRulesText(readFileSync19(flags2.config, "utf8"), flags2.config);
+    const rules = parseRulesText(readFileSync20(flags2.config, "utf8"), flags2.config);
     const { scan: scan2, graph } = await readArtifacts();
     const violations = checkRules(graph, rules, { scan: scan2 });
     const errors = violations.filter((v) => v.severity === "error").length;
@@ -27067,7 +27256,7 @@ async function runCli(rawArgv) {
   } else if (cmd === "churn") {
     const res = gitChurn(flags2.repo, { since: flags2.since });
     const filter = scanPathFilter(flags2.repo, scanOptions(flags2));
-    const keep = filter && ((rel2) => filter({ rel: rel2, abs: join28(flags2.repo, rel2), directory: false }));
+    const keep = filter && ((rel2) => filter({ rel: rel2, abs: join29(flags2.repo, rel2), directory: false }));
     const sorted = {};
     for (const k of [...res.churn.keys()].sort()) if (!keep || keep(k)) sorted[k] = res.churn.get(k);
     emit(JSON.stringify({ ok: res.ok, ...historyStatus(res), churn: sorted }, null, 2) + "\n", flags2.out);
