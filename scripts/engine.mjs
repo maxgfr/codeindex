@@ -12272,6 +12272,7 @@ function buildResolveContext(scan2) {
     jvm: buildJvmIndex({ filesByDir, javaRoots: javaRootList }, scan2.files),
     dartPackages,
     luaRoots: [...luaRoots].sort(byLen),
+    svelteKitRoots: [...fileSet].filter((rel2) => /(?:^|\/)svelte\.config\.(?:js|ts|mjs|cjs)$/.test(rel2)).map((rel2) => rel2.includes("/") ? posix2.dirname(rel2) : "").sort((a, b) => b.length - a.length || byStr(a, b)),
     elixirModules,
     pyRoots: [...pyRootSet].sort(byLen),
     workspacePackages,
@@ -12336,12 +12337,15 @@ function resolveJs(fromRel, rawSpec, ctx) {
   const q = rawSpec.indexOf("?");
   const spec = q === -1 ? rawSpec : rawSpec.slice(0, q);
   if (!spec) return { kind: "external" };
+  const kit = ctx.svelteKitRoots?.find((d) => !d || fromRel.startsWith(d + "/"));
   if (spec.startsWith(".")) {
     const base = fromRel.includes("/") ? posix2.dirname(fromRel) : "";
     const p = norm(posix2.join(base, spec));
     if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
     const hit = tryResolve(p);
-    return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    if (hit) return { kind: "resolved", target: hit };
+    if (kit !== void 0 && /(?:^|\/)\$types(?:\.d\.ts|\.js)?$/.test(spec)) return { kind: "external" };
+    return { kind: "dangling", reason: "missing-module" };
   }
   let aliasFallback;
   let bareBase;
@@ -12370,6 +12374,12 @@ function resolveJs(fromRel, rawSpec, ctx) {
   if (bareBase !== void 0 && !spec.startsWith("/")) {
     const hit = tryResolve(norm(posix2.join(bareBase, spec)));
     if (hit) return { kind: "resolved", target: hit };
+  }
+  if (kit !== void 0 && !aliasFallback && (spec === "$lib" || spec.startsWith("$lib/"))) {
+    const p = norm(posix2.join(kit, "src/lib", spec.slice("$lib".length)));
+    const hit = tryResolve(p);
+    if (hit) return { kind: "resolved", target: hit };
+    if (ctx.dirSet.has(norm(posix2.join(kit, "src/lib")))) return { kind: "dangling", reason: "alias-unresolved" };
   }
   if (spec.startsWith("#")) {
     const scope = ctx.packageScopes.find((s) => !s.dir || fromRel.startsWith(s.dir + "/"));

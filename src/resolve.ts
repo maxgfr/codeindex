@@ -123,6 +123,9 @@ export interface ResolveContext {
   // Optional for the same reason; absent, those imports resolve as external.
   dartPackages?: Map<string, string>; // pubspec.yaml `name` -> its dir
   luaRoots?: string[]; // dirs a Lua `require("a.b")` resolves against, shortest first
+  // Dirs holding a svelte.config.*, deepest first: SvelteKit projects, whose
+  // `$lib` alias is their src/lib and whose `./$types` modules are generated.
+  svelteKitRoots?: string[];
   elixirModules?: Map<string, string>; // defmodule name -> the byStr-first file declaring it
   warnings: string[]; // build-time config issues (e.g. an unparseable tsconfig)
   // Memo of JS/TS resolutions keyed by "<importing dir>\0<spec>" — resolveJs is
@@ -943,6 +946,10 @@ export function buildResolveContext(scan: RepoScan): ResolveContext {
     jvm: buildJvmIndex({ filesByDir, javaRoots: javaRootList }, scan.files),
     dartPackages,
     luaRoots: [...luaRoots].sort(byLen),
+    svelteKitRoots: [...fileSet]
+      .filter((rel) => /(?:^|\/)svelte\.config\.(?:js|ts|mjs|cjs)$/.test(rel))
+      .map((rel) => (rel.includes("/") ? posix.dirname(rel) : ""))
+      .sort((a, b) => b.length - a.length || byStr(a, b)),
     elixirModules,
     pyRoots: [...pyRootSet].sort(byLen),
     workspacePackages,
@@ -1026,12 +1033,19 @@ function resolveJs(fromRel: string, rawSpec: string, ctx: ResolveContext): Resol
   const spec = q === -1 ? rawSpec : rawSpec.slice(0, q);
   if (!spec) return { kind: "external" };
 
+  // The SvelteKit project around the importer, when there is one.
+  const kit = ctx.svelteKitRoots?.find((d) => !d || fromRel.startsWith(d + "/"));
+
   if (spec.startsWith(".")) {
     const base = fromRel.includes("/") ? posix.dirname(fromRel) : "";
     const p = norm(posix.join(base, spec));
     if (p.startsWith("..")) return { kind: "dangling", reason: "escapes-repo-root" };
     const hit = tryResolve(p);
-    return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
+    if (hit) return { kind: "resolved", target: hit };
+    // `import type { PageLoad } from "./$types"`: SvelteKit generates that
+    // module per route, under .svelte-kit/ — never a missing file.
+    if (kit !== undefined && /(?:^|\/)\$types(?:\.d\.ts|\.js)?$/.test(spec)) return { kind: "external" };
+    return { kind: "dangling", reason: "missing-module" };
   }
 
   // tsconfig path aliases (e.g. "@/x" -> "src/x"), nearest enclosing config first.
@@ -1072,6 +1086,17 @@ function resolveJs(fromRel: string, rawSpec: string, ctx: ResolveContext): Resol
   if (bareBase !== undefined && !spec.startsWith("/")) {
     const hit = tryResolve(norm(posix.join(bareBase, spec)));
     if (hit) return { kind: "resolved", target: hit };
+  }
+
+  // SvelteKit's `$lib` alias: the project's src/lib, unless a tsconfig
+  // `paths` entry above already said otherwise (its generated tsconfig lives
+  // under the uncommitted .svelte-kit/). sveltejs/realworld's every `$lib`
+  // import was external, and no route reached src/lib.
+  if (kit !== undefined && !aliasFallback && (spec === "$lib" || spec.startsWith("$lib/"))) {
+    const p = norm(posix.join(kit, "src/lib", spec.slice("$lib".length)));
+    const hit = tryResolve(p);
+    if (hit) return { kind: "resolved", target: hit };
+    if (ctx.dirSet.has(norm(posix.join(kit, "src/lib")))) return { kind: "dangling", reason: "alias-unresolved" };
   }
 
   // package.json `imports` (`#internal/x`): matched in the nearest package.json

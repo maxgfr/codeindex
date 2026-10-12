@@ -568,6 +568,25 @@ describe("real-world campaign findings (2026-10)", () => {
     expect(resolveImport("src/a.c", ".c", "own.h", c)).toEqual({ kind: "dangling", reason: "missing-include" });
     expect(resolveImport("src/a.c", ".c", "local.h", c)).toEqual({ kind: "resolved", target: "src/local.h" });
   });
+
+  it("S-102: SvelteKit's $lib is src/lib, and ./$types is generated", () => {
+    const c = scratchCtx({
+      "svelte.config.js": "export default {};\n",
+      "src/lib/api.js": "export const get = () => 1;\n",
+      "src/lib/constants.js": "export const page_size = 10;\n",
+      "src/routes/+page.server.js": 'import * as api from "$lib/api.js";\n',
+      "other/a.js": "export {};\n",
+    });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$lib/api.js", c)).toEqual({ kind: "resolved", target: "src/lib/api.js" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$lib/constants", c)).toEqual({ kind: "resolved", target: "src/lib/constants.js" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$lib/missing", c)).toEqual({ kind: "dangling", reason: "alias-unresolved" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "./$types", c)).toEqual({ kind: "external" });
+    expect(resolveImport("src/routes/+page.server.js", ".js", "$app/navigation", c)).toEqual({ kind: "external" });
+    // Without a svelte.config, neither is SvelteKit's.
+    const plain = scratchCtx({ "src/lib/api.js": "export {};\n", "src/a.js": "export {};\n" });
+    expect(resolveImport("src/a.js", ".js", "$lib/api.js", plain)).toEqual({ kind: "external" });
+    expect(resolveImport("src/a.js", ".js", "./$types", plain)).toEqual({ kind: "dangling", reason: "missing-module" });
+  });
 });
 
 describe("resolution review fixes (2026-10)", () => {

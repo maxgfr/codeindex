@@ -140,8 +140,9 @@ export const REPOS: RealRepo[] = [
     // Svelte + SvelteKit: `$lib` alias, generated `./$types`.
     slug: "sveltejs/realworld",
     sha: "df796708040f5200ec572b28ab7f88ecee5794dd",
-    maxDanglingRatio: 0.42, // measured baseline: 11/27 edges (40.7%)
+    maxDanglingRatio: 0.03, // measured: 1/45 edges (2.2%); 11/27 (40.7%) before $lib and ./$types resolved
     primaryLang: "svelte",
+    crossEdge: [/^src\/routes\//, /^src\/lib\//],
     budgetMs: 120_000,
   },
   {
