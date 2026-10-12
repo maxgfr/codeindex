@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.5";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 15;
+    EXTRACTOR_VERSION = 16;
   }
 });
 
@@ -10826,12 +10826,14 @@ function* keptFiles(root, opts) {
 }
 function selfIndexGuard(root, out2) {
   if (!out2) return void 0;
-  const up = relative(resolve3(out2), resolve3(root));
+  const dir = resolve3(out2);
+  const up = relative(dir, resolve3(root));
   if (up === "") return (f) => !f.rel.includes("/") && isIndexArtifact(f.rel);
   if (up !== ".." && !up.startsWith(`..${sep2}`) && !isAbsolute(up)) return void 0;
-  const dir = out2.replace(/\/+$/, "");
-  const prefix = dir + "/";
-  return (f) => f.abs === dir || f.abs.startsWith(prefix);
+  return (f) => {
+    const inside = relative(dir, f.abs);
+    return inside === "" || inside !== ".." && !inside.startsWith(`..${sep2}`) && !isAbsolute(inside);
+  };
 }
 function keptCodeFiles(root, opts = {}) {
   const out2 = [];
@@ -11094,8 +11096,7 @@ function extractedAlike(stored, current) {
   return (kind, ext) => {
     if (kind !== "code") return true;
     if (!callsMatch) return false;
-    const key = grammarKeyForExt(ext);
-    return key === void 0 || astBefore.has(key) === current.ast(key);
+    return grammarKeysForExts([ext]).every((key) => astBefore.has(key) === current.ast(key));
   };
 }
 var object, string, count, line, strings, sha, kinds, symbolText, fileText, fileLists;
@@ -11309,7 +11310,7 @@ var init_pool = __esm({
 });
 
 // src/preload.ts
-import { readFileSync as readFileSync5 } from "fs";
+import { readFileSync as readFileSync5, statSync as statSync4 } from "fs";
 import { join as join5, resolve as resolve4 } from "path";
 function indexDirPath(repo, indexDir = INDEX_DIR) {
   return resolve4(repo, indexDir);
@@ -11326,14 +11327,20 @@ function needsGrammarWarm(walked, cache, fullHash = false) {
     return !cached || cached.size !== file.size || cached.mtimeMs !== file.mtimeMs;
   });
 }
+function untrustedMtime(mtimeMs, cacheWrittenMs) {
+  return mtimeMs >= cacheWrittenMs;
+}
 function readPersistedIndex(repo, indexDir = INDEX_DIR) {
   const read = inspectPersistedIndex(repo, indexDir);
   return "unusable" in read ? void 0 : read;
 }
 function inspectPersistedIndex(repo, indexDir = INDEX_DIR) {
   let text;
+  let written;
   try {
-    text = readFileSync5(join5(indexDirPath(repo, indexDir), "cache.json"), "utf8");
+    const path = join5(indexDirPath(repo, indexDir), "cache.json");
+    text = readFileSync5(path, "utf8");
+    written = statSync4(path).mtimeMs;
   } catch (e) {
     const code = e.code;
     return { unusable: code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable" };
@@ -11351,6 +11358,12 @@ function inspectPersistedIndex(repo, indexDir = INDEX_DIR) {
   if (parsed2.extractorVersion !== EXTRACTOR_VERSION) return { unusable: "extractor" };
   const cacheMap = parseCacheEntries(parsed2);
   if (!cacheMap) return { unusable: "corrupt" };
+  for (const [rel2, entry2] of cacheMap) {
+    if (entry2.mtimeMs !== void 0 && untrustedMtime(entry2.mtimeMs, written)) {
+      const { mtimeMs: _racy, ...rest } = entry2;
+      cacheMap.set(rel2, rest);
+    }
+  }
   return {
     cacheMap,
     meta: {
@@ -11467,7 +11480,7 @@ var init_preload = __esm({
 });
 
 // src/freshness.ts
-import { readFileSync as readFileSync6, statSync as statSync4 } from "fs";
+import { readFileSync as readFileSync6, statSync as statSync5 } from "fs";
 import { join as join6 } from "path";
 function predictedAst(ast) {
   if (ast === false) return () => false;
@@ -11488,7 +11501,7 @@ function treeDrift(walked, stamps, alike, fullHash = false) {
   return drift;
 }
 function renderFreshness(scan2, meta, extraction, cache) {
-  const files = {};
+  const files = /* @__PURE__ */ Object.create(null);
   for (const f of scan2.files) files[f.rel] = [f.hash, f.size, scan2.mtimes.get(f.rel)];
   return JSON.stringify({
     schemaVersion: SCHEMA_VERSION,
@@ -11509,7 +11522,7 @@ function readFreshness(repo, indexDir = INDEX_DIR) {
   let cacheStat;
   try {
     value = JSON.parse(readFileSync6(join6(dir, FRESHNESS_FILE), "utf8"));
-    const { size, mtimeMs } = statSync4(join6(dir, "cache.json"));
+    const { size, mtimeMs } = statSync5(join6(dir, "cache.json"));
     cacheStat = { size, mtimeMs };
   } catch {
     return void 0;
@@ -11526,7 +11539,7 @@ function readFreshness(repo, indexDir = INDEX_DIR) {
   const files = /* @__PURE__ */ new Map();
   for (const [rel2, stamp] of Object.entries(value.files)) {
     if (!Array.isArray(stamp) || !isSha(stamp[0]) || !isCount(stamp[1]) || !isTime(stamp[2])) return void 0;
-    files.set(rel2, { hash: stamp[0], size: stamp[1], mtimeMs: stamp[2] });
+    files.set(rel2, untrustedMtime(stamp[2], cacheStat.mtimeMs) ? { hash: stamp[0], size: stamp[1] } : { hash: stamp[0], size: stamp[1], mtimeMs: stamp[2] });
   }
   return {
     meta: {
@@ -15896,7 +15909,7 @@ var init_edit_spans = __esm({
 });
 
 // src/edit.ts
-import { chmodSync, mkdtempSync as mkdtempSync2, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync5, writeFileSync as writeFileSync2 } from "fs";
+import { chmodSync, mkdtempSync as mkdtempSync2, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync6, writeFileSync as writeFileSync2 } from "fs";
 import { basename as basename3, dirname as dirname4, extname as extname3, isAbsolute as isAbsolute4, join as join14, posix as posix5, relative as relative4 } from "path";
 function resolveUniqueSymbol(scan2, namePath, file, line2) {
   let matches = findSymbol(scan2, namePath, { maxResults: Infinity });
@@ -15989,7 +16002,7 @@ function bodyLines(body2) {
 }
 function atomicWrite(abs, content, cleanup = rmSync2) {
   const target = realpathSync3(abs);
-  const mode = statSync5(target).mode;
+  const mode = statSync6(target).mode;
   let tempDir;
   try {
     tempDir = mkdtempSync2(join14(dirname4(target), ".codeindex-edit-"));
@@ -16177,7 +16190,7 @@ var init_edit = __esm({
 });
 
 // src/memory.ts
-import { lstatSync as lstatSync3, realpathSync as realpathSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync9, rmSync as rmSync3, statSync as statSync6, writeFileSync as writeFileSync3 } from "fs";
+import { lstatSync as lstatSync3, realpathSync as realpathSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync9, rmSync as rmSync3, statSync as statSync7, writeFileSync as writeFileSync3 } from "fs";
 import { dirname as dirname5, join as join15 } from "path";
 function sanitize(name2) {
   const clean = name2.replace(/^mem:/, "").replace(/\.md$/, "");
@@ -16225,7 +16238,7 @@ function readMemory(repo, name2) {
 function deleteMemory(repo, name2) {
   const path = memoryPath(repo, name2);
   try {
-    statSync6(path);
+    statSync7(path);
   } catch {
     return false;
   }
@@ -16272,7 +16285,7 @@ var init_memory = __esm({
 });
 
 // src/workspaces.ts
-import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync7 } from "fs";
+import { existsSync as existsSync6, readdirSync as readdirSync3, statSync as statSync8 } from "fs";
 import { join as join16, posix as posix6 } from "path";
 function readJson(path, label, warnings) {
   const raw = readText(path);
@@ -16445,7 +16458,7 @@ function addPackage(root, dir, found, kind, warnings) {
 }
 function isDirAt(root, rel2) {
   try {
-    return statSync7(join16(root, rel2)).isDirectory();
+    return statSync8(join16(root, rel2)).isDirectory();
   } catch {
     return false;
   }
@@ -21453,7 +21466,7 @@ var init_persist = __esm({
 });
 
 // src/mcp/session.ts
-import { realpathSync as realpathSync5, statSync as statSync8 } from "fs";
+import { realpathSync as realpathSync5, statSync as statSync9 } from "fs";
 import { isAbsolute as isAbsolute8, join as join24, relative as relative7, sep as sep6 } from "path";
 function scanFingerprint(scan2) {
   return sha1(scan2.files.map((f) => `${f.rel}:${f.hash}`).join("\n"));
@@ -21469,7 +21482,7 @@ async function memoizedEmbeddingIndex(key, build) {
 function memoizedEmbedModel(modelDir) {
   let stat;
   try {
-    stat = statSync8(join24(modelDir, "model.json"));
+    stat = statSync9(join24(modelDir, "model.json"));
   } catch {
     return void 0;
   }
@@ -21676,7 +21689,7 @@ var init_session = __esm({
 });
 
 // src/mcp/watch.ts
-import { existsSync as existsSync10, mkdtempSync as mkdtempSync3, rmSync as rmSync5, statSync as statSync9, watch as watchFs, writeFileSync as writeFileSync5 } from "fs";
+import { existsSync as existsSync10, mkdtempSync as mkdtempSync3, rmSync as rmSync5, statSync as statSync10, watch as watchFs, writeFileSync as writeFileSync5 } from "fs";
 import { tmpdir } from "os";
 import { join as join25 } from "path";
 function watchRepo(repo, warn, maxDirs = MAX_WATCHED_DIRS) {
@@ -21805,7 +21818,7 @@ var init_watch = __esm({
           }
         });
         const info2 = ".git/info";
-        if (existsSync10(join25(this.repo, info2)) && statSync9(join25(this.repo, info2)).isDirectory()) {
+        if (existsSync10(join25(this.repo, info2)) && statSync10(join25(this.repo, info2)).isDirectory()) {
           visited.add(info2);
           this.add(info2);
         }
@@ -21874,7 +21887,7 @@ var init_watch = __esm({
 });
 
 // src/mcp/protocol.ts
-import { readFileSync as readFileSync17, statSync as statSync10 } from "fs";
+import { readFileSync as readFileSync17, statSync as statSync11 } from "fs";
 import { join as join26 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 function validateArgs(schema, args2) {
@@ -21929,7 +21942,7 @@ function negotiateProtocol(requested) {
 function artifactState(path, text, bytes) {
   let size;
   try {
-    size = statSync10(path).size;
+    size = statSync11(path).size;
   } catch {
     return "absent";
   }
@@ -22987,7 +23000,7 @@ __export(mcp_exports, {
   warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
-import { readFileSync as readFileSync18, realpathSync as realpathSync6, statSync as statSync11 } from "fs";
+import { readFileSync as readFileSync18, realpathSync as realpathSync6, statSync as statSync12 } from "fs";
 import { basename as basename4, isAbsolute as isAbsolute9, join as join27, relative as relative8, resolve as resolve10, sep as sep7 } from "path";
 import { createInterface } from "readline";
 function isRpcRequest(value) {
@@ -23040,7 +23053,7 @@ function repoRoot(args2, defaultRepo) {
   if (!requested) throw new Error("`repo` is required (absolute path to the repository root)");
   const repo = resolve10(requested);
   try {
-    if (!statSync11(repo).isDirectory()) throw new Error("not a directory");
+    if (!statSync12(repo).isDirectory()) throw new Error("not a directory");
   } catch {
     throw new Error(`repository root is not a readable directory: ${requested}`);
   }
@@ -25504,7 +25517,7 @@ init_patharg();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync11, mkdirSync as mkdirSync4, readFileSync as readFileSync19, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync12, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync11, mkdirSync as mkdirSync4, readFileSync as readFileSync19, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
 import { isAbsolute as isAbsolute10, join as join28, resolve as resolve11 } from "path";
 init_pipeline();
 init_hash();
@@ -26240,7 +26253,7 @@ async function runCli(rawArgv) {
   const flags2 = parseFlags(rest);
   if (flags2.positionals.length > 1 && cmd !== "callpath") throw new Error(`unknown flag: ${flags2.positionals[1]}`);
   if (!existsSync11(flags2.repo)) throw new Error(`--repo path does not exist: ${flags2.repo}`);
-  if (!statSync12(flags2.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags2.repo}`);
+  if (!statSync13(flags2.repo).isDirectory()) throw new Error(`--repo path is not a directory: ${flags2.repo}`);
   warnPathFlags(flags2);
   const scans = (!SCANLESS_COMMANDS.has(cmd) || cmd === "workspaces" && flags2.check === true) && !(cmd === "embed" && flags2.positional !== "build");
   const walkRepo = () => walk(flags2.repo, scanWalkOptions(flags2.repo, scanOptions(flags2)));
@@ -26375,7 +26388,7 @@ async function runCli(rawArgv) {
     const writeFreshness = (out2) => {
       let cacheStat;
       try {
-        cacheStat = statSync12(cachePath);
+        cacheStat = statSync13(cachePath);
       } catch {
         return;
       }
@@ -26389,7 +26402,7 @@ async function runCli(rawArgv) {
       if (current !== text) writeArtifact(freshnessPath, text);
     };
     const writeCache = (out2) => {
-      const files = {};
+      const files = /* @__PURE__ */ Object.create(null);
       for (const f of scan2.files) {
         const entry2 = { hash: f.hash, record: f, size: f.size };
         const mtime = scan2.mtimes.get(f.rel);

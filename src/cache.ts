@@ -3,7 +3,7 @@
 // assertions alone do not make a stat-matching record safe to reuse.
 import { EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { FileRecord } from "./types.js";
-import { grammarKeyForExt, grammarKeysForExts } from "./ast/loader.js";
+import { grammarKeysForExts } from "./ast/loader.js";
 
 export type PersistedCacheEntry = { hash: string; record: FileRecord; size?: number; mtimeMs?: number };
 export type PersistedCacheMap = Map<string, PersistedCacheEntry>;
@@ -166,7 +166,10 @@ export function extractedAlike(
   return (kind, ext) => {
     if (kind !== "code") return true;
     if (!callsMatch) return false;
-    const key = grammarKeyForExt(ext);
-    return key === undefined || astBefore.has(key) === current.ast(key);
+    // Every grammar the extension can be parsed with: a .vue/.svelte/.astro
+    // file has no grammar of its own but runs its scripts through the TS/JS
+    // ones, and a .h may be read as C++. Checking only the extension's own key
+    // reused their regex-tier records after the grammars loaded.
+    return grammarKeysForExts([ext]).every((key) => astBefore.has(key) === current.ast(key));
   };
 }

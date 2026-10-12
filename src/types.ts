@@ -86,7 +86,12 @@ export const SCHEMA_VERSION = 5;
 // extraction; regex-tier docs and spans; reStructuredText docs; file
 // summaries that skip licenses; and UTF-8 decoding of files holding a literal
 // U+FFFD.
-export const EXTRACTOR_VERSION = 15;
+// v16 folds the review of 2026-10: records extracted without the grammars a
+// .vue/.svelte/.astro or C++ header needs are no longer reused once they load,
+// regex-tier call collection and import extraction were rewritten (same
+// answers, linear), and the fixes to resolution, the graph and markdown links
+// that follow — an older cache holds records none of them produced.
+export const EXTRACTOR_VERSION = 16;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

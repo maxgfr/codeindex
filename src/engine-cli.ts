@@ -1195,7 +1195,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       if (current !== text) writeArtifact(freshnessPath, text);
     };
     const writeCache = (out: Pick<CacheMeta, "graphSha1" | "symbolsSha1" | "embed">): void => {
-      const files: Record<string, CacheEntry> = {};
+      // No prototype: a file named `__proto__` set the object's prototype
+      // instead of adding a key, and never reached cache.json.
+      const files: Record<string, CacheEntry> = Object.create(null);
       for (const f of scan.files) {
         const entry: CacheEntry = { hash: f.hash, record: f, size: f.size };
         const mtime = scan.mtimes.get(f.rel);
