@@ -131,7 +131,10 @@ export const REPOS: RealRepo[] = [
     // Vue + TS pnpm monorepo; VitePress docs.
     slug: "vuejs/pinia",
     sha: "f48737e9aaffcb63c70c0f4f2c977e91be657fcb",
-    maxDanglingRatio: 0.03, // measured baseline: 24/830 edges (2.89%)
+    // measured: 24/793 edges (3.03%) — the same 24 dangling links as at the pin
+    // (VitePress root-absolute links, generated files); 37 cross-language or
+    // imported-name use edges left the denominator with S-016.
+    maxDanglingRatio: 0.035,
     primaryLang: "typescript",
     crossEdge: [/^packages\/testing\//, /^packages\/pinia\//],
     budgetMs: 120_000,
