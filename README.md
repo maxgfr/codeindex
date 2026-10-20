@@ -1396,11 +1396,16 @@ given a full answer is trusted and is not asked again.
 ## Use as an MCP server
 
 `codeindex mcp` (or `node scripts/cli.mjs mcp`) serves the engine over stdio.
-Register it in Claude Code with:
+Register it with your agent's CLI (the arguments are the same everywhere):
 
 ```sh
-claude mcp add codeindex -- codeindex mcp
+claude mcp add codeindex -- codeindex mcp     # Claude Code
+codex mcp add codeindex -- codeindex mcp      # Codex
+opencode mcp add codeindex -- codeindex mcp   # OpenCode
 ```
+
+Any other MCP client takes the same stdio command, `codeindex` with the
+argument `mcp`, in its own config.
 
 **40 tools**, grouped by what they answer:
 
