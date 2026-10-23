@@ -531,6 +531,12 @@
   .code code {
     white-space: pre;
   }
+  .code .copy-group {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.35em;
+  }
   .copy-btn {
     font-family: var(--mono);
     font-size: 0.68rem;
@@ -1474,11 +1480,11 @@ codeindex search  <span class="comment">"http client retry"</span> --repo .</cod
             <code>check_rules</code> and <code>embed_status</code>.
           </p>
           <div class="code">
-            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="mcp-cmd">copy</button></div>
+            <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="copy-group"><button class="copy-btn" data-copy-target="mcp-cmd-claude">copy claude</button><button class="copy-btn" data-copy-target="mcp-cmd-codex">copy codex</button><button class="copy-btn" data-copy-target="mcp-cmd-opencode">copy opencode</button></span></div>
             <pre><code id="mcp-cmd"><span class="comment"># pick your agent; any other MCP client takes the JSON below</span>
-claude mcp add codeindex -- codeindex mcp     <span class="comment"># Claude Code</span>
-codex mcp add codeindex -- codeindex mcp      <span class="comment"># Codex</span>
-opencode mcp add codeindex -- codeindex mcp   <span class="comment"># OpenCode</span></code></pre>
+<span id="mcp-cmd-claude">claude mcp add codeindex -- codeindex mcp</span>     <span class="comment"># Claude Code</span>
+<span id="mcp-cmd-codex">codex mcp add codeindex -- codeindex mcp</span>      <span class="comment"># Codex</span>
+<span id="mcp-cmd-opencode">opencode mcp add codeindex -- codeindex mcp</span>   <span class="comment"># OpenCode</span></code></pre>
           </div>
           <div class="code">
             <div class="code-bar"><span class="code-dots" aria-hidden="true"><span></span><span></span><span></span></span><button class="copy-btn" data-copy-target="mcp-json">copy</button></div>
