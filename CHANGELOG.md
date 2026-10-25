@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.12](https://github.com/maxgfr/codeindex/compare/v2.31.11...v2.31.12) (2026-10-25)
+
+
+### Bug Fixes
+
+* **grammars:** bump tree-sitter grammars and re-vendor wasm ([476ccb4](https://github.com/maxgfr/codeindex/commit/476ccb43e3c48b6f122470509e051332e67e2331))
+
 ## [2.31.11](https://github.com/maxgfr/codeindex/compare/v2.31.10...v2.31.11) (2026-10-19)
 
 
