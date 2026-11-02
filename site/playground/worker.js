@@ -58,12 +58,15 @@ async function fetchWasm(name) {
   const url = new URL(`./grammars/${name}`, self.location.href).href;
   // Cached so a second repo — and every reload — skips the download entirely.
   // Grammar wasm is immutable per release, so there is nothing to invalidate.
-  const cache = self.caches ? await caches.open(GRAMMAR_CACHE) : null;
-  const hit = cache ? await cache.match(url) : null;
+  // The cache is best effort: maxgfr.github.io is one origin shared by many
+  // sites, so its quota can be full, and private windows may refuse Cache
+  // Storage outright. Either way the grammar still loads from the network.
+  const cache = self.caches ? await caches.open(GRAMMAR_CACHE).catch(() => null) : null;
+  const hit = cache ? await cache.match(url).catch(() => undefined) : undefined;
   if (hit) return new Uint8Array(await hit.arrayBuffer());
   const response = await fetch(url);
   if (!response.ok) throw new Error(`grammar ${name}: HTTP ${response.status}`);
-  if (cache) await cache.put(url, response.clone());
+  if (cache) await cache.put(url, response.clone()).catch(() => {});
   return new Uint8Array(await response.arrayBuffer());
 }
 
