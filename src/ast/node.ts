@@ -194,8 +194,27 @@ export function readReceiver(node: TSNode | null): string | undefined {
     const name = type ? readTypeName(type) : undefined;
     return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
   }
-  const name = obj ? readName(obj) : undefined;
-  return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
+  // Ruby's `@repo`, `@@registry` and `$stdout` are leaves of their own node
+  // types, which readName does not take for a name.
+  const name = obj ? (readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : undefined)) : undefined;
+  return receiverName(name);
+}
+
+const RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
+
+// A receiver's name as the index keeps it. `$` is an identifier character
+// (JS/TS `$el`, `clicks$`, a Ruby global), and a sigil that marks a member
+// rather than naming it is dropped, as the regex tier reads it: `this.#cache`
+// → "cache", Ruby's `@repo` / `@@registry` → "repo" / "registry".
+//
+// These names used to be refused outright, which left the call with NO
+// receiver: `$el.render()`, `this.#cache.get(k)` and `@repo.save` were
+// recorded as the bare calls `render()`, `get()` and `save()`, and bound to a
+// same-file function of that name — a call edge to something never called.
+function receiverName(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  const bare = name.replace(/^(?:#|@{1,2})/, "");
+  return /^[A-Za-z_$][\w$]*$/.test(bare) ? bare : undefined;
 }
 
 // A leaf that can NAME a type. Ruby writes one as a `constant`, every other

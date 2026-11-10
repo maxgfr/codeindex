@@ -369,3 +369,60 @@ describe("relations through a renaming import", () => {
     expect(implementationsOf(hierarchy, "Base").map((r) => `${r.name}@${r.file}`)).toEqual(["Blueprint@pkg/blueprints.py"]);
   });
 });
+
+// A member call is not a bare call. The AST tier used to drop a receiver whose
+// name is not `[A-Za-z_]\w*`, so the call lost its receiver and bound, by name
+// alone, to a same-file function it never calls.
+describe("a receiver named with `$`, a private field or an instance variable", () => {
+  const SOURCES: Record<string, string> = {
+    "dollar.ts": [
+      "export function render(): void {}",
+      "export function drawDollar($el: { render(): void }): void {",
+      "  $el.render();",
+      "}",
+      "export function drawPlain(el: { render(): void }): void {",
+      "  el.render();",
+      "}",
+      "",
+    ].join("\n"),
+    "obs.js": ["export function subscribe() {}", "export function watch(clicks$) {", "  clicks$.subscribe();", "}", ""].join("\n"),
+    "priv.ts": [
+      "export function get(): number { return 1; }",
+      "export class Store {",
+      "  #cache = new Map<string, number>();",
+      "  read(k: string): number | undefined {",
+      "    return this.#cache.get(k);",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    "ivar.rb": ["class Service", "  def save", "  end", "  def run", "    @repo.save", "  end", "end", ""].join("\n"),
+  };
+  let dir: string;
+  let local: RepoScan;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "ci-call-binding-sigil-"));
+    for (const [rel, content] of Object.entries(SOURCES)) writeFileSync(join(dir, rel), content);
+    local = scanRepo(dir);
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  const callsIn = (rel: string) => local.files.find((f) => f.rel === rel)!.calls;
+
+  it("keeps the receiver on the call site", () => {
+    expect(callsIn("dollar.ts")).toEqual([
+      { name: "render", line: 3, receiver: "$el" },
+      { name: "render", line: 6, receiver: "el" },
+    ]);
+    expect(callsIn("obs.js")).toEqual([{ name: "subscribe", line: 3, receiver: "clicks$" }]);
+    expect(callsIn("priv.ts")).toContainEqual({ name: "get", line: 5, receiver: "cache" });
+    expect(callsIn("ivar.rb")).toEqual([{ name: "save", line: 5, receiver: "repo" }]);
+  });
+
+  it("binds none of them to the same-file function of that name", () => {
+    const edges = buildSymbolGraph(local, importPairsFor(local))
+      .edges.filter((e) => e.kind === "calls")
+      .map((e) => `${e.from} -> ${e.to}`);
+    expect(edges).toEqual([]);
+  });
+});

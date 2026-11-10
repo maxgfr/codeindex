@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.16";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 18;
+    EXTRACTOR_VERSION = 19;
   }
 });
 
@@ -8238,8 +8238,13 @@ function readReceiver(node) {
     const name3 = type ? readTypeName(type) : void 0;
     return name3 && /^[A-Za-z_]\w*$/.test(name3) ? name3 : void 0;
   }
-  const name2 = obj ? readName(obj) : void 0;
-  return name2 && /^[A-Za-z_]\w*$/.test(name2) ? name2 : void 0;
+  const name2 = obj ? readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : void 0) : void 0;
+  return receiverName(name2);
+}
+function receiverName(name2) {
+  if (!name2) return void 0;
+  const bare = name2.replace(/^(?:#|@{1,2})/, "");
+  return /^[A-Za-z_$][\w$]*$/.test(bare) ? bare : void 0;
 }
 function readTypeName(node) {
   if (!node) return void 0;
@@ -8258,13 +8263,14 @@ function readTypeName(node) {
   visit(node);
   return last;
 }
-var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, TYPE_LEAF;
+var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, RUBY_VARIABLE, TYPE_LEAF;
 var init_node = __esm({
   "src/ast/node.ts"() {
     "use strict";
     IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
     COMMENT_NODE = /(^|_)comment$/;
     UNNAMED_CHAIN = /* @__PURE__ */ new Set(["reference_declarator", "parenthesized_declarator"]);
+    RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
     TYPE_LEAF = /identifier|constant|(^|_)name$/;
   }
 });
@@ -15291,7 +15297,7 @@ function declaredType(signature, name2) {
   if (!signature.includes(name2)) return void 0;
   let re = declaredRe.get(name2);
   if (!re) {
-    re = new RegExp(`(?:^|[(,\\s])${name2}\\s*(?::\\s*["']?|\\s+[*&]?)\\s*(?:([A-Za-z_]\\w*)\\.)?(?:[A-Za-z_]\\w*\\.)*([A-Za-z_]\\w*)`);
+    re = new RegExp(`(?:^|[(,\\s])${escapeRegExp(name2)}\\s*(?::\\s*["']?|\\s+[*&]?)\\s*(?:([A-Za-z_]\\w*)\\.)?(?:[A-Za-z_]\\w*\\.)*([A-Za-z_]\\w*)`);
     if (declaredRe.size < 4096) declaredRe.set(name2, re);
   }
   const m = re.exec(signature);
@@ -15866,6 +15872,7 @@ var init_bind = __esm({
     init_modules();
     init_tests_map();
     init_sort();
+    init_util();
     REFERENCE_KINDS3 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
     STRICT = /* @__PURE__ */ new Set(["js", "go"]);
     SHAPED = /* @__PURE__ */ new Set(["go", "python"]);

@@ -96,7 +96,11 @@ export const SCHEMA_VERSION = 5;
 // sites; Rust `crate::`/`super::` calls carry their path as the receiver.
 // v18: a method called on a Go composite literal (`T{…}.M()`) takes the
 // literal's type as its receiver, where it read an identifier inside the body.
-export const EXTRACTOR_VERSION = 18;
+// v19: a call on a receiver named with `$` (`$el.render()`, `clicks$.subscribe()`),
+// on a JS private field (`this.#cache.get()`) or on a Ruby instance/class
+// variable (`@repo.save`) keeps that receiver at the AST tier, where it was
+// recorded as a bare call.
+export const EXTRACTOR_VERSION = 19;
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.

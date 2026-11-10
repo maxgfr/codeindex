@@ -31,6 +31,7 @@ import { resolveContextFor } from "./derived.js";
 import { tierForPath } from "./modules.js";
 import { isTestCaseFile, isTestPath } from "./tests-map.js";
 import { byStr } from "./sort.js";
+import { escapeRegExp } from "./util.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -133,12 +134,14 @@ function goExternalName(spec: string): string {
 // `r *http.Request`) or a Python annotation (`app: "Flask"`). `type` is the
 // last segment of a qualified type, `qualifier` its first (`http`) when it has
 // one; undefined when the header does not say.
+// `name` is escaped: a receiver may hold `$`, which unescaped is an
+// end-of-input assertion — the header of `($el: Widget)` then never matched.
 const declaredRe = new Map<string, RegExp>();
 function declaredType(signature: string, name: string): { type: string; qualifier?: string } | undefined {
   if (!signature.includes(name)) return undefined; // the common case, without a regex
   let re = declaredRe.get(name);
   if (!re) {
-    re = new RegExp(`(?:^|[(,\\s])${name}\\s*(?::\\s*["']?|\\s+[*&]?)\\s*(?:([A-Za-z_]\\w*)\\.)?(?:[A-Za-z_]\\w*\\.)*([A-Za-z_]\\w*)`);
+    re = new RegExp(`(?:^|[(,\\s])${escapeRegExp(name)}\\s*(?::\\s*["']?|\\s+[*&]?)\\s*(?:([A-Za-z_]\\w*)\\.)?(?:[A-Za-z_]\\w*\\.)*([A-Za-z_]\\w*)`);
     if (declaredRe.size < 4096) declaredRe.set(name, re);
   }
   const m = re.exec(signature);
