@@ -119,26 +119,40 @@ function bracketClass(pattern: string, start: number): { source: string; end: nu
   let body = "";
   let impossible = false;
   let first = true;
+  // The single character a `-` right after it would start a range from.
+  let prev: string | undefined;
+  const member = (ch: string): void => {
+    body += escapeClassChar(ch);
+    prev = ch;
+  };
   for (; j < pattern.length; j++) {
     const ch = pattern[j]!;
     if (ch === "]" && !first) break;
     first = false;
     if (ch === "\\" && j + 1 < pattern.length) {
-      body += escapeClassChar(pattern[++j]!);
+      member(pattern[++j]!);
     } else if (ch === "[" && pattern[j + 1] === ":") {
       const close = pattern.indexOf(":]", j + 2);
       if (close === -1) {
-        body += "\\[";
+        member("[");
         continue;
       }
       const posix = POSIX_CLASSES[pattern.slice(j + 2, close)];
       if (posix === undefined) impossible = true;
       else body += posix;
+      prev = undefined;
       j = close + 1;
-    } else if (ch === "-") {
-      body += "-"; // a range, or a literal at either end — JS reads both alike
+    } else if (ch === "-" && prev !== undefined && j + 1 < pattern.length && pattern[j + 1] !== "]") {
+      // A range from `prev`, which is already a member, to the next character.
+      // Reversed (`[z-a]`), git's wildmatch matches nothing with it and keeps
+      // `z`; written into the regex as is, it is a syntax error, and the whole
+      // RULE was dropped — files git ignores were indexed.
+      let high = pattern[++j]!;
+      if (high === "\\" && j + 1 < pattern.length) high = pattern[++j]!;
+      if (high >= prev) body += "-" + escapeClassChar(high);
+      prev = undefined;
     } else {
-      body += escapeClassChar(ch);
+      member(ch); // a `-` here is a literal: first, last, or right after a range
     }
   }
   if (j >= pattern.length) return undefined; // never closed

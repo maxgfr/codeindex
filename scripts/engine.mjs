@@ -460,26 +460,35 @@ function bracketClass(pattern, start2) {
   let body2 = "";
   let impossible = false;
   let first = true;
+  let prev;
+  const member = (ch) => {
+    body2 += escapeClassChar(ch);
+    prev = ch;
+  };
   for (; j < pattern.length; j++) {
     const ch = pattern[j];
     if (ch === "]" && !first) break;
     first = false;
     if (ch === "\\" && j + 1 < pattern.length) {
-      body2 += escapeClassChar(pattern[++j]);
+      member(pattern[++j]);
     } else if (ch === "[" && pattern[j + 1] === ":") {
       const close = pattern.indexOf(":]", j + 2);
       if (close === -1) {
-        body2 += "\\[";
+        member("[");
         continue;
       }
       const posix9 = POSIX_CLASSES[pattern.slice(j + 2, close)];
       if (posix9 === void 0) impossible = true;
       else body2 += posix9;
+      prev = void 0;
       j = close + 1;
-    } else if (ch === "-") {
-      body2 += "-";
+    } else if (ch === "-" && prev !== void 0 && j + 1 < pattern.length && pattern[j + 1] !== "]") {
+      let high = pattern[++j];
+      if (high === "\\" && j + 1 < pattern.length) high = pattern[++j];
+      if (high >= prev) body2 += "-" + escapeClassChar(high);
+      prev = void 0;
     } else {
-      body2 += escapeClassChar(ch);
+      member(ch);
     }
   }
   if (j >= pattern.length) return void 0;

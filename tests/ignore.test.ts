@@ -211,10 +211,21 @@ describe("differential against git check-ignore", () => {
     "r\\[x",
     "q[[:space:][:punct:]]",
     "p[^[:alnum:]]",
+    // A reversed range matches nothing, but the bound before it is still a
+    // member — git reads `[z-a]` as `z`, where the rule used to be dropped whole.
+    "o[z-a]n",
+    "m[c-a-z]",
+    "k[!z-a]",
+    "h[a-\\c]",
+    "g[\\a-c]",
+    "f[a-c-e]",
+    "e[--0]",
   ];
   const PATHS = [
     "xa", "xb", "x^", "1z", "az", "yb", "ye", "a1", "Z9", "w]", "wx", "va", "v-", "vd", "README.md", "readme.md",
     "ub", "u1", "t]q", "tq", "a.pyc", "a.pyx", "r[x", "rx", "q ", "q!", "qa", "p_", "pa", "p9",
+    "ozn", "oan", "oyn", "o-n", "mc", "ma", "mb", "m-", "mz", "my", "kz", "ka", "km",
+    "ha", "hb", "hc", "hd", "ga", "gb", "gc", "gd", "fa", "fb", "fc", "fd", "fe", "f-", "e-", "e.", "e0", "e1",
   ];
 
   it("ignores exactly the paths git ignores", () => {
