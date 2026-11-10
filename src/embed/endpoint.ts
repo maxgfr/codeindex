@@ -17,6 +17,7 @@
 
 import type { RepoScan } from "../scan.js";
 import { sha1 } from "../hash.js";
+import { clampTimerMs } from "../util.js";
 import { quantize } from "./encode.js";
 import { EMBED_VERSION } from "./model.js";
 import { embeddingUnits, reusableVectors, unitHash, unitRecord, type EmbeddingIndex, type EmbeddingRecord } from "./index.js";
@@ -62,9 +63,9 @@ export function healthzUrl(base: string): string {
 }
 
 function resolveTimeout(opts: EmbedEndpointOptions): number {
-  if (typeof opts.timeoutMs === "number") return opts.timeoutMs;
+  if (typeof opts.timeoutMs === "number") return clampTimerMs(opts.timeoutMs);
   const env = Number(process.env.CODEINDEX_EMBED_TIMEOUT_MS);
-  return Number.isFinite(env) && env > 0 ? env : 30_000;
+  return Number.isFinite(env) && env > 0 ? clampTimerMs(env) : 30_000;
 }
 
 // Request float embeddings for a batch of texts from the endpoint's /embed

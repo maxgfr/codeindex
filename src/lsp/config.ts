@@ -29,6 +29,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { clampTimerMs } from "../util.js";
 
 export interface LspServerConfig {
   /** Stable id, used in `source` labels and in `lsp status`. */
@@ -198,17 +199,17 @@ export const DEFAULT_STARTUP_TIMEOUT_MS = 15000;
  * retune every server without editing an lsp.json the team shares.
  */
 export function timeoutFor(server: LspServerConfig): number {
-  return positiveEnv("CODEINDEX_LSP_TIMEOUT_MS") ?? server.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  return clampTimerMs(positiveEnv("CODEINDEX_LSP_TIMEOUT_MS") ?? server.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 }
 
 /** The `initialize` budget, with the same precedence as timeoutFor. */
 export function startupTimeoutFor(server: LspServerConfig): number {
-  return positiveEnv("CODEINDEX_LSP_STARTUP_TIMEOUT_MS") ?? server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
+  return clampTimerMs(positiveEnv("CODEINDEX_LSP_STARTUP_TIMEOUT_MS") ?? server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS);
 }
 
 function positiveEnv(name: string): number | undefined {
   const raw = process.env[name];
   if (raw === undefined) return undefined;
   const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : undefined;
+  return Number.isFinite(value) && value > 0 ? clampTimerMs(value) : undefined;
 }

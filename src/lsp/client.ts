@@ -13,6 +13,7 @@
 // didChange. Anything richer belongs in an editor, not in an indexer.
 
 import { createFramer, encodeMessage, fileUri, locationsToRefs, incomingCallsToSites, uniqueIncomingCalls, type LspMessage, type LspRef, type LspIncomingCall } from "./protocol.js";
+import { clampTimerMs } from "../util.js";
 
 export interface LspTransport {
   write(chunk: string): void;
@@ -99,8 +100,8 @@ interface Pending {
 }
 
 export async function openLspSession(transport: LspTransport, options: LspSessionOptions): Promise<LspSession> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
-  const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT;
+  const timeoutMs = clampTimerMs(options.timeoutMs ?? DEFAULT_TIMEOUT);
+  const startupTimeoutMs = clampTimerMs(options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT);
 
   const framer = createFramer();
   const pending = new Map<number, Pending>();

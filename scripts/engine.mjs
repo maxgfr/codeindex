@@ -152,13 +152,15 @@ function stemOf(term) {
   if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
   return t;
 }
-var GIT_LOCALE, GIT_SAFE_CONFIG, whichCache, STOPWORDS, NON_ASCII, NON_WORD, ASCII_CASE_1, ASCII_CASE_2, ASCII_GLUE, ASCII_SPLIT, UNICODE_CASE_1, UNICODE_CASE_2, UNICODE_GLUE, UNICODE_SPLIT;
+var GIT_LOCALE, GIT_SAFE_CONFIG, whichCache, MAX_TIMER_MS, clampTimerMs, STOPWORDS, NON_ASCII, NON_WORD, ASCII_CASE_1, ASCII_CASE_2, ASCII_GLUE, ASCII_SPLIT, UNICODE_CASE_1, UNICODE_CASE_2, UNICODE_GLUE, UNICODE_SPLIT;
 var init_util = __esm({
   "src/util.ts"() {
     "use strict";
     GIT_LOCALE = { LC_ALL: "C", LANGUAGE: "" };
     GIT_SAFE_CONFIG = ["-c", "core.fsmonitor=false"];
     whichCache = /* @__PURE__ */ new Map();
+    MAX_TIMER_MS = 2147483647;
+    clampTimerMs = (ms) => Math.min(ms, MAX_TIMER_MS);
     STOPWORDS = /* @__PURE__ */ new Set([
       "the",
       "a",
@@ -19085,9 +19087,9 @@ function healthzUrl(base) {
   return stripTrailingSlash(base).replace(/\/embed$/, "") + "/healthz";
 }
 function resolveTimeout(opts) {
-  if (typeof opts.timeoutMs === "number") return opts.timeoutMs;
+  if (typeof opts.timeoutMs === "number") return clampTimerMs(opts.timeoutMs);
   const env = Number(process.env.CODEINDEX_EMBED_TIMEOUT_MS);
-  return Number.isFinite(env) && env > 0 ? env : 3e4;
+  return Number.isFinite(env) && env > 0 ? clampTimerMs(env) : 3e4;
 }
 async function embedViaEndpoint(texts, opts = {}) {
   const base = resolveEmbedEndpoint(opts);
@@ -19188,6 +19190,7 @@ var init_endpoint = __esm({
   "src/embed/endpoint.ts"() {
     "use strict";
     init_hash();
+    init_util();
     init_encode();
     init_model();
     init_embed();
@@ -19585,21 +19588,22 @@ function serverForLang(config, lang) {
   return config.servers.find((s) => s.languages.includes(lang));
 }
 function timeoutFor(server) {
-  return positiveEnv("CODEINDEX_LSP_TIMEOUT_MS") ?? server.timeoutMs ?? DEFAULT_TIMEOUT_MS2;
+  return clampTimerMs(positiveEnv("CODEINDEX_LSP_TIMEOUT_MS") ?? server.timeoutMs ?? DEFAULT_TIMEOUT_MS2);
 }
 function startupTimeoutFor(server) {
-  return positiveEnv("CODEINDEX_LSP_STARTUP_TIMEOUT_MS") ?? server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
+  return clampTimerMs(positiveEnv("CODEINDEX_LSP_STARTUP_TIMEOUT_MS") ?? server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS);
 }
 function positiveEnv(name2) {
   const raw = process.env[name2];
   if (raw === void 0) return void 0;
   const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : void 0;
+  return Number.isFinite(value) && value > 0 ? clampTimerMs(value) : void 0;
 }
 var LSP_CONFIG_NAME, LSP_CONFIG_DIR, LSP_TRUST_HINT, DEFAULT_TIMEOUT_MS2, DEFAULT_STARTUP_TIMEOUT_MS;
 var init_config2 = __esm({
   "src/lsp/config.ts"() {
     "use strict";
+    init_util();
     LSP_CONFIG_NAME = "lsp.json";
     LSP_CONFIG_DIR = ".codeindex";
     LSP_TRUST_HINT = "a repository's lsp.json names commands to run, so it is read only with --trust-lsp-config or CODEINDEX_TRUST_LSP_CONFIG=1";
@@ -19958,8 +19962,8 @@ function withServerError(message, transport) {
   return detail && !message.includes(detail) ? `${message}: ${detail}` : message;
 }
 async function openLspSession(transport, options) {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT;
-  const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT;
+  const timeoutMs = clampTimerMs(options.timeoutMs ?? DEFAULT_TIMEOUT);
+  const startupTimeoutMs = clampTimerMs(options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT);
   const framer = createFramer();
   const pending = /* @__PURE__ */ new Map();
   const open = /* @__PURE__ */ new Set();
@@ -20116,6 +20120,7 @@ var init_client = __esm({
   "src/lsp/client.ts"() {
     "use strict";
     init_protocol();
+    init_util();
     LspTimeout = class extends Error {
       constructor(method, ms) {
         super(`${method} exceeded ${ms}ms`);
@@ -20352,7 +20357,7 @@ var init_pool2 = __esm({
       hooked = false;
       closed = false;
       constructor(options = {}) {
-        this.idleMs = options.idleMs ?? idleFromEnv() ?? DEFAULT_IDLE_MS;
+        this.idleMs = clampTimerMs(options.idleMs ?? idleFromEnv() ?? DEFAULT_IDLE_MS);
         this.open = options.open ?? openServer;
       }
       /** Live sessions, for tests and status. */

@@ -22,7 +22,7 @@
 // which servers use to exit when their parent is SIGKILLed.
 
 import { realpathSync } from "node:fs";
-import { have } from "../util.js";
+import { clampTimerMs, have } from "../util.js";
 import { sha1 } from "../hash.js";
 import type { RepoScan } from "../scan.js";
 import { openLspSession, withServerError, type LspSession, type LspTransport } from "./client.js";
@@ -146,7 +146,7 @@ export class LspSessionPool {
   private closed = false;
 
   constructor(options: LspPoolOptions = {}) {
-    this.idleMs = options.idleMs ?? idleFromEnv() ?? DEFAULT_IDLE_MS;
+    this.idleMs = clampTimerMs(options.idleMs ?? idleFromEnv() ?? DEFAULT_IDLE_MS);
     this.open = options.open ?? openServer;
   }
 

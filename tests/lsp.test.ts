@@ -304,6 +304,19 @@ describe("LSP session state machine (no process)", () => {
     expect(sentAfter(from)).toEqual([]);
   });
 
+  it("a budget past what a timer can wait is the longest wait, not an immediate timeout", async () => {
+    const transport = memoryTransport();
+    const opening = openLspSession(transport, { root: "/tmp/repo", timeoutMs: 1e10, startupTimeoutMs: 1e10 });
+    await new Promise((r) => setTimeout(r, 20));
+    initialize(transport, { referencesProvider: true });
+    const session = await opening;
+
+    const pending = session.references("src/a.ts", 1, 0);
+    await new Promise((r) => setTimeout(r, 20));
+    transport.reply({ jsonrpc: "2.0", id: 2, result: [] });
+    expect(await pending).toEqual([]);
+  });
+
   it("surfaces a server error response as a rejection", async () => {
     const transport = memoryTransport();
     const opening = openLspSession(transport, { root: "/tmp/repo" });

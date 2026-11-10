@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseMcpFlags } from "../src/engine-cli.js";
-import { loadLspConfig, parseLspConfig, resolveLspConfigPath, userLspConfigPath } from "../src/lsp/config.js";
+import { loadLspConfig, parseLspConfig, resolveLspConfigPath, startupTimeoutFor, timeoutFor, userLspConfigPath } from "../src/lsp/config.js";
 import { callersWithLsp, lspStatus, referencesWithLsp } from "../src/lsp/index.js";
 import { findReferences } from "../src/query.js";
 import { scanRepo } from "../src/scan.js";
@@ -157,6 +157,22 @@ describe("lsp.json budgets", () => {
   it.each([0, -1, Number.NaN, "5000"])("rejects timeoutMs %s", (value) => {
     expect(() => parseLspConfig(server({ timeoutMs: value }))).toThrow(/timeoutMs must be a positive number/);
     expect(() => parseLspConfig(server({ startupTimeoutMs: value }))).toThrow(/startupTimeoutMs must be a positive number/);
+  });
+
+  it("caps a budget at the longest delay a timer takes", () => {
+    const one = parseLspConfig(server({ timeoutMs: 1e10, startupTimeoutMs: 1e10 })).servers[0]!;
+    expect(timeoutFor(one)).toBe(2_147_483_647);
+    expect(startupTimeoutFor(one)).toBe(2_147_483_647);
+    process.env.CODEINDEX_LSP_TIMEOUT_MS = "10000000000";
+    process.env.CODEINDEX_LSP_STARTUP_TIMEOUT_MS = "10000000000";
+    try {
+      const plain = parseLspConfig(server({})).servers[0]!;
+      expect(timeoutFor(plain)).toBe(2_147_483_647);
+      expect(startupTimeoutFor(plain)).toBe(2_147_483_647);
+    } finally {
+      delete process.env.CODEINDEX_LSP_TIMEOUT_MS;
+      delete process.env.CODEINDEX_LSP_STARTUP_TIMEOUT_MS;
+    }
   });
 
   it("keeps a positive budget", () => {

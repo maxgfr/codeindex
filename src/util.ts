@@ -106,6 +106,12 @@ export function clipInline(s: string, max: number): string {
   return cut.replace(/\s+$/, "") + "…";
 }
 
+// The longest delay a timer takes. Past it setTimeout does not wait longer: it
+// warns and fires after 1 ms, so a budget meant as "practically never"
+// (CODEINDEX_LSP_TIMEOUT_MS=10000000000) timed every request out at once.
+export const MAX_TIMER_MS = 2_147_483_647;
+export const clampTimerMs = (ms: number): number => Math.min(ms, MAX_TIMER_MS);
+
 // Escape a string for safe inclusion as a literal inside a RegExp.
 export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
