@@ -12772,7 +12772,23 @@ function resolveJvm(fromRel, spec, ctx) {
 }
 function resolveC(fromRel, spec, ctx) {
   const fromDir = fromRel.includes("/") ? posix2.dirname(fromRel) : "";
-  const hit = firstExisting(ctx, [posix2.join(fromDir, spec), ...ctx.cIncludeRoots.map((r) => posix2.join(r, spec))]);
+  let hit = firstExisting(ctx, [posix2.join(fromDir, spec)]);
+  if (!hit) {
+    const memo = ctx.cRootMemo ??= /* @__PURE__ */ new Map();
+    let viaRoot = memo.get(spec);
+    if (viaRoot === void 0) {
+      viaRoot = null;
+      for (const root of ctx.cIncludeRoots) {
+        const found = firstExisting(ctx, [posix2.join(root, spec)]);
+        if (found) {
+          viaRoot = found;
+          break;
+        }
+      }
+      memo.set(spec, viaRoot);
+    }
+    hit = viaRoot ?? void 0;
+  }
   if (hit) return { kind: "resolved", target: hit };
   if (SYSTEM_HEADERS.has(spec) || SYSTEM_HEADER_DIR.test(spec)) return { kind: "external" };
   return { kind: "dangling", reason: "missing-include" };

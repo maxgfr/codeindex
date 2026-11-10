@@ -569,6 +569,25 @@ describe("real-world campaign findings (2026-10)", () => {
     expect(resolveImport("src/a.c", ".c", "local.h", c)).toEqual({ kind: "resolved", target: "src/local.h" });
   });
 
+  it("a C include probes the includer's own directory before the include roots, whatever was resolved before", () => {
+    // The include-root probe is memoized per spec: one including directory's
+    // answer must never be served to another.
+    const c = scratchCtx({
+      "a/util.h": "",
+      "a/x.c": '#include "util.h"\n',
+      "b/y.c": '#include "util.h"\n',
+      "c/z.c": '#include "util.h"\n#include "nowhere.h"\n',
+      "include/util.h": "",
+    });
+    for (let round = 0; round < 2; round++) {
+      expect(resolveImport("b/y.c", ".c", "util.h", c)).toEqual({ kind: "resolved", target: "include/util.h" });
+      expect(resolveImport("a/x.c", ".c", "util.h", c)).toEqual({ kind: "resolved", target: "a/util.h" });
+      expect(resolveImport("c/z.c", ".c", "util.h", c)).toEqual({ kind: "resolved", target: "include/util.h" });
+      expect(resolveImport("c/z.c", ".c", "nowhere.h", c)).toEqual({ kind: "dangling", reason: "missing-include" });
+      expect(resolveImport("a/x.c", ".c", "nowhere.h", c)).toEqual({ kind: "dangling", reason: "missing-include" });
+    }
+  });
+
   it("S-104: a doc link to a file that exists but is not indexed is no broken link", () => {
     const c = scratchCtx({ "docs/features/e.md": "# e\n", "docs/assets/images/events@2x.png": "\x89PNG", "README.md": "# r\n" });
     expect(resolveDocLink("docs/features/e.md", "../assets/images/events@2x.png", c)).toEqual({ kind: "external" });

@@ -141,6 +141,9 @@ export interface ResolveContext {
   // The same memo for Python, same key: resolvePython also only reads the
   // importer's directory (relative base, enclosing roots).
   pyMemo?: Map<string, Resolution>;
+  // C/C++: the file an include spec reaches through cIncludeRoots (null: none),
+  // keyed by spec — that probe never looks at the including file.
+  cRootMemo?: Map<string, string | null>;
   // Per-directory sorted file lists by extension ("<ext>\0<dir>"), for the
   // Go-package "first file in the directory" rule.
   dirFilesMemo?: Map<string, string[]>;
@@ -1479,9 +1482,31 @@ const SYSTEM_HEADER_DIR = /^(?:sys|arpa|netinet|net)\//;
 // C/C++: local `#include "x"` relative to the including file, then each include
 // root. Unresolved quoted includes are dangling (they read as an in-repo
 // intent), except the system headers above.
+//
+// The include-root probe depends on the spec alone, so it is memoized per
+// spec. cIncludeRoots holds EVERY directory named include, inc or src, and
+// each `#include` used to join and normalize one path per root before probing
+// any: on a 3 000-file tree with 600 such directories, 66 000 includes built
+// 40 million paths and the graph took 5.4 s of CPU.
 function resolveC(fromRel: string, spec: string, ctx: ResolveContext): Resolution {
   const fromDir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
-  const hit = firstExisting(ctx, [posix.join(fromDir, spec), ...ctx.cIncludeRoots.map((r) => posix.join(r, spec))]);
+  let hit = firstExisting(ctx, [posix.join(fromDir, spec)]);
+  if (!hit) {
+    const memo = (ctx.cRootMemo ??= new Map());
+    let viaRoot = memo.get(spec);
+    if (viaRoot === undefined) {
+      viaRoot = null;
+      for (const root of ctx.cIncludeRoots) {
+        const found = firstExisting(ctx, [posix.join(root, spec)]);
+        if (found) {
+          viaRoot = found;
+          break;
+        }
+      }
+      memo.set(spec, viaRoot);
+    }
+    hit = viaRoot ?? undefined;
+  }
   if (hit) return { kind: "resolved", target: hit };
   if (SYSTEM_HEADERS.has(spec) || SYSTEM_HEADER_DIR.test(spec)) return { kind: "external" };
   return { kind: "dangling", reason: "missing-include" };

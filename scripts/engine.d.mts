@@ -749,6 +749,7 @@ interface ResolveContext {
     warnings: string[];
     jsMemo?: Map<string, Resolution>;
     pyMemo?: Map<string, Resolution>;
+    cRootMemo?: Map<string, string | null>;
     dirFilesMemo?: Map<string, string[]>;
 }
 declare function buildResolveContext(scan: RepoScan): ResolveContext;
