@@ -7,12 +7,14 @@
 //
 // Shared by the CLI and the MCP server, so a path an agent copies out of a
 // shell answer reads the same in a tool call.
-import { isAbsolute, relative } from "node:path";
+//
+// Normalized like a path, too: `src/../src/a.ts` and `./src//a.ts` name the
+// file `src/a.ts`, and the MCP tools that take a file already read them so.
+import { isAbsolute, posix, relative } from "node:path";
 
 export function fileArgReadings(repo: string, arg: string): string[] {
-  let rel = (isAbsolute(arg) ? relative(repo, arg) : arg).replace(/\\/g, "/");
-  while (rel.startsWith("./")) rel = rel.slice(2);
-  return rel !== arg && rel !== "" && rel !== ".." && !rel.startsWith("../") ? [arg, rel] : [arg];
+  const rel = posix.normalize((isAbsolute(arg) ? relative(repo, arg) : arg).replace(/\\/g, "/")).replace(/\/+$/, "");
+  return rel !== arg && rel !== "" && rel !== "." && rel !== ".." && !rel.startsWith("../") ? [arg, rel] : [arg];
 }
 
 /** The first reading of `arg` that `known` holds, or undefined. */

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMAND_FLAGS, VALUE_FLAGS, parseFlags, parseMcpFlags } from "../src/engine-cli.js";
+import { fileArgReadings, resolveFileArg } from "../src/patharg.js";
 
 // The CLI's argument contract: a flag a command does not read, an unknown
 // single-dash token or a stray positional is an error (exit 2) with a
@@ -181,5 +182,50 @@ describe("rewrite takes ONE command line", () => {
     expect(cli(["rewrite", "grep -r foo ."], cwd).status).toBe(1);
     expect(cli(["rewrite", "grep -r foo src"], cwd).status).toBe(0); // the submodule is not in src
     expect(cli(["rewrite", "git grep foo"], cwd).status).toBe(0); // git grep skips submodules too
+  });
+});
+
+describe("mcp flags and path arguments read strictly", () => {
+  it("a value flag never takes another flag for its value", () => {
+    expect(() => parseMcpFlags(["--repo", "--watch"])).toThrow(/--repo requires a directory/);
+    expect(() => parseMcpFlags(["--server-name", "--tools", "find"])).toThrow(/--server-name requires a value/);
+    expect(() => parseMcpFlags(["--tools"])).toThrow(/--tools requires a profile/);
+  });
+
+  it("--max-response-bytes is a positive whole number", () => {
+    expect(parseMcpFlags(["--max-response-bytes", "40"]).maxResponseBytes).toBe(40);
+    expect(parseMcpFlags(["--max-response-bytes", "1e6"]).maxResponseBytes).toBe(1_000_000);
+    for (const bad of ["1.5", "0", "-3", "abc"]) {
+      expect(() => parseMcpFlags(["--max-response-bytes", bad]), bad).toThrow(/positive whole number/);
+    }
+  });
+
+  it("--tools must name at least one profile", () => {
+    expect(() => parseMcpFlags(["--tools", ","])).toThrow(/--tools names no profile/);
+    expect(() => parseMcpFlags(["--tools", " , "])).toThrow(/--tools names no profile/);
+    expect(parseMcpFlags(["--tools", "find,"]).profile).toBe("find,");
+  });
+
+  it("a file argument is read as a path: `..`, `//` and a trailing slash are spellings", () => {
+    const known = (rel: string): boolean => rel === "src/client.ts";
+    for (const arg of ["src/client.ts", "./src/client.ts", "src/../src/client.ts", "./src//client.ts", "src/./client.ts", "src\\client.ts", join(REPO, "src", "..", "src", "client.ts")]) {
+      expect(resolveFileArg(REPO, arg, known), arg).toBe("src/client.ts");
+    }
+    // Outside the repository, or nothing at all, is still not a file of it.
+    expect(fileArgReadings(REPO, "../elsewhere.ts")).toEqual(["../elsewhere.ts"]);
+    expect(fileArgReadings(REPO, "src/../..")).toEqual(["src/../.."]);
+    expect(fileArgReadings(REPO, ".")).toEqual(["."]);
+    const impact = cli(["impact", "src/../src/client.ts", "--repo", REPO]);
+    expect(impact.status, impact.err).toBe(0);
+    expect(JSON.parse(impact.out).target).toBe("src/client.ts");
+  });
+
+  it("a leading slash in --include/--exclude anchors the glob to the repository root, as in grep", () => {
+    const count = (...flags: string[]): number => JSON.parse(cli(["scan", "--repo", REPO, ...flags]).out).fileCount;
+    const inSrc = count("--include", "src/**");
+    expect(inSrc).toBeGreaterThan(0);
+    expect(count("--include", "/src/**")).toBe(inSrc);
+    expect(count("--exclude", "/src/**")).toBe(count("--exclude", "src/**"));
+    expect(count("--exclude", "/src/**")).toBe(count() - inSrc);
   });
 });

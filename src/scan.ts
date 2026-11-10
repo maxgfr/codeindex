@@ -273,12 +273,15 @@ export function normalizeScope(root: string, scope: string): string {
 }
 
 // An include/exclude glob with the spellings of the repo root removed: a
-// leading `./`, or the repo's own absolute path. Anything else is the glob.
+// leading `./`, the repo's own absolute path, or a leading `/` — the root
+// anchor of a .gitignore line, which is how `grep` already reads it. A glob
+// that started with `/` and was not under the repo's path used to match
+// nothing at all: `scan --include '/src/**'` answered zero files, in silence.
 function normalizeGlob(root: string, glob: string): string {
   const abs = resolve(root).split(sep).join("/") + "/";
   let g = glob.startsWith(abs) ? glob.slice(abs.length) : glob;
   while (g.startsWith("./")) g = g.slice(2);
-  return g;
+  return g.replace(/^\/+/, "");
 }
 
 // The --scope/--include/--exclude test, in the shape of WalkOptions.filter:

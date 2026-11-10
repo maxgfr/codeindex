@@ -993,25 +993,30 @@ export function parseMcpFlags(argv: string[]): {
   let trustLspConfig = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // A value flag takes the next argument, unless that is another flag:
+    // `--repo --watch` used to pin a directory called "--watch".
+    const value = (): string | undefined => (argv[i + 1]?.startsWith("--") ? undefined : argv[++i]);
     if (a === "--repo") {
-      const v = argv[++i];
+      const v = value();
       if (!v) throw new Error("--repo requires a directory");
       defaultRepo = resolve(v);
     } else if (a === "--server-name") {
-      const v = argv[++i];
+      const v = value();
       if (!v) throw new Error("--server-name requires a value");
       name = v;
     } else if (a === "--max-response-bytes") {
-      const v = argv[++i];
+      const v = value();
       const n = Number(v);
-      if (!v || !Number.isFinite(n) || n <= 0) throw new Error("--max-response-bytes requires a positive number");
+      // A whole number, like every other number flag: 1.5 bytes is a typo.
+      if (!v || !Number.isSafeInteger(n) || n <= 0) throw new Error("--max-response-bytes requires a positive whole number");
       maxResponseBytes = n;
     } else if (a === "--tools") {
-      const v = argv[++i];
+      const v = value();
       if (!v) throw new Error(`--tools requires a profile: ${profileNames().join(", ")}`);
       // Validate HERE, at startup, rather than on the first tools/list: a typo'd
       // profile that silently advertised everything would look like it worked.
-      toolsInProfiles(v);
+      // So would a list naming none (`--tools ","`), which advertised no tool.
+      if (toolsInProfiles(v).size === 0) throw new Error(`--tools names no profile: ${profileNames().join(", ")}`);
       profile = v === "all" ? undefined : v;
     } else if (a === "--watch") {
       watch = true;

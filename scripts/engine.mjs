@@ -472,9 +472,9 @@ function bracketClass(pattern, start2) {
         body2 += "\\[";
         continue;
       }
-      const posix8 = POSIX_CLASSES[pattern.slice(j + 2, close)];
-      if (posix8 === void 0) impossible = true;
-      else body2 += posix8;
+      const posix9 = POSIX_CLASSES[pattern.slice(j + 2, close)];
+      if (posix9 === void 0) impossible = true;
+      else body2 += posix9;
       j = close + 1;
     } else if (ch === "-") {
       body2 += "-";
@@ -790,14 +790,14 @@ function enclosingRules(rootReal) {
   }
   if (!gitDir) return [];
   const top = above[above.length - 1];
-  const posix8 = (p) => p.split(sep).join("/");
-  const fromTop = posix8(relative(top, rootReal)) + "/";
-  const fromRoot = (abs) => posix8(relative(rootReal, abs));
+  const posix9 = (p) => p.split(sep).join("/");
+  const fromTop = posix9(relative(top, rootReal)) + "/";
+  const fromRoot = (abs) => posix9(relative(rootReal, abs));
   const rules = parseGitignore(readInfoExclude(gitDir), "", fromRoot(join(gitDir, "info", "exclude")));
   for (const dir of above.reverse()) {
     const file = join(dir, ".gitignore");
     if (!existsSync(file)) continue;
-    rules.push(...parseGitignore(readText(file), posix8(relative(top, dir)), fromRoot(file)));
+    rules.push(...parseGitignore(readText(file), posix9(relative(top, dir)), fromRoot(file)));
   }
   return rules.map((r) => ({
     ...r,
@@ -11106,7 +11106,7 @@ function normalizeGlob(root, glob) {
   const abs = resolve3(root).split(sep2).join("/") + "/";
   let g = glob.startsWith(abs) ? glob.slice(abs.length) : glob;
   while (g.startsWith("./")) g = g.slice(2);
-  return g;
+  return g.replace(/^\/+/, "");
 }
 function scanPathFilter(root, opts) {
   const scope = opts.scope === void 0 ? "" : normalizeScope(root, opts.scope);
@@ -22153,11 +22153,10 @@ var init_resolution = __esm({
 });
 
 // src/patharg.ts
-import { isAbsolute as isAbsolute7, relative as relative7 } from "path";
+import { isAbsolute as isAbsolute7, posix as posix8, relative as relative7 } from "path";
 function fileArgReadings(repo, arg) {
-  let rel2 = (isAbsolute7(arg) ? relative7(repo, arg) : arg).replace(/\\/g, "/");
-  while (rel2.startsWith("./")) rel2 = rel2.slice(2);
-  return rel2 !== arg && rel2 !== "" && rel2 !== ".." && !rel2.startsWith("../") ? [arg, rel2] : [arg];
+  const rel2 = posix8.normalize((isAbsolute7(arg) ? relative7(repo, arg) : arg).replace(/\\/g, "/")).replace(/\/+$/, "");
+  return rel2 !== arg && rel2 !== "" && rel2 !== "." && rel2 !== ".." && !rel2.startsWith("../") ? [arg, rel2] : [arg];
 }
 function resolveFileArg(repo, arg, known) {
   return fileArgReadings(repo, arg).find(known);
@@ -27226,23 +27225,24 @@ function parseMcpFlags(argv) {
   let trustLspConfig = false;
   for (let i2 = 0; i2 < argv.length; i2++) {
     const a = argv[i2];
+    const value = () => argv[i2 + 1]?.startsWith("--") ? void 0 : argv[++i2];
     if (a === "--repo") {
-      const v = argv[++i2];
+      const v = value();
       if (!v) throw new Error("--repo requires a directory");
       defaultRepo = resolve12(v);
     } else if (a === "--server-name") {
-      const v = argv[++i2];
+      const v = value();
       if (!v) throw new Error("--server-name requires a value");
       name2 = v;
     } else if (a === "--max-response-bytes") {
-      const v = argv[++i2];
+      const v = value();
       const n = Number(v);
-      if (!v || !Number.isFinite(n) || n <= 0) throw new Error("--max-response-bytes requires a positive number");
+      if (!v || !Number.isSafeInteger(n) || n <= 0) throw new Error("--max-response-bytes requires a positive whole number");
       maxResponseBytes = n;
     } else if (a === "--tools") {
-      const v = argv[++i2];
+      const v = value();
       if (!v) throw new Error(`--tools requires a profile: ${profileNames().join(", ")}`);
-      toolsInProfiles(v);
+      if (toolsInProfiles(v).size === 0) throw new Error(`--tools names no profile: ${profileNames().join(", ")}`);
       profile = v === "all" ? void 0 : v;
     } else if (a === "--watch") {
       watch = true;
