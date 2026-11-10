@@ -269,13 +269,140 @@ var init_util = __esm({
   }
 });
 
-// src/ignore.ts
-function patternToRegExpSource(pattern) {
+// src/wildcard.ts
+function wildcardSource(tokens) {
   let re = "";
+  for (const t of tokens) {
+    if (t.kind === "lit") re += escapeRegExp(t.ch);
+    else if (t.kind === "one") re += "[^/]";
+    else if (t.kind === "star") re += "[^/]*";
+    else if (t.kind === "any") re += ".*";
+    else if (t.kind === "prefix") re += "(?:.*/)?";
+    else if (t.kind === "segments") re += "(?:[^/]+/)*";
+    else re += t.source;
+  }
+  return re;
+}
+function wildcardRegExp(tokens, opts = {}) {
+  return new RegExp(`^${wildcardSource(tokens)}${opts.dirPrefix ? "($|/)" : "$"}`);
+}
+function wildcardLinear(tokens, opts = {}) {
+  const kinds2 = [];
+  const codes = [];
+  const classes = [];
+  const push = (kind, code = 0, cls) => {
+    kinds2.push(kind);
+    codes.push(code);
+    classes.push(cls);
+  };
+  for (const t of tokens) {
+    if (t.kind === "lit") push(LIT, t.ch.charCodeAt(0));
+    else if (t.kind === "one") push(ONE);
+    else if (t.kind === "star") push(STAR);
+    else if (t.kind === "any") push(ANY);
+    else if (t.kind === "prefix") {
+      push(PREFIX_START);
+      push(PREFIX_INSIDE);
+    } else if (t.kind === "segments") {
+      push(SEG_BOUNDARY);
+      push(SEG_INSIDE);
+    } else push(CLASS, 0, new RegExp(`^(?:${t.source})$`));
+  }
+  const accept = kinds2.length;
+  const dirPrefix = opts.dirPrefix === true;
+  const close = (active) => {
+    for (let s = 0; s < accept; s++) {
+      if (!active[s]) continue;
+      const kind = kinds2[s];
+      if (kind === STAR || kind === ANY) active[s + 1] = 1;
+      else if (kind === PREFIX_START || kind === SEG_BOUNDARY) active[s + 2] = 1;
+    }
+  };
+  return (subject) => {
+    let active = new Uint8Array(accept + 1);
+    let next = new Uint8Array(accept + 1);
+    active[0] = 1;
+    close(active);
+    for (let i2 = 0; i2 < subject.length; i2++) {
+      const c2 = subject.charCodeAt(i2);
+      const slash = c2 === 47;
+      if (dirPrefix && slash && active[accept]) return true;
+      next.fill(0);
+      let alive = false;
+      for (let s = 0; s < accept; s++) {
+        if (!active[s]) continue;
+        const kind = kinds2[s];
+        let to = -1;
+        if (kind === LIT) {
+          if (c2 === codes[s]) to = s + 1;
+        } else if (kind === ONE) {
+          if (!slash) to = s + 1;
+        } else if (kind === STAR) {
+          if (!slash) to = s;
+        } else if (kind === ANY) {
+          if (!isLineTerminator(c2)) to = s;
+        } else if (kind === PREFIX_START || kind === PREFIX_INSIDE) {
+          const inside = kind === PREFIX_START ? s + 1 : s;
+          if (!isLineTerminator(c2)) to = inside;
+          if (slash) {
+            next[inside + 1] = 1;
+            alive = true;
+          }
+        } else if (kind === SEG_BOUNDARY) {
+          if (!slash) to = s + 1;
+        } else if (kind === SEG_INSIDE) {
+          to = slash ? s - 1 : s;
+        } else if (classes[s].test(subject[i2])) {
+          to = s + 1;
+        }
+        if (to !== -1) {
+          next[to] = 1;
+          alive = true;
+        }
+      }
+      if (!alive) return false;
+      close(next);
+      const swap = active;
+      active = next;
+      next = swap;
+    }
+    return active[accept] === 1;
+  };
+}
+function wildcardMatcher(tokens, opts = {}) {
+  let unbounded = 0;
+  for (const t of tokens) if (UNBOUNDED.has(t.kind)) unbounded++;
+  if (unbounded > MAX_REGEX_WILDCARDS) return wildcardLinear(tokens, opts);
+  const re = wildcardRegExp(tokens, opts);
+  return (subject) => re.test(subject);
+}
+var MAX_REGEX_WILDCARDS, UNBOUNDED, LIT, ONE, STAR, ANY, PREFIX_START, PREFIX_INSIDE, SEG_BOUNDARY, SEG_INSIDE, CLASS, isLineTerminator;
+var init_wildcard = __esm({
+  "src/wildcard.ts"() {
+    "use strict";
+    init_util();
+    MAX_REGEX_WILDCARDS = 2;
+    UNBOUNDED = /* @__PURE__ */ new Set(["star", "any", "prefix", "segments"]);
+    LIT = 0;
+    ONE = 1;
+    STAR = 2;
+    ANY = 3;
+    PREFIX_START = 4;
+    PREFIX_INSIDE = 5;
+    SEG_BOUNDARY = 6;
+    SEG_INSIDE = 7;
+    CLASS = 8;
+    isLineTerminator = (c2) => c2 === 10 || c2 === 13 || c2 === 8232 || c2 === 8233;
+  }
+});
+
+// src/ignore.ts
+function patternTokens(pattern) {
+  const tokens = [];
   for (let i2 = 0; i2 < pattern.length; i2++) {
     const c2 = pattern[i2];
     if (c2 === "\\" && i2 + 1 < pattern.length) {
-      re += escapeRegExp(pattern[++i2]);
+      tokens.push({ kind: "lit", ch: pattern[++i2] });
     } else if (c2 === "*") {
       if (pattern[i2 + 1] === "*") {
         const atStart = i2 === 0 || pattern[i2 - 1] === "/";
@@ -284,32 +411,32 @@ function patternToRegExpSource(pattern) {
         const next = pattern[j + 1];
         if (atStart && next === "/") {
           i2 = j + 1;
-          re += "(?:[^/]+/)*";
+          tokens.push({ kind: "segments" });
         } else if (atStart && next === void 0) {
           i2 = j;
-          re += ".*";
+          tokens.push({ kind: "any" });
         } else {
           i2 = j;
-          re += "[^/]*";
+          tokens.push({ kind: "star" });
         }
       } else {
-        re += "[^/]*";
+        tokens.push({ kind: "star" });
       }
     } else if (c2 === "?") {
-      re += "[^/]";
+      tokens.push({ kind: "one" });
     } else if (c2 === "[") {
       const cls = bracketClass(pattern, i2);
       if (cls) {
-        re += cls.source;
+        tokens.push({ kind: "class", source: cls.source });
         i2 = cls.end;
       } else {
-        re += "\\[";
+        tokens.push({ kind: "lit", ch: "[" });
       }
     } else {
-      re += escapeRegExp(c2);
+      tokens.push({ kind: "lit", ch: c2 });
     }
   }
-  return re;
+  return tokens;
 }
 function bracketClass(pattern, start2) {
   let j = start2 + 1;
@@ -371,11 +498,12 @@ function parseGitignore(content, baseRel, source) {
     if (!line2) continue;
     const anchored = line2.includes("/");
     if (line2.startsWith("/")) line2 = line2.slice(1);
-    const body2 = patternToRegExpSource(line2);
+    const tokens = patternTokens(line2);
+    const body2 = wildcardSource(tokens);
     const reSource = anchored ? `^${prefix}${body2}$` : `^${prefix}(?:[^/]+/)*${body2}$`;
     try {
       const re = new RegExp(reSource);
-      const rule2 = { re, negated, dirOnly, test: fastMatcher(line2, body2, anchored, baseRel ? baseRel + "/" : "", re) };
+      const rule2 = { re, negated, dirOnly, test: fastMatcher(line2, tokens, anchored, baseRel ? baseRel + "/" : "") };
       if (source !== void 0) Object.assign(rule2, { source, line: n + 1, pattern: written });
       rules.push(rule2);
     } catch {
@@ -393,12 +521,13 @@ function literalHead(pattern) {
   }
   return { head, whole: true };
 }
-function fastMatcher(pattern, body2, anchored, prefix, re) {
+function fastMatcher(pattern, tokens, anchored, prefix) {
   if (anchored) {
     const { head: head2, whole: whole2 } = literalHead(pattern);
     const full = prefix + head2;
     if (whole2) return (rel2) => rel2 === full;
-    return (rel2) => rel2.startsWith(full) && re.test(rel2);
+    const matchBody = wildcardMatcher(tokens);
+    return (rel2) => rel2.startsWith(full) && matchBody(rel2.slice(prefix.length));
   }
   const { head, whole } = literalHead(pattern);
   if (whole) return (rel2, base) => base === head && rel2.startsWith(prefix);
@@ -406,8 +535,8 @@ function fastMatcher(pattern, body2, anchored, prefix, re) {
     const tail = literalHead(pattern.slice(1));
     if (tail.whole) return (rel2, base) => base.endsWith(tail.head) && rel2.startsWith(prefix);
   }
-  const baseRe = new RegExp(`^${body2}$`);
-  return (rel2, base) => rel2.startsWith(prefix) && baseRe.test(base);
+  const matchBase = wildcardMatcher(tokens);
+  return (rel2, base) => rel2.startsWith(prefix) && matchBase(base);
 }
 function isIgnored(rules, rel2, isDir) {
   const rule2 = decidingRule(rules, rel2, isDir);
@@ -427,6 +556,7 @@ var init_ignore = __esm({
   "src/ignore.ts"() {
     "use strict";
     init_util();
+    init_wildcard();
     POSIX_CLASSES = {
       alnum: "A-Za-z0-9",
       alpha: "A-Za-z",
@@ -1610,10 +1740,10 @@ function blankComments(src) {
         kept = i2;
         continue;
       }
-      if (next === STAR) {
+      if (next === STAR2) {
         out2 += src.slice(kept, i2);
         let run2 = 0;
-        while (i2 < n && !(src.charCodeAt(i2) === STAR && src.charCodeAt(i2 + 1) === SLASH)) {
+        while (i2 < n && !(src.charCodeAt(i2) === STAR2 && src.charCodeAt(i2 + 1) === SLASH)) {
           if (src.charCodeAt(i2) === NEWLINE) {
             out2 += " ".repeat(run2) + "\n";
             run2 = 0;
@@ -1713,7 +1843,7 @@ function extractReexports(rel2, content, localSymbols) {
   }
   return out2;
 }
-var ID, TYPE_KINDS, BraceSpans, EXT_LANG, REEXPORT_EXTS, SLASH, STAR, NEWLINE, DQUOTE, SQUOTE, BACKTICK, BACKSLASH, MAX_REEXPORTS;
+var ID, TYPE_KINDS, BraceSpans, EXT_LANG, REEXPORT_EXTS, SLASH, STAR2, NEWLINE, DQUOTE, SQUOTE, BACKTICK, BACKSLASH, MAX_REEXPORTS;
 var init_common = __esm({
   "src/lang/common.ts"() {
     "use strict";
@@ -1894,7 +2024,7 @@ var init_common = __esm({
     };
     REEXPORT_EXTS = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
     SLASH = 47;
-    STAR = 42;
+    STAR2 = 42;
     NEWLINE = 10;
     DQUOTE = 34;
     SQUOTE = 39;
@@ -2040,11 +2170,11 @@ function maskJs(src) {
         i2 = stop2;
         continue;
       }
-      if (next === STAR2) {
+      if (next === STAR3) {
         const close = src.indexOf("*/", i2 + 2);
         const end = close === -1 ? n : close + 2;
         let from = i2;
-        if (src.charCodeAt(i2 + 2) === STAR2) {
+        if (src.charCodeAt(i2 + 2) === STAR3) {
           JSDOC_IMPORT.lastIndex = 0;
           const body2 = src.slice(i2, end);
           for (let m; m = JSDOC_IMPORT.exec(body2); ) {
@@ -2159,14 +2289,14 @@ function maskBraced(src, lex2) {
       i2 = stop2;
       continue;
     }
-    if (c2 === SLASH2 && src.charCodeAt(i2 + 1) === STAR2) {
+    if (c2 === SLASH2 && src.charCodeAt(i2 + 1) === STAR3) {
       let j = i2 + 2;
       let depth = 1;
       while (j < n) {
-        if (src.charCodeAt(j) === STAR2 && src.charCodeAt(j + 1) === SLASH2) {
+        if (src.charCodeAt(j) === STAR3 && src.charCodeAt(j + 1) === SLASH2) {
           j += 2;
           if (--depth === 0) break;
-        } else if (lex2.nested && src.charCodeAt(j) === SLASH2 && src.charCodeAt(j + 1) === STAR2) {
+        } else if (lex2.nested && src.charCodeAt(j) === SLASH2 && src.charCodeAt(j + 1) === STAR3) {
           j += 2;
           depth++;
         } else j++;
@@ -2410,7 +2540,7 @@ function extractPackage(ext, content) {
   if (SCALA.has(ext)) return scalaPackage(content);
   return void 0;
 }
-var JS_TS, PY, C_CPP, KOTLIN, SCALA, SHELL, MAX_USE_EXPANSION, SHELL_SELF_DIR, Mask, UTF16_HOST, NEWLINE2, SPACE, HASH, DOLLAR, SQUOTE2, DQUOTE2, STAR2, SLASH2, LBRACKET, BACKSLASH2, RBRACKET, BACKTICK2, LBRACE, RBRACE, REGEX_AFTER, REGEX_AFTER_WORD, JSDOC_IMPORT, CHAR_LITERAL, ID2, JS_FROM, JS_BARE, JS_REQUIRE, JS_DYNAMIC, PY_IMPORT, PHP_TYPE_DECL, PHP_USE, PHP_USE_NAME, PHP_INCLUDE;
+var JS_TS, PY, C_CPP, KOTLIN, SCALA, SHELL, MAX_USE_EXPANSION, SHELL_SELF_DIR, Mask, UTF16_HOST, NEWLINE2, SPACE, HASH, DOLLAR, SQUOTE2, DQUOTE2, STAR3, SLASH2, LBRACKET, BACKSLASH2, RBRACKET, BACKTICK2, LBRACE, RBRACE, REGEX_AFTER, REGEX_AFTER_WORD, JSDOC_IMPORT, CHAR_LITERAL, ID2, JS_FROM, JS_BARE, JS_REQUIRE, JS_DYNAMIC, PY_IMPORT, PHP_TYPE_DECL, PHP_USE, PHP_USE_NAME, PHP_INCLUDE;
 var init_imports = __esm({
   "src/extract/imports.ts"() {
     "use strict";
@@ -2460,7 +2590,7 @@ var init_imports = __esm({
     DOLLAR = 36;
     SQUOTE2 = 39;
     DQUOTE2 = 34;
-    STAR2 = 42;
+    STAR3 = 42;
     SLASH2 = 47;
     LBRACKET = 91;
     BACKSLASH2 = 92;
@@ -3386,8 +3516,8 @@ var init_classify = __esm({
 });
 
 // src/glob.ts
-function globToRegExp(glob) {
-  let re = "";
+function globTokens(glob) {
+  const tokens = [];
   for (let i2 = 0; i2 < glob.length; i2++) {
     const c2 = glob[i2];
     if (c2 === "*") {
@@ -3395,29 +3525,29 @@ function globToRegExp(glob) {
         i2++;
         if (glob[i2 + 1] === "/") {
           i2++;
-          re += "(?:.*/)?";
+          tokens.push({ kind: "prefix" });
         } else {
-          re += ".*";
+          tokens.push({ kind: "any" });
         }
       } else {
-        re += "[^/]*";
+        tokens.push({ kind: "star" });
       }
     } else if (c2 === "?") {
-      re += "[^/]";
+      tokens.push({ kind: "one" });
     } else {
-      re += escapeRegExp(c2);
+      tokens.push({ kind: "lit", ch: c2 });
     }
   }
-  return new RegExp(`^${re}$`);
+  return tokens;
 }
 function compileGlobs(globs) {
   if (!globs || globs.length === 0) return null;
-  const res = globs.map(globToRegExp);
-  return (rel2) => res.some((r) => r.test(rel2));
+  const matchers = globs.map(globMatcher);
+  return (rel2) => matchers.some((m) => m(rel2));
 }
 function compileDirGlobs(globs) {
   if (!globs || globs.length === 0) return null;
-  const compiled = globs.map((g) => g.split("/").map((seg) => seg.includes("**") ? null : globToRegExp(seg)));
+  const compiled = globs.map((g) => g.split("/").map((seg) => seg.includes("**") ? null : globMatcher(seg)));
   return (dir) => {
     const parts2 = dir.split("/");
     return compiled.some((segs) => {
@@ -3425,16 +3555,16 @@ function compileDirGlobs(globs) {
         const seg = segs[i2];
         if (seg === void 0) return false;
         if (seg === null) return true;
-        if (!seg.test(parts2[i2])) return false;
+        if (!seg(parts2[i2])) return false;
       }
       return parts2.length < segs.length;
     });
   };
 }
 function compileDirExcludes(globs) {
-  const whole = (globs ?? []).filter((g) => g.endsWith("/**") && g.length > 3).map((g) => globToRegExp(g.slice(0, -3)));
+  const whole = (globs ?? []).filter((g) => g.endsWith("/**") && g.length > 3).map((g) => globMatcher(g.slice(0, -3)));
   if (whole.length === 0) return null;
-  return (dir) => whole.some((r) => r.test(dir));
+  return (dir) => whole.some((m) => m(dir));
 }
 function compileGlobFilter(globs) {
   if (!globs || globs.length === 0) return null;
@@ -3442,10 +3572,12 @@ function compileGlobFilter(globs) {
   const exclude2 = compileGlobs(globs.filter((g) => g.startsWith("!")).map((g) => g.slice(1)));
   return (rel2) => (!include2 || include2(rel2)) && !exclude2?.(rel2);
 }
+var globMatcher;
 var init_glob = __esm({
   "src/glob.ts"() {
     "use strict";
-    init_util();
+    init_wildcard();
+    globMatcher = (glob) => wildcardMatcher(globTokens(glob));
   }
 });
 
@@ -16892,25 +17024,23 @@ function tomlStringArray(body2, key) {
 function tomlString(body2, key) {
   return body2?.match(new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*["']([^"']+)["']`, "m"))?.[1];
 }
-function wsGlobToRegExp(pat) {
-  let re = "";
+function wsGlobMatcher(pat) {
+  const tokens = [];
   for (let i2 = 0; i2 < pat.length; i2++) {
     const c2 = pat[i2];
     if (c2 === "*") {
       if (pat[i2 + 1] === "*") {
-        re += ".*";
+        tokens.push({ kind: "any" });
         i2++;
         if (pat[i2 + 1] === "/") i2++;
       } else {
-        re += "[^/]*";
+        tokens.push({ kind: "star" });
       }
-    } else if ("\\^$.|?+()[]{}".includes(c2)) {
-      re += "\\" + c2;
     } else {
-      re += c2;
+      tokens.push({ kind: "lit", ch: c2 });
     }
   }
-  return new RegExp(`^${re}($|/)`);
+  return wildcardMatcher(tokens, { dirPrefix: true });
 }
 function probeNodePkg(root, dir, kind, warnings) {
   const path = join16(root, dir, "package.json");
@@ -17065,10 +17195,12 @@ function expandGlobDirs(root, pat) {
         for (const s of desc) next.add(s);
       }
     } else if (seg.includes("*")) {
-      const re = new RegExp(`^${seg.split("*").map(escapeRegExp).join("[^/]*")}$`);
+      const matchSeg = wildcardMatcher(
+        [...seg].map((ch) => ch === "*" ? { kind: "star" } : { kind: "lit", ch })
+      );
       for (const d of dirs) {
         for (const sub of subdirsOf(root, d)) {
-          if (re.test(sub.split("/").pop())) next.add(sub);
+          if (matchSeg(sub.split("/").pop())) next.add(sub);
         }
       }
     } else {
@@ -17169,11 +17301,11 @@ function detectCargoMembers(root, found, warnings) {
   if (!body2) return;
   const members = tomlStringArray(body2, "members");
   if (!members.length) return;
-  const excludes = tomlStringArray(body2, "exclude").map(wsGlobToRegExp);
+  const excludes = tomlStringArray(body2, "exclude").map(wsGlobMatcher);
   const candidates = /* @__PURE__ */ new Map();
   for (const pat of members) expandPattern(root, pat, candidates, "cargo", warnings);
   for (const [dir, pkg] of candidates) {
-    if (excludes.some((re) => re.test(dir))) continue;
+    if (excludes.some((excluded) => excluded(dir))) continue;
     if (!found.has(dir)) found.set(dir, pkg);
   }
 }
@@ -17236,11 +17368,11 @@ function detectUvMembers(root, found, warnings) {
   if (!body2) return;
   const members = tomlStringArray(body2, "members");
   if (!members.length) return;
-  const excludes = tomlStringArray(body2, "exclude").map(wsGlobToRegExp);
+  const excludes = tomlStringArray(body2, "exclude").map(wsGlobMatcher);
   const candidates = /* @__PURE__ */ new Map();
   for (const pat of members) expandPattern(root, pat, candidates, "uv", warnings);
   for (const [dir, pkg] of candidates) {
-    if (excludes.some((re) => re.test(dir))) continue;
+    if (excludes.some((excluded) => excluded(dir))) continue;
     if (!found.has(dir)) found.set(dir, pkg);
   }
 }
@@ -17466,9 +17598,9 @@ function detectWorkspaces(root) {
   if (npmPatterns.length) {
     const candidates = /* @__PURE__ */ new Map();
     for (const { pattern, kind } of npmPatterns) expandPattern(root, pattern, candidates, kind, warnings);
-    const negRes = negations.map(wsGlobToRegExp);
+    const negRes = negations.map(wsGlobMatcher);
     for (const [dir, pkg] of candidates) {
-      if (negRes.some((re) => re.test(dir))) continue;
+      if (negRes.some((negated) => negated(dir))) continue;
       found.set(dir, pkg);
     }
   }
@@ -17577,6 +17709,7 @@ var init_workspaces = __esm({
     init_resolve();
     init_sort();
     init_util();
+    init_wildcard();
     WS_SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", "dist", "build", "target", "coverage"]);
     MAX_RECURSE_DEPTH = 4;
     unquoteYaml = (s) => s.trim().replace(/^(["'])(.*)\1$/, "$2").trim();

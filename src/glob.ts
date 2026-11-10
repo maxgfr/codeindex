@@ -1,12 +1,18 @@
-import { escapeRegExp } from "./util.js";
+import { wildcardMatcher, type WildToken } from "./wildcard.js";
 
-// Minimal glob → RegExp for --include/--exclude. Supports `**` (any path,
+type Matcher = (subject: string) => boolean;
+
+// Minimal glob matcher for --include/--exclude. Supports `**` (any path,
 // crossing `/`), `*` (any run within a segment), and `?` (one non-`/` char).
 // Patterns match against the posix path relative to the repo root. Anything
 // fancier (brace expansion, extglob) is intentionally out of scope — keep it
 // dependency-free and predictable.
-function globToRegExp(glob: string): RegExp {
-  let re = "";
+//
+// Compiled through src/wildcard.ts rather than straight to a RegExp: these
+// globs come from CLI flags, MCP arguments and rules files, and a glob with
+// many stars made a backtracking regex take seconds per path.
+function globTokens(glob: string): WildToken[] {
+  const tokens: WildToken[] = [];
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i]!;
     if (c === "*") {
@@ -16,31 +22,33 @@ function globToRegExp(glob: string): RegExp {
         if (glob[i + 1] === "/") {
           // `a/**/b` should also match `a/b` → the segment is optional.
           i++;
-          re += "(?:.*/)?";
+          tokens.push({ kind: "prefix" });
         } else {
           // Trailing `**` (e.g. `src/**`) must match everything beneath, files
-          // included. `(?:.*/)?` only matches dir-like paths ending in `/`, so a
-          // bare trailing `**` would match ZERO files — use `.*` instead.
-          re += ".*";
+          // included. The optional-prefix form only matches dir-like paths
+          // ending in `/`, so a bare trailing `**` would match ZERO files.
+          tokens.push({ kind: "any" });
         }
       } else {
-        re += "[^/]*";
+        tokens.push({ kind: "star" });
       }
     } else if (c === "?") {
-      re += "[^/]";
+      tokens.push({ kind: "one" });
     } else {
-      re += escapeRegExp(c);
+      tokens.push({ kind: "lit", ch: c });
     }
   }
-  return new RegExp(`^${re}$`);
+  return tokens;
 }
+
+const globMatcher = (glob: string): Matcher => wildcardMatcher(globTokens(glob));
 
 // Compile a list of globs into a single predicate (matches if ANY glob matches).
 // An empty/undefined list yields `null` so callers can skip the test entirely.
 export function compileGlobs(globs: string[] | undefined): ((rel: string) => boolean) | null {
   if (!globs || globs.length === 0) return null;
-  const res = globs.map(globToRegExp);
-  return (rel: string) => res.some((r) => r.test(rel));
+  const matchers = globs.map(globMatcher);
+  return (rel: string) => matchers.some((m) => m(rel));
 }
 
 // Directory pruning for a walk filtered by `globs`: whether the directory `dir`
@@ -58,8 +66,8 @@ export function compileGlobs(globs: string[] | undefined): ((rel: string) => boo
 // costs time.
 export function compileDirGlobs(globs: string[] | undefined): ((dir: string) => boolean) | null {
   if (!globs || globs.length === 0) return null;
-  // Per glob: one regex per segment, null for a `**` segment.
-  const compiled = globs.map((g) => g.split("/").map((seg) => (seg.includes("**") ? null : globToRegExp(seg))));
+  // Per glob: one matcher per segment, null for a `**` segment.
+  const compiled = globs.map((g) => g.split("/").map((seg) => (seg.includes("**") ? null : globMatcher(seg))));
   return (dir: string) => {
     const parts = dir.split("/");
     return compiled.some((segs) => {
@@ -67,7 +75,7 @@ export function compileDirGlobs(globs: string[] | undefined): ((dir: string) => 
         const seg = segs[i];
         if (seg === undefined) return false; // the glob ends above this depth
         if (seg === null) return true;
-        if (!seg.test(parts[i]!)) return false;
+        if (!seg(parts[i]!)) return false;
       }
       return parts.length < segs.length;
     });
@@ -78,9 +86,9 @@ export function compileDirGlobs(globs: string[] | undefined): ((dir: string) => 
 // prefix matches the directory matches every path beneath it too, so the walk
 // can skip it unlisted. Any other exclude glob is left to the per-file test.
 export function compileDirExcludes(globs: string[] | undefined): ((dir: string) => boolean) | null {
-  const whole = (globs ?? []).filter((g) => g.endsWith("/**") && g.length > 3).map((g) => globToRegExp(g.slice(0, -3)));
+  const whole = (globs ?? []).filter((g) => g.endsWith("/**") && g.length > 3).map((g) => globMatcher(g.slice(0, -3)));
   if (whole.length === 0) return null;
-  return (dir: string) => whole.some((r) => r.test(dir));
+  return (dir: string) => whole.some((m) => m(dir));
 }
 
 // Negation-aware variant: `!`-prefixed globs EXCLUDE. A path passes when it

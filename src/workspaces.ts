@@ -15,6 +15,7 @@ import { readText } from "./walk.js";
 import { tolerantJsonParse } from "./resolve.js";
 import { byStr } from "./sort.js";
 import { escapeRegExp } from "./util.js";
+import { wildcardMatcher, type WildToken } from "./wildcard.js";
 
 export type WorkspaceKind =
   | "npm"
@@ -103,25 +104,26 @@ function tomlString(body: string | null, key: string): string | undefined {
 
 // Glob for workspace patterns/negations (npm semantics: `*` one level, `**`
 // crossing, match a prefix so `packages/*` covers the package dir itself).
-function wsGlobToRegExp(pat: string): RegExp {
-  let re = "";
+//
+// Through src/wildcard.ts: the patterns are a manifest's, i.e. repository
+// content, and must not be able to make a regex backtrack.
+function wsGlobMatcher(pat: string): (dir: string) => boolean {
+  const tokens: WildToken[] = [];
   for (let i = 0; i < pat.length; i++) {
     const c = pat[i]!;
     if (c === "*") {
       if (pat[i + 1] === "*") {
-        re += ".*";
+        tokens.push({ kind: "any" });
         i++;
         if (pat[i + 1] === "/") i++;
       } else {
-        re += "[^/]*";
+        tokens.push({ kind: "star" });
       }
-    } else if ("\\^$.|?+()[]{}".includes(c)) {
-      re += "\\" + c;
     } else {
-      re += c;
+      tokens.push({ kind: "lit", ch: c });
     }
   }
-  return new RegExp(`^${re}($|/)`);
+  return wildcardMatcher(tokens, { dirPrefix: true });
 }
 
 // --- per-manifest package probes ------------------------------------------
@@ -336,10 +338,12 @@ function expandGlobDirs(root: string, pat: string): string[] {
         for (const s of desc) next.add(s);
       }
     } else if (seg.includes("*")) {
-      const re = new RegExp(`^${seg.split("*").map(escapeRegExp).join("[^/]*")}$`);
+      const matchSeg = wildcardMatcher(
+        [...seg].map((ch): WildToken => (ch === "*" ? { kind: "star" } : { kind: "lit", ch })),
+      );
       for (const d of dirs) {
         for (const sub of subdirsOf(root, d)) {
-          if (re.test(sub.split("/").pop()!)) next.add(sub);
+          if (matchSeg(sub.split("/").pop()!)) next.add(sub);
         }
       }
     } else {
@@ -470,11 +474,11 @@ function detectCargoMembers(root: string, found: Map<string, WorkspacePackage>, 
   if (!body) return;
   const members = tomlStringArray(body, "members");
   if (!members.length) return;
-  const excludes = tomlStringArray(body, "exclude").map(wsGlobToRegExp);
+  const excludes = tomlStringArray(body, "exclude").map(wsGlobMatcher);
   const candidates = new Map<string, WorkspacePackage>();
   for (const pat of members) expandPattern(root, pat, candidates, "cargo", warnings);
   for (const [dir, pkg] of candidates) {
-    if (excludes.some((re) => re.test(dir))) continue;
+    if (excludes.some((excluded) => excluded(dir))) continue;
     if (!found.has(dir)) found.set(dir, pkg);
   }
 }
@@ -563,11 +567,11 @@ function detectUvMembers(root: string, found: Map<string, WorkspacePackage>, war
   if (!body) return;
   const members = tomlStringArray(body, "members");
   if (!members.length) return;
-  const excludes = tomlStringArray(body, "exclude").map(wsGlobToRegExp);
+  const excludes = tomlStringArray(body, "exclude").map(wsGlobMatcher);
   const candidates = new Map<string, WorkspacePackage>();
   for (const pat of members) expandPattern(root, pat, candidates, "uv", warnings);
   for (const [dir, pkg] of candidates) {
-    if (excludes.some((re) => re.test(dir))) continue;
+    if (excludes.some((excluded) => excluded(dir))) continue;
     if (!found.has(dir)) found.set(dir, pkg);
   }
 }
@@ -851,9 +855,9 @@ export function detectWorkspaces(root: string): WorkspaceInfo {
   if (npmPatterns.length) {
     const candidates = new Map<string, WorkspacePackage>();
     for (const { pattern, kind } of npmPatterns) expandPattern(root, pattern, candidates, kind, warnings);
-    const negRes = negations.map(wsGlobToRegExp);
+    const negRes = negations.map(wsGlobMatcher);
     for (const [dir, pkg] of candidates) {
-      if (negRes.some((re) => re.test(dir))) continue;
+      if (negRes.some((negated) => negated(dir))) continue;
       found.set(dir, pkg);
     }
   }

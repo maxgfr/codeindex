@@ -10,6 +10,7 @@
 // git's platform default is core.ignorecase=true — a platform-dependent match
 // would break cross-machine byte-identical builds.
 import { escapeRegExp } from "./util.js";
+import { wildcardMatcher, wildcardSource, type WildToken } from "./wildcard.js";
 
 export interface IgnoreRule {
   re: RegExp; // tested against the path RELATIVE TO THE REPO ROOT (posix)
@@ -31,13 +32,18 @@ export interface IgnoreRule {
 // follows gitignore's spec (`**/` leading, `/**` trailing, `/**/` mid-pattern),
 // `\x` escapes the next character (fnmatch), and `[...]` character classes are
 // supported (`*.py[cod]`, `[Tt]humbs.db`).
-function patternToRegExpSource(pattern: string): string {
-  let re = "";
+//
+// Emitted as tokens (src/wildcard.ts), not as a regex source: a .gitignore is
+// repository content, and a line such as `**/**/**/**/**/**/**/**/**/**/x` or
+// `a*a*a*a*a*a*a*a*a*a*a*a*b` made the regex backtrack for tens of seconds on
+// one path, hanging every scan of that repository.
+function patternTokens(pattern: string): WildToken[] {
+  const tokens: WildToken[] = [];
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]!;
     if (c === "\\" && i + 1 < pattern.length) {
       // fnmatch escaping: the next character is literal (`\*`, `\?`, `\ `, `\\`).
-      re += escapeRegExp(pattern[++i]!);
+      tokens.push({ kind: "lit", ch: pattern[++i]! });
     } else if (c === "*") {
       if (pattern[i + 1] === "*") {
         // `**` is special only at segment boundaries (`**/`, `/**`, `/**/`,
@@ -49,32 +55,32 @@ function patternToRegExpSource(pattern: string): string {
         const next = pattern[j + 1];
         if (atStart && next === "/") {
           i = j + 1;
-          re += "(?:[^/]+/)*"; // `**/` — zero or more whole segments
+          tokens.push({ kind: "segments" }); // `**/` — zero or more whole segments
         } else if (atStart && next === undefined) {
           i = j;
-          re += ".*"; // trailing `/**` or bare `**` — anything, crossing `/`
+          tokens.push({ kind: "any" }); // trailing `/**` or bare `**` — anything, crossing `/`
         } else {
           i = j;
-          re += "[^/]*"; // mid-segment run of stars — one segment, like `*`
+          tokens.push({ kind: "star" }); // mid-segment run of stars — one segment, like `*`
         }
       } else {
-        re += "[^/]*";
+        tokens.push({ kind: "star" });
       }
     } else if (c === "?") {
-      re += "[^/]";
+      tokens.push({ kind: "one" });
     } else if (c === "[") {
       const cls = bracketClass(pattern, i);
       if (cls) {
-        re += cls.source;
+        tokens.push({ kind: "class", source: cls.source });
         i = cls.end;
       } else {
-        re += "\\[";
+        tokens.push({ kind: "lit", ch: "[" });
       }
     } else {
-      re += escapeRegExp(c);
+      tokens.push({ kind: "lit", ch: c });
     }
   }
-  return re;
+  return tokens;
 }
 
 // POSIX character classes inside a bracket expression, as git's wildmatch
@@ -175,11 +181,12 @@ export function parseGitignore(content: string, baseRel: string, source?: string
     // directory; otherwise it floats to any depth beneath it.
     const anchored = line.includes("/");
     if (line.startsWith("/")) line = line.slice(1);
-    const body = patternToRegExpSource(line);
+    const tokens = patternTokens(line);
+    const body = wildcardSource(tokens);
     const reSource = anchored ? `^${prefix}${body}$` : `^${prefix}(?:[^/]+/)*${body}$`;
     try {
       const re = new RegExp(reSource);
-      const rule: IgnoreRule = { re, negated, dirOnly, test: fastMatcher(line, body, anchored, baseRel ? baseRel + "/" : "", re) };
+      const rule: IgnoreRule = { re, negated, dirOnly, test: fastMatcher(line, tokens, anchored, baseRel ? baseRel + "/" : "") };
       if (source !== undefined) Object.assign(rule, { source, line: n + 1, pattern: written });
       rules.push(rule);
     } catch {
@@ -215,21 +222,25 @@ function literalHead(pattern: string): { head: string; whole: boolean } {
 // from a pattern made of stars alone, which matches any basename). So it
 // matches exactly when the path lies under the .gitignore's directory and the
 // body matches the BASENAME: a string compare for a literal (`node_modules`),
-// a suffix test for `*<literal>` (`*.log`), else the body regex on the
-// basename. An anchored pattern keeps its regex behind a literal-prefix check
-// that rejects almost every path at the first differing character.
+// a suffix test for `*<literal>` (`*.log`), else the body matcher on the
+// basename. An anchored pattern matches its body on what follows the
+// .gitignore's directory, behind a literal-prefix check that rejects almost
+// every path at the first differing character.
+//
+// The body goes through wildcardMatcher, never through the rule's `re`: that
+// one backtracks, and the pattern is whatever a repository committed.
 function fastMatcher(
   pattern: string,
-  body: string,
+  tokens: readonly WildToken[],
   anchored: boolean,
   prefix: string,
-  re: RegExp,
 ): (rel: string, base: string) => boolean {
   if (anchored) {
     const { head, whole } = literalHead(pattern);
     const full = prefix + head;
     if (whole) return (rel) => rel === full;
-    return (rel) => rel.startsWith(full) && re.test(rel);
+    const matchBody = wildcardMatcher(tokens);
+    return (rel) => rel.startsWith(full) && matchBody(rel.slice(prefix.length));
   }
   const { head, whole } = literalHead(pattern);
   if (whole) return (rel, base) => base === head && rel.startsWith(prefix);
@@ -237,8 +248,8 @@ function fastMatcher(
     const tail = literalHead(pattern.slice(1));
     if (tail.whole) return (rel, base) => base.endsWith(tail.head) && rel.startsWith(prefix);
   }
-  const baseRe = new RegExp(`^${body}$`);
-  return (rel, base) => rel.startsWith(prefix) && baseRe.test(base);
+  const matchBase = wildcardMatcher(tokens);
+  return (rel, base) => rel.startsWith(prefix) && matchBase(base);
 }
 
 // Decide whether `rel` (posix, repo-root-relative) is ignored under an ordered
