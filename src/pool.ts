@@ -151,6 +151,32 @@ export async function runExtractWorker(input: WorkerInput, post: (out: WorkerOut
 // Main side
 // ---------------------------------------------------------------------------
 
+// The script a pool worker runs: warm the grammars once (an empty batch),
+// announce the set it got ready, then extract each batch it is sent.
+//
+// Written as a CommonJS script with a dynamic import(): an `eval: true` worker
+// is a classic script, and a static `import` in one is a SyntaxError before
+// Node 20.19 / 22.7 (where module syntax started being detected). Every worker
+// then failed to start on Node 18 — a supported version — and the scan fell
+// back to sequential without a word. Exported for the test that parses it as a
+// classic script, whatever Node runs the suite.
+export function workerBootstrap(engineUrl: string): string {
+  return (
+    `const { parentPort, workerData } = require("node:worker_threads");\n` +
+    `const base = workerData.input;\n` +
+    `const post = (o) => parentPort.postMessage(o);\n` +
+    `const fail = (e) => post({ error: String(e) });\n` +
+    `import(${JSON.stringify(engineUrl)}).then(({ runExtractWorker }) =>\n` +
+    `  runExtractWorker({ ...base, jobs: [] }, post).then(() => {\n` +
+    `    parentPort.on("message", (m) => {\n` +
+    `      if (m.done) { parentPort.close(); return; }\n` +
+    `      runExtractWorker({ ...base, jobs: m.jobs }, post).catch(fail);\n` +
+    `    });\n` +
+    `  })\n` +
+    `).catch(fail);\n`
+  );
+}
+
 // Extract `jobs` across `count` workers. Returns undefined — meaning "scan
 // sequentially" — when workers cannot be used or cannot be trusted:
 //   * the engine URL does not resolve to an on-disk engine.mjs,
@@ -197,18 +223,7 @@ export async function extractInParallel(
   // it got ready, then extracts each batch it is sent through the SAME
   // runExtractWorker a one-shot worker used — the per-record contract has not
   // moved.
-  const bootstrap =
-    `import { runExtractWorker } from ${JSON.stringify(engineUrl)};\n` +
-    `import { parentPort, workerData } from "node:worker_threads";\n` +
-    `const base = workerData.input;\n` +
-    `const post = (o) => parentPort.postMessage(o);\n` +
-    `const fail = (e) => post({ error: String(e) });\n` +
-    `runExtractWorker({ ...base, jobs: [] }, post).then(() => {\n` +
-    `  parentPort.on("message", (m) => {\n` +
-    `    if (m.done) { parentPort.close(); return; }\n` +
-    `    runExtractWorker({ ...base, jobs: m.jobs }, post).catch(fail);\n` +
-    `  });\n` +
-    `}).catch(fail);\n`;
+  const bootstrap = workerBootstrap(engineUrl);
 
   const out = new Map<string, ExtractedRecord>();
   let next = 0; // index of the first job not yet dispatched

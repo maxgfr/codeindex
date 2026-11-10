@@ -4,8 +4,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { cpSync, mkdtempSync, rmSync, readFileSync, statSync, utimesSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Script } from "node:vm";
 import { scanRepo } from "../src/scan.js";
-import { extractInParallel, resolveEngineUrl, runExtractWorker, scanRepoParallel, workerCount } from "../src/pool.js";
+import { extractInParallel, resolveEngineUrl, runExtractWorker, scanRepoParallel, workerBootstrap, workerCount } from "../src/pool.js";
 import { sha1 } from "../src/hash.js";
 import { buildIndexArtifacts, buildArtifactsFromScan } from "../src/pipeline.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
@@ -13,6 +14,7 @@ import { renderSymbolsJson } from "../src/render/symbols-json.js";
 
 const REPO = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
+const ENGINE = fileURLToPath(new URL("../scripts/engine.mjs", import.meta.url));
 
 // THE determinism gate. The in-process tests below exercise the fallback (under
 // vitest the worker cannot import the built bundle); this one drives the real
@@ -221,6 +223,28 @@ describe("worker hash check", () => {
     });
     expect(miss.files.find((f) => f.rel === rel)).toEqual(real);
     expect(miss.contentUnchanged).toBe(false);
+  });
+});
+
+// An `eval: true` worker is a CLASSIC script. A static `import` in one is a
+// SyntaxError before Node 20.19 / 22.7, so on Node 18 no worker ever started
+// and every index fell back to sequential, silently. Parsed here as a classic
+// script, the bootstrap is checked on whatever Node runs the suite.
+describe("the worker bootstrap runs on every supported Node", () => {
+  it("is a classic script: no static import or export", () => {
+    const source = workerBootstrap(pathToFileURL(ENGINE).href);
+    expect(() => new Script(source)).not.toThrow();
+    // The control: the shape it used to have does not parse as one.
+    expect(() => new Script(`import { parentPort } from "node:worker_threads";\n`)).toThrow(SyntaxError);
+  });
+
+  it("the pool hands back worker-built records for the built engine", async () => {
+    const scan = scanRepo(REPO);
+    const jobs = scan.files.filter((f) => f.kind === "code").map((f) => ({ abs: join(REPO, f.rel), rel: f.rel, ext: f.ext }));
+    const records = await extractInParallel(jobs, [], 2, { engineUrl: pathToFileURL(ENGINE).href });
+    // undefined is the pool's "fall back to sequential" answer.
+    expect(records).toBeDefined();
+    expect([...records!.keys()].sort()).toEqual(jobs.map((j) => j.rel).sort());
   });
 });
 

@@ -11426,24 +11426,28 @@ async function runExtractWorker(input, post) {
   }
   post({ ready, records });
 }
+function workerBootstrap(engineUrl) {
+  return `const { parentPort, workerData } = require("node:worker_threads");
+const base = workerData.input;
+const post = (o) => parentPort.postMessage(o);
+const fail = (e) => post({ error: String(e) });
+import(${JSON.stringify(engineUrl)}).then(({ runExtractWorker }) =>
+  runExtractWorker({ ...base, jobs: [] }, post).then(() => {
+    parentPort.on("message", (m) => {
+      if (m.done) { parentPort.close(); return; }
+      runExtractWorker({ ...base, jobs: m.jobs }, post).catch(fail);
+    });
+  })
+).catch(fail);
+`;
+}
 async function extractInParallel(jobs, grammarKeys, count2, opts = {}) {
   if (count2 < 2 || jobs.length === 0) return void 0;
   const engineUrl = opts.engineUrl ?? resolveEngineUrl();
   if (!engineUrl) return void 0;
   const wanted = grammarKeys.filter((k) => grammarReady(k)).sort();
   const workers = Math.min(count2, jobs.length);
-  const bootstrap = `import { runExtractWorker } from ${JSON.stringify(engineUrl)};
-import { parentPort, workerData } from "node:worker_threads";
-const base = workerData.input;
-const post = (o) => parentPort.postMessage(o);
-const fail = (e) => post({ error: String(e) });
-runExtractWorker({ ...base, jobs: [] }, post).then(() => {
-  parentPort.on("message", (m) => {
-    if (m.done) { parentPort.close(); return; }
-    runExtractWorker({ ...base, jobs: m.jobs }, post).catch(fail);
-  });
-}).catch(fail);
-`;
+  const bootstrap = workerBootstrap(engineUrl);
   const out2 = /* @__PURE__ */ new Map();
   let next = 0;
   const takeBatch = () => {
