@@ -100,7 +100,20 @@ export const SCHEMA_VERSION = 5;
 // on a JS private field (`this.#cache.get()`) or on a Ruby instance/class
 // variable (`@repo.save`) keeps that receiver at the AST tier, where it was
 // recorded as a bare call.
-export const EXTRACTOR_VERSION = 19;
+// v20: a call on a receiver that has no name (`'a,b'.split(',')`,
+// `items[0].run()`, `', '.join(parts)`, a chained `.then()` on its own line)
+// carries UNNAMED_RECEIVER instead of no receiver, on both tiers; a call on the
+// keyword `this`/`self` (JS/TS, Java, C#, C++, Ruby, Rust) keeps it as its
+// receiver at the AST tier; the regex tier reads the receiver of `a?.b()` and
+// `a!.b()`.
+export const EXTRACTOR_VERSION = 20;
+
+// The receiver of a call made ON something that has no simple name: a literal,
+// a subscript, a parenthesised expression, the result of a constructor. It says
+// "this is a member call" where an absent receiver says "this is a bare call" —
+// the difference between binding nothing and binding a same-file function that
+// merely shares the method's name. Never a valid identifier in any language.
+export const UNNAMED_RECEIVER = "?";
 
 // How a file is classified. `code` gets symbol/import extraction; `doc` gets
 // link/heading extraction; the rest are catalogued but not deeply parsed.
@@ -249,6 +262,8 @@ export interface FileRecord {
   // is the simple name of the IMMEDIATE receiver of a qualified call —
   // `axios.get(...)` → {name: "get", receiver: "axios"}, `a.b.c(...)` →
   // {name: "c", receiver: "b"}
+  // — UNNAMED_RECEIVER for a receiver with no name (`'a,b'.split(',')`,
+  // `items[0].run()`), and
   // — absent for a bare call (`get()`) or a computed/complex receiver
   // (`fetch().then(...)`). Receiver-gated sink catalogs (ultrasec) key on it.
   calls?: { name: string; line: number; receiver?: string }[];

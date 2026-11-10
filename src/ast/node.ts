@@ -4,6 +4,8 @@
 // Typed STRUCTURALLY rather than by importing web-tree-sitter's own types, so
 // none of its declarations leak through the bundle's public .d.mts. Only the
 // members we actually use appear here.
+import { UNNAMED_RECEIVER } from "../types.js";
+
 export interface TSNode {
   type: string;
   text: string;
@@ -169,18 +171,29 @@ export function readName(node: TSNode | null): string | undefined {
 // scoped_identifier's `path`, c# member_access_expression's `expression`, c/c++
 // field_expression's `argument`, ruby call's `receiver`, lua dot/method_index_
 // expression's `table` (scala's field_expression reuses `value`). Undefined for a
-// bare callee or a computed/complex receiver (`fetch().then(...)`, `arr[0].map(...)`).
-export function readReceiver(node: TSNode | null): string | undefined {
+// bare callee; "this"/"self" for a call on the enclosing instance.
+//
+// A receiver that IS there but has no name — a literal, a subscript, a
+// parenthesised expression (`'a,b'.split(',')`, `items[0].run()`,
+// `', '.join(parts)`) — is UNNAMED_RECEIVER, never undefined: without a
+// receiver the site read as the bare call `split()`, and bound to a same-file
+// function of that name it never calls.
+//
+// `onCallNode` is for the second read some grammars need, off the call node
+// itself (Java's method_invocation and Ruby's call carry the receiver there).
+// Only their `object`/`receiver` fields mean a receiver on such a node: a
+// shell command's `argument` is its first argument.
+export function readReceiver(node: TSNode | null, onCallNode = false): string | undefined {
   if (!node || node.namedChildren.length === 0) return undefined;
-  const obj =
-    node.childForFieldName("object") ??
-    node.childForFieldName("operand") ??
-    node.childForFieldName("value") ??
-    node.childForFieldName("path") ??
-    node.childForFieldName("expression") ??
-    node.childForFieldName("argument") ??
-    node.childForFieldName("receiver") ??
-    node.childForFieldName("table");
+  let obj: TSNode | null = null;
+  let field = "";
+  for (const candidate of RECEIVER_FIELDS) {
+    obj = node.childForFieldName(candidate);
+    if (obj) {
+      field = candidate;
+      break;
+    }
+  }
   // `super` and Rust's `crate` are keywords, leaves readName does not take for
   // a name. Rust's `crate::f()`/`super::f()` name a module the binder resolves
   // to a file; JS/TS/Java's `super.f()` the enclosing class's base, which the
@@ -196,11 +209,28 @@ export function readReceiver(node: TSNode | null): string | undefined {
   }
   // Ruby's `@repo`, `@@registry` and `$stdout` are leaves of their own node
   // types, which readName does not take for a name.
-  const name = obj ? (readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : undefined)) : undefined;
-  return receiverName(name);
+  if (!obj) return undefined;
+  const name = readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : undefined);
+  const kept = receiverName(name);
+  if (kept !== undefined) return kept;
+  // The enclosing instance, written as a keyword node rather than as a name:
+  // the receiver the regex tier, Python (`self`) and PHP (`$this`) already
+  // record. Without it `this.save()` read as the bare `save()` and bound to a
+  // same-file FUNCTION of that name instead of the class's own method.
+  const self = SELF_NODE.exec(obj.type);
+  if (self) return self[1];
+  if (BASE_NODE.test(obj.type)) return undefined;
+  if (onCallNode && field !== "object" && field !== "receiver") return undefined;
+  return UNNAMED_RECEIVER;
 }
 
+// The fields a grammar keeps a callee's object under, in the order they are tried.
+const RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "argument", "receiver", "table"] as const;
 const RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
+// The enclosing instance as a keyword node: `this` (JS/TS, Java, C#, C++),
+// `self` (Ruby, Rust). C#'s `base.f()` stays a call in the class's own scope.
+const SELF_NODE = /^(this|self)(?:_expression)?$/;
+const BASE_NODE = /^base(?:_expression)?$/;
 
 // A receiver's name as the index keeps it. `$` is an identifier character
 // (JS/TS `$el`, `clicks$`, a Ruby global), and a sigil that marks a member

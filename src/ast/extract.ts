@@ -314,7 +314,7 @@ function collectAll(
         // is nothing, and this site — visited first, so the inner one dedupes
         // away — would read as a bare `ensure_sync()`.
         const inner = callee && spec.calls![callee.type] === "function" ? callee.childForFieldName("function") : null;
-        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node));
+        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node, true));
       } else if (how === "member") {
         addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
       } else if (how === "constructor") {

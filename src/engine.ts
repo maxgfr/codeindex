@@ -9,7 +9,7 @@
 // next to the bundle (regex tier otherwise — see ast/loader.ts).
 
 // Version constants — see types.ts for bump rules.
-export { ENGINE_VERSION, SCHEMA_VERSION, EXTRACTOR_VERSION } from "./types.js";
+export { ENGINE_VERSION, SCHEMA_VERSION, EXTRACTOR_VERSION, UNNAMED_RECEIVER } from "./types.js";
 export type {
   FileKind,
   EdgeKind,

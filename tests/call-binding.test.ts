@@ -8,7 +8,8 @@ import { resolveCallEdges } from "../src/calls.js";
 import { buildSymbolGraph } from "../src/symbolgraph.js";
 import { buildTypeHierarchy, implementationsOf } from "../src/relations.js";
 import { importPairsFor } from "../src/derived.js";
-import { extractCode } from "../src/extract/code.js";
+import { collectCallsRegex, extractCode } from "../src/extract/code.js";
+import { UNNAMED_RECEIVER } from "../src/types.js";
 import { buildArtifactsFromScan } from "../src/pipeline.js";
 
 // The shared call-site binder (src/bind.ts) on a real extraction: every case
@@ -424,5 +425,106 @@ describe("a receiver named with `$`, a private field or an instance variable", (
       .edges.filter((e) => e.kind === "calls")
       .map((e) => `${e.from} -> ${e.to}`);
     expect(edges).toEqual([]);
+  });
+});
+
+// A call made on something with no name at all — a literal, a subscript, a
+// constructor's result — is still a member call. Recorded without a receiver it
+// read as a bare call, and `'a,b'.split(',')` bound to a same-file `split`.
+describe("a receiver that has no name", () => {
+  const SOURCES: Record<string, string> = {
+    "lit.ts": [
+      "export function split(): void {}",
+      "export function run(): void {}",
+      "export function go(): void {}",
+      "export function own(): void {}",
+      "export class K {",
+      "  own(): void {}",
+      "  m(items: { run(): void }[]): void {",
+      "    'a,b'.split(',');",
+      "    items[0].run();",
+      "    new K().go();",
+      "    this.own();",
+      "    split();",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    "lit.py": ["def join():", "    pass", "", "def index():", "    pass", "", "def m(parts):", "    ', '.join(parts)", "    [1, 2].index(1)", "    join()", ""].join("\n"),
+    "lit.go": ["package lit", "", "func Run() {}", "", "func M(items []T) {", "\titems[0].Run()", "\tRun()", "}", ""].join("\n"),
+    "lit.rb": ["def split", "end", "", "def m(items)", "  'a,b'.split(',')", "  items[0].split", "end", ""].join("\n"),
+    "Lit.java": ["class Lit {", "  void split() {}", "  void m() {", '    "a,b".split(",");', "    this.split();", "  }", "}", ""].join("\n"),
+    "lit.rs": ["fn own() {}", "", "struct K;", "", "impl K {", "    fn own(&self) {}", "    fn m(&self) {", "        self.own();", "    }", "}", ""].join("\n"),
+  };
+  let dir: string;
+  let local: RepoScan;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "ci-call-binding-unnamed-"));
+    for (const [rel, content] of Object.entries(SOURCES)) writeFileSync(join(dir, rel), content);
+    local = scanRepo(dir);
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  const callsIn = (rel: string) => local.files.find((f) => f.rel === rel)!.calls;
+
+  it("is recorded as UNNAMED_RECEIVER; a call on this keeps `this`, a bare call keeps none", () => {
+    expect(UNNAMED_RECEIVER).toBe("?");
+    expect(callsIn("lit.ts")).toEqual([
+      { name: "K", line: 10 },
+      { name: "go", line: 10, receiver: "?" },
+      { name: "own", line: 11, receiver: "this" },
+      { name: "run", line: 9, receiver: "?" },
+      { name: "split", line: 8, receiver: "?" },
+      { name: "split", line: 12 },
+    ]);
+    expect(callsIn("lit.py")).toEqual([
+      { name: "index", line: 9, receiver: "?" },
+      { name: "join", line: 8, receiver: "?" },
+      { name: "join", line: 10 },
+    ]);
+    expect(callsIn("lit.go")).toEqual([
+      { name: "Run", line: 6, receiver: "?" },
+      { name: "Run", line: 7 },
+    ]);
+    expect(callsIn("lit.rb")).toEqual([
+      { name: "split", line: 5, receiver: "?" },
+      { name: "split", line: 6, receiver: "?" },
+    ]);
+    expect(callsIn("lit.rs")).toEqual([{ name: "own", line: 8, receiver: "self" }]);
+    expect(callsIn("Lit.java")).toEqual([
+      { name: "split", line: 4, receiver: "?" },
+      { name: "split", line: 5, receiver: "this" },
+    ]);
+  });
+
+  it("binds only the calls that are really bare or on this, and `this.own()` to the method, not the function", () => {
+    const edges = buildSymbolGraph(local, importPairsFor(local))
+      .edges.filter((e) => e.kind === "calls")
+      .map((e) => `${e.from} -> ${e.to}`)
+      .sort();
+    expect(edges).toEqual([
+      "Lit.java#Lit/m -> Lit.java#Lit/split", // this.split()
+      "lit.go#M -> lit.go#Run", // Run()
+      "lit.py#m -> lit.py#join", // join()
+      "lit.rs#K/m -> lit.rs#K/own", // self.own(), not the free fn own
+      "lit.ts#K/m -> lit.ts#K", // new K()
+      "lit.ts#K/m -> lit.ts#K/own", // this.own()
+      "lit.ts#K/m -> lit.ts#split", // split()
+    ]);
+  });
+
+  it("the regex tier reads the same sites the same way", () => {
+    const sites = (code: string) => collectCallsRegex(code).map((c) => `${c.receiver ?? "-"}.${c.name}`);
+    expect(sites("'a,b'.split(',');")).toEqual(["?.split"]);
+    expect(sites("items[0].run();")).toEqual(["?.run"]);
+    expect(sites("fetch(url)\n  .then(handle);")).toEqual(["-.fetch", "?.then"]);
+    // The receiver of an optional or asserted access is named.
+    expect(sites("a?.b?.opt(); obj!.bang();")).toEqual(["obj.bang", "b.opt"]);
+    expect(sites("super().base()")).toEqual(["super.base", "-.super"]);
+    // Not a member access: a range, a spread, PHP's spaced concatenation, a bare call.
+    expect(sites("for i in 0..len(xs) {}")).toEqual(["-.len"]);
+    expect(sites("call(...rest(xs));")).toEqual(["-.call", "-.rest"]);
+    expect(sites("'x' . strlen($b);")).toEqual(["-.strlen"]);
+    expect(sites("plain(1);")).toEqual(["-.plain"]);
   });
 });

@@ -23,6 +23,7 @@
 // inference everywhere, JS/TS's unique-name relaxation — on top of the new
 // evidence, and labels what it found by name alone.
 import type { CodeSymbol, FileRecord } from "./types.js";
+import { UNNAMED_RECEIVER } from "./types.js";
 import type { RepoScan } from "./scan.js";
 import { resolveImport, type ResolveContext } from "./resolve.js";
 import { addDef, defsOutside, familyOf, importTargets, importedDefs, pickCandidate, type DefGroup, type DefTable } from "./calls.js";
@@ -751,6 +752,10 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       ({ shape, receiver, selfType, typeHint, results: new Map() });
     const BARE = reading("bare");
     const OUTSIDE = reading("outside");
+    // A member call on something with no name: some object's method, with
+    // nothing to say whose. Never read through the enclosing header, and bound
+    // in recall mode only (see the binder's entry point).
+    const UNNAMED = reading("foreign", UNNAMED_RECEIVER);
     // Readings that depend on the receiver alone, and those that also depend on
     // the enclosing declaration (a `self`, or a SHAPED family's typed header).
     const byReceiver = new Map<string, Reading>();
@@ -758,6 +763,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     const read = (c: CallSite, enclosing: CodeSymbol | undefined): Reading => {
       let receiver = c.receiver;
       if (receiver === undefined) return BARE;
+      if (receiver === UNNAMED_RECEIVER) return UNNAMED;
       if (family === "rust" && receiver === "super") {
         const block = modScope(c.line);
         if (block) {
@@ -940,6 +946,11 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
 
     return (c: CallSite, enclosing?: CodeSymbol): BoundCall | undefined => {
       const how = read(c, enclosing);
+      // Nothing says whose method this is — no name, no type, no import — so
+      // precision mode binds nothing: any match would be on the callee's name
+      // alone (`(*self).replace(…)` reached a struct FIELD called `replace` in
+      // another crate). Recall mode is the name-driven one, and still looks.
+      if (how === UNNAMED && !recall) return undefined;
       let r = how.results.get(c.name);
       if (r === undefined) how.results.set(c.name, (r = resolve(c.name, how)));
       if (!r) return undefined;

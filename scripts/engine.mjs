@@ -15,13 +15,14 @@ var __export = (target, all) => {
 };
 
 // src/types.ts
-var ENGINE_VERSION, SCHEMA_VERSION, EXTRACTOR_VERSION;
+var ENGINE_VERSION, SCHEMA_VERSION, EXTRACTOR_VERSION, UNNAMED_RECEIVER;
 var init_types = __esm({
   "src/types.ts"() {
     "use strict";
     ENGINE_VERSION = "2.31.18";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 19;
+    EXTRACTOR_VERSION = 20;
+    UNNAMED_RECEIVER = "?";
   }
 });
 
@@ -8237,17 +8238,32 @@ function readName(node) {
   const last = kids[kids.length - 1];
   return last && last !== node ? readName(last) : void 0;
 }
-function readReceiver(node) {
+function readReceiver(node, onCallNode = false) {
   if (!node || node.namedChildren.length === 0) return void 0;
-  const obj = node.childForFieldName("object") ?? node.childForFieldName("operand") ?? node.childForFieldName("value") ?? node.childForFieldName("path") ?? node.childForFieldName("expression") ?? node.childForFieldName("argument") ?? node.childForFieldName("receiver") ?? node.childForFieldName("table");
+  let obj = null;
+  let field = "";
+  for (const candidate of RECEIVER_FIELDS) {
+    obj = node.childForFieldName(candidate);
+    if (obj) {
+      field = candidate;
+      break;
+    }
+  }
   if (obj?.type === "super" || obj?.type === "crate" && node.type === "scoped_identifier") return obj.type;
   if (obj?.type === "composite_literal") {
     const type = obj.childForFieldName("type");
     const name3 = type ? readTypeName(type) : void 0;
     return name3 && /^[A-Za-z_]\w*$/.test(name3) ? name3 : void 0;
   }
-  const name2 = obj ? readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : void 0) : void 0;
-  return receiverName(name2);
+  if (!obj) return void 0;
+  const name2 = readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : void 0);
+  const kept = receiverName(name2);
+  if (kept !== void 0) return kept;
+  const self = SELF_NODE.exec(obj.type);
+  if (self) return self[1];
+  if (BASE_NODE.test(obj.type)) return void 0;
+  if (onCallNode && field !== "object" && field !== "receiver") return void 0;
+  return UNNAMED_RECEIVER;
 }
 function receiverName(name2) {
   if (!name2) return void 0;
@@ -8271,14 +8287,18 @@ function readTypeName(node) {
   visit(node);
   return last;
 }
-var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, RUBY_VARIABLE, TYPE_LEAF;
+var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, RECEIVER_FIELDS, RUBY_VARIABLE, SELF_NODE, BASE_NODE, TYPE_LEAF;
 var init_node = __esm({
   "src/ast/node.ts"() {
     "use strict";
+    init_types();
     IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
     COMMENT_NODE = /(^|_)comment$/;
     UNNAMED_CHAIN = /* @__PURE__ */ new Set(["reference_declarator", "parenthesized_declarator"]);
+    RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "argument", "receiver", "table"];
     RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
+    SELF_NODE = /^(this|self)(?:_expression)?$/;
+    BASE_NODE = /^base(?:_expression)?$/;
     TYPE_LEAF = /identifier|constant|(^|_)name$/;
   }
 });
@@ -9957,7 +9977,7 @@ function collectAll(root, spec, defNames, maxCalls) {
       if (how === "function") {
         const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name") ?? node.childForFieldName("target") ?? kids[0] ?? null;
         const inner = callee && spec.calls[callee.type] === "function" ? callee.childForFieldName("function") : null;
-        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node));
+        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node, true));
       } else if (how === "member") {
         addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
       } else if (how === "constructor") {
@@ -10705,7 +10725,7 @@ function collectCallsRegex(content, symbols = [], maxCalls = DEFAULT_MAX_CALLS) 
   const out2 = /* @__PURE__ */ new Map();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
-  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
+  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*[?!]?\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i2 = 0; i2 < lines.length; i2++) {
     const line2 = lines[i2];
     const trimmed = line2.trimStart();
@@ -10722,10 +10742,11 @@ function collectCallsRegex(content, symbols = [], maxCalls = DEFAULT_MAX_CALLS) 
     let m;
     const fallbackExcluded = /* @__PURE__ */ new Set();
     while ((m = CALL_RE.exec(line2)) !== null) {
-      const receiver = m[1];
       const name2 = m[2];
       if (name2.length < 2 || CALL_KEYWORDS.has(name2)) continue;
       if (introducedAt(line2, m.index)) continue;
+      const nameAt = m.index + m[0].lastIndexOf(name2);
+      const receiver = m[1] ?? (line2.slice(0, nameAt).endsWith("super().") ? "super" : afterUnnamedReceiver(line2, nameAt) ? UNNAMED_RECEIVER : void 0);
       const key = `${name2} ${i2 + 1}`;
       if (ownDefLines.has(key) && !introducerCaught.has(key)) {
         if (!fallbackExcluded.has(key)) {
@@ -10738,6 +10759,12 @@ function collectCallsRegex(content, symbols = [], maxCalls = DEFAULT_MAX_CALLS) 
     }
   }
   return capCallSites([...out2.values()], maxCalls);
+}
+function afterUnnamedReceiver(line2, at) {
+  if (line2[at - 1] !== ".") return false;
+  let before = at - 2;
+  while (before >= 0 && (line2[before] === " " || line2[before] === "	")) before--;
+  return before < 0 || line2[before] !== ".";
 }
 function collectTermsRegex(content) {
   const found = /* @__PURE__ */ new Set();
@@ -10874,6 +10901,7 @@ var MAX_FILE_SYMBOLS, CALL_KEYWORDS, DEF_INTRODUCERS, SPACE2, WORD, MAX_TERMS2, 
 var init_code = __esm({
   "src/extract/code.ts"() {
     "use strict";
+    init_types();
     init_literals();
     init_registry();
     init_extract();
@@ -15755,11 +15783,13 @@ function createCallBinder(scan2, pairs, opts = {}) {
     const reading = (shape, receiver, selfType, typeHint) => ({ shape, receiver, selfType, typeHint, results: /* @__PURE__ */ new Map() });
     const BARE = reading("bare");
     const OUTSIDE = reading("outside");
+    const UNNAMED = reading("foreign", UNNAMED_RECEIVER);
     const byReceiver = /* @__PURE__ */ new Map();
     const byEnclosing = /* @__PURE__ */ new Map();
     const read = (c2, enclosing) => {
       let receiver = c2.receiver;
       if (receiver === void 0) return BARE;
+      if (receiver === UNNAMED_RECEIVER) return UNNAMED;
       if (family === "rust" && receiver === "super") {
         const block = modScope(c2.line);
         if (block) {
@@ -15883,6 +15913,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
     };
     return (c2, enclosing) => {
       const how = read(c2, enclosing);
+      if (how === UNNAMED && !recall) return void 0;
       let r = how.results.get(c2.name);
       if (r === void 0) how.results.set(c2.name, r = resolve13(c2.name, how));
       if (!r) return void 0;
@@ -15896,6 +15927,7 @@ var REFERENCE_KINDS3, STRICT, SHAPED, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, 
 var init_bind = __esm({
   "src/bind.ts"() {
     "use strict";
+    init_types();
     init_resolve();
     init_calls();
     init_callers();
@@ -27966,6 +27998,7 @@ export {
   OffsetMap,
   RISK_WEIGHTS,
   SCHEMA_VERSION,
+  UNNAMED_RECEIVER,
   agreementOf,
   allGrammarKeys,
   applyCentrality,

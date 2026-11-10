@@ -1,4 +1,5 @@
 import type { CodeLiteral, CodeSymbol, ImportAlias, RawRef, RawRelation } from "../types.js";
+import { UNNAMED_RECEIVER } from "../types.js";
 import { LiteralCollector } from "./literals.js";
 import { extractSymbols } from "../lang/registry.js";
 import { DEFAULT_MAX_CALLS, capCallSites, extractAst } from "../ast/extract.js";
@@ -119,7 +120,9 @@ export function collectCallsRegex(
   const out = new Map<string, { name: string; line: number; receiver?: string }>();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
-  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
+  // The receiver may be followed by `?` or `!` before its dot (`a?.b()`,
+  // `a!.b()`): without them the call read as the bare `b()`.
+  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*[?!]?\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     // Cheap comment guard: a line-leading comment marker means no calls here
@@ -146,10 +149,13 @@ export function collectCallsRegex(
     let m: RegExpExecArray | null;
     const fallbackExcluded = new Set<string>();
     while ((m = CALL_RE.exec(line)) !== null) {
-      const receiver = m[1];
       const name = m[2]!;
       if (name.length < 2 || CALL_KEYWORDS.has(name)) continue;
       if (introducedAt(line, m.index)) continue;
+      const nameAt = m.index + m[0].lastIndexOf(name);
+      // Python's `super().f()`: the receiver the AST tier records as "super".
+      const receiver =
+        m[1] ?? (line.slice(0, nameAt).endsWith("super().") ? "super" : afterUnnamedReceiver(line, nameAt) ? UNNAMED_RECEIVER : undefined);
       const key = `${name} ${i + 1}`;
       if (ownDefLines.has(key) && !introducerCaught.has(key)) {
         if (!fallbackExcluded.has(key)) {
@@ -163,6 +169,19 @@ export function collectCallsRegex(
     }
   }
   return capCallSites([...out.values()], maxCalls);
+}
+
+// Whether the callee name starting at `at` is a member of something the call
+// regex could not name: a dot right before it, which is neither the second dot
+// of a range or spread (`0..len()`, `...rest()`) nor the dot of a number
+// (`1.e3`). What precedes that dot is then a literal, a subscript, a closing
+// parenthesis — or nothing, when the line continues a chain (`.then(...)`).
+// A dot followed by a space is left alone: PHP writes concatenation that way.
+function afterUnnamedReceiver(line: string, at: number): boolean {
+  if (line[at - 1] !== ".") return false;
+  let before = at - 2;
+  while (before >= 0 && (line[before] === " " || line[before] === "\t")) before--;
+  return before < 0 || line[before] !== ".";
 }
 
 const MAX_TERMS = 512;
