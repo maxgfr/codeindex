@@ -108,12 +108,53 @@ describe("the extraction profile gates record reuse", { timeout: 120_000 }, () =
     const repo = freshRepo();
     const out = join(scratch(), "out");
     const profile = (): unknown => (JSON.parse(read(out, "cache.json")) as { extraction?: unknown }).extraction;
+    const build = { sha1: expect.stringMatching(/^[a-f0-9]{40}$/), size: expect.any(Number), mtimeMs: expect.any(Number) };
     index(repo, out);
-    expect(profile()).toEqual({ grammars: expect.arrayContaining(["typescript"]) });
+    // Each grammar at the AST tier, with the build of it that parsed the records.
+    expect(profile()).toEqual({ grammars: expect.arrayContaining(["typescript"]), grammarFiles: expect.objectContaining({ typescript: build }) });
+    const first = profile() as { grammars: string[]; grammarFiles: Record<string, unknown> };
+    expect(Object.keys(first.grammarFiles).sort()).toEqual([...first.grammars].sort());
     index(repo, out, "--max-calls", "7");
-    expect(profile()).toEqual({ grammars: expect.arrayContaining(["typescript"]), maxCallsPerFile: 7 });
+    expect(profile()).toEqual({ ...first, maxCallsPerFile: 7 });
     index(repo, out, "--no-ast");
-    expect(profile()).toEqual({ grammars: [] });
+    expect(profile()).toEqual({ grammars: [], grammarFiles: {} });
+  });
+
+  // A grammar is re-vendored without the extraction code changing, so without
+  // EXTRACTOR_VERSION changing. The index used to know only that typescript was
+  // "at the AST tier", and kept serving the records the old build had parsed.
+  it("re-extracts when a grammar is another build, and only then", () => {
+    const repo = freshRepo();
+    const out = join(scratch(), "out");
+    // The grammars this run loads, in a directory of their own to replace one in.
+    const grammars = join(scratch(), "grammars");
+    cpSync(join(SCRIPTS, "grammars"), grammars, { recursive: true });
+    const env = { ...ENV, CODEINDEX_GRAMMAR_DIR: grammars };
+    const run = (): { reused: boolean; build: string } => {
+      const reused = cli(["index", "--repo", repo, "--out", out], env).stderr.includes("(unchanged — artifacts reused)");
+      const profile = (JSON.parse(read(out, "cache.json")) as { extraction: { grammarFiles: Record<string, { sha1: string }> } }).extraction;
+      return { reused, build: profile.grammarFiles.typescript!.sha1 };
+    };
+    const cold = run();
+    expect(cold.reused).toBe(false);
+    expect(run()).toEqual({ reused: true, build: cold.build });
+    const graph = read(out, "graph.json");
+
+    // Same bytes, another mtime (a reinstall, a CI cache restore): still the same build.
+    const wasm = join(grammars, "typescript.wasm");
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(wasm, later, later);
+    expect(run()).toEqual({ reused: true, build: cold.build });
+
+    // Another build: the same grammar with one more custom section, which
+    // loads and parses alike but is not the file the records came from.
+    appendFileSync(wasm, Buffer.from([0x00, 0x05, 0x04, 0x61, 0x75, 0x64, 0x74]));
+    const swapped = run();
+    expect(swapped.reused).toBe(false);
+    expect(swapped.build).not.toBe(cold.build);
+    // Re-extracted by a grammar that parses the same: the same artifact.
+    expect(read(out, "graph.json")).toBe(graph);
+    expect(run()).toEqual({ reused: true, build: swapped.build });
   });
 
   it("read commands honour --no-ast / --max-calls against an index built without them", () => {

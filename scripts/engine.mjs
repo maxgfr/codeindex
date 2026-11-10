@@ -8022,6 +8022,47 @@ function resolvableGrammarKeys() {
   if (!present("web-tree-sitter.wasm")) return /* @__PURE__ */ new Set();
   return new Set(allGrammarKeys().filter((key) => present(`${key}.wasm`)));
 }
+function grammarPath(key, dirs = resolveGrammarsTier().dirs) {
+  for (const dir of dirs) {
+    const path = join2(dir, `${key}.wasm`);
+    if (existsSync2(path)) return path;
+  }
+  return void 0;
+}
+function grammarLandscape() {
+  const { dirs } = resolveGrammarsTier();
+  if (!dirs.some((dir) => existsSync2(join2(dir, "web-tree-sitter.wasm")))) return "";
+  const parts2 = [];
+  for (const key of allGrammarKeys().sort()) {
+    const path = grammarPath(key, dirs);
+    if (!path) continue;
+    try {
+      const st = statSync2(path);
+      parts2.push(`${key}:${st.size}:${st.mtimeMs}`);
+    } catch {
+    }
+  }
+  return parts2.join(",");
+}
+function grammarFile(key, known) {
+  const path = grammarPath(key);
+  if (!path) return void 0;
+  try {
+    const st = statSync2(path);
+    if (known && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
+    const seen = grammarFiles.get(path);
+    if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen;
+    const file = { sha1: sha1(readFileSync4(path)), size: st.size, mtimeMs: st.mtimeMs };
+    grammarFiles.set(path, file);
+    return file;
+  } catch {
+    return void 0;
+  }
+}
+function sameGrammarFile(key, stored) {
+  if (!stored) return false;
+  return grammarFile(key, stored)?.sha1 === stored.sha1;
+}
 function resolveGrammarsDir(opts) {
   return resolveGrammarsTier(opts).dir;
 }
@@ -8091,12 +8132,13 @@ function parserFor(key) {
   parser.setLanguage(lang);
   return parser;
 }
-var CORE_GRAMMARS, EXTENDED_GRAMMARS, EXT_GRAMMAR, EMBEDDED_GRAMMARS, CPP_HEADER, EXTENDED_DIR, runtimeReady, parser, loaded, failed;
+var CORE_GRAMMARS, EXTENDED_GRAMMARS, EXT_GRAMMAR, EMBEDDED_GRAMMARS, CPP_HEADER, EXTENDED_DIR, grammarFiles, runtimeReady, parser, loaded, failed;
 var init_loader = __esm({
   "src/ast/loader.ts"() {
     "use strict";
     init_web_tree_sitter();
     init_types();
+    init_hash();
     CORE_GRAMMARS = /* @__PURE__ */ new Set([
       "typescript",
       "tsx",
@@ -8163,6 +8205,7 @@ var init_loader = __esm({
     };
     CPP_HEADER = /^[ \t]*(?:namespace(?:[ \t]+[A-Za-z_][\w:]*)?\s*\{|using[ \t]+namespace[ \t]|template[ \t]*<|class[ \t]+(?:[A-Z_][A-Z0-9_]*[ \t]+)?[A-Za-z_]\w*(?:[ \t]+final)?[ \t]*(?:[:;{]|$)|(?:public|private|protected)[ \t]*:(?!:)|#[ \t]*include[ \t]*<[a-z_]+>|extern[ \t]+"C\+\+")/m;
     EXTENDED_DIR = "grammars-extended";
+    grammarFiles = /* @__PURE__ */ new Map();
     runtimeReady = false;
     parser = null;
     loaded = /* @__PURE__ */ new Map();
@@ -11363,19 +11406,37 @@ function parseCacheEntries(value) {
   }
   return cache;
 }
-function extractionProfile(files, maxCallsPerFile, ast) {
+function extractionProfile(files, maxCallsPerFile, ast, known) {
   const grammars = grammarKeysForExts(files.filter((f) => f.kind === "code").map((f) => f.ext)).filter(ast);
-  return maxCallsPerFile === void 0 ? { grammars } : { grammars, maxCallsPerFile };
+  const profile = maxCallsPerFile === void 0 ? { grammars } : { grammars, maxCallsPerFile };
+  if (!known) return profile;
+  const grammarFiles2 = {};
+  for (const key of grammars) {
+    const file = grammarFile(key, known.profile?.grammarFiles?.[key]);
+    if (file) grammarFiles2[key] = file;
+  }
+  return { ...profile, grammarFiles: grammarFiles2 };
 }
-function sameExtractionProfile(a, b) {
-  return a !== void 0 && a.maxCallsPerFile === b.maxCallsPerFile && a.grammars.join(",") === b.grammars.join(",");
+function sameExtractionProfile(a, b, same = sameGrammarFile) {
+  return a !== void 0 && a.maxCallsPerFile === b.maxCallsPerFile && a.grammars.join(",") === b.grammars.join(",") && b.grammars.every((key) => same(key, a.grammarFiles?.[key]));
+}
+function parseGrammarFiles(value) {
+  if (!object(value)) return void 0;
+  const out2 = {};
+  for (const [key, file] of Object.entries(value)) {
+    if (object(file) && sha(file.sha1) && count(file.size) && typeof file.mtimeMs === "number" && Number.isFinite(file.mtimeMs)) {
+      out2[key] = { sha1: file.sha1, size: file.size, mtimeMs: file.mtimeMs };
+    }
+  }
+  return out2;
 }
 function parseExtractionProfile(value) {
   if (!object(value) || !Array.isArray(value.grammars) || !value.grammars.every(string)) return void 0;
   const calls = value.maxCallsPerFile;
   if (calls !== void 0 && !(typeof calls === "number" && Number.isFinite(calls) && calls > 0)) return void 0;
   const grammars = [...value.grammars];
-  return calls === void 0 ? { grammars } : { grammars, maxCallsPerFile: calls };
+  const grammarFiles2 = parseGrammarFiles(value.grammarFiles);
+  return { grammars, ...calls === void 0 ? {} : { maxCallsPerFile: calls }, ...grammarFiles2 ? { grammarFiles: grammarFiles2 } : {} };
 }
 function compatibleEntries(cache, stored, current) {
   const alike = extractedAlike(stored, current);
@@ -11388,10 +11449,21 @@ function compatibleEntries(cache, stored, current) {
 function extractedAlike(stored, current) {
   const astBefore = new Set(stored?.grammars);
   const callsMatch = stored !== void 0 && stored.maxCallsPerFile === current.maxCallsPerFile;
+  const same = current.sameGrammar ?? sameGrammarFile;
+  const verdicts = /* @__PURE__ */ new Map();
+  const alike = (key) => {
+    let verdict = verdicts.get(key);
+    if (verdict === void 0) {
+      const now = current.ast(key);
+      verdict = astBefore.has(key) === now && (!now || same(key, stored?.grammarFiles?.[key]));
+      verdicts.set(key, verdict);
+    }
+    return verdict;
+  };
   return (kind, ext) => {
     if (kind !== "code") return true;
     if (!callsMatch) return false;
-    return grammarKeysForExts([ext]).every((key) => astBefore.has(key) === current.ast(key));
+    return grammarKeysForExts([ext]).every(alike);
   };
 }
 var object, string, count, line, strings, sha, kinds, symbolText, fileText, fileLists;
@@ -22263,6 +22335,7 @@ function sessionGet(key) {
   return entry2;
 }
 function sessionPut(entry2) {
+  entry2.grammars ??= grammarLandscape();
   const i2 = sessionCaches.findIndex((e) => e.key === entry2.key);
   if (i2 >= 0) sessionCaches.splice(i2, 1);
   sessionCaches.unshift(entry2);
@@ -22323,10 +22396,20 @@ function sessionKey(repo, opts) {
     fullHash: opts.fullHash
   });
 }
+function againstGrammars(entry2) {
+  const now = grammarLandscape();
+  if (entry2.grammars === now) return;
+  entry2.grammars = now;
+  entry2.walked = void 0;
+  const kept = /* @__PURE__ */ new Map();
+  for (const [rel2, cached] of entry2.cacheMap) if (cached.record.kind !== "code") kept.set(rel2, cached);
+  entry2.cacheMap = kept;
+}
 function getScan(repo, opts = {}, walked) {
   const key = sessionKey(repo, opts);
   const hit = sessionGet(key);
   if (hit) {
+    againstGrammars(hit);
     if (walked && hit.walked === walked) {
       syncCommit(hit, headCommit(repo));
       return hit.scan;
@@ -22361,6 +22444,7 @@ async function getScanParallel(repo, opts = {}, walked, warm = async () => {
   const key = sessionKey(repo, opts);
   const existing = sessionCaches.find((entry2) => entry2.key === key);
   if (existing) {
+    againstGrammars(existing);
     if (walked && existing.walked === walked) {
       syncCommit(existing, headCommit(repo));
       sessionGet(key);
@@ -27414,7 +27498,7 @@ ${HELP}`);
       out: outDir,
       workers: flags2.workers
     });
-    const extraction = extractionProfile(scan2.files, flags2.maxCalls, grammarReady);
+    const extraction = extractionProfile(scan2.files, flags2.maxCalls, grammarReady, { profile: persisted?.meta.extraction });
     if (scan2.files.length === 0) warnEmptyScan(flags2);
     const freshnessPath = join30(outDir, FRESHNESS_FILE);
     const writeFreshness = (out2) => {

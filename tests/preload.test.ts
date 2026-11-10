@@ -310,7 +310,7 @@ describe("lazy grammar warm on persisted indexes", { timeout: 30_000 }, () => {
   it("re-extracts records an index built at another tier", async () => {
     await withRepoAsync(async (repo) => {
       run(repo, ["index", "--out", join(repo, ".codeindex"), "--no-ast"]);
-      expect(readPersistedIndex(repo)?.meta.extraction).toEqual({ grammars: [] });
+      expect(readPersistedIndex(repo)?.meta.extraction).toEqual({ grammars: [], grammarFiles: {} });
       let warms = 0;
       const session = await preloadSessionLazy(repo, {}, async () => {
         warms++;

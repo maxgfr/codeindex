@@ -3,7 +3,7 @@
 // assertions alone do not make a stat-matching record safe to reuse.
 import { EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { FileRecord } from "./types.js";
-import { grammarKeysForExts } from "./ast/loader.js";
+import { grammarFile, grammarKeysForExts, sameGrammarFile, type GrammarFile } from "./ast/loader.js";
 
 export type PersistedCacheEntry = { hash: string; record: FileRecord; size?: number; mtimeMs?: number };
 export type PersistedCacheMap = Map<string, PersistedCacheEntry>;
@@ -107,22 +107,64 @@ export interface ExtractionProfile {
   // default. Not normalized on purpose: an explicit value equal to the default
   // costs one re-extraction, never a wrong record.
   maxCallsPerFile?: number;
+  // Which build of each grammar in `grammars` parsed the records (see
+  // GrammarFile). Absent in an index written before builds were recorded, and
+  // then no AST-tier record is trusted: it is re-extracted once.
+  grammarFiles?: Record<string, GrammarFile>;
 }
+
+// How the checks below ask whether a grammar is still the build an index
+// recorded. Replaceable so they can be tested without wasm on disk.
+export type SameGrammar = (key: string, stored: GrammarFile | undefined) => boolean;
 
 // The profile a scan's records were extracted under. `ast` answers, per
 // grammar key, whether this run extracted at the AST tier — grammarReady when
 // the scan has already run, since extractAst gates on exactly that.
+//
+// `known` is the profile an index already holds. Passing it asks for the
+// grammar builds too — the profile is about to be PERSISTED — and lets a build
+// whose file has not changed be carried over instead of hashed again. A profile
+// built only to be compared needs none: sameExtractionProfile reads the builds
+// off the stored side.
 export function extractionProfile(
   files: readonly Pick<FileRecord, "kind" | "ext">[],
   maxCallsPerFile: number | undefined,
   ast: (key: string) => boolean,
+  known?: { profile: ExtractionProfile | undefined },
 ): ExtractionProfile {
   const grammars = grammarKeysForExts(files.filter((f) => f.kind === "code").map((f) => f.ext)).filter(ast);
-  return maxCallsPerFile === undefined ? { grammars } : { grammars, maxCallsPerFile };
+  const profile: ExtractionProfile = maxCallsPerFile === undefined ? { grammars } : { grammars, maxCallsPerFile };
+  if (!known) return profile;
+  const grammarFiles: Record<string, GrammarFile> = {};
+  for (const key of grammars) {
+    const file = grammarFile(key, known.profile?.grammarFiles?.[key]);
+    if (file) grammarFiles[key] = file;
+  }
+  return { ...profile, grammarFiles };
 }
 
-export function sameExtractionProfile(a: ExtractionProfile | undefined, b: ExtractionProfile): boolean {
-  return a !== undefined && a.maxCallsPerFile === b.maxCallsPerFile && a.grammars.join(",") === b.grammars.join(",");
+// Whether the index holding `a` was extracted the way `b` describes: the same
+// call cap, the same grammars at the AST tier, each still the build `a` recorded.
+export function sameExtractionProfile(a: ExtractionProfile | undefined, b: ExtractionProfile, same: SameGrammar = sameGrammarFile): boolean {
+  return (
+    a !== undefined &&
+    a.maxCallsPerFile === b.maxCallsPerFile &&
+    a.grammars.join(",") === b.grammars.join(",") &&
+    b.grammars.every((key) => same(key, a.grammarFiles?.[key]))
+  );
+}
+
+function parseGrammarFiles(value: unknown): Record<string, GrammarFile> | undefined {
+  if (!object(value)) return undefined;
+  const out: Record<string, GrammarFile> = {};
+  for (const [key, file] of Object.entries(value)) {
+    // One malformed entry is dropped, not the rest: its grammar then reads as
+    // unrecorded and only its records are re-extracted.
+    if (object(file) && sha(file.sha1) && count(file.size) && typeof file.mtimeMs === "number" && Number.isFinite(file.mtimeMs)) {
+      out[key] = { sha1: file.sha1, size: file.size, mtimeMs: file.mtimeMs };
+    }
+  }
+  return out;
 }
 
 // Lenient where the entries are strict: a malformed profile says nothing about
@@ -133,7 +175,8 @@ export function parseExtractionProfile(value: unknown): ExtractionProfile | unde
   const calls = value.maxCallsPerFile;
   if (calls !== undefined && !(typeof calls === "number" && Number.isFinite(calls) && calls > 0)) return undefined;
   const grammars = [...(value.grammars as string[])];
-  return calls === undefined ? { grammars } : { grammars, maxCallsPerFile: calls };
+  const grammarFiles = parseGrammarFiles(value.grammarFiles);
+  return { grammars, ...(calls === undefined ? {} : { maxCallsPerFile: calls }), ...(grammarFiles ? { grammarFiles } : {}) };
 }
 
 // The persisted entries a scan extracting under `current` would reproduce.
@@ -146,7 +189,7 @@ export function parseExtractionProfile(value: unknown): ExtractionProfile | unde
 export function compatibleEntries(
   cache: PersistedCacheMap,
   stored: ExtractionProfile | undefined,
-  current: { maxCallsPerFile?: number; ast: (key: string) => boolean },
+  current: { maxCallsPerFile?: number; ast: (key: string) => boolean; sameGrammar?: SameGrammar },
 ): PersistedCacheMap {
   const alike = extractedAlike(stored, current);
   const kept: PersistedCacheMap = new Map();
@@ -160,10 +203,24 @@ export function compatibleEntries(
 // what freshness.json keeps of a record (see freshness.ts).
 export function extractedAlike(
   stored: ExtractionProfile | undefined,
-  current: { maxCallsPerFile?: number; ast: (key: string) => boolean },
+  current: { maxCallsPerFile?: number; ast: (key: string) => boolean; sameGrammar?: SameGrammar },
 ): (kind: string, ext: string) => boolean {
   const astBefore = new Set(stored?.grammars);
   const callsMatch = stored !== undefined && stored.maxCallsPerFile === current.maxCallsPerFile;
+  const same = current.sameGrammar ?? sameGrammarFile;
+  // One verdict per grammar key, however many files ask: at the AST tier then
+  // and now, and still the build the index recorded — or at the regex tier both
+  // times, where no grammar is involved.
+  const verdicts = new Map<string, boolean>();
+  const alike = (key: string): boolean => {
+    let verdict = verdicts.get(key);
+    if (verdict === undefined) {
+      const now = current.ast(key);
+      verdict = astBefore.has(key) === now && (!now || same(key, stored?.grammarFiles?.[key]));
+      verdicts.set(key, verdict);
+    }
+    return verdict;
+  };
   return (kind, ext) => {
     if (kind !== "code") return true;
     if (!callsMatch) return false;
@@ -171,6 +228,6 @@ export function extractedAlike(
     // file has no grammar of its own but runs its scripts through the TS/JS
     // ones, and a .h may be read as C++. Checking only the extension's own key
     // reused their regex-tier records after the grammars loaded.
-    return grammarKeysForExts([ext]).every((key) => astBefore.has(key) === current.ast(key));
+    return grammarKeysForExts([ext]).every(alike);
   };
 }

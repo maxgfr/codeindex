@@ -362,6 +362,34 @@ declare function scanSkips(root: string, opts?: ScanOptions): {
 declare function skipHistogram(skips: readonly ScanSkip[]): Record<string, number>;
 declare function whyPath(root: string, path: string, opts?: ScanOptions): PathVerdict;
 
+declare const CORE_GRAMMARS: Set<string>;
+declare const EXTENDED_GRAMMARS: Set<string>;
+declare const EXT_GRAMMAR: Record<string, string>;
+declare function grammarKeyForExt(ext: string): string | undefined;
+type GrammarsTierName = "adjacent" | "env" | "cache" | "none";
+interface GrammarsTier {
+    tier: GrammarsTierName;
+    dir?: string;
+    cacheDir: string;
+    dirs: string[];
+}
+declare function sharedGrammarsCacheDir(): string;
+declare function resolveGrammarsTier(opts?: {
+    moduleDir?: string;
+}): GrammarsTier;
+interface GrammarFile {
+    sha1: string;
+    size: number;
+    mtimeMs: number;
+}
+declare function resolveGrammarsDir(opts?: {
+    moduleDir?: string;
+}): string | undefined;
+declare function ensureGrammars(keys: Iterable<string>): Promise<void>;
+declare function allGrammarKeys(): string[];
+declare function grammarKeysForExts(exts: Iterable<string>): string[];
+declare function grammarReady(key: string): boolean;
+
 type PersistedCacheEntry = {
     hash: string;
     record: FileRecord;
@@ -372,6 +400,7 @@ type PersistedCacheMap = Map<string, PersistedCacheEntry>;
 interface ExtractionProfile {
     grammars: string[];
     maxCallsPerFile?: number;
+    grammarFiles?: Record<string, GrammarFile>;
 }
 
 interface BuildIndexOptions extends ScanOptions {
@@ -544,29 +573,6 @@ interface MarkdownInfo {
 declare function extractMarkdown(content: string): MarkdownInfo;
 
 declare function extractRst(rel: string, content: string): MarkdownInfo;
-
-declare const CORE_GRAMMARS: Set<string>;
-declare const EXTENDED_GRAMMARS: Set<string>;
-declare const EXT_GRAMMAR: Record<string, string>;
-declare function grammarKeyForExt(ext: string): string | undefined;
-type GrammarsTierName = "adjacent" | "env" | "cache" | "none";
-interface GrammarsTier {
-    tier: GrammarsTierName;
-    dir?: string;
-    cacheDir: string;
-    dirs: string[];
-}
-declare function sharedGrammarsCacheDir(): string;
-declare function resolveGrammarsTier(opts?: {
-    moduleDir?: string;
-}): GrammarsTier;
-declare function resolveGrammarsDir(opts?: {
-    moduleDir?: string;
-}): string | undefined;
-declare function ensureGrammars(keys: Iterable<string>): Promise<void>;
-declare function allGrammarKeys(): string[];
-declare function grammarKeysForExts(exts: Iterable<string>): string[];
-declare function grammarReady(key: string): boolean;
 
 interface AstResult {
     symbols: CodeSymbol[];

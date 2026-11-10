@@ -1396,7 +1396,8 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       out: outDir,
       workers: flags.workers,
     });
-    const extraction = extractionProfile(scan.files, flags.maxCalls, grammarReady);
+    // With the grammar builds: this is the profile the index is written with.
+    const extraction = extractionProfile(scan.files, flags.maxCalls, grammarReady, { profile: persisted?.meta.extraction });
     if (scan.files.length === 0) warnEmptyScan(flags);
     const freshnessPath = join(outDir, FRESHNESS_FILE);
     // freshness.json (see freshness.ts) for the cache.json now on disk: always

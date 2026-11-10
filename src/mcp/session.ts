@@ -12,7 +12,7 @@ import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummar
 import { scanRepoParallel } from "../pool.js";
 import { needsGrammarWarm, preloadSession, preloadSessionLazy, toCacheMap, type PersistedCacheEntry, type PersistedCacheMap } from "../preload.js";
 import type { WalkResult } from "../walk.js";
-import { ensureGrammars, grammarKeysForExts } from "../ast/loader.js";
+import { ensureGrammars, grammarKeysForExts, grammarLandscape } from "../ast/loader.js";
 import { resolveEmbedModelDir, loadEmbedModel, type StaticEmbedModel } from "../embed/model.js";
 import { type EmbeddingIndex } from "../embed/index.js";
 import { sha1 } from "../hash.js";
@@ -130,6 +130,9 @@ interface SessionEntry {
   // exactly when no watched directory changed since it was taken: the scan is
   // then still current without re-checking a single file.
   walked?: WalkResult;
+  // The grammars available when the records were built (grammarLandscape):
+  // see againstGrammars. Set by sessionPut.
+  grammars?: string;
 }
 
 // `commit` (headCommit(root)) is NOT part of the stat/hash freshness oracle: a
@@ -165,6 +168,7 @@ function sessionGet(key: string): SessionEntry | undefined {
 }
 
 function sessionPut(entry: SessionEntry): SessionEntry {
+  entry.grammars ??= grammarLandscape();
   const i = sessionCaches.findIndex((e) => e.key === entry.key);
   if (i >= 0) sessionCaches.splice(i, 1);
   sessionCaches.unshift(entry);
@@ -276,11 +280,33 @@ export function sessionKey(repo: string, opts: SessionScanOptions): string {
 // preload machinery moved into src/preload.ts.
 export { toCacheMap };
 
+// A session's records are the ones the grammars available when they were built
+// would produce. When that set has changed since — a grammar pulled, removed or
+// replaced beside a running server — the code records say nothing any more:
+// kept, they stayed at the regex tier next to new files extracted at the AST
+// tier, in an index no cold build would produce, until the server restarted.
+// They are dropped (docs and config do not depend on a grammar), so the scan
+// that follows re-extracts them; the CLI applies the same rule to cache.json
+// through compatibleEntries.
+//
+// One limit: a grammar this process has already LOADED is not reloaded when its
+// file is replaced, so the re-extraction then still runs on the build in memory.
+function againstGrammars(entry: SessionEntry): void {
+  const now = grammarLandscape();
+  if (entry.grammars === now) return;
+  entry.grammars = now;
+  entry.walked = undefined;
+  const kept: SessionCacheMap = new Map();
+  for (const [rel, cached] of entry.cacheMap) if (cached.record.kind !== "code") kept.set(rel, cached);
+  entry.cacheMap = kept;
+}
+
 // The memoizing replacement for scanRepo inside callTool. Exported for tests.
 export function getScan(repo: string, opts: SessionScanOptions = {}, walked?: WalkResult): RepoScan {
   const key = sessionKey(repo, opts);
   const hit = sessionGet(key);
   if (hit) {
+    againstGrammars(hit);
     if (walked && hit.walked === walked) {
       syncCommit(hit, headCommit(repo));
       return hit.scan;
@@ -333,6 +359,7 @@ export async function getScanParallel(
   const key = sessionKey(repo, opts);
   const existing = sessionCaches.find((entry) => entry.key === key);
   if (existing) {
+    againstGrammars(existing);
     if (walked && existing.walked === walked) {
       syncCommit(existing, headCommit(repo));
       sessionGet(key);

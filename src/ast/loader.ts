@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Parser, Language } from "web-tree-sitter";
 import { ENGINE_VERSION } from "../types.js";
+import { sha1 } from "../hash.js";
 
 // Extension → committed grammar wasm key (scripts/grammars/<key>.wasm). Only the
 // languages we ship a grammar for appear here; everything else falls back to the
@@ -182,6 +183,78 @@ export function resolvableGrammarKeys(): Set<string> {
   const present = (name: string): boolean => dirs.some((d) => existsSync(join(d, name)));
   if (!present("web-tree-sitter.wasm")) return new Set();
   return new Set(allGrammarKeys().filter((key) => present(`${key}.wasm`)));
+}
+
+// WHICH build of a grammar a record was parsed with: the wasm's content hash,
+// with the (size, mtime) it was read at. A grammar is re-vendored without the
+// engine's extraction code changing — so without EXTRACTOR_VERSION changing —
+// and a new build can parse the same source differently. A cache that knew only
+// "typescript was at the AST tier" then kept serving records the old build had
+// parsed, and a warm index stopped matching a cold one.
+export interface GrammarFile {
+  sha1: string;
+  size: number;
+  mtimeMs: number;
+}
+
+// The wasm ensureGrammars would load for `key`: the first resolved dir holding it.
+function grammarPath(key: string, dirs: readonly string[] = resolveGrammarsTier().dirs): string | undefined {
+  for (const dir of dirs) {
+    const path = join(dir, `${key}.wasm`);
+    if (existsSync(path)) return path;
+  }
+  return undefined;
+}
+
+// Every grammar that could be loaded right now, with the (size, mtime) of its
+// wasm: one string that changes when a grammar appears, disappears or is
+// replaced on disk — a `grammars pull` beside a running server. Stats only.
+// A long-lived process compares it with the one its records were built under.
+export function grammarLandscape(): string {
+  const { dirs } = resolveGrammarsTier();
+  if (!dirs.some((dir) => existsSync(join(dir, "web-tree-sitter.wasm")))) return "";
+  const parts: string[] = [];
+  for (const key of allGrammarKeys().sort()) {
+    const path = grammarPath(key, dirs);
+    if (!path) continue;
+    try {
+      const st = statSync(path);
+      parts.push(`${key}:${st.size}:${st.mtimeMs}`);
+    } catch {
+      // Gone between the two calls: not loadable, so not part of the landscape.
+    }
+  }
+  return parts.join(",");
+}
+
+const grammarFiles = new Map<string, GrammarFile>(); // by path, for this process
+
+// The identity of the wasm `key` resolves to right now, or undefined when none
+// does. `known` is an identity read earlier (a persisted one): when the file
+// still has its size and mtime it is returned as is and nothing is read — the
+// same stat fastpath the scan gives source files — so proving an index fresh
+// costs one stat per grammar, not a hash of megabytes of wasm.
+export function grammarFile(key: string, known?: GrammarFile): GrammarFile | undefined {
+  const path = grammarPath(key);
+  if (!path) return undefined;
+  try {
+    const st = statSync(path);
+    if (known && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
+    const seen = grammarFiles.get(path);
+    if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen;
+    const file: GrammarFile = { sha1: sha1(readFileSync(path)), size: st.size, mtimeMs: st.mtimeMs };
+    grammarFiles.set(path, file);
+    return file;
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether `key` still resolves to the build `stored` describes. An absent
+// `stored` (an index written before builds were recorded) proves nothing.
+export function sameGrammarFile(key: string, stored: GrammarFile | undefined): boolean {
+  if (!stored) return false;
+  return grammarFile(key, stored)?.sha1 === stored.sha1;
 }
 
 // The chosen grammars dir, or undefined when nothing is resolvable anywhere

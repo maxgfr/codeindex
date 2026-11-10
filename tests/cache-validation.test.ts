@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { readPersistedIndex, toCacheMap } from "../src/preload.js";
-import { extractedAlike } from "../src/cache.js";
+import { extractedAlike, parseExtractionProfile, sameExtractionProfile } from "../src/cache.js";
 import { scanRepo } from "../src/scan.js";
 import { EXTRACTOR_VERSION, SCHEMA_VERSION } from "../src/types.js";
 
@@ -119,8 +119,39 @@ describe("what the cache may reuse", () => {
     // A header extracted with C alone, now that C++ is loaded too.
     expect(extractedAlike({ grammars: ["c"] }, { ast: () => true })("code", ".h")).toBe(false);
     const loaded = ["c", "cpp", "javascript", "typescript"];
-    const same = extractedAlike({ grammars: loaded }, { ast: (k) => loaded.includes(k) });
+    const same = extractedAlike({ grammars: loaded }, { ast: (k) => loaded.includes(k), sameGrammar: () => true });
     for (const ext of [".vue", ".svelte", ".h", ".ts"]) expect(same("code", ext), ext).toBe(true);
+  });
+
+  it("a record parsed by another build of its grammar is not reused", () => {
+    const loaded = ["c", "cpp", "javascript", "typescript"];
+    const file = (sha1: string) => ({ sha1, size: 1, mtimeMs: 1 });
+    const stored = { grammars: loaded, grammarFiles: Object.fromEntries(loaded.map((k) => [k, file(k === "typescript" ? "a".repeat(40) : "b".repeat(40))])) };
+    // Only typescript.wasm was re-vendored since the index was written.
+    const now = extractedAlike(stored, { ast: (k) => loaded.includes(k), sameGrammar: (key, was) => was?.sha1 === (key === "typescript" ? "c" : "b").repeat(40) });
+    expect(now("code", ".ts")).toBe(false);
+    expect(now("code", ".vue")).toBe(false); // its script runs through the TS grammar
+    expect(now("code", ".h")).toBe(true);
+    expect(now("doc", ".md")).toBe(true);
+    // An index written before builds were recorded proves nothing about an AST-tier record…
+    const unrecorded = extractedAlike({ grammars: loaded }, { ast: (k) => loaded.includes(k) });
+    expect(unrecorded("code", ".ts")).toBe(false);
+    // …and nothing is asked of a grammar at the regex tier then and now.
+    expect(extractedAlike({ grammars: [] }, { ast: () => false, sameGrammar: () => false })("code", ".ts")).toBe(true);
+    // The whole-profile comparison reads the builds off the stored side.
+    expect(sameExtractionProfile(stored, { grammars: loaded }, (key, was) => was?.sha1 === (key === "typescript" ? "a" : "b").repeat(40))).toBe(true);
+    expect(sameExtractionProfile(stored, { grammars: loaded }, () => false)).toBe(false);
+    expect(sameExtractionProfile({ grammars: loaded }, { grammars: loaded }, (_key, was) => was !== undefined)).toBe(false);
+  });
+
+  it("a persisted profile keeps well-formed grammar builds and drops malformed ones", () => {
+    const good = { sha1: "a".repeat(40), size: 10, mtimeMs: 1.5 };
+    expect(parseExtractionProfile({ grammars: ["go"], grammarFiles: { go: good, rust: { sha1: "nope", size: 1, mtimeMs: 1 }, c: 3 } })).toEqual({
+      grammars: ["go"],
+      grammarFiles: { go: good },
+    });
+    expect(parseExtractionProfile({ grammars: ["go"], grammarFiles: "x" })).toEqual({ grammars: ["go"] });
+    expect(parseExtractionProfile({ grammars: ["go"], maxCallsPerFile: 7 })).toEqual({ grammars: ["go"], maxCallsPerFile: 7 });
   });
 
   it("index after an --no-ast index re-extracts a single-file component", { timeout: 60_000 }, () => {
