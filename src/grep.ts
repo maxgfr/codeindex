@@ -17,7 +17,7 @@
 import { Worker, MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { walk, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
+import { walk, enclosingIgnoreFilter, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
 import { compileGlobs, compileGlobFilter } from "./glob.js";
 import { sh, have } from "./util.js";
 import { byStr } from "./sort.js";
@@ -333,7 +333,7 @@ function universeArgs(opts: GrepOptions): string[] {
   // Lockfiles match at any depth, case-insensitively (the walker lowercases).
   for (const l of LOCKFILES) args.push("--iglob", `!**/${l}`);
   for (const ext of BINARY_EXT) args.push("--iglob", `!**/*${ext}`);
-  args.push("--glob", "!*.min.js", "--glob", "!*.min.css");
+  args.push("--iglob", "!*.min.js", "--iglob", "!*.min.css"); // any case, as the walk reads them
   // The JS keep-predicate applies every user glob afterwards, so rg only gets
   // what can prune its walk without ever dropping a file that predicate keeps:
   // a tree exclusion (`!dir/**`) with no braces or classes, where the two glob
@@ -679,7 +679,12 @@ export function grepRepoEx(root: string, pattern: string, opts: GrepOptions = {}
   let out: (RgOutcome & { timedOut?: boolean }) | undefined;
   if (!opts.noRipgrep && have("rg")) {
     const rust = toRipgrepRegex(re);
-    const rg = rust === undefined ? undefined : rgBackend(root, rust, opts, keep, max);
+    // ripgrep is told not to read ignore files above the root (it would go on
+    // past the repository, into ones the walk never reads), so the .gitignore
+    // files between the root and its repository's top level are applied here.
+    const above = opts.gitignore === false ? undefined : enclosingIgnoreFilter(root);
+    const keepRg = above ? (rel: string): boolean => (!keep || keep(rel)) && !above(rel) : keep;
+    const rg = rust === undefined ? undefined : rgBackend(root, rust, opts, keepRg, max);
     if (rg && "fallback" in rg) notes.push(rg.fallback);
     else if (rg) out = rg;
     else if (rust === undefined) notes.push("the pattern uses JavaScript-only syntax (lookaround, backreference…); searched with the slower JavaScript engine");

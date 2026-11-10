@@ -189,6 +189,54 @@ function enclosingRules(rootReal: string): IgnoreRule[] {
   }));
 }
 
+// Whether a path under `root` is ignored by the rules the walk applies there,
+// for a caller that did NOT walk — ripgrep, which grep runs with
+// --no-ignore-parent. undefined when no .gitignore above `root` applies, i.e.
+// when ripgrep's own reading of the tree's .gitignore files already is the
+// walk's. Otherwise the answer follows the walk's chain for that path: the
+// rules from above, then each .gitignore down to the file's directory, a
+// directory ignored on the way hiding everything beneath it.
+//
+// Without it a search in one package of a monorepo returned hits in files the
+// root .gitignore excludes — files `scan` and the JavaScript backend never see.
+export function enclosingIgnoreFilter(root: string): ((rel: string) => boolean) | undefined {
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return undefined;
+  }
+  const above = enclosingRules(rootReal);
+  if (!above.length) return undefined;
+  const chains = new Map<string, readonly IgnoreRule[]>(); // dir → the rules in force inside it
+  const hidden = new Map<string, boolean>([["", false]]); // dir → ignored, itself or through an ancestor
+  const parentOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+  const chainOf = (dir: string): readonly IgnoreRule[] => {
+    let chain = chains.get(dir);
+    if (!chain) {
+      const inherited = dir === "" ? above : chainOf(parentOf(dir));
+      const file = join(rootReal, dir, ".gitignore");
+      const own = existsSync(file) ? parseGitignore(readText(file), dir, dir ? `${dir}/.gitignore` : ".gitignore") : [];
+      chain = own.length ? [...inherited, ...own] : inherited;
+      chains.set(dir, chain);
+    }
+    return chain;
+  };
+  const dirHidden = (dir: string): boolean => {
+    let verdict = hidden.get(dir);
+    if (verdict === undefined) {
+      const parent = parentOf(dir);
+      verdict = dirHidden(parent) || isIgnored(chainOf(parent), dir, true);
+      hidden.set(dir, verdict);
+    }
+    return verdict;
+  };
+  return (rel) => {
+    const dir = parentOf(rel);
+    return dirHidden(dir) || isIgnored(chainOf(dir), rel, false);
+  };
+}
+
 // Lockfiles: huge, machine-generated, and pure noise for a code/docs question —
 // they'd otherwise rank as keyword-dense "code" hits (e.g. package-lock.json
 // matching a dependency name). Skipped entirely.
@@ -476,7 +524,9 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       else if (st.size > maxFileBytes && !opts.includeOversize) reason = "over-max-bytes";
       else if (LOCKFILES.has(name.toLowerCase()) && !opts.includeLockfiles) reason = "lockfile";
       else if ((opts.binaryExtensions ?? BINARY_EXT).has(ext) && !opts.includeBinary) reason = "binary-ext";
-      else if ((name.endsWith(".min.js") || name.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
+      // Whatever the case of the name, like the lockfile and extension tests
+      // above: `LIB.MIN.JS` is as minified as `lib.min.js`, and was indexed.
+      else if (/\.min\.(?:js|css)$/i.test(name) && !opts.includeMinified) reason = "minified";
       if (reason) {
         excluded++;
         if (reason === "over-max-bytes") oversized.push({ rel: rel.split(sep).join("/"), size: st.size });

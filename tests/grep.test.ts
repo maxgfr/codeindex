@@ -76,6 +76,33 @@ describe("grep universe: walk flags, scope and globs", () => {
     expect(files(both(root, "NEEDLE", { gitignore: false }))).toEqual(["kept.txt", "local.txt"]);
   });
 
+  it("applies the .gitignore files above a package of a monorepo, on both backends", () => {
+    // ripgrep runs with --no-ignore-parent, so it returned hits in files the
+    // repository's root .gitignore excludes — files `scan` never sees.
+    const root = repo({
+      ".gitignore": "generated/\n*.gen.ts\nlogs/\n",
+      "pkg/.gitignore": "!keep.gen.ts\nlocal/\n",
+      "pkg/src/a.ts": "NEEDLE\n",
+      "pkg/src/b.gen.ts": "NEEDLE\n",
+      "pkg/src/keep.gen.ts": "NEEDLE\n", // the package's own rule re-includes it
+      "pkg/generated/c.ts": "NEEDLE\n",
+      "pkg/deep/logs/d.txt": "NEEDLE\n",
+      "pkg/local/e.ts": "NEEDLE\n",
+      "other/f.ts": "NEEDLE\n",
+    });
+    execFileSync("git", ["init", "-q", "."], { cwd: root });
+    const pkg = join(root, "pkg");
+    expect(files(both(pkg, "NEEDLE"))).toEqual(["src/a.ts", "src/keep.gen.ts"]);
+    expect(files(both(pkg, "NEEDLE", { gitignore: false }))).toEqual(["deep/logs/d.txt", "generated/c.ts", "local/e.ts", "src/a.ts", "src/b.gen.ts", "src/keep.gen.ts"]);
+    // From the top level nothing is "above": the same rules, read by both as before.
+    expect(files(both(root, "NEEDLE"))).toEqual(["other/f.ts", "pkg/src/a.ts", "pkg/src/keep.gen.ts"]);
+  });
+
+  it("skips a minified file whatever the case of its name, on both backends", () => {
+    const root = repo({ "a.ts": "NEEDLE\n", "LIB.MIN.JS": "var NEEDLE=1;\n", "Site.Min.Css": ".NEEDLE{}\n", "admin.js": "NEEDLE\n" });
+    expect(files(both(root, "NEEDLE"))).toEqual(["a.ts", "admin.js"]);
+  });
+
   it("never lets a positive glob resurrect ignored files (an rg whitelist glob overrides ignores)", () => {
     const root = repo({
       ".gitignore": "gen.ts\n",

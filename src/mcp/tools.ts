@@ -391,7 +391,7 @@ export const TOOLS = [
           type: "boolean",
           description: "Return { hits, truncated, filesMatched, notes? } instead of the bare hit array",
         },
-        timeoutMs: { type: "integer", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" },
+        timeoutMs: { type: "integer", minimum: 1, maximum: 120000, description: "Wall-clock budget for the JS regex engine (default 10000, at most 120000: the server answers nothing else while a search runs)" },
       },
       required: ["repo", "pattern"],
     },

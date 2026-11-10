@@ -813,6 +813,43 @@ function enclosingRules(rootReal) {
     test: (rel2, base) => r.test ? r.test(fromTop + rel2, base) : r.re.test(fromTop + rel2)
   }));
 }
+function enclosingIgnoreFilter(root) {
+  let rootReal;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return void 0;
+  }
+  const above = enclosingRules(rootReal);
+  if (!above.length) return void 0;
+  const chains = /* @__PURE__ */ new Map();
+  const hidden = /* @__PURE__ */ new Map([["", false]]);
+  const parentOf = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+  const chainOf = (dir) => {
+    let chain = chains.get(dir);
+    if (!chain) {
+      const inherited = dir === "" ? above : chainOf(parentOf(dir));
+      const file = join(rootReal, dir, ".gitignore");
+      const own = existsSync(file) ? parseGitignore(readText(file), dir, dir ? `${dir}/.gitignore` : ".gitignore") : [];
+      chain = own.length ? [...inherited, ...own] : inherited;
+      chains.set(dir, chain);
+    }
+    return chain;
+  };
+  const dirHidden = (dir) => {
+    let verdict = hidden.get(dir);
+    if (verdict === void 0) {
+      const parent = parentOf(dir);
+      verdict = dirHidden(parent) || isIgnored(chainOf(parent), dir, true);
+      hidden.set(dir, verdict);
+    }
+    return verdict;
+  };
+  return (rel2) => {
+    const dir = parentOf(rel2);
+    return dirHidden(dir) || isIgnored(chainOf(dir), rel2, false);
+  };
+}
 function walk(root, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
   const maxFiles = opts.maxFiles ?? Infinity;
@@ -937,7 +974,7 @@ function walk(root, opts = {}) {
       else if (st.size > maxFileBytes && !opts.includeOversize) reason = "over-max-bytes";
       else if (LOCKFILES.has(name2.toLowerCase()) && !opts.includeLockfiles) reason = "lockfile";
       else if ((opts.binaryExtensions ?? BINARY_EXT).has(ext) && !opts.includeBinary) reason = "binary-ext";
-      else if ((name2.endsWith(".min.js") || name2.endsWith(".min.css")) && !opts.includeMinified) reason = "minified";
+      else if (/\.min\.(?:js|css)$/i.test(name2) && !opts.includeMinified) reason = "minified";
       if (reason) {
         excluded++;
         if (reason === "over-max-bytes") oversized.push({ rel: rel2.split(sep).join("/"), size: st.size });
@@ -18574,7 +18611,7 @@ function universeArgs(opts) {
   args2.push("--glob", "!**/.codeindex/**");
   for (const l of LOCKFILES) args2.push("--iglob", `!**/${l}`);
   for (const ext of BINARY_EXT) args2.push("--iglob", `!**/*${ext}`);
-  args2.push("--glob", "!*.min.js", "--glob", "!*.min.css");
+  args2.push("--iglob", "!*.min.js", "--iglob", "!*.min.css");
   for (const g of opts.globs ?? []) {
     const body2 = g.slice(1).replace(/^\//, "");
     if (g.startsWith("!") && body2.endsWith("/**") && !/[{}[\]\\!]/.test(body2)) args2.push("--glob", `!/${body2}`);
@@ -18789,7 +18826,9 @@ function grepRepoEx(root, pattern, opts = {}) {
   let out2;
   if (!opts.noRipgrep && have("rg")) {
     const rust2 = toRipgrepRegex(re);
-    const rg = rust2 === void 0 ? void 0 : rgBackend(root, rust2, opts, keep, max);
+    const above = opts.gitignore === false ? void 0 : enclosingIgnoreFilter(root);
+    const keepRg = above ? (rel2) => (!keep || keep(rel2)) && !above(rel2) : keep;
+    const rg = rust2 === void 0 ? void 0 : rgBackend(root, rust2, opts, keepRg, max);
     if (rg && "fallback" in rg) notes.push(rg.fallback);
     else if (rg) out2 = rg;
     else if (rust2 === void 0) notes.push("the pattern uses JavaScript-only syntax (lookaround, backreference\u2026); searched with the slower JavaScript engine");
@@ -23322,7 +23361,7 @@ var init_tools = __esm({
               type: "boolean",
               description: "Return { hits, truncated, filesMatched, notes? } instead of the bare hit array"
             },
-            timeoutMs: { type: "integer", minimum: 1, description: "Wall-clock budget for the JS regex engine (default 10000)" }
+            timeoutMs: { type: "integer", minimum: 1, maximum: 12e4, description: "Wall-clock budget for the JS regex engine (default 10000, at most 120000: the server answers nothing else while a search runs)" }
           },
           required: ["repo", "pattern"]
         }
