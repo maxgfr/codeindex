@@ -33,6 +33,9 @@ function decodeLatin1(bytes: Uint8Array): string {
   return out;
 }
 
+const isUtf16le = (encoding: unknown): boolean =>
+  encoding === "utf16le" || encoding === "utf-16le" || encoding === "ucs2" || encoding === "ucs-2";
+
 class BrowserBuffer extends Uint8Array {
   // Params are widened to `any` for one reason: Uint8Array's static `from` is
   // the TypedArray.from overload set (arrayLike, mapfn, thisArg), and a
@@ -56,6 +59,17 @@ class BrowserBuffer extends Uint8Array {
       if (encoding === "latin1" || encoding === "binary") {
         const out = new BrowserBuffer(value.length);
         for (let i = 0; i < value.length; i++) out[i] = value.charCodeAt(i) & 0xff;
+        return out;
+      }
+      if (isUtf16le(encoding)) {
+        // What edit.ts writes a UTF-16 file back with. Falling through to UTF-8
+        // here put UTF-8 bytes after a UTF-16 BOM: a corrupted file.
+        const out = new BrowserBuffer(value.length * 2);
+        for (let i = 0; i < value.length; i++) {
+          const unit = value.charCodeAt(i);
+          out[2 * i] = unit & 0xff;
+          out[2 * i + 1] = unit >> 8;
+        }
         return out;
       }
       const encoded = encoder.encode(value);
@@ -87,6 +101,7 @@ class BrowserBuffer extends Uint8Array {
   static byteLength(value: string | Uint8Array, encoding?: string): number {
     if (typeof value !== "string") return value.byteLength;
     if (encoding === "latin1" || encoding === "binary") return value.length;
+    if (isUtf16le(encoding)) return value.length * 2;
     return encoder.encode(value).length;
   }
 

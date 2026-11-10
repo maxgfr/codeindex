@@ -160,6 +160,18 @@ describe("Buffer shim", () => {
     expect(shim.toString("utf16le")).toBe(node.toString("utf16le"));
   });
 
+  it("encodes a string as UTF-16LE like node:Buffer", () => {
+    // What a symbol edit writes a UTF-16 file back with: this used to come out
+    // as UTF-8 bytes, after a UTF-16 BOM.
+    for (const text of ["", "héllo", "x = \u4e2d\u6587;", "pair \u{1F600} end"]) {
+      for (const encoding of ["utf16le", "utf-16le", "ucs2"] as const) {
+        expect([...ShimBuffer.from(text, encoding)], `${text} as ${encoding}`).toEqual([...Buffer.from(text, encoding)]);
+        expect(ShimBuffer.byteLength(text, encoding)).toBe(Buffer.byteLength(text, encoding));
+      }
+      expect(ShimBuffer.from(text, "utf16le").toString("utf16le")).toBe(text);
+    }
+  });
+
   it("throws on swap16 of an odd length, like node:Buffer", () => {
     expect(() => decode(new Uint8Array([1, 2, 3])).swap16()).toThrow(RangeError);
   });
