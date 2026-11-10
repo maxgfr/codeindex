@@ -17658,13 +17658,22 @@ function detectWorkspaces(root) {
     const edges = edgesFor(root, pkg, byName, byDir, accessors, warnings);
     if (edges.length) pkg.dependsOn = edges.sort(byStr);
   }
-  const byDepth = [...packages].sort((a, b) => b.dir.length - a.dir.length);
+  const packageAt2 = new Map(packages.map((p) => [p.dir, p]));
+  const packageOf = (rel2) => {
+    for (let dir = rel2; ; ) {
+      const hit = packageAt2.get(dir);
+      if (hit) return hit;
+      const slash = dir.lastIndexOf("/");
+      if (slash === -1) return void 0;
+      dir = dir.slice(0, slash);
+    }
+  };
   return {
     packages,
     cycle: findCycle(packages),
     topoOrder: topoOrder(packages),
     warnings: [...new Set(warnings)].sort(byStr),
-    packageOf: (rel2) => byDepth.find((p) => rel2 === p.dir || rel2.startsWith(p.dir + "/"))
+    packageOf
   };
 }
 function ownPomVersion(pom) {

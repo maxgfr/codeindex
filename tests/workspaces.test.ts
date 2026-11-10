@@ -238,3 +238,28 @@ describe("manifestCoordinates", () => {
     expect(manifestCoordinates(root, "missing", "package.json")).toBeUndefined();
   });
 });
+
+describe("packageOf — the package a path belongs to", () => {
+  it("is the nearest enclosing package directory, the directory itself included", () => {
+    const root = scratchRepo({
+      "package.json": JSON.stringify({ name: "root", workspaces: ["packages/*", "packages/ui/widgets/*"] }),
+      "packages/ui/package.json": JSON.stringify({ name: "ui" }),
+      "packages/ui/widgets/button/package.json": JSON.stringify({ name: "button" }),
+      "packages/uikit/package.json": JSON.stringify({ name: "uikit" }),
+    });
+    const info = detectWorkspaces(root);
+    const owner = (rel: string): string | undefined => info.packageOf(rel)?.name;
+    expect(owner("packages/ui/src/index.ts")).toBe("ui");
+    expect(owner("packages/ui")).toBe("ui");
+    // The deepest enclosing package wins over the one around it.
+    expect(owner("packages/ui/widgets/button/src/a.ts")).toBe("button");
+    expect(owner("packages/ui/widgets/other.ts")).toBe("ui");
+    // A sibling whose name merely starts with a package's name is not inside it.
+    expect(owner("packages/uikit/index.ts")).toBe("uikit");
+    expect(owner("packages/uiextra/index.ts")).toBeUndefined();
+    // Outside every member.
+    expect(owner("scripts/build.ts")).toBeUndefined();
+    expect(owner("README.md")).toBeUndefined();
+    expect(owner("")).toBeUndefined();
+  });
+});
