@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.17](https://github.com/maxgfr/codeindex/compare/v2.31.16...v2.31.17) (2026-11-10)
+
+
+### Bug Fixes
+
+* **ast:** keep a receiver named with $, a private field or an instance variable ([bb57265](https://github.com/maxgfr/codeindex/commit/bb57265c613fb0e9a6f4b3699795324129681ad6))
+* **browser:** encode UTF-16LE in the Buffer shim ([dd0383b](https://github.com/maxgfr/codeindex/commit/dd0383b95f04b2a801b315f1a6e813f5e76d726a))
+* **cli:** refuse inherited names as commands and answer --help for mcp and rewrite ([29290e2](https://github.com/maxgfr/codeindex/commit/29290e299329a2aa14df0cd79e5ddbdec8d5cc70))
+* **embed:** cut texts to the endpoint's limit instead of failing the whole build ([cec5633](https://github.com/maxgfr/codeindex/commit/cec5633316bca44c306102d1ec71cbb2af097733))
+* **git:** keep a repository's git config from running a command, guard public diff bases ([19ac12e](https://github.com/maxgfr/codeindex/commit/19ac12efb69bfe842b39f1ef00c2a2f1c3aac1be))
+* **glob:** match globs, .gitignore and workspace patterns without backtracking ([b651ab7](https://github.com/maxgfr/codeindex/commit/b651ab7528d046c42d30b25794d8b25f5fa2cda5))
+* **grammars:** never install an unverified archive, and bound every download ([bae1f22](https://github.com/maxgfr/codeindex/commit/bae1f2290bb603e8036ebf8d99ad060fc65f0a44))
+* **lsp:** cap time budgets at the longest delay a timer takes ([63870d9](https://github.com/maxgfr/codeindex/commit/63870d94259c80c777b707dcf8fc09f8a441f578))
+* **lsp:** never read a server's own request as a reply, and resolve dot segments in URIs ([d433078](https://github.com/maxgfr/codeindex/commit/d43307822c3651e620faa4cea3413bef8b05feb1))
+* **mcp:** limit --trust-lsp-config to the pinned repository ([b59f839](https://github.com/maxgfr/codeindex/commit/b59f839806bfef571ab38563697c9a65b5c094d1))
+* **pool:** start extraction workers on Node 18 ([1f36c76](https://github.com/maxgfr/codeindex/commit/1f36c7656191b77a7d3b791bf038b5b34511577e))
+* **rewrite:** decline several patterns when one holds a back-reference ([08887cd](https://github.com/maxgfr/codeindex/commit/08887cdcdf4dbdd8e3f1959dda4d45e0091ed85b))
+
+
+### Performance Improvements
+
+* **grep:** prune the JavaScript backend's walk by scope ([6b02508](https://github.com/maxgfr/codeindex/commit/6b02508f5d67a93e0bc36ca978003697a173c784))
+* **resolve:** memoize the C/C++ include-root probe per spec ([a8e62ec](https://github.com/maxgfr/codeindex/commit/a8e62ec3fdc258601e1d5802ae4ee1dc9c403e44)), closes [#include](https://github.com/maxgfr/codeindex/issues/include)
+* **traverse:** take a Go package's importers once per closure ([4267211](https://github.com/maxgfr/codeindex/commit/4267211efdac96b01d9449f2a202d6e7dadcce2e))
+* **workspaces:** look a path's package up through its ancestors ([82b89ec](https://github.com/maxgfr/codeindex/commit/82b89ec3bd716ac382197da962b38cf1a5fb3695))
+
 ## [2.31.16](https://github.com/maxgfr/codeindex/compare/v2.31.15...v2.31.16) (2026-11-09)
 
 
