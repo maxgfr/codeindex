@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pagerankOf, betweennessOf, applyCentrality, BETWEENNESS_MAX_NODES } from "../src/centrality.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";
+import { importPagerankFor } from "../src/derived.js";
+import { scanRepo } from "../src/scan.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
 import type { Edge, FileNode, Graph, ModuleNode } from "../src/types.js";
 
@@ -177,5 +179,20 @@ describe("centrality at build time", () => {
     expect(parsed.modules.some((m) => typeof m.pagerank === "number")).toBe(true);
     expect(parsed.modules.some((m) => typeof m.betweenness === "number")).toBe(true);
     expect(parsed.files.some((f) => typeof f.pagerank === "number")).toBe(true);
+  });
+});
+
+// Import pairs are kept as `from|to`, and "|" is a legal character in a path.
+describe("search's import PageRank", () => {
+  it.runIf(process.platform !== "win32")("gives a file named with a `|` its own imports", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-pagerank-pipe-"));
+    writeFileSync(join(dir, "core.ts"), "export const core = 1;\n");
+    writeFileSync(join(dir, "lonely.ts"), "export const lonely = 1;\n");
+    // Three importers of core.ts, each with a pipe in its name.
+    for (const name of ["a|x.ts", "b|y.ts", "c|z.ts"]) writeFileSync(join(dir, name), 'import { core } from "./core";\nexport const v = core;\n');
+    const rank = importPagerankFor(scanRepo(dir));
+    // Cut at the first "|", each pair read `a` -> `x.ts|core.ts`: no such files,
+    // so core.ts had no importer and ranked like a file nothing imports.
+    expect(rank.get("core.ts")!).toBeGreaterThan(rank.get("lonely.ts")! * 2);
   });
 });

@@ -15285,10 +15285,12 @@ function importPagerankFor(scan2) {
   const c2 = cacheFor(scan2);
   if (!c2.importPagerank) {
     const ids = scan2.files.map((f) => f.rel);
+    const known = new Set(ids);
     const edges = [];
     for (const pair of importPairsFor(scan2)) {
-      const sep9 = pair.indexOf("|");
-      edges.push({ from: pair.slice(0, sep9), to: pair.slice(sep9 + 1), kind: "import", weight: 1 });
+      let sep9 = pair.indexOf("|");
+      while (sep9 !== -1 && !(known.has(pair.slice(0, sep9)) && known.has(pair.slice(sep9 + 1)))) sep9 = pair.indexOf("|", sep9 + 1);
+      if (sep9 !== -1) edges.push({ from: pair.slice(0, sep9), to: pair.slice(sep9 + 1), kind: "import", weight: 1 });
     }
     c2.importPagerank = pagerankOf(ids, edges);
   }

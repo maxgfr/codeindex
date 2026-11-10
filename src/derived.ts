@@ -237,10 +237,15 @@ export function importPagerankFor(scan: RepoScan): Map<string, number> {
   const c = cacheFor(scan);
   if (!c.importPagerank) {
     const ids = scan.files.map((f) => f.rel);
+    const known = new Set(ids);
     const edges: Edge[] = [];
     for (const pair of importPairsFor(scan)) {
-      const sep = pair.indexOf("|");
-      edges.push({ from: pair.slice(0, sep), to: pair.slice(sep + 1), kind: "import", weight: 1 });
+      // `from|to`, and a path may itself hold a "|": the split is the one with
+      // a file of the scan on each side. Cutting at the first "|" gave such a
+      // file's imports to a path that does not exist.
+      let sep = pair.indexOf("|");
+      while (sep !== -1 && !(known.has(pair.slice(0, sep)) && known.has(pair.slice(sep + 1)))) sep = pair.indexOf("|", sep + 1);
+      if (sep !== -1) edges.push({ from: pair.slice(0, sep), to: pair.slice(sep + 1), kind: "import", weight: 1 });
     }
     c.importPagerank = pagerankOf(ids, edges);
   }
