@@ -2,7 +2,9 @@ name: Release
 
 # Conventional-Commit-driven releases, fully in CI. On every push to `main`,
 # semantic-release inspects the commits since the last release and, when they
-# warrant one (feat → minor, fix → patch, `!`/BREAKING → major):
+# warrant one (feat → minor, fix/perf → patch, `!`/BREAKING CHANGE → major; the
+# `conventionalcommits` preset in .releaserc.json is what reads the `!` — under
+# the default preset `feat!:` matched no rule and cut no release at all):
 #   - runs the full gate (typecheck / test / reproducible bundle),
 #   - computes the next version, syncs it across package.json / src/types.ts,
 #     rebuilds the bundle (scripts/sync-version.mjs + pnpm build),

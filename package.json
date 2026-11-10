@@ -72,6 +72,7 @@
     "@tree-sitter-grammars/tree-sitter-lua": "0.4.1",
     "@tree-sitter-grammars/tree-sitter-zig": "1.1.2",
     "@types/node": "^20.19.43",
+    "conventional-changelog-conventionalcommits": "9.1.0",
     "esbuild": "0.28.2",
     "semantic-release": "^25.0.9",
     "tree-sitter-bash": "0.25.1",
