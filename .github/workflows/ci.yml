@@ -39,3 +39,20 @@ jobs:
           node scripts/cli.mjs search client --repo tests/fixtures/mini-repo --out /tmp/codeindex-node18-search.json
           test -s /tmp/codeindex-node18-scan.json
           test -s /tmp/codeindex-node18-search.json
+      # The pool falls back to a sequential scan when its workers cannot start,
+      # and a scan that succeeds says nothing about which path it took: on
+      # Node 18 no worker ever started, for months, behind a green smoke test.
+      # extractInParallel answers undefined on that fallback, so ask it.
+      - name: Extraction workers start on Node 18
+        run: |
+          node -e '
+            import("./scripts/engine.mjs").then(async (m) => {
+              const jobs = m.walk("tests/fixtures/mini-repo").files.map((f) => ({ abs: f.abs, rel: f.rel, ext: f.ext }));
+              const records = await m.extractInParallel(jobs, [], 2);
+              if (!records || records.size !== jobs.length) {
+                console.error("extraction workers did not run: " + (records ? records.size + "/" + jobs.length + " records" : "sequential fallback"));
+                process.exit(1);
+              }
+              console.log("extraction workers built " + records.size + " records");
+            });
+          '

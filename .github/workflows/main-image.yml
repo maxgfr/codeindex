@@ -31,7 +31,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # main's head, not the commit that triggered Release. On the
+          # workflow_run path head_sha is the commit BEFORE the version bump:
+          # building it pushed `:latest` over the image release.yml had just
+          # built from the tag, so `latest` announced the previous
+          # ENGINE_VERSION after every release. site.yml does the same.
+          ref: main
 
       - name: Short SHA
         id: sha
