@@ -19429,7 +19429,7 @@ async function buildEndpointIndex(scan2, opts = {}) {
   });
   return { embedVersion: EMBED_VERSION, modelId, dim, records };
 }
-var ENDPOINT_MAX_TEXT_CHARS, CANARY;
+var EMBED_IMAGE_VERSION, ENDPOINT_MAX_TEXT_CHARS, CANARY;
 var init_endpoint = __esm({
   "src/embed/endpoint.ts"() {
     "use strict";
@@ -19438,6 +19438,7 @@ var init_endpoint = __esm({
     init_encode();
     init_model();
     init_embed();
+    EMBED_IMAGE_VERSION = "1.0.0";
     ENDPOINT_MAX_TEXT_CHARS = 8192;
     CANARY = "codeindex endpoint fingerprint: parse the request, retry on timeout";
   }
@@ -24283,7 +24284,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
         try {
           const index = await memoizedEmbeddingIndex(
             { mode: "endpoint", identity: endpoint, scan: scan2 },
-            (previous) => buildEndpointIndex(scan2, { previous })
+            async (previous) => buildEndpointIndex(scan2, { previous, modelId: await endpointModelId() })
           );
           const queryVec = await encodeQueryViaEndpoint(query);
           return answer(explainSemantic(scan2, query, index, { ...lexOpts, queryVec }), "endpoint");
@@ -27922,7 +27923,7 @@ ${HELP}`);
       if (endpoint) status.endpointReachable = await probeEndpoint(endpoint);
       emit(JSON.stringify(status, null, 2) + "\n", flags2.out);
     } else if (sub === "serve") {
-      const dockerArgs = ["run", "-d", "-p", "8756:8756", "ghcr.io/maxgfr/codeindex-embed:latest"];
+      const dockerArgs = ["run", "-d", "-p", "127.0.0.1:8756:8756", `ghcr.io/maxgfr/codeindex-embed:${EMBED_IMAGE_VERSION}`];
       const oneLiner = `docker ${dockerArgs.join(" ")}`;
       if (!have("docker")) {
         process.stderr.write(

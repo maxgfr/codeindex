@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 const pExecFile = promisify(execFile);
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  EMBED_IMAGE_VERSION,
   ENDPOINT_MAX_TEXT_CHARS,
   buildEndpointIndex,
   embedEndpointUrl,
@@ -413,6 +414,13 @@ describe("`embed serve` convenience (engine-cli only, never the library)", () =>
     expect(status).toBe(0);
     expect(stdout).toContain("ghcr.io/maxgfr/codeindex-embed");
     expect(stdout).toContain("8756");
+  });
+
+  it("publishes the unauthenticated server on the loopback interface, at the image's own version", () => {
+    const { stdout } = run(["embed", "serve"]);
+    const version = readFileSync(fileURLToPath(new URL("../docker/embed/VERSION", import.meta.url)), "utf8").trim();
+    expect(EMBED_IMAGE_VERSION).toBe(version);
+    expect(stdout.trim()).toBe(`docker run -d -p 127.0.0.1:8756:8756 ghcr.io/maxgfr/codeindex-embed:${version}`);
   });
 });
 

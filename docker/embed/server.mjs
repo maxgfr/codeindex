@@ -33,11 +33,27 @@ env.allowLocalModels = true;
 
 // Lazily construct the extractor once, shared across requests. Awaiting the same
 // promise everywhere means concurrent requests don't each load the model.
+//
+// A load that FAILS is not kept: the rejected promise used to stay cached, so
+// one failed start (a model cache not mounted yet) answered 500 to every later
+// request for the life of the process. The next request tries again.
 let extractorPromise;
 function getExtractor() {
-  if (!extractorPromise) extractorPromise = pipeline("feature-extraction", MODEL_ID);
+  if (!extractorPromise) {
+    extractorPromise = pipeline("feature-extraction", MODEL_ID);
+    extractorPromise.catch(() => {
+      extractorPromise = undefined;
+    });
+  }
   return extractorPromise;
 }
+
+// How many /embed requests may run or wait at once. Each one is CPU-bound for
+// its whole batch and they do not parallelize, so an unbounded backlog only
+// grows memory and latency: past this, a request is told to come back (503),
+// which the engine's client reports as an endpoint failure and degrades from.
+const MAX_IN_FLIGHT = 8;
+let inFlight = 0;
 
 // `close: true` marks the response Connection: close, so Node tears the socket
 // down cleanly once the reply is flushed — used for the 413 path below, where
@@ -100,6 +116,19 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === "POST" && req.url === "/embed") {
+      // Not from a web page. A browser sends `Origin` with every cross-origin
+      // POST, and a page open in one can reach a local port without a preflight:
+      // it would get to spend this server's CPU. The engine, curl and any other
+      // program send none.
+      if (req.headers.origin) {
+        json(res, 403, { error: "requests from a web page are refused" }, { close: true });
+        return;
+      }
+      if (inFlight >= MAX_IN_FLIGHT) {
+        res.setHeader("retry-after", "1");
+        json(res, 503, { error: `busy: ${MAX_IN_FLIGHT} requests already in flight` }, { close: true });
+        return;
+      }
       let raw;
       try {
         raw = await readBody(req);
@@ -135,17 +164,38 @@ const server = createServer(async (req, res) => {
         json(res, 200, { vectors: [] });
         return;
       }
-      const extractor = await getExtractor();
-      const out = await extractor(texts, { pooling: "mean", normalize: true });
-      json(res, 200, { model: MODEL_ID, vectors: out.tolist() });
+      inFlight++;
+      try {
+        const extractor = await getExtractor();
+        const out = await extractor(texts, { pooling: "mean", normalize: true });
+        json(res, 200, { model: MODEL_ID, vectors: out.tolist() });
+      } finally {
+        inFlight--;
+      }
       return;
     }
     json(res, 404, { error: "not found" });
   } catch (e) {
-    json(res, 500, { error: e && e.message ? e.message : String(e) });
+    // Logged here, not sent: an internal message (a path, a stack) is the
+    // operator's to read, and the client only needs to know it failed.
+    console.error(e);
+    if (!res.headersSent) json(res, 500, { error: "internal error" });
   }
 });
 
+// 0.0.0.0 INSIDE the container: a published port is forwarded to it. Which host
+// interface that port is published on is the `docker run -p` argument's to say
+// (`codeindex embed serve` prints 127.0.0.1) — this server has no authentication.
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`codeindex-embed listening on :${PORT} (model ${MODEL_ID})`);
 });
+
+// node is PID 1 in the image, and PID 1 gets no default signal handling: with
+// no handler `docker stop` waited out its 10 s grace period and killed it.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => {
+    server.close(() => process.exit(0));
+    server.closeIdleConnections?.();
+    setTimeout(() => process.exit(0), 2000).unref();
+  });
+}

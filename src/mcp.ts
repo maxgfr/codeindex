@@ -49,7 +49,7 @@ import { buildEmbeddingIndex } from "./embed/index.js";
 import { readEmbeddingsFile } from "./embed/persist.js";
 import { INDEX_DIR } from "./preload.js";
 import { explainSemantic } from "./embed/search.js";
-import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
+import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint, endpointModelId } from "./embed/endpoint.js";
 import { walk, type WalkResult } from "./walk.js";
 import { watchRepo, type RepoWatch } from "./mcp/watch.js";
 import { toolsFor, OUTPUT_SCHEMAS, TOOL_META, profileNames, toolsInProfiles } from "./mcp/tools.js";
@@ -609,8 +609,13 @@ async function callTool(
         // The corpus index is memoized per (endpoint, scan state) — the query
         // itself is always re-encoded fresh (it differs per call).
         try {
-          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, (previous) =>
-            buildEndpointIndex(scan, { previous }),
+          // Under the endpoint's model fingerprint, as the CLI does: `previous`
+          // donates vectors only to an index of the SAME model. Without it, a
+          // model swapped behind the same URL during a session kept the old
+          // model's vectors for every unit whose text had not changed, and
+          // ranked them against the new model's query vector.
+          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, async (previous) =>
+            buildEndpointIndex(scan, { previous, modelId: await endpointModelId() }),
           );
           const queryVec = await encodeQueryViaEndpoint(query);
           return answer(explainSemantic(scan, query, index, { ...lexOpts, queryVec }), "endpoint");

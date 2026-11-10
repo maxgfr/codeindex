@@ -70,9 +70,13 @@ try {
         assert.deepEqual((await post({texts:[]})).body,{vectors:[]});
         for(const body of ['{',null,{}, {texts:[1]}, {texts:['x'.repeat(8193)]}, {texts:Array(257).fill('x')}])assert.equal((await post(body)).status,400);
         assert.equal((await post('x'.repeat(2*1024*1024+1))).status,413);
+        assert.equal((await fetch(base+'/embed',{method:'POST',headers:{origin:'https://example.invalid'},body:JSON.stringify(input)})).status,403);
+        const flood=await Promise.all(Array.from({length:24},()=>post({texts:Array(64).fill('a sentence long enough to take the model a moment to embed, repeated')})));
+        assert.ok(flood.every(r=>r.status===200||r.status===503),'statuses under load');
+        assert.ok(flood.some(r=>r.status===200),'some requests are served under load');
         assert.equal((await fetch(base+'/missing')).status,404);
         assert.equal((await fetch(base+'/healthz')).status,200);
-        console.log('PASS embed: offline/nonroot readiness, 384 finite normalized deterministic floats, empty/malformed/limits/413, post-error health');
+        console.log('PASS embed: offline/nonroot readiness, 384 finite normalized deterministic floats, empty/malformed/limits/413, web-origin 403, bounded backlog, post-error health');
       })().catch(e=>{console.error(e);process.exitCode=1;});`;
     console.log(docker(["exec", container, "node", "-e", checks]));
     const semantic = docker(["run", "--rm", "--network", `container:${container}`, "-e", "CODEINDEX_EMBED_ENDPOINT=http://127.0.0.1:8756", "-v", `${repo}:/work`, engine, "search", "greet", "--semantic", "--repo", "/work"]);
@@ -82,6 +86,13 @@ try {
     assert.equal(status.mode, "endpoint");
     assert.equal(status.endpointReachable, true);
     console.log("PASS engine semantic endpoint integration", JSON.stringify(status));
+    // node is PID 1 in the image: without its own SIGTERM handler `docker stop`
+    // waits out the 10 s grace period and kills it.
+    const stopping = Date.now();
+    docker(["stop", container]);
+    const stopMs = Date.now() - stopping;
+    assert.ok(stopMs < 8000, `docker stop took ${stopMs} ms: SIGTERM is not handled`);
+    console.log(`PASS embed: stops on SIGTERM (${stopMs} ms)`);
   }
 } finally {
   if (started) { const logs = spawnSync("docker", ["logs", container], { encoding: "utf8" }); console.log(logs.stdout, logs.stderr); spawnSync("docker", ["rm", "-f", container], { encoding: "utf8", timeout: 30_000 }); }

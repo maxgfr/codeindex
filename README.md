@@ -1175,7 +1175,7 @@ unreachable endpoint degrades to lexical (exit 0), not to the static model.
 
 ```sh
 codeindex embed serve            # print the docker run one-liner (or --run it)
-docker run -d -p 8756:8756 ghcr.io/maxgfr/codeindex-embed:latest
+docker run -d -p 127.0.0.1:8756:8756 ghcr.io/maxgfr/codeindex-embed:1.0.0
 # reproducible: pin the digest → ghcr.io/maxgfr/codeindex-embed@sha256:<digest>
 CODEINDEX_EMBED_ENDPOINT=http://localhost:8756 \
   codeindex search "auth token" --repo . --semantic

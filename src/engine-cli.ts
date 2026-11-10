@@ -74,14 +74,7 @@ import {
 import { buildEmbeddingIndex, sameEmbeddings, serializeEmbeddings } from "./embed/index.js";
 import { readEmbeddingsFile, writeEmbeddingsFileAtomic } from "./embed/persist.js";
 import { explainSemantic } from "./embed/search.js";
-import {
-  resolveEmbedEndpoint,
-  buildEndpointIndex,
-  embedEndpointUrl,
-  encodeQueryViaEndpoint,
-  endpointModelId,
-  probeEndpoint,
-} from "./embed/endpoint.js";
+import { EMBED_IMAGE_VERSION, resolveEmbedEndpoint, buildEndpointIndex, embedEndpointUrl, encodeQueryViaEndpoint, endpointModelId, probeEndpoint } from "./embed/endpoint.js";
 import { errMessage, have, sh } from "./util.js";
 import { lspStatus, callersWithLsp, referencesWithLsp } from "./lsp/index.js";
 import { profileNames, toolsInProfiles } from "./mcp/tools.js";
@@ -1839,7 +1832,10 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // Convenience only — the LIBRARY never orchestrates docker (engine.ts is
       // side-effect-free). This lives in the CLI: it prints (or, with --run,
       // executes) the docker command that starts the embedding server image.
-      const dockerArgs = ["run", "-d", "-p", "8756:8756", "ghcr.io/maxgfr/codeindex-embed:latest"];
+      // Published on the loopback interface only: the server has no
+      // authentication, and `-p 8756:8756` offered it to the whole network. The
+      // image is the embed server's own version, not whatever `latest` is today.
+      const dockerArgs = ["run", "-d", "-p", "127.0.0.1:8756:8756", `ghcr.io/maxgfr/codeindex-embed:${EMBED_IMAGE_VERSION}`];
       const oneLiner = `docker ${dockerArgs.join(" ")}`;
       if (!have("docker")) {
         process.stderr.write(

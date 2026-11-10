@@ -24,8 +24,12 @@ WORKDIR /build
 # does NOT drop `sharp`: sharp is a REGULAR dependency of @xenova/transformers,
 # required on the feature-extraction path (see the prune step below), so it
 # always installs.
-COPY package.json ./
-RUN npm install --omit=optional --no-audit --no-fund
+#
+# `npm ci` from the committed lockfile: every image is built from the same
+# dependency tree. `npm install` resolved the ~80 transitive packages afresh on
+# each build, so two builds of one commit could ship different code.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=optional --no-audit --no-fund
 
 # Download + cache the model at build time (baked into the layer below).
 ENV MODEL_CACHE_DIR=/build/models

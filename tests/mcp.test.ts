@@ -818,7 +818,9 @@ describe("memoizedEmbedModel (single-entry static-model cache)", () => {
 
 interface EmbedMock {
   url: string;
-  calls: number; // count of POST /embed requests received
+  calls: number;
+  // What every text embeds to: change it to put another MODEL behind the same URL.
+  vector: number[]; // count of POST /embed requests received
   texts: string[][]; // the texts of each POST, in arrival order
   close: () => Promise<void>;
 }
@@ -828,7 +830,7 @@ interface EmbedMock {
 // memoizes the corpus index (one POST for the whole corpus, however many
 // searches follow) instead of re-embedding it on every `search` call.
 async function startEmbedMock(): Promise<EmbedMock> {
-  const mock: EmbedMock = { url: "", calls: 0, texts: [], close: async () => {} };
+  const mock: EmbedMock = { url: "", calls: 0, texts: [], vector: [1, 0], close: async () => {} };
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -843,7 +845,7 @@ async function startEmbedMock(): Promise<EmbedMock> {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { texts: string[] };
         mock.texts.push(body.texts);
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ vectors: body.texts.map(() => [1, 0]) }));
+        res.end(JSON.stringify({ vectors: body.texts.map(() => mock.vector) }));
       });
       return;
     }
@@ -947,6 +949,37 @@ describe("MCP search — embedding index memoization (endpoint tier)", () => {
     }
   }, 20_000);
 
+  it("a model swapped behind the same URL donates no vector: the corpus is embedded again", async () => {
+    const tmpRepo = join(mkdtempSync(join(tmpdir(), "ci-mcp-model-")), "mini-repo");
+    cpSync(REPO, tmpRepo, { recursive: true });
+    mock = await startEmbedMock();
+    const session = mcpStagedSession({ CODEINDEX_EMBED_ENDPOINT: mock.url, CODEINDEX_EMBED_DIR: undefined });
+    try {
+      const corpusTexts = async (id: number): Promise<number> => {
+        const before = mock!.texts.length;
+        await session.call(id, "search", { repo: tmpRepo, query: "http client retry", semantic: true });
+        // Everything sent but the model check and the query itself.
+        return mock!.texts
+          .slice(before)
+          .filter((batch) => !(batch.length === 1 && (batch[0] === "http client retry" || batch[0]!.startsWith("codeindex endpoint fingerprint"))))
+          .flat().length;
+      };
+      const whole = await corpusTexts(1);
+      expect(whole).toBeGreaterThan(5);
+      const clientFile = join(tmpRepo, "src", "client.ts");
+      // Same model, a comment appended: no unit text changed, nothing is re-sent.
+      writeFileSync(clientFile, readFileSync(clientFile, "utf8") + "\n// touched\n");
+      expect(await corpusTexts(2)).toBe(0);
+      // Another model now answers at that URL. The old vectors were kept for
+      // every unchanged unit and ranked against the new model's query vector.
+      mock.vector = [0, 1];
+      writeFileSync(clientFile, readFileSync(clientFile, "utf8") + "// touched again\n");
+      expect(await corpusTexts(3)).toBe(whole);
+    } finally {
+      session.close();
+    }
+  }, 30_000);
+
   it("editing a file between searches rebuilds the corpus index, re-sending only the units whose text changed", async () => {
     const tmpRepo = join(mkdtempSync(join(tmpdir(), "ci-mcp-memo-")), "mini-repo");
     cpSync(REPO, tmpRepo, { recursive: true });
@@ -957,8 +990,14 @@ describe("MCP search — embedding index memoization (endpoint tier)", () => {
         const before = mock!.texts.length;
         const res = await session.call(id, "search", { repo: tmpRepo, query: "http client retry", semantic: true });
         expect((JSON.parse(res.result!.content![0]!.text) as { tier: string }).tier).toBe("endpoint");
-        return mock!.texts.slice(before);
+        // Each (re)build first asks the endpoint which model it is, with one
+        // fixed text: vectors are only reused under the same model.
+        const sent = mock!.texts.slice(before);
+        const fingerprint = sent.filter((batch) => batch.length === 1 && batch[0]!.startsWith("codeindex endpoint fingerprint"));
+        fingerprints.push(fingerprint.length);
+        return sent.filter((batch) => !fingerprint.includes(batch));
       };
+      const fingerprints: number[] = [];
       const first = await search(1);
       // One corpus POST with every unit, then the query.
       expect(first.length).toBe(2);
@@ -977,6 +1016,8 @@ describe("MCP search — embedding index memoization (endpoint tier)", () => {
       expect(third[0]!.length).toBe(1);
       expect(third[0]![0]).toMatch(/^reconnectSocket\n/);
       expect(third[1]).toEqual(["http client retry"]);
+      // One model check per rebuild: all three searches found a changed scan.
+      expect(fingerprints).toEqual([1, 1, 1]);
     } finally {
       session.close();
     }

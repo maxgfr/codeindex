@@ -68,6 +68,10 @@ function resolveTimeout(opts: EmbedEndpointOptions): number {
   return Number.isFinite(env) && env > 0 ? clampTimerMs(env) : 30_000;
 }
 
+// The version of the reference embedding server image `embed serve` names:
+// docker/embed/VERSION, which tests/endpoint.test.ts holds this to.
+export const EMBED_IMAGE_VERSION = "1.0.0";
+
 // The longest text an endpoint is sent, in UTF-16 units: the per-text limit of
 // the reference server (MAX_TEXT_CHARS in docker/embed/server.mjs), which
 // answers 400 past it. A unit's text has no bound of its own — a file-level
