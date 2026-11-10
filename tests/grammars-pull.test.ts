@@ -17,6 +17,7 @@ import {
   fetchExpectedSha256,
   fetchGrammarsTarball,
   installGrammarCacheAtomically,
+  pullGrammars,
   resolveGrammarsPullTarget,
 } from "../src/ast/grammars-pull.js";
 import type { GrammarsPullTarget } from "../src/engine.js";
@@ -62,6 +63,21 @@ async function serveOnce(body: Buffer | string, status = 200): Promise<{ url: st
     res.writeHead(status);
     res.end(body);
   });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    url: `http://127.0.0.1:${port}/asset`,
+    close: () =>
+      new Promise<void>((r) => {
+        server.closeAllConnections?.();
+        server.close(() => r());
+      }),
+  };
+}
+
+// A server that accepts the request and never answers: a stalled connection.
+async function serveNever(): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = http.createServer(() => {});
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as AddressInfo).port;
   return {
@@ -297,6 +313,97 @@ describe("fetchExpectedSha256 — sidecar parsing", () => {
       await expect(fetchExpectedSha256(srv.url)).rejects.toThrow(/invalid sha256 sidecar/);
     } finally {
       await srv.close();
+    }
+  });
+});
+
+describe("downloads are bounded in time", () => {
+  it("fetchGrammarsTarball gives up on a connection that stalls", async () => {
+    const srv = await serveNever();
+    try {
+      await expect(fetchGrammarsTarball(srv.url, undefined, 150)).rejects.toThrow(/timeout|aborted/i);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("fetchExpectedSha256 gives up on a connection that stalls", async () => {
+    const srv = await serveNever();
+    try {
+      await expect(fetchExpectedSha256(srv.url, 150)).rejects.toThrow(/timeout|aborted/i);
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe("pullGrammars — a target that names a checksum is never installed unverified", () => {
+  const archive = (): Buffer =>
+    gzipSync(makeTar([{ name: "web-tree-sitter.wasm", data: Buffer.from("runtime") }, { name: "x.wasm", data: Buffer.from("grammar") }]));
+
+  it("fails, writing nothing, when the checksum cannot be fetched", async () => {
+    const tarball = await serveOnce(archive());
+    const sidecar = await serveOnce("not found", 404);
+    const cache = join(mk("ci-gr-closed-"), "grammars", ENGINE_VERSION);
+    const notes: string[] = [];
+    try {
+      const res = await pullGrammars(cache, {
+        target: { url: tarball.url, sha256Url: sidecar.url },
+        onNote: (m) => notes.push(m),
+      });
+      expect(res).toMatchObject({ ok: false, status: "failed", cacheDir: cache });
+      expect(res.message).toMatch(/could not fetch the checksum/);
+      expect(res.message).toMatch(/HTTP 404/);
+      expect(res.message).toMatch(/nothing written/);
+      expect(existsSync(cache)).toBe(false);
+      // The archive was not even requested.
+      expect(notes.join("")).not.toMatch(/fetching grammars/);
+    } finally {
+      await tarball.close();
+      await sidecar.close();
+    }
+  });
+
+  it("fails when the checksum is malformed, and leaves an existing cache as it was", async () => {
+    const tarball = await serveOnce(archive());
+    const sidecar = await serveOnce("<html>captive portal</html>");
+    const cache = join(mk("ci-gr-closed-"), "grammars", ENGINE_VERSION);
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, "web-tree-sitter.wasm"), "previous");
+    try {
+      const res = await pullGrammars(cache, { target: { url: tarball.url, sha256Url: sidecar.url } });
+      expect(res).toMatchObject({ ok: false, status: "failed" });
+      expect(readFileSync(join(cache, "web-tree-sitter.wasm"), "utf8")).toBe("previous");
+    } finally {
+      await tarball.close();
+      await sidecar.close();
+    }
+  });
+
+  it("installs when the checksum is fetched and matches", async () => {
+    const bytes = archive();
+    const tarball = await serveOnce(bytes);
+    const sidecar = await serveOnce(createHash("sha256").update(bytes).digest("hex") + "  grammars.tar.gz\n");
+    const cache = join(mk("ci-gr-closed-"), "grammars", ENGINE_VERSION);
+    try {
+      const res = await pullGrammars(cache, { target: { url: tarball.url, sha256Url: sidecar.url } });
+      expect(res).toMatchObject({ ok: true, status: "pulled" });
+      expect(readFileSync(join(cache, "web-tree-sitter.wasm"), "utf8")).toBe("runtime");
+    } finally {
+      await tarball.close();
+      await sidecar.close();
+    }
+  });
+
+  it("a target with no checksum (an explicit CODEINDEX_GRAMMARS_URL) still installs unverified", async () => {
+    const tarball = await serveOnce(archive());
+    const cache = join(mk("ci-gr-closed-"), "grammars", ENGINE_VERSION);
+    try {
+      const res = await pullGrammars(cache, { target: { url: tarball.url } });
+      expect(res).toMatchObject({ ok: true, status: "pulled" });
+      expect(existsSync(join(cache, "x.wasm"))).toBe(true);
+    } finally {
+      await tarball.close();
     }
   });
 });

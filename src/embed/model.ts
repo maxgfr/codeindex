@@ -186,8 +186,17 @@ export function resolveEmbedPullUrl(): EmbedPullTarget {
 // clear message and returns nothing — so a corrupt/tampered default asset never
 // gets written. A non-2xx response also throws. Verification and I/O are split
 // from the CLI so both the success and the sha-mismatch paths are unit-testable.
-export async function fetchEmbedModel(url: string, expectedSha256?: string): Promise<string> {
-  const res = await fetch(url);
+//
+// `timeoutMs` bounds the whole download: with no signal a stalled connection
+// kept `embed pull` waiting forever.
+export const EMBED_DOWNLOAD_TIMEOUT_MS = 600_000;
+
+export async function fetchEmbedModel(
+  url: string,
+  expectedSha256?: string,
+  timeoutMs: number = EMBED_DOWNLOAD_TIMEOUT_MS,
+): Promise<string> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   const body = await res.text();
   if (expectedSha256) {

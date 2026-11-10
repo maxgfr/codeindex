@@ -739,6 +739,18 @@ describe("embed pull — default URL + sha256 verification", () => {
     }
   });
 
+  it("fetchEmbedModel gives up on a connection that stalls", async () => {
+    const server = http.createServer(() => {});
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      await expect(fetchEmbedModel(`http://127.0.0.1:${port}/model.json`, undefined, 150)).rejects.toThrow(/timeout|aborted/i);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it("fetchEmbedModel throws on a non-2xx response", async () => {
     const srv = await serveOnce("nope", 404);
     try {

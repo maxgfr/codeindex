@@ -625,8 +625,8 @@ interface GrammarsPullTarget {
     sha256Url?: string;
 }
 declare function resolveGrammarsPullTarget(): GrammarsPullTarget;
-declare function fetchGrammarsTarball(url: string, expectedSha256?: string): Promise<Uint8Array>;
-declare function fetchExpectedSha256(url: string): Promise<string>;
+declare function fetchGrammarsTarball(url: string, expectedSha256?: string, timeoutMs?: number): Promise<Uint8Array>;
+declare function fetchExpectedSha256(url: string, timeoutMs?: number): Promise<string>;
 declare function extractTarInto(rawTar: Uint8Array, destDir: string): string[];
 declare function extractGrammarsTarball(bytes: Uint8Array, destDir: string): string[];
 interface GrammarsPullResult {
@@ -638,6 +638,7 @@ interface GrammarsPullResult {
 }
 declare function pullGrammars(cacheDir: string, opts?: {
     onNote?: (msg: string) => void;
+    target?: GrammarsPullTarget;
 }): Promise<GrammarsPullResult>;
 
 interface WarmGrammarsResult {

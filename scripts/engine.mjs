@@ -18719,8 +18719,8 @@ function resolveEmbedPullUrl() {
   if (env && env.trim()) return { url: env.trim() };
   return { url: DEFAULT_EMBED_URL, sha256: EMBED_ASSET_SHA256 };
 }
-async function fetchEmbedModel(url, expectedSha256) {
-  const res = await fetch(url);
+async function fetchEmbedModel(url, expectedSha256, timeoutMs = EMBED_DOWNLOAD_TIMEOUT_MS) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   const body2 = await res.text();
   if (expectedSha256) {
@@ -18731,7 +18731,7 @@ async function fetchEmbedModel(url, expectedSha256) {
   }
   return body2;
 }
-var EMBED_VERSION, DEFAULT_EMBED_DIRNAME, DEFAULT_EMBED_URL, EMBED_ASSET_SHA256;
+var EMBED_VERSION, DEFAULT_EMBED_DIRNAME, DEFAULT_EMBED_URL, EMBED_ASSET_SHA256, EMBED_DOWNLOAD_TIMEOUT_MS;
 var init_model = __esm({
   "src/embed/model.ts"() {
     "use strict";
@@ -18739,6 +18739,7 @@ var init_model = __esm({
     DEFAULT_EMBED_DIRNAME = "models";
     DEFAULT_EMBED_URL = "https://github.com/maxgfr/codeindex/releases/download/embed-model-v1/model.json";
     EMBED_ASSET_SHA256 = "163ad053eab4e9a80d421ed4164f32292c83290f02fbbe6fe4b9b1cd6ea18d34";
+    EMBED_DOWNLOAD_TIMEOUT_MS = 6e5;
   }
 });
 
@@ -25403,13 +25404,16 @@ import { existsSync as existsSync5, mkdirSync, mkdtempSync, readFileSync as read
 import { dirname as dirname4, join as join8, resolve as resolve5, sep as sep4 } from "path";
 import { gunzipSync } from "zlib";
 var DEFAULT_GRAMMARS_URL = `https://github.com/maxgfr/codeindex/releases/download/v${ENGINE_VERSION}/grammars-${ENGINE_VERSION}.tar.gz`;
+var GRAMMARS_CHECKSUM_TIMEOUT_MS = 3e4;
+var GRAMMARS_DOWNLOAD_TIMEOUT_MS = 6e5;
+var MAX_INFLATED_BYTES = 512 * 1024 * 1024;
 function resolveGrammarsPullTarget() {
   const env = process.env.CODEINDEX_GRAMMARS_URL;
   if (env && env.trim()) return { url: env.trim() };
   return { url: DEFAULT_GRAMMARS_URL, sha256Url: `${DEFAULT_GRAMMARS_URL}.sha256` };
 }
-async function fetchGrammarsTarball(url, expectedSha256) {
-  const res = await fetch(url);
+async function fetchGrammarsTarball(url, expectedSha256, timeoutMs = GRAMMARS_DOWNLOAD_TIMEOUT_MS) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (expectedSha256) {
@@ -25423,8 +25427,8 @@ async function fetchGrammarsTarball(url, expectedSha256) {
 function asBuffer(u) {
   return Buffer.isBuffer(u) ? u : Buffer.from(u.buffer, u.byteOffset, u.byteLength);
 }
-async function fetchExpectedSha256(url) {
-  const res = await fetch(url);
+async function fetchExpectedSha256(url, timeoutMs = GRAMMARS_CHECKSUM_TIMEOUT_MS) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   const text = await res.text();
   const hex = (text.trim().split(/\s+/)[0] ?? "").toLowerCase();
@@ -25490,7 +25494,7 @@ function extractTarInto(rawTar, destDir) {
 }
 function extractGrammarsTarball(bytes, destDir) {
   const b = asBuffer(bytes);
-  const raw = b.length >= 2 && b[0] === 31 && b[1] === 139 ? gunzipSync(b) : b;
+  const raw = b.length >= 2 && b[0] === 31 && b[1] === 139 ? gunzipSync(b, { maxOutputLength: MAX_INFLATED_BYTES }) : b;
   return extractTarInto(raw, destDir);
 }
 function installGrammarCacheAtomically(tempDir, cacheDir, markerPath, expectedSha256, rename = renameSync, cleanup = rmSync) {
@@ -25554,14 +25558,19 @@ function installGrammarCacheAtomically(tempDir, cacheDir, markerPath, expectedSh
 async function pullGrammars(cacheDir, opts = {}) {
   const note = opts.onNote ?? (() => {
   });
-  const target = resolveGrammarsPullTarget();
+  const target = opts.target ?? resolveGrammarsPullTarget();
   let expected;
   if (target.sha256Url) {
     try {
       expected = await fetchExpectedSha256(target.sha256Url);
     } catch (e) {
-      note(`codeindex: could not fetch checksum (${e instanceof Error ? e.message : String(e)}) \u2014 proceeding unverified
-`);
+      return {
+        ok: false,
+        status: "failed",
+        cacheDir,
+        message: `codeindex: pull failed \u2014 could not fetch the checksum, and the archive is not installed unverified: ${e instanceof Error ? e.message : String(e)} (nothing written)
+`
+      };
     }
   }
   const runtime = join8(cacheDir, "web-tree-sitter.wasm");

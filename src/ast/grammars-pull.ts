@@ -41,6 +41,18 @@ export interface GrammarsPullTarget {
   sha256Url?: string; // present only for the built-in default → fetch + verify
 }
 
+// How long a download may take before it is given up. A fetch with no signal
+// waits forever on a connection that stalls, and `grammars pull` (or a library
+// consumer's warm-up) hung with it. The checksum is one line; the archive is
+// ~22 MB, so its bound only has to outlast a slow link, not a dead one.
+export const GRAMMARS_CHECKSUM_TIMEOUT_MS = 30_000;
+export const GRAMMARS_DOWNLOAD_TIMEOUT_MS = 600_000;
+
+// The most a gzip-framed archive may inflate to. The published asset inflates
+// to ~28 MB; without a bound a few kilobytes from a custom URL could ask zlib
+// for gigabytes.
+const MAX_INFLATED_BYTES = 512 * 1024 * 1024;
+
 export function resolveGrammarsPullTarget(): GrammarsPullTarget {
   const env = process.env.CODEINDEX_GRAMMARS_URL;
   if (env && env.trim()) return { url: env.trim() };
@@ -53,8 +65,12 @@ export function resolveGrammarsPullTarget(): GrammarsPullTarget {
 // non-2xx response also throws. I/O + verification are split from the CLI so
 // both the success and the sha-mismatch paths are unit-testable — mirrors
 // fetchEmbedModel.
-export async function fetchGrammarsTarball(url: string, expectedSha256?: string): Promise<Uint8Array> {
-  const res = await fetch(url);
+export async function fetchGrammarsTarball(
+  url: string,
+  expectedSha256?: string,
+  timeoutMs: number = GRAMMARS_DOWNLOAD_TIMEOUT_MS,
+): Promise<Uint8Array> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (expectedSha256) {
@@ -78,8 +94,8 @@ function asBuffer(u: Uint8Array): Buffer {
 // returning the lowercased 64-hex digest. Throws on a non-2xx or a malformed
 // body so a bad sidecar degrades the pull to a clear error rather than silently
 // skipping verification.
-export async function fetchExpectedSha256(url: string): Promise<string> {
-  const res = await fetch(url);
+export async function fetchExpectedSha256(url: string, timeoutMs: number = GRAMMARS_CHECKSUM_TIMEOUT_MS): Promise<string> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   const text = await res.text();
   const hex = (text.trim().split(/\s+/)[0] ?? "").toLowerCase();
@@ -177,7 +193,7 @@ export function extractTarInto(rawTar: Uint8Array, destDir: string): string[] {
 // too (magic-byte sniff), so the tier does not force a compression format.
 export function extractGrammarsTarball(bytes: Uint8Array, destDir: string): string[] {
   const b = asBuffer(bytes);
-  const raw = b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b ? gunzipSync(b) : b;
+  const raw = b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b ? gunzipSync(b, { maxOutputLength: MAX_INFLATED_BYTES }) : b;
   return extractTarInto(raw, destDir);
 }
 
@@ -284,20 +300,33 @@ export function installGrammarCacheAtomically(
 //
 // NEVER throws: every failure becomes `{ ok: false, status: "failed" }` with a
 // message, because both callers must survive an offline machine — the engine
-// simply stays on the regex tier. `onNote` receives progress lines (checksum
-// degradation, download start) that are not the terminal message.
+// simply stays on the regex tier. `onNote` receives progress lines (download
+// start) that are not the terminal message. `target` replaces the resolved one
+// (tests point it at a local server).
+//
+// A target that names a checksum is installed ONLY when that checksum was
+// fetched and matches. The pull used to go on unverified when the sidecar could
+// not be fetched: blocking one small request (or a release whose sidecar upload
+// failed) was enough to have ~22 MB of executable wasm installed unchecked. An
+// explicit CODEINDEX_GRAMMARS_URL names no checksum and stays unverified, as
+// documented.
 export async function pullGrammars(
   cacheDir: string,
-  opts: { onNote?: (msg: string) => void } = {},
+  opts: { onNote?: (msg: string) => void; target?: GrammarsPullTarget } = {},
 ): Promise<GrammarsPullResult> {
   const note = opts.onNote ?? (() => {});
-  const target = resolveGrammarsPullTarget();
+  const target = opts.target ?? resolveGrammarsPullTarget();
   let expected: string | undefined;
   if (target.sha256Url) {
     try {
       expected = await fetchExpectedSha256(target.sha256Url);
     } catch (e) {
-      note(`codeindex: could not fetch checksum (${e instanceof Error ? e.message : String(e)}) — proceeding unverified\n`);
+      return {
+        ok: false,
+        status: "failed",
+        cacheDir,
+        message: `codeindex: pull failed — could not fetch the checksum, and the archive is not installed unverified: ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
+      };
     }
   }
   // Idempotent: the marker sibling records the digest of the tarball that

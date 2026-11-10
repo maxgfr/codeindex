@@ -332,7 +332,9 @@ the npm package (which ships only the core wasms) pick up the extended ones a
 pull put in the cache. The legacy `CODEINDEX_GRAMMAR_DIR` still pins one dir
 with nothing behind it. `pull` fetches the official
 `grammars-<version>.tar.gz` release asset (its `.sha256` sidecar is verified
-before anything is written) and extracts it atomically; the same wasm bytes
+before anything is written, and a pull that cannot fetch it fails instead of
+installing the archive unverified; a `CODEINDEX_GRAMMARS_URL` mirror carries no
+checksum) and extracts it atomically; the same wasm bytes
 produce **byte-identical** AST extraction from the cache as from a vendored dir.
 It is fully **offline-safe**: with no grammars resolvable anywhere — and after a
 failed or absent pull — the engine silently falls back to the regex tier exactly
