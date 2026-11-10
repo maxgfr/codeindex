@@ -602,6 +602,16 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     if (t === undefined) tailMemo.set(rel, (t = isTestPath(rel) || tierForPath(dirOf(rel) || "(root)") === 2));
     return t;
   };
+  // Whether a file is a test case, once per file. The name-inference step asks
+  // it of every homonym of every unresolved callee of every file, and each
+  // answer runs a handful of regexes over the path: on spring-security (6 985
+  // files) that was a quarter of the whole graph build.
+  const testCaseMemo = new Map<string, boolean>();
+  const isTestCase = (rel: string): boolean => {
+    let t = testCaseMemo.get(rel);
+    if (t === undefined) testCaseMemo.set(rel, (t = isTestCaseFile(rel)));
+    return t;
+  };
 
   const forFile = (f: FileRecord): ((c: CallSite, enclosing?: CodeSymbol) => BoundCall | undefined) | undefined => {
     if (!f.calls?.length) return undefined;
@@ -938,7 +948,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         const tail = isTail(f.rel);
         // Nothing calls into a test file it does not import, and the product
         // never calls into tests, examples or scripts.
-        guesses = guesses.filter((d) => !isTestCaseFile(d.file) && (tail || !isTail(d.file)));
+        guesses = guesses.filter((d) => !isTestCase(d.file) && (tail || !isTail(d.file)));
       }
       const chosen = pickCandidate(f.rel, preferParent(guesses, typeHint, receiver));
       return chosen ? { hit: { def: chosen, corroborated: false }, local: false } : null;

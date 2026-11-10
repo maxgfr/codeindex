@@ -15810,6 +15810,12 @@ function createCallBinder(scan2, pairs, opts = {}) {
     if (t === void 0) tailMemo.set(rel2, t = isTestPath(rel2) || tierForPath(dirOf(rel2) || "(root)") === 2);
     return t;
   };
+  const testCaseMemo = /* @__PURE__ */ new Map();
+  const isTestCase = (rel2) => {
+    let t = testCaseMemo.get(rel2);
+    if (t === void 0) testCaseMemo.set(rel2, t = isTestCaseFile(rel2));
+    return t;
+  };
   const forFile = (f) => {
     if (!f.calls?.length) return void 0;
     if (only && !f.calls.some((c2) => only.has(c2.name) || f.importAliases?.some((a) => a.local === c2.name))) return void 0;
@@ -16040,7 +16046,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
       } else {
         if (STRICT.has(family)) return null;
         const tail = isTail2(f.rel);
-        guesses = guesses.filter((d) => !isTestCaseFile(d.file) && (tail || !isTail2(d.file)));
+        guesses = guesses.filter((d) => !isTestCase(d.file) && (tail || !isTail2(d.file)));
       }
       const chosen = pickCandidate(f.rel, preferParent(guesses, typeHint, receiver));
       return chosen ? { hit: { def: chosen, corroborated: false }, local: false } : null;
