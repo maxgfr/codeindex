@@ -5,6 +5,7 @@
 // named notes read on relevance) rather than any machinery.
 import { lstatSync, realpathSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { errMessage } from "./util.js";
 
 const MEMORY_DIR = [".codeindex", "memories"];
 
@@ -59,6 +60,21 @@ export function readMemory(repo: string, name: string): string | undefined {
     return readFileSync(memoryPath(repo, name), "utf8");
   } catch {
     return undefined;
+  }
+}
+
+// Why a memory that exists on disk is not served: the reason checkedPath
+// refuses its path (a symbolic or hard link in it), or that its name is not
+// one. Undefined for a memory that is simply not there, or readable. readMemory
+// answers undefined in all those cases; this is what lets a caller say
+// "refused" instead of "no such memory" for a note that is plainly in the
+// directory.
+export function memoryRefusal(repo: string, name: string): string | undefined {
+  try {
+    memoryPath(repo, name);
+    return undefined;
+  } catch (error) {
+    return errMessage(error);
   }
 }
 

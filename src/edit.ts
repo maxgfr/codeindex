@@ -21,6 +21,7 @@ import { readTextEx, type Encoding } from "./text.js";
 import { sha1 } from "./hash.js";
 import { braceBodyEnd, leadingBlockStart } from "./edit-spans.js";
 import { byStr } from "./sort.js";
+import { isInside } from "./walk.js";
 
 // Symbol kinds that conventionally sit separated from neighbours by a blank
 // line — insertions next to them keep at least one.
@@ -187,12 +188,21 @@ function bodyLines(body: string): string[] {
 // write rather than turning a valid edit into EPERM. A killed process can leave
 // the hidden temp directory visible to git in a consumer repo; the scanner and
 // MCP watcher always ignore the prefix so it cannot become a phantom symbol.
-export function atomicWriteText(abs: string, content: string, cleanup: typeof rmSync = rmSync): void {
-  atomicWrite(abs, content, cleanup);
+//
+// `root`, when given, is the repository the edit belongs to: the resolved
+// target must lie inside it. The scan only ever indexes a symlink whose target
+// is in the repository, but the write resolves the path AGAIN, later — a file
+// swapped for a link to `~/.ssh/config` between the scan and the edit was
+// followed, and the edit landed outside the repository.
+export function atomicWriteText(abs: string, content: string, cleanup: typeof rmSync = rmSync, root?: string): void {
+  atomicWrite(abs, content, cleanup, root);
 }
 
-function atomicWrite(abs: string, content: string | Buffer, cleanup: typeof rmSync = rmSync): void {
+function atomicWrite(abs: string, content: string | Buffer, cleanup: typeof rmSync = rmSync, root?: string): void {
   const target = realpathSync(abs);
+  if (root !== undefined && !isInside(realpathSync(root), target)) {
+    throw new Error(`edit refused, nothing written: ${abs} now resolves to ${target}, outside the repository`);
+  }
   const mode = statSync(target).mode;
   let tempDir: string;
   try {
@@ -428,7 +438,7 @@ function applyEdit(scan: RepoScan, namePath: string, body: string, op: Operation
     target: op === "replace" ? target : undefined,
   });
   if (warnings.length && opts.strict) throw new Error(`edit refused (strict), nothing written: ${warnings.join("; ")}`);
-  atomicWrite(abs, doc.encode());
+  atomicWrite(abs, doc.encode(), rmSync, scan.root);
   const result: EditResult =
     op === "replace"
       ? { file: sym.file, startLine: target.line, endLine: target.line + newLines.length - 1, lines: newLines.length }

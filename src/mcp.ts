@@ -40,7 +40,7 @@ import { conciseCaller, conciseDelta, conciseReferences, conciseSymbolIndex, sym
 import { onboardBrief } from "./onboard.js";
 import { indexStatus } from "./status.js";
 import { replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
-import { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
+import { writeMemory, readMemory, deleteMemory, listMemories, memoryRefusal } from "./memory.js";
 import { explainQuery, type RankMode } from "./bm25.js";
 import { checkRules, parseRules, parseRulesText, rulesReport, type ArchRule } from "./rules.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
@@ -460,7 +460,10 @@ async function callTool(
     const memName = str(args.name);
     if (!memName) throw new Error("`name` is required");
     const content = readMemory(repo, memName);
-    if (content === undefined) throw new Error(`no memory named "${memName}" — see list_memories`);
+    if (content === undefined) {
+      const refused = memoryRefusal(repo, memName);
+      throw new Error(refused ? `memory "${memName}" is not read: ${refused}` : `no memory named "${memName}" — see list_memories`);
+    }
     return content;
   }
   if (name === "list_memories") {

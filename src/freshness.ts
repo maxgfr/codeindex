@@ -141,6 +141,8 @@ export function readFreshness(repo: string, indexDir: string = INDEX_DIR): Fresh
   const files = new Map<string, FileStamp>();
   for (const [rel, stamp] of Object.entries(value.files as Record<string, unknown>)) {
     if (!Array.isArray(stamp) || !isSha(stamp[0]) || !isCount(stamp[1]) || !isTime(stamp[2])) return undefined;
+    // A key is a repo-relative path, as in cache.json (parseCacheEntries).
+    if (rel.split("/").some((part) => part === "" || part === "." || part === "..")) return undefined;
     // A racily clean stamp (see untrustedMtime) proves nothing: hashed instead.
     files.set(rel, untrustedMtime(stamp[2], cacheStat.mtimeMs) ? { hash: stamp[0], size: stamp[1] } : { hash: stamp[0], size: stamp[1], mtimeMs: stamp[2] });
   }

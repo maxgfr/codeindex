@@ -82,6 +82,18 @@ describe("freshness.json", { timeout: 60_000 }, () => {
     expect(readFreshness(repo)).toBeUndefined();
   });
 
+  it("is refused whole when a key is not a repo-relative path, as cache.json is", () => {
+    const repo = freshRepo();
+    index(repo);
+    expect(readFreshness(repo)).toBeDefined();
+    const path = idx(repo, "freshness.json");
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { files: Record<string, unknown> };
+    const [first] = Object.keys(parsed.files);
+    parsed.files["../outside.ts"] = parsed.files[first!];
+    writeFileSync(path, JSON.stringify(parsed));
+    expect(readFreshness(repo)).toBeUndefined();
+  });
+
   it("lets graph/symbols and graph-only commands answer without parsing cache.json", () => {
     const repo = freshRepo();
     index(repo);

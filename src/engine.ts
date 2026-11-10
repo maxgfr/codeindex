@@ -117,7 +117,7 @@ export { buildCallerIndex, buildRawCallerIndex, enclosingSymbol, computeImportPa
 export { symbolsOverview, findSymbol, findReferences } from "./query.js";
 export { resolveUniqueSymbol, replaceSymbolBody, insertAfterSymbol, insertBeforeSymbol } from "./edit.js";
 export type { EditResult } from "./edit.js";
-export { writeMemory, readMemory, deleteMemory, listMemories } from "./memory.js";
+export { writeMemory, readMemory, deleteMemory, listMemories, memoryRefusal } from "./memory.js";
 export type { SymbolMatch, FindSymbolOptions, SymbolReferences } from "./query.js";
 export type { CallerIndex, CallerEntry, CallerSite } from "./callers.js";
 export { detectWorkspaces } from "./workspaces.js";

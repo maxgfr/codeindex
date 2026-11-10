@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deleteMemory, listMemories, readMemory, writeMemory } from "../src/memory.js";
+import { deleteMemory, listMemories, memoryRefusal, readMemory, writeMemory } from "../src/memory.js";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 for (const boundary of [".codeindex", "memories", "topic", "file"] as const) {
@@ -14,6 +14,8 @@ for (const boundary of [".codeindex", "memories", "topic", "file"] as const) {
     const link = join(repo, ...(boundary === ".codeindex" ? [".codeindex"] : boundary === "memories" ? [".codeindex", "memories"] : boundary === "topic" ? [".codeindex", "memories", "topic"] : [".codeindex", "memories", "topic", "note.md"]));
     mkdirSync(join(link, ".."), { recursive: true }); symlinkSync(boundary === "file" ? note : outside, link);
     expect(readMemory(repo, "topic/note")).toBeUndefined();
+    // Not "no such memory": the note is there, and the reason it is not read is said.
+    expect(memoryRefusal(repo, "topic/note")).toMatch(/symbolic link/);
     expect(() => writeMemory(repo, "topic/note", "changed")).toThrow(/symlink|symbolic/i);
     expect(() => deleteMemory(repo, "topic/note")).toThrow(/symlink|symbolic/i);
     expect(listMemories(repo)).not.toContain("topic/note");
@@ -36,6 +38,10 @@ it("rejects hard-linked memories without exposing or changing shared files", () 
   const note = join(repo, ".codeindex", "memories", "topic", "note.md");
   linkSync(outside, note);
   expect(readMemory(repo, "topic/note")).toBeUndefined();
+  expect(memoryRefusal(repo, "topic/note")).toMatch(/hard link/);
+  // A memory that is simply absent, or fine, is refused nothing.
+  expect(memoryRefusal(repo, "topic/absent")).toBeUndefined();
+  expect(memoryRefusal(repo, "../escape")).toMatch(/invalid memory name/);
   expect(() => writeMemory(repo, "topic/note", "changed")).toThrow(/hard link/i);
   expect(() => deleteMemory(repo, "topic/note")).toThrow(/hard link/i);
   expect(listMemories(repo)).not.toContain("topic/note");

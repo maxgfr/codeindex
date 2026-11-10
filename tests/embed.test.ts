@@ -111,6 +111,15 @@ describe("parseEmbedModel — shape validation (issue #12: guards the custom-URL
     );
   });
 
+  it("rejects a size no model has, before allocating it", () => {
+    // `dim: 1e9` with one row asked for 8 GB; a model.json is found in a
+    // repository's own .codeindex/models/.
+    expect(() => parseEmbedModel({ modelId: "m", dim: 1_000_000_000, vocab: ["a"], weights: [[1]] }, "src")).toThrow(/is past what a model holds/);
+    expect(() => parseEmbedModel({ modelId: "m", dim: 4096, vocab: new Array(30_000).fill("a"), weights: new Array(30_000).fill([]) }, "src")).toThrow(
+      /is past what a model holds/,
+    );
+  });
+
   it("rejects a non-positive or non-integer dim", () => {
     expect(() => parseEmbedModel({ ...good(), dim: 0 }, "src")).toThrow(/bad dim 0 in src/);
     expect(() => parseEmbedModel({ ...good(), dim: -3 }, "src")).toThrow(/bad dim -3/);

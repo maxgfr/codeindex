@@ -120,6 +120,7 @@ const CONTRACT = [
   "readMemory",
   "deleteMemory",
   "listMemories",
+  "memoryRefusal",
   // helpers
   "sha1",
   "shortHash",

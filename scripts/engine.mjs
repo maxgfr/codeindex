@@ -11931,6 +11931,7 @@ function readFreshness(repo, indexDir = INDEX_DIR) {
   const files = /* @__PURE__ */ new Map();
   for (const [rel2, stamp] of Object.entries(value.files)) {
     if (!Array.isArray(stamp) || !isSha(stamp[0]) || !isCount(stamp[1]) || !isTime(stamp[2])) return void 0;
+    if (rel2.split("/").some((part) => part === "" || part === "." || part === "..")) return void 0;
     files.set(rel2, untrustedMtime(stamp[2], cacheStat.mtimeMs) ? { hash: stamp[0], size: stamp[1] } : { hash: stamp[0], size: stamp[1], mtimeMs: stamp[2] });
   }
   return {
@@ -16877,8 +16878,11 @@ function spliceLines(doc, index, count2, inserted) {
 function bodyLines(body2) {
   return body2.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "").split("\n");
 }
-function atomicWrite(abs, content, cleanup = rmSync2) {
+function atomicWrite(abs, content, cleanup = rmSync2, root) {
   const target = realpathSync3(abs);
+  if (root !== void 0 && !isInside(realpathSync3(root), target)) {
+    throw new Error(`edit refused, nothing written: ${abs} now resolves to ${target}, outside the repository`);
+  }
   const mode = statSync6(target).mode;
   let tempDir;
   try {
@@ -17026,7 +17030,7 @@ function applyEdit(scan2, namePath, body2, op, file, opts = {}) {
     target: op === "replace" ? target : void 0
   });
   if (warnings.length && opts.strict) throw new Error(`edit refused (strict), nothing written: ${warnings.join("; ")}`);
-  atomicWrite(abs, doc.encode());
+  atomicWrite(abs, doc.encode(), rmSync2, scan2.root);
   const result = op === "replace" ? { file: sym.file, startLine: target.line, endLine: target.line + newLines.length - 1, lines: newLines.length } : { file: sym.file, startLine: index + 1, endLine: index + inserted.length, lines: inserted.length };
   if (warnings.length) result.warnings = warnings;
   return result;
@@ -17052,6 +17056,7 @@ var init_edit = __esm({
     init_hash();
     init_edit_spans();
     init_sort();
+    init_walk();
     SEPARATED_KINDS = /* @__PURE__ */ new Set(["function", "method", "class", "interface", "struct", "trait", "enum", "def"]);
     REFERENCE_KINDS6 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
     MAX_LISTED = 20;
@@ -17112,6 +17117,14 @@ function readMemory(repo, name2) {
     return void 0;
   }
 }
+function memoryRefusal(repo, name2) {
+  try {
+    memoryPath(repo, name2);
+    return void 0;
+  } catch (error) {
+    return errMessage(error);
+  }
+}
 function deleteMemory(repo, name2) {
   const path = memoryPath(repo, name2);
   try {
@@ -17157,6 +17170,7 @@ var MEMORY_DIR;
 var init_memory = __esm({
   "src/memory.ts"() {
     "use strict";
+    init_util();
     MEMORY_DIR = [".codeindex", "memories"];
   }
 });
@@ -18860,6 +18874,9 @@ function parseEmbedModel(raw, source) {
     throw new Error(`embed model: vocab/weights length mismatch in ${source}`);
   }
   const vocabSize = vocab.length;
+  if (dim > MAX_EMBED_DIM || vocabSize * dim > MAX_EMBED_WEIGHTS) {
+    throw new Error(`embed model: ${vocabSize} x ${dim} weights in ${source} is past what a model holds (dim <= ${MAX_EMBED_DIM}, ${MAX_EMBED_WEIGHTS} weights)`);
+  }
   const flat = new Float64Array(vocabSize * dim);
   const vmap = /* @__PURE__ */ new Map();
   for (let i2 = 0; i2 < vocabSize; i2++) {
@@ -18914,7 +18931,7 @@ async function fetchEmbedModel(url, expectedSha256, timeoutMs = EMBED_DOWNLOAD_T
   }
   return body2;
 }
-var EMBED_VERSION, DEFAULT_EMBED_DIRNAME, DEFAULT_EMBED_URL, EMBED_ASSET_SHA256, EMBED_DOWNLOAD_TIMEOUT_MS;
+var EMBED_VERSION, DEFAULT_EMBED_DIRNAME, DEFAULT_EMBED_URL, EMBED_ASSET_SHA256, MAX_EMBED_DIM, MAX_EMBED_WEIGHTS, EMBED_DOWNLOAD_TIMEOUT_MS;
 var init_model = __esm({
   "src/embed/model.ts"() {
     "use strict";
@@ -18923,6 +18940,8 @@ var init_model = __esm({
     DEFAULT_EMBED_DIRNAME = "models";
     DEFAULT_EMBED_URL = "https://github.com/maxgfr/codeindex/releases/download/embed-model-v1/model.json";
     EMBED_ASSET_SHA256 = "163ad053eab4e9a80d421ed4164f32292c83290f02fbbe6fe4b9b1cd6ea18d34";
+    MAX_EMBED_DIM = 4096;
+    MAX_EMBED_WEIGHTS = 96e6;
     EMBED_DOWNLOAD_TIMEOUT_MS = 6e5;
   }
 });
@@ -24100,7 +24119,10 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
     const memName = str(args2.name);
     if (!memName) throw new Error("`name` is required");
     const content = readMemory(repo, memName);
-    if (content === void 0) throw new Error(`no memory named "${memName}" \u2014 see list_memories`);
+    if (content === void 0) {
+      const refused = memoryRefusal(repo, memName);
+      throw new Error(refused ? `memory "${memName}" is not read: ${refused}` : `no memory named "${memName}" \u2014 see list_memories`);
+    }
     return content;
   }
   if (name2 === "list_memories") {
@@ -28238,6 +28260,7 @@ export {
   locationsToRefs,
   lspStatus,
   lspUnavailable,
+  memoryRefusal,
   neighborhood,
   neighborsOf,
   onboardBrief,

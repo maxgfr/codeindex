@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { scanRepo } from "../src/scan.js";
@@ -131,6 +131,27 @@ describe("resolution", () => {
     const edited = read(root, "x.ts");
     expect(() => replaceSymbolBody(scan, "b", "export function b(): number {\n  return 3;\n}")).toThrow(/no longer declared at x\.ts:5.*re-scan/);
     expect(read(root, "x.ts")).toBe(edited);
+  });
+
+  it.runIf(process.platform !== "win32")("refuses to follow a file swapped for a link out of the repository", () => {
+    const src = "export function a(): number {\n  return 1;\n}\n";
+    const root = repo({ "x.ts": src, "kept/y.ts": src });
+    // A file outside the repository, with the very declaration the edit names.
+    const outside = join(repo({}), "victim.ts");
+    writeFileSync(outside, src);
+    const scan = scanRepo(root);
+    // Between the scan and the edit, the indexed file becomes a link to it.
+    rmSync(join(root, "x.ts"));
+    symlinkSync(outside, join(root, "x.ts"));
+    expect(() => replaceSymbolBody(scan, "a", "export function a(): number {\n  return 2;\n}", "x.ts")).toThrow(
+      /edit refused, nothing written: .*x\.ts now resolves to .*victim\.ts, outside the repository/,
+    );
+    expect(readFileSync(outside, "utf8")).toBe(src);
+    // A link that stays inside the repository is still an alias of its target.
+    rmSync(join(root, "x.ts"));
+    symlinkSync(join(root, "kept", "y.ts"), join(root, "x.ts"));
+    replaceSymbolBody(scan, "a", "export function a(): number {\n  return 2;\n}", "x.ts");
+    expect(read(root, "kept/y.ts")).toContain("return 2;");
   });
 });
 

@@ -98,6 +98,11 @@ export function hasEmbedModel(repo?: string): boolean {
 // rows) with a message citing `source` (a file path, a URL, …) so a corrupt
 // asset fails loudly wherever it enters — at load, or at `embed pull` BEFORE
 // the shape-invalid file is ever written to disk.
+// The largest model accepted: the shipped one is 29 528 x 256, 7.6 million
+// weights; these leave an order of magnitude above it.
+const MAX_EMBED_DIM = 4096;
+const MAX_EMBED_WEIGHTS = 96_000_000;
+
 export function parseEmbedModel(raw: unknown, source: string): StaticEmbedModel {
   const { modelId, dim, vocab, weights, unk: rawUnk } = (raw ?? {}) as ModelFile;
   if (typeof modelId !== "string" || !modelId) throw new Error(`embed model: missing modelId in ${source}`);
@@ -106,6 +111,11 @@ export function parseEmbedModel(raw: unknown, source: string): StaticEmbedModel 
     throw new Error(`embed model: vocab/weights length mismatch in ${source}`);
   }
   const vocabSize = vocab.length;
+  // Bounded BEFORE the allocation: a model.json is found in a repository's own
+  // .codeindex/models/, and `"dim": 1000000000` asked for 8 GB at once.
+  if (dim > MAX_EMBED_DIM || vocabSize * dim > MAX_EMBED_WEIGHTS) {
+    throw new Error(`embed model: ${vocabSize} x ${dim} weights in ${source} is past what a model holds (dim <= ${MAX_EMBED_DIM}, ${MAX_EMBED_WEIGHTS} weights)`);
+  }
   const flat = new Float64Array(vocabSize * dim);
   const vmap = new Map<string, number>();
   for (let i = 0; i < vocabSize; i++) {
