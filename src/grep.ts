@@ -21,7 +21,7 @@ import { walk, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
 import { compileGlobs, compileGlobFilter } from "./glob.js";
 import { sh, have } from "./util.js";
 import { byStr } from "./sort.js";
-import { normalizeScope } from "./scan.js";
+import { normalizeScope, scanPathFilter } from "./scan.js";
 
 export interface SearchHit {
   file: string; // repo-relative posix path
@@ -620,11 +620,16 @@ function jsBackend(
   // Build-output-named dirs by name alone, like rg's `!**/<dir>/**` globs in
   // universeArgs: the walk's exemption for git-tracked ones is not
   // expressible there, so both backends keep seeing the same files.
+  //
+  // A scope prunes the walk itself, as it does for a scan: without the filter
+  // the whole tree was listed and stat'd, and `keep` then dropped everything
+  // outside the scope — a one-directory search paid for the entire repository.
   const walked = walk(root, {
     gitignore: opts.gitignore,
     ignoreDirs: opts.ignoreDirs,
     maxFileBytes: opts.maxFileBytes,
     trackedBuildDirs: false,
+    filter: scanPathFilter(root, { scope: opts.scope }),
   });
   const files = walked.files
     .filter((f) => !keep || keep(f.rel))

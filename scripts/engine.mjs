@@ -18585,7 +18585,8 @@ function jsBackend(root, re, opts, keep, max, deadline) {
     gitignore: opts.gitignore,
     ignoreDirs: opts.ignoreDirs,
     maxFileBytes: opts.maxFileBytes,
-    trackedBuildDirs: false
+    trackedBuildDirs: false,
+    filter: scanPathFilter(root, { scope: opts.scope })
   });
   const files = walked.files.filter((f) => !keep || keep(f.rel)).map((f) => [f.rel, f.abs]).sort((a, b) => byStr(a[0], b[0]));
   const job = {
