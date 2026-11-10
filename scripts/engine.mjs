@@ -19095,6 +19095,12 @@ function resolveTimeout(opts) {
   const env = Number(process.env.CODEINDEX_EMBED_TIMEOUT_MS);
   return Number.isFinite(env) && env > 0 ? clampTimerMs(env) : 3e4;
 }
+function capText(text) {
+  if (text.length <= ENDPOINT_MAX_TEXT_CHARS) return text;
+  const last = text.charCodeAt(ENDPOINT_MAX_TEXT_CHARS - 1);
+  const end = last >= 55296 && last <= 56319 ? ENDPOINT_MAX_TEXT_CHARS - 1 : ENDPOINT_MAX_TEXT_CHARS;
+  return text.slice(0, end);
+}
 async function embedViaEndpoint(texts, opts = {}) {
   const base = resolveEmbedEndpoint(opts);
   if (!base) throw new Error("no embedding endpoint configured (set CODEINDEX_EMBED_ENDPOINT or pass opts.url)");
@@ -19105,7 +19111,7 @@ async function embedViaEndpoint(texts, opts = {}) {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...opts.headers ?? {} },
-      body: JSON.stringify({ texts }),
+      body: JSON.stringify({ texts: texts.map(capText) }),
       signal: controller.signal
     });
     if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
@@ -19189,7 +19195,7 @@ async function buildEndpointIndex(scan2, opts = {}) {
   });
   return { embedVersion: EMBED_VERSION, modelId, dim, records };
 }
-var CANARY;
+var ENDPOINT_MAX_TEXT_CHARS, CANARY;
 var init_endpoint = __esm({
   "src/embed/endpoint.ts"() {
     "use strict";
@@ -19198,6 +19204,7 @@ var init_endpoint = __esm({
     init_encode();
     init_model();
     init_embed();
+    ENDPOINT_MAX_TEXT_CHARS = 8192;
     CANARY = "codeindex endpoint fingerprint: parse the request, retry on timeout";
   }
 });

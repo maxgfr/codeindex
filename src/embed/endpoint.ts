@@ -68,6 +68,24 @@ function resolveTimeout(opts: EmbedEndpointOptions): number {
   return Number.isFinite(env) && env > 0 ? clampTimerMs(env) : 30_000;
 }
 
+// The longest text an endpoint is sent, in UTF-16 units: the per-text limit of
+// the reference server (MAX_TEXT_CHARS in docker/embed/server.mjs), which
+// answers 400 past it. A unit's text has no bound of its own — a file-level
+// unit joins every heading of a document, 72k characters for a changelog of
+// 1 500 releases — and ONE refused text failed the whole corpus build, so
+// `search --semantic` fell back to lexical on any repository with a long
+// changelog. An embedding model reads a few hundred tokens of a text at most,
+// so what is cut off was never embedded anyway.
+export const ENDPOINT_MAX_TEXT_CHARS = 8192;
+
+function capText(text: string): string {
+  if (text.length <= ENDPOINT_MAX_TEXT_CHARS) return text;
+  // Never end on half a surrogate pair: it would not survive JSON as itself.
+  const last = text.charCodeAt(ENDPOINT_MAX_TEXT_CHARS - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? ENDPOINT_MAX_TEXT_CHARS - 1 : ENDPOINT_MAX_TEXT_CHARS;
+  return text.slice(0, end);
+}
+
 // Request float embeddings for a batch of texts from the endpoint's /embed
 // route. Throws a clear error when no endpoint is configured, the request times
 // out / fails, or the response is malformed; the caller decides whether to
@@ -82,7 +100,7 @@ export async function embedViaEndpoint(texts: string[], opts: EmbedEndpointOptio
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...(opts.headers ?? {}) },
-      body: JSON.stringify({ texts }),
+      body: JSON.stringify({ texts: texts.map(capText) }),
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);

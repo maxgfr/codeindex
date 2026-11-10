@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 const pExecFile = promisify(execFile);
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ENDPOINT_MAX_TEXT_CHARS,
   buildEndpointIndex,
   embedEndpointUrl,
   embedViaEndpoint,
@@ -20,6 +21,7 @@ import {
   resolveEmbedEndpoint,
 } from "../src/embed/endpoint.js";
 import { quantize } from "../src/embed/encode.js";
+import { embeddingUnits } from "../src/embed/index.js";
 import { searchSemantic } from "../src/embed/search.js";
 import { scanRepo } from "../src/scan.js";
 
@@ -90,6 +92,16 @@ async function deadUrl(): Promise<string> {
   await new Promise<void>((r) => s.close(() => r()));
   return `http://127.0.0.1:${port}`;
 }
+
+// The reference server's own limits (docker/embed/server.mjs): a text past
+// MAX_TEXT_CHARS is answered 400.
+const SERVER_MAX_TEXT_CHARS = 8192;
+const refusingLongTexts = (_req: http.IncomingMessage, res: http.ServerResponse, texts: string[]): boolean => {
+  if (!texts.some((t) => t.length > SERVER_MAX_TEXT_CHARS)) return false;
+  res.writeHead(400, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: `each text must be at most ${SERVER_MAX_TEXT_CHARS} characters` }));
+  return true;
+};
 
 const openMocks: Mock[] = [];
 afterEach(async () => {
@@ -401,5 +413,41 @@ describe("`embed serve` convenience (engine-cli only, never the library)", () =>
     expect(status).toBe(0);
     expect(stdout).toContain("ghcr.io/maxgfr/codeindex-embed");
     expect(stdout).toContain("8756");
+  });
+});
+
+describe("texts longer than the reference server accepts", () => {
+  // A changelog of 1 500 releases: its file-level unit joins every heading.
+  function repoWithLongChangelog(): string {
+    const dir = mkdtempSync(join(tmpdir(), "ci-embed-long-"));
+    const headings = Array.from({ length: 1500 }, (_, i) => `## Release ${i} about the http client retry\n\ntext\n`);
+    writeFileSync(join(dir, "CHANGELOG.md"), `# Changelog\n\n${headings.join("\n")}`);
+    writeFileSync(join(dir, "auth.md"), "# Auth token service\n\nHow tokens are issued.\n");
+    return dir;
+  }
+
+  it("the corpus unit of such a file is far past the limit", () => {
+    const longest = Math.max(...embeddingUnits(scanRepo(repoWithLongChangelog())).map((u) => u.text.length));
+    expect(longest).toBeGreaterThan(SERVER_MAX_TEXT_CHARS * 4);
+  });
+
+  it("are cut to the limit instead of failing the whole build", async () => {
+    const m = await mock(refusingLongTexts);
+    const scan = scanRepo(repoWithLongChangelog());
+    const index = await buildEndpointIndex(scan, { url: m.url });
+    expect(index.records.map((r) => r.file).sort()).toEqual(["CHANGELOG.md", "auth.md"]);
+    const sent = m.texts.flat();
+    expect(Math.max(...sent.map((t) => t.length))).toBe(ENDPOINT_MAX_TEXT_CHARS);
+    // The record still carries the hash of the unit's whole text: reuse is unchanged.
+    const again = await buildEndpointIndex(scan, { url: m.url, previous: index });
+    expect(again.records).toEqual(index.records);
+    expect(m.texts.flat()).toHaveLength(sent.length);
+  });
+
+  it("a query is cut the same way, and never in the middle of a surrogate pair", async () => {
+    const m = await mock(refusingLongTexts);
+    await encodeQueryViaEndpoint("x".repeat(ENDPOINT_MAX_TEXT_CHARS - 1) + "\u{1F600} tail", { url: m.url });
+    const [sent] = m.texts.flat();
+    expect(sent).toBe("x".repeat(ENDPOINT_MAX_TEXT_CHARS - 1));
   });
 });
