@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { byStr } from "./sort.js";
-import { GIT_LOCALE, sh } from "./util.js";
+import { GIT_LOCALE, GIT_SAFE_CONFIG, sh } from "./util.js";
 
 // The short HEAD commit of a working tree, when it is a git repo. Recorded in
 // the manifest so an index is pinned to an exact revision. Returns undefined
@@ -74,10 +74,14 @@ const gitArgs = (dir: string): string[] => ["-C", dir, ...GIT_CONFIG];
 
 // A user-supplied ref that git would read as an OPTION: `--output=/tmp/x` as a
 // delta base or a changedSince ref made `git diff` write a file. No branch, tag
-// or sha starts with "-", so such a ref is refused before git sees it; the diff
-// call also passes --end-of-options ahead of it.
+// or sha starts with "-", so such a ref is refused before git sees it; every
+// diff call also passes --end-of-options ahead of it.
 const optionLike = (ref: string): boolean => ref.startsWith("-");
-const rangeArgs = (spec: DiffSpec): string[] => (spec.staged ? ["--cached"] : [spec.mergeBase!]);
+const rangeArgs = (spec: DiffSpec): string[] => (spec.staged ? ["--cached"] : ["--end-of-options", spec.mergeBase!]);
+// diffFiles and diffHunks are public: the merge-base they are handed is not
+// always one resolveBaseRef produced. A spec with nothing to diff against, or
+// with a base git would read as an option, has no diff.
+const diffable = (spec: DiffSpec): boolean => spec.staged === true || (typeof spec.mergeBase === "string" && !optionLike(spec.mergeBase));
 
 // The review base of a repository with no commit yet. Everything in it is new,
 // so the diff is taken against the empty tree rather than refused: the first
@@ -151,6 +155,7 @@ export function resolveBaseRef(
 // committed + staged + unstaged, "review my branch as it sits".
 export function diffFiles(dir: string, spec: DiffSpec): DiffFile[] {
   const out: DiffFile[] = [];
+  if (!diffable(spec)) return out;
   const ns = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
   if (ns.ok) {
     const toks = ns.stdout.split("\0");
@@ -207,6 +212,7 @@ export function diffFiles(dir: string, spec: DiffSpec): DiffFile[] {
 // submodule diffs, and no merging of nearby hunks (diff.interHunkContext).
 export function diffHunks(dir: string, spec: DiffSpec): Map<string, Hunk[]> {
   const map = new Map<string, Hunk[]>();
+  if (!diffable(spec)) return map;
   const res = sh("git", [
     ...gitArgs(dir),
     "diff",
@@ -375,7 +381,7 @@ export function readHistory(dir: string, since?: string): HistoryResult {
   // commit. --full-history keeps side-branch commits that default history
   // simplification hides behind a merge TREESAME to one parent.
   if (prefix) args.push("--full-history", "--full-diff", "--", ".");
-  const res = spawnSync("git", args, {
+  const res = spawnSync("git", [...GIT_SAFE_CONFIG, ...args], {
     input: revs.join("\n") + "\n",
     maxBuffer: LOG_MAX_BYTES,
     timeout: 600_000,

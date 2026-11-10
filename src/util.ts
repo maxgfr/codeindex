@@ -21,6 +21,14 @@ export interface ShResult {
 // depended on the machine. Every git call runs in the C locale.
 export const GIT_LOCALE = { LC_ALL: "C", LANGUAGE: "" } as const;
 
+// Configuration every git call overrides, ahead of its own arguments.
+// `core.fsmonitor` names a COMMAND that git runs whenever it refreshes the
+// index, which `ls-files` and `diff` both do: a directory that arrives with its
+// own .git/config (an unpacked archive, a shared mount, a nested clone) had
+// that command run by a mere `codeindex scan`. The engine never needs a
+// filesystem monitor, so it is off for every call.
+export const GIT_SAFE_CONFIG: readonly string[] = ["-c", "core.fsmonitor=false"];
+
 // Run a command synchronously. Sync keeps the CLI simple and deterministic
 // (mirrors how the engine is structured); the work is I/O-bound git/rg/gh calls
 // where parallelism buys little. `input` feeds stdin; `maxBuffer` is generous
@@ -31,7 +39,7 @@ export function sh(
   opts: { cwd?: string; input?: string; timeoutMs?: number; env?: Record<string, string | undefined>; maxBufferBytes?: number } = {},
 ): ShResult {
   const env = opts.env ?? process.env;
-  const res = spawnSync(cmd, args, {
+  const res = spawnSync(cmd, cmd === "git" ? [...GIT_SAFE_CONFIG, ...args] : args, {
     cwd: opts.cwd,
     input: opts.input,
     encoding: "utf8",

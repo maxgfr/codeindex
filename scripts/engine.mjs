@@ -29,7 +29,7 @@ var init_types = __esm({
 import { spawnSync } from "child_process";
 function sh(cmd, args2, opts = {}) {
   const env = opts.env ?? process.env;
-  const res = spawnSync(cmd, args2, {
+  const res = spawnSync(cmd, cmd === "git" ? [...GIT_SAFE_CONFIG, ...args2] : args2, {
     cwd: opts.cwd,
     input: opts.input,
     encoding: "utf8",
@@ -152,11 +152,12 @@ function stemOf(term) {
   if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
   return t;
 }
-var GIT_LOCALE, whichCache, STOPWORDS, NON_ASCII, NON_WORD, ASCII_CASE_1, ASCII_CASE_2, ASCII_GLUE, ASCII_SPLIT, UNICODE_CASE_1, UNICODE_CASE_2, UNICODE_GLUE, UNICODE_SPLIT;
+var GIT_LOCALE, GIT_SAFE_CONFIG, whichCache, STOPWORDS, NON_ASCII, NON_WORD, ASCII_CASE_1, ASCII_CASE_2, ASCII_GLUE, ASCII_SPLIT, UNICODE_CASE_1, UNICODE_CASE_2, UNICODE_GLUE, UNICODE_SPLIT;
 var init_util = __esm({
   "src/util.ts"() {
     "use strict";
     GIT_LOCALE = { LC_ALL: "C", LANGUAGE: "" };
+    GIT_SAFE_CONFIG = ["-c", "core.fsmonitor=false"];
     whichCache = /* @__PURE__ */ new Map();
     STOPWORDS = /* @__PURE__ */ new Set([
       "the",
@@ -1132,6 +1133,7 @@ function resolveBaseRef(dir, base) {
 }
 function diffFiles(dir, spec) {
   const out2 = [];
+  if (!diffable(spec)) return out2;
   const ns = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
   if (ns.ok) {
     const toks = ns.stdout.split("\0");
@@ -1180,6 +1182,7 @@ function diffFiles(dir, spec) {
 }
 function diffHunks(dir, spec) {
   const map = /* @__PURE__ */ new Map();
+  if (!diffable(spec)) return map;
   const res = sh("git", [
     ...gitArgs(dir),
     "diff",
@@ -1274,7 +1277,7 @@ function readHistory(dir, since) {
   }
   const args2 = [...gitArgs(dir), "log", "--no-color", "--no-renames", ...window2.args, "--pretty=format:%x1e", "--name-only", "-z", "--stdin"];
   if (prefix) args2.push("--full-history", "--full-diff", "--", ".");
-  const res = spawnSync2("git", args2, {
+  const res = spawnSync2("git", [...GIT_SAFE_CONFIG, ...args2], {
     input: revs.join("\n") + "\n",
     maxBuffer: LOG_MAX_BYTES,
     timeout: 6e5,
@@ -1388,7 +1391,7 @@ function changedSince(dir, ref2) {
   for (const p of untrackedFiles(dir)) out2.add(p);
   return out2;
 }
-var COMMIT_CHARS, GIT_CONFIG, gitArgs, optionLike, rangeArgs, NO_COMMITS_REF, C_ESCAPES, LOG_MAX_BYTES, SINCE_DATE, LOG_MEMO, LOG_MEMO_MAX;
+var COMMIT_CHARS, GIT_CONFIG, gitArgs, optionLike, rangeArgs, diffable, NO_COMMITS_REF, C_ESCAPES, LOG_MAX_BYTES, SINCE_DATE, LOG_MEMO, LOG_MEMO_MAX;
 var init_git = __esm({
   "src/git.ts"() {
     "use strict";
@@ -1415,7 +1418,8 @@ var init_git = __esm({
     ];
     gitArgs = (dir) => ["-C", dir, ...GIT_CONFIG];
     optionLike = (ref2) => ref2.startsWith("-");
-    rangeArgs = (spec) => spec.staged ? ["--cached"] : [spec.mergeBase];
+    rangeArgs = (spec) => spec.staged ? ["--cached"] : ["--end-of-options", spec.mergeBase];
+    diffable = (spec) => spec.staged === true || typeof spec.mergeBase === "string" && !optionLike(spec.mergeBase);
     NO_COMMITS_REF = "(no commits)";
     C_ESCAPES = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13 };
     LOG_MAX_BYTES = 1024 * 1024 * 1024;

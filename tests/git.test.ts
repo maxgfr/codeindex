@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedSince, gitChurn, resolveBaseRef } from "../src/git.js";
+import { changedSince, diffFiles, diffHunks, gitChurn, resolveBaseRef, untrackedFiles } from "../src/git.js";
+import { walk } from "../src/walk.js";
 
 // git hardening: the locale its messages are read in, and refs that git would
 // otherwise take for options.
@@ -48,6 +49,20 @@ describe("a ref that looks like an option never reaches git as one", () => {
     expect([...changedSince(dir, "HEAD")]).toEqual(["a.txt"]);
   });
 
+  it("diffFiles and diffHunks, which are public, refuse one as a merge-base", () => {
+    const dir = repoWithCommit();
+    const target = join(mkdtempSync(join(tmpdir(), "ci-git-out-")), "x");
+    expect(diffFiles(dir, { mergeBase: `--output=${target}` })).toEqual([]);
+    expect(diffHunks(dir, { mergeBase: `--output=${target}` }).size).toBe(0);
+    expect(existsSync(target)).toBe(false);
+    // Nothing to diff against is no diff, not a crash.
+    expect(diffFiles(dir, {})).toEqual([]);
+    expect(diffHunks(dir, {}).size).toBe(0);
+    // A real base still answers.
+    expect(diffFiles(dir, { mergeBase: "HEAD" })).toEqual([{ path: "a.txt", status: "modified", linesAdded: 1, linesDeleted: 1 }]);
+    expect([...diffHunks(dir, { mergeBase: "HEAD" }).keys()]).toEqual(["a.txt"]);
+  });
+
   it("a delta base starting with '-' is not found", () => {
     const dir = repoWithCommit();
     const target = join(mkdtempSync(join(tmpdir(), "ci-git-out-")), "x");
@@ -58,5 +73,36 @@ describe("a ref that looks like an option never reaches git as one", () => {
   it("a since window starting with '-' is neither a ref nor a date", () => {
     const dir = repoWithCommit();
     expect(() => gitChurn(dir, { since: "--all" })).toThrow(/neither a commit/);
+  });
+});
+
+// A directory that arrives with its own .git/config — an unpacked archive, a
+// shared mount, a nested clone — must not get to run a command because it was
+// indexed. `core.fsmonitor` names one, and git runs it on ls-files and diff.
+describe("a repository's own git config cannot run a command", () => {
+  it("core.fsmonitor is not honoured by any call the engine makes", () => {
+    const dir = repoWithCommit();
+    const marker = join(mkdtempSync(join(tmpdir(), "ci-git-mark-")), "ran");
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
+    // A tracked file under `build/` makes the walk ask git which build dirs are tracked.
+    mkdirSync(join(dir, "build"));
+    writeFileSync(join(dir, "build", "gen.ts"), "export const generated = 1;\n");
+    git("add", "build/gen.ts");
+    git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "build");
+    git("config", "core.fsmonitor", `touch ${marker}; true`);
+
+    // The setting does run a command when git is left to honour it.
+    git("ls-files");
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    expect(walk(dir).files.map((f) => f.rel)).toContain("build/gen.ts");
+    expect([...changedSince(dir, "HEAD")]).toEqual(["a.txt"]);
+    expect(untrackedFiles(dir)).toEqual([]);
+    expect(diffFiles(dir, { mergeBase: "HEAD" })).toHaveLength(1);
+    expect(diffHunks(dir, { mergeBase: "HEAD" }).size).toBe(1);
+    expect(resolveBaseRef(dir)).toHaveProperty("mergeBase");
+    expect(gitChurn(dir).ok).toBe(true);
+    expect(existsSync(marker)).toBe(false);
   });
 });
