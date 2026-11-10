@@ -1,6 +1,6 @@
 import { basename, isAbsolute, posix, relative, resolve, sep } from "node:path";
 import type { FileRecord, FileKind } from "./types.js";
-import { walk, readText, type WalkEntry, type WalkOptions, type WalkResult, type WalkSkip, type WalkedFile } from "./walk.js";
+import { walk, readText, readTextEx, type WalkEntry, type WalkOptions, type WalkResult, type WalkSkip, type WalkedFile } from "./walk.js";
 import { headCommit } from "./git.js";
 import { sha1 } from "./hash.js";
 import { classify, MARKDOWN_EXT } from "./classify.js";
@@ -530,7 +530,19 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     // hash hit reuses the previous record — content is byte-identical, so every
     // derived field is too. classify()/extToLang() depend only on the path, so
     // kind/lang are stable across the hit.
-    const content = preUsable ? undefined : readText(f.abs);
+    //
+    // A file that cannot be read is no file of the index: it is reported as
+    // skipped, exactly like one the walk could not stat. It used to be indexed
+    // as an EMPTY file, and to stay empty: fixing its permissions changes its
+    // ctime, not its mtime, so the (size, mtime) fastpath kept serving the empty
+    // record until the file was next edited. With no record there is no cache
+    // entry, and the next scan simply tries again.
+    const read = preUsable ? undefined : readTextEx(f.abs);
+    if (read && !read.ok) {
+      opts.onSkip?.({ rel: f.rel, reason: "unreadable", directory: false, size: f.size });
+      continue;
+    }
+    const content = read?.text;
     const hash = preUsable ? preUsable.hash : sha1(content!);
     if (cached && cached.hash === hash) {
       // The hash is over the DECODED text, so it is blind to bytes the decoder

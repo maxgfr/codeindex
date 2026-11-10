@@ -23,7 +23,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { FileRecord } from "./types.js";
 import { sha1 } from "./hash.js";
-import { readText, walk } from "./walk.js";
+import { readTextEx, walk } from "./walk.js";
 import { extToLang } from "./lang/registry.js";
 import { ensureGrammars, grammarKeysForExts, grammarReady } from "./ast/loader.js";
 import {
@@ -129,7 +129,9 @@ export async function runExtractWorker(input: WorkerInput, post: (out: WorkerOut
     } catch {
       continue; // vanished mid-run — the main thread re-reads it (and drops it)
     }
-    const content = readText(job.abs);
+    const read = readTextEx(job.abs);
+    if (!read.ok) continue; // unreadable — the main thread reads it again, and skips it
+    const content = read.text;
     const hash = sha1(content);
     // Hash first: on a match scanRepo keeps the cached record, so extracting
     // would be pure waste. After a `touch` of every file this was the whole

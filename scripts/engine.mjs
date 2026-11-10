@@ -840,7 +840,7 @@ function walk(root, opts = {}) {
   } catch {
     return { files: out2, capped, excluded };
   }
-  const contained = (real) => real === rootReal || real.startsWith(rootReal + sep);
+  const contained = (real) => isInside(rootReal, real);
   const stack = [
     { dir: root, rel: "", rules: useGitignore ? enclosingRules(rootReal) : [] }
   ];
@@ -852,6 +852,7 @@ function walk(root, opts = {}) {
     try {
       real = realpathSync(frame.dir);
     } catch {
+      skip(frame.rel, "unreadable", true);
       continue;
     }
     if (seenDirs.has(real)) continue;
@@ -863,6 +864,7 @@ function walk(root, opts = {}) {
         (a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0
       );
     } catch {
+      skip(frame.rel, "unreadable", true);
       continue;
     }
     const gitDir = entries.some((e) => e.name === GIT_ENTRY) ? gitDirOf(frame.dir, entries) : void 0;
@@ -961,6 +963,10 @@ function walk(root, opts = {}) {
 }
 function readText(abs) {
   return readTextEx(abs).text;
+}
+function isInside(rootReal, real) {
+  if (real === rootReal) return true;
+  return real.startsWith(rootReal.endsWith(sep) ? rootReal : rootReal + sep);
 }
 var IGNORE_DIRS, BUILD_OUTPUT_DIRS, GIT_ENTRY, INDEX_ENTRY, GITFILE_PREFIX, MAX_GITFILE_BYTES, LOCKFILES, BINARY_EXT, DEFAULT_MAX_FILES;
 var init_walk = __esm({
@@ -11220,7 +11226,12 @@ function scanRepo(root, opts = {}) {
     }
     const pre = opts.extracted?.get(f.rel);
     const preUsable = pre && pre.size === f.size && pre.mtimeMs === f.mtimeMs && (pre.record || pre.hash === cached?.hash) ? pre : void 0;
-    const content = preUsable ? void 0 : readText(f.abs);
+    const read = preUsable ? void 0 : readTextEx(f.abs);
+    if (read && !read.ok) {
+      opts.onSkip?.({ rel: f.rel, reason: "unreadable", directory: false, size: f.size });
+      continue;
+    }
+    const content = read?.text;
     const hash = preUsable ? preUsable.hash : sha1(content);
     if (cached && cached.hash === hash) {
       files.push(cached.record.size === f.size ? cached.record : { ...cached.record, size: f.size });
@@ -11527,7 +11538,9 @@ async function runExtractWorker(input, post) {
     } catch {
       continue;
     }
-    const content = readText(job.abs);
+    const read = readTextEx(job.abs);
+    if (!read.ok) continue;
+    const content = read.text;
     const hash = sha1(content);
     if (hash === job.cachedHash) {
       records.push({ rel: job.rel, size, mtimeMs, hash });

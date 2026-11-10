@@ -352,7 +352,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
   } catch {
     return { files: out, capped, excluded };
   }
-  const contained = (real: string): boolean => real === rootReal || real.startsWith(rootReal + sep);
+  const contained = (real: string): boolean => isInside(rootReal, real);
 
   // Each frame carries the ignore-rule chain inherited from its ancestors;
   // rules from deeper .gitignore files are appended after (later rules win).
@@ -374,6 +374,9 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     try {
       real = realpathSync(frame.dir);
     } catch {
+      // Said, like a file that cannot be read: a directory skipped in silence
+      // left `scan --why` with nothing to explain the files missing under it.
+      skip(frame.rel, "unreadable", true);
       continue;
     }
     if (seenDirs.has(real)) continue;
@@ -389,6 +392,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
         a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
       );
     } catch {
+      skip(frame.rel, "unreadable", true); // no permission to list it (EACCES)
       continue;
     }
     // Resolved at most once per directory, and only when a `.git` entry is
@@ -514,4 +518,14 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
 /** Compatibility reader; use readTextEx when empty, binary and unreadable differ. */
 export function readText(abs: string): string {
   return readTextEx(abs).text;
+}
+
+// Whether the resolved path `real` is `rootReal` or lies beneath it. The
+// separator is appended only when the root does not already end with one:
+// for `/` or a drive root (`C:\\`) it made the prefix `//`, which nothing starts
+// with, so every symlink inside a repository indexed from the root of a
+// filesystem was read as escaping it.
+export function isInside(rootReal: string, real: string): boolean {
+  if (real === rootReal) return true;
+  return real.startsWith(rootReal.endsWith(sep) ? rootReal : rootReal + sep);
 }
