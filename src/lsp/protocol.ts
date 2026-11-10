@@ -255,6 +255,9 @@ export function relFromUri(root: string | readonly string[], uri: string): strin
     return undefined;
   }
   if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+  // Dot segments are resolved BEFORE the containment test: `<root>/../etc/x`
+  // starts with the root and used to come back as the relative path `../etc/x`.
+  path = withoutDotSegments(path);
   const base = root.replace(/\\/g, "/").replace(/\/+$/, "");
   const windows = /^[A-Za-z]:/.test(base) || base.startsWith("//");
   const comparablePath = windows ? path.toLowerCase() : path;
@@ -262,6 +265,21 @@ export function relFromUri(root: string | readonly string[], uri: string): strin
   if (comparablePath === comparableBase) return "";
   if (!comparablePath.startsWith(`${comparableBase}/`)) return undefined;
   return path.slice(base.length + 1);
+}
+
+// Resolve `.` and `..` segments of a posix-style path, keeping its leading
+// slashes (one for a local path, two for a UNC host) and a drive prefix as the
+// first segment. A `..` with nothing left to remove stays at the top.
+function withoutDotSegments(path: string): string {
+  if (!/(?:^|\/)\.\.?(?:\/|$)/.test(path)) return path;
+  const lead = /^\/*/.exec(path)![0];
+  const kept: string[] = [];
+  for (const segment of path.slice(lead.length).split("/")) {
+    if (segment === ".") continue;
+    if (segment === "..") kept.pop();
+    else kept.push(segment);
+  }
+  return lead + kept.join("/");
 }
 
 interface RawPosition {

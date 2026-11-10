@@ -136,6 +136,15 @@ describe("URI mapping", () => {
     // A definition in node_modules or the standard library is real, but has no
     // repo-relative path — reporting one would name a file that does not exist.
     expect(relFromUri("/tmp/repo", "file:///usr/lib/node_modules/x/index.d.ts")).toBeUndefined();
+    // Dot segments are resolved before the containment test: these start with
+    // the root and came back as `../etc/passwd` and `../repo-other/x.ts`.
+    expect(relFromUri("/tmp/repo", "file:///tmp/repo/../etc/passwd")).toBeUndefined();
+    expect(relFromUri("/tmp/repo", "file:///tmp/repo/src/../../repo-other/x.ts")).toBeUndefined();
+    expect(relFromUri("/tmp/repo", "file:///tmp/repo/%2e%2e/etc/passwd")).toBeUndefined();
+    // Inside the root they are only another spelling of the same file.
+    expect(relFromUri("/tmp/repo", "file:///tmp/repo/src/./lib/../a.ts")).toBe("src/a.ts");
+    expect(relFromUri("C:\\work\\repo", "file:///C:/work/repo/src/../a.ts")).toBe("a.ts");
+    expect(relFromUri("C:\\work\\repo", "file:///C:/work/repo/../secret.ts")).toBeUndefined();
     expect(relFromUri("/tmp/repo", "http://example.com/x.ts")).toBeUndefined();
   });
 
@@ -241,6 +250,58 @@ describe("LSP session state machine (no process)", () => {
     await expect(session.references("src/a.ts", 1, 0)).rejects.toBeInstanceOf(LspTimeout);
     // The late answer must be dropped, not routed to the next waiter.
     expect(() => transport.reply({ jsonrpc: "2.0", id: 2, result: [] })).not.toThrow();
+  });
+
+  it("never takes a request the server sends for the reply to one of ours", async () => {
+    const transport = memoryTransport();
+    const opening = openLspSession(transport, { root: "/tmp/repo" });
+    initialize(transport, { referencesProvider: true });
+    const session = await opening;
+
+    const pending = session.references("src/a.ts", 1, 0); // our request, id 2
+    await new Promise((r) => setTimeout(r, 1));
+    let settled = false;
+    void pending.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    // The server numbers ITS requests in its own sequence: this one also has id 2.
+    transport.reply({ jsonrpc: "2.0", id: 2, method: "workspace/configuration", params: { items: [{ section: "a" }, { section: "b" }] } });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(settled).toBe(false);
+
+    transport.reply({ jsonrpc: "2.0", id: 2, result: [{ uri: "file:///tmp/repo/src/b.ts", range: { start: { line: 1, character: 4 } } }] });
+    expect(await pending).toEqual([{ file: "src/b.ts", line: 2, character: 4 }]);
+  });
+
+  it("answers the requests a server sends, so one waiting on them goes on", async () => {
+    const transport = memoryTransport();
+    const opening = openLspSession(transport, { root: "/tmp/repo" });
+    initialize(transport, { referencesProvider: true });
+    await opening;
+    const sentAfter = (from: number): unknown[] =>
+      transport.sent.slice(from).map((frame) => JSON.parse(frame.slice(frame.indexOf("\r\n\r\n") + 4)));
+
+    let from = transport.sent.length;
+    transport.reply({ jsonrpc: "2.0", id: 7, method: "workspace/configuration", params: { items: [{ section: "a" }, { section: "b" }] } });
+    expect(sentAfter(from)).toEqual([{ jsonrpc: "2.0", id: 7, result: [null, null] }]);
+
+    from = transport.sent.length;
+    transport.reply({ jsonrpc: "2.0", id: "reg-1", method: "client/registerCapability", params: { registrations: [] } });
+    transport.reply({ jsonrpc: "2.0", id: 8, method: "window/workDoneProgress/create", params: { token: "t" } });
+    expect(sentAfter(from)).toEqual([
+      { jsonrpc: "2.0", id: "reg-1", result: null },
+      { jsonrpc: "2.0", id: 8, result: null },
+    ]);
+
+    from = transport.sent.length;
+    transport.reply({ jsonrpc: "2.0", id: 9, method: "workspace/applyEdit", params: {} });
+    expect(sentAfter(from)).toEqual([{ jsonrpc: "2.0", id: 9, error: { code: -32601, message: "method not found: workspace/applyEdit" } }]);
+
+    // A notification has no id and gets no answer.
+    from = transport.sent.length;
+    transport.reply({ jsonrpc: "2.0", method: "$/progress", params: { token: "t", value: {} } });
+    expect(sentAfter(from)).toEqual([]);
   });
 
   it("surfaces a server error response as a rejection", async () => {

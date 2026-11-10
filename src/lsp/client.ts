@@ -84,6 +84,14 @@ export class LspIncomingCallsError extends Error {
 const DEFAULT_TIMEOUT = 5000;
 const DEFAULT_STARTUP_TIMEOUT = 15000;
 
+// Server requests that only want an acknowledgement.
+const ACKNOWLEDGED_SERVER_REQUESTS: ReadonlySet<string> = new Set([
+  "client/registerCapability",
+  "client/unregisterCapability",
+  "window/workDoneProgress/create",
+  "window/showMessageRequest",
+]);
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -110,12 +118,37 @@ export async function openLspSession(transport: LspTransport, options: LspSessio
     pending.clear();
   };
 
+  // A request the SERVER sends. It is answered — a server may wait on
+  // `workspace/configuration` or `window/workDoneProgress/create` before it
+  // goes on indexing — with the least a client can say: no configuration, a
+  // null acknowledgement, or "method not found" for anything else. This client
+  // asks questions; it does not host a language server's UI.
+  const answerServerRequest = (message: LspMessage): void => {
+    if (dead) return;
+    const reply = (body: Pick<LspMessage, "result" | "error">): void => {
+      transport.write(encodeMessage({ jsonrpc: "2.0", id: message.id, ...body }));
+    };
+    if (message.method === "workspace/configuration") {
+      const items = (message.params as { items?: unknown } | undefined)?.items;
+      reply({ result: Array.isArray(items) ? items.map(() => null) : [] });
+    } else if (ACKNOWLEDGED_SERVER_REQUESTS.has(message.method!)) {
+      reply({ result: null });
+    } else {
+      reply({ error: { code: -32601, message: `method not found: ${message.method}` } });
+    }
+  };
+
   transport.onData((chunk) => {
     for (const message of framer.push(chunk)) {
-      // Server-initiated requests and notifications (progress, diagnostics,
-      // window/logMessage) are simply ignored. This client asks questions; it
-      // does not host a language server's UI, and a server that gets no answer
-      // to `window/showMessageRequest` carries on.
+      // A message that names a method is the server's own request (with an id)
+      // or notification (without): progress, diagnostics, window/logMessage.
+      // It is never a reply, WHATEVER its id — a server numbers its requests in
+      // its own sequence, and one whose id met a pending request of ours used
+      // to settle it with `undefined`, read as "no references".
+      if (typeof message.method === "string") {
+        if (message.id !== undefined) answerServerRequest(message);
+        continue;
+      }
       if (typeof message.id !== "number") continue;
       const waiter = pending.get(message.id);
       if (!waiter) continue; // a reply that arrived after its timeout

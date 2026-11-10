@@ -19901,6 +19901,7 @@ function relFromUri(root, uri) {
     return void 0;
   }
   if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+  path = withoutDotSegments(path);
   const base = root.replace(/\\/g, "/").replace(/\/+$/, "");
   const windows = /^[A-Za-z]:/.test(base) || base.startsWith("//");
   const comparablePath = windows ? path.toLowerCase() : path;
@@ -19908,6 +19909,17 @@ function relFromUri(root, uri) {
   if (comparablePath === comparableBase) return "";
   if (!comparablePath.startsWith(`${comparableBase}/`)) return void 0;
   return path.slice(base.length + 1);
+}
+function withoutDotSegments(path) {
+  if (!/(?:^|\/)\.\.?(?:\/|$)/.test(path)) return path;
+  const lead = /^\/*/.exec(path)[0];
+  const kept = [];
+  for (const segment of path.slice(lead.length).split("/")) {
+    if (segment === ".") continue;
+    if (segment === "..") kept.pop();
+    else kept.push(segment);
+  }
+  return lead + kept.join("/");
 }
 function locationsToRefs(root, raw) {
   const list = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? [raw] : [];
@@ -19962,8 +19974,26 @@ async function openLspSession(transport, options) {
     }
     pending.clear();
   };
+  const answerServerRequest = (message) => {
+    if (dead) return;
+    const reply = (body2) => {
+      transport.write(encodeMessage({ jsonrpc: "2.0", id: message.id, ...body2 }));
+    };
+    if (message.method === "workspace/configuration") {
+      const items = message.params?.items;
+      reply({ result: Array.isArray(items) ? items.map(() => null) : [] });
+    } else if (ACKNOWLEDGED_SERVER_REQUESTS.has(message.method)) {
+      reply({ result: null });
+    } else {
+      reply({ error: { code: -32601, message: `method not found: ${message.method}` } });
+    }
+  };
   transport.onData((chunk) => {
     for (const message of framer.push(chunk)) {
+      if (typeof message.method === "string") {
+        if (message.id !== void 0) answerServerRequest(message);
+        continue;
+      }
       if (typeof message.id !== "number") continue;
       const waiter = pending.get(message.id);
       if (!waiter) continue;
@@ -20081,7 +20111,7 @@ async function openLspSession(transport, options) {
     }
   };
 }
-var LspTimeout, LspIncomingCallsError, DEFAULT_TIMEOUT, DEFAULT_STARTUP_TIMEOUT;
+var LspTimeout, LspIncomingCallsError, DEFAULT_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ACKNOWLEDGED_SERVER_REQUESTS;
 var init_client = __esm({
   "src/lsp/client.ts"() {
     "use strict";
@@ -20102,6 +20132,12 @@ var init_client = __esm({
     };
     DEFAULT_TIMEOUT = 5e3;
     DEFAULT_STARTUP_TIMEOUT = 15e3;
+    ACKNOWLEDGED_SERVER_REQUESTS = /* @__PURE__ */ new Set([
+      "client/registerCapability",
+      "client/unregisterCapability",
+      "window/workDoneProgress/create",
+      "window/showMessageRequest"
+    ]);
   }
 });
 
