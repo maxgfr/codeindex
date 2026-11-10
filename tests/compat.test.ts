@@ -14,6 +14,12 @@ import { renderSymbolsJson } from "../src/render/symbols-json.js";
 // `meta`, must reproduce them byte-for-byte — proving the core moved here
 // without a behavior change. Regenerate the pins ONLY for an adjudicated,
 // documented behavior change (see the versioning rules in README.md).
+//
+// Regenerated since, each time for one such change and nothing else:
+//   - the three recall gaps the ctags differential named (dea75aa);
+//   - `lines` (EXTRACTOR_VERSION 21): the newline ending a file's last line is
+//     no longer counted as one more line. 13 of the 14 nodes lose exactly 1;
+//     no other byte of either pin moved.
 const EXPECTED_GRAPH = fileURLToPath(new URL("./compat/ultraindex-5.1.0-graph.json", import.meta.url));
 const EXPECTED_SYMBOLS = fileURLToPath(new URL("./compat/ultraindex-5.1.0-symbols.json", import.meta.url));
 const FIXTURE = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));

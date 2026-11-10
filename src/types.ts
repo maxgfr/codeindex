@@ -106,7 +106,9 @@ export const SCHEMA_VERSION = 5;
 // keyword `this`/`self` (JS/TS, Java, C#, C++, Ruby, Rust) keeps it as its
 // receiver at the AST tier; the regex tier reads the receiver of `a?.b()` and
 // `a!.b()`.
-export const EXTRACTOR_VERSION = 20;
+// v21: FileRecord.lines no longer counts the newline that ends the last line as
+// the start of another ("a\n" is 1 line, not 2).
+export const EXTRACTOR_VERSION = 21;
 
 // The receiver of a call made ON something that has no simple name: a literal,
 // a subscript, a parenthesised expression, the result of a constructor. It says

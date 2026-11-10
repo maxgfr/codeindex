@@ -119,11 +119,16 @@ export interface ExtractedRecord {
   record?: FileRecord;
 }
 
+// The number of lines a file holds, as `wc -l` counts them plus a last line
+// with no newline after it: "a\n" is 1 line, "a\nb" is 2, "" is 0. The newline
+// that ENDS the last line used to count as the start of one more, so every file
+// written by an editor reported one line too many — in graph.json, in the
+// hotspot score, and in the range a delta gives a newly added file.
 function countLines(s: string): number {
   if (!s) return 0;
-  let n = 1;
+  let n = 0;
   for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
-  return n;
+  return s.charCodeAt(s.length - 1) === 10 ? n : n + 1;
 }
 
 // The FileRecord for ONE code file. Factored out because the worker pool builds

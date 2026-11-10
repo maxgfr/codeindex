@@ -307,3 +307,28 @@ describe("scanSummary — agrees with scanRepo", () => {
     expect(Object.keys(sum.languages).length).toBeGreaterThan(0);
   });
 });
+
+// `lines` is how many lines a file holds: the newline that ends the last line
+// is not the start of another one.
+describe("FileRecord.lines", () => {
+  it("counts lines as wc -l does, plus a last line with no newline", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-scan-lines-"));
+    const contents: Record<string, string> = {
+      "one.ts": "export const a = 1;\n",
+      "bare.ts": "export const a = 1;",
+      "two.ts": "export const a = 1;\nexport const b = 2;\n",
+      "two-bare.ts": "export const a = 1;\nexport const b = 2;",
+      "crlf.ts": "export const a = 1;\r\nexport const b = 2;\r\n",
+      "blank.md": "\n",
+      "empty.md": "",
+      "doc.md": "# Title\n\nBody.\n",
+    };
+    for (const [rel, content] of Object.entries(contents)) writeFileSync(join(dir, rel), content);
+    try {
+      const lines = Object.fromEntries(scanRepo(dir).files.map((f) => [f.rel, f.lines]));
+      expect(lines).toEqual({ "one.ts": 1, "bare.ts": 1, "two.ts": 2, "two-bare.ts": 2, "crlf.ts": 2, "blank.md": 1, "empty.md": 0, "doc.md": 3 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

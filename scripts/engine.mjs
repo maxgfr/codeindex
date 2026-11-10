@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.18";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 20;
+    EXTRACTOR_VERSION = 21;
     UNNAMED_RECEIVER = "?";
   }
 });
@@ -11052,9 +11052,9 @@ var init_config = __esm({
 import { basename, isAbsolute, posix, relative as relative2, resolve as resolve3, sep as sep2 } from "path";
 function countLines2(s) {
   if (!s) return 0;
-  let n = 1;
+  let n = 0;
   for (let i2 = 0; i2 < s.length; i2++) if (s.charCodeAt(i2) === 10) n++;
-  return n;
+  return s.charCodeAt(s.length - 1) === 10 ? n : n + 1;
 }
 function buildCodeRecord(rel2, ext, size, content, hash, lang, opts = {}) {
   const record2 = {

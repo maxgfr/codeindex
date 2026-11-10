@@ -21,7 +21,7 @@
       "title": "Mini Repo",
       "summary": "A tiny polyglot fixture used to exercise ultraindex. The HTTP layer is built",
       "symbols": 0,
-      "lines": 11,
+      "lines": 10,
       "degIn": 1,
       "degOut": 3,
       "pagerank": 1.1854
@@ -36,7 +36,7 @@
       "title": "API Reference",
       "summary": "The HttpClient is the main entry point. See the guide for usage.",
       "symbols": 0,
-      "lines": 4,
+      "lines": 3,
       "degIn": 2,
       "degOut": 2,
       "pagerank": 1.5213
@@ -51,7 +51,7 @@
       "title": "User Guide",
       "summary": "Start here, then read the API reference. Back to the",
       "symbols": 0,
-      "lines": 7,
+      "lines": 6,
       "degIn": 2,
       "degOut": 2,
       "pagerank": 1.5213
@@ -65,7 +65,7 @@
       "module": "root",
       "title": "go.mod",
       "symbols": 0,
-      "lines": 4,
+      "lines": 3,
       "degIn": 0,
       "degOut": 0,
       "pagerank": 0.5389
@@ -80,7 +80,7 @@
       "title": "main.go",
       "summary": "Command main wires the sub package together.",
       "symbols": 2,
-      "lines": 13,
+      "lines": 12,
       "degIn": 0,
       "degOut": 2,
       "pagerank": 0.5389
@@ -95,7 +95,7 @@
       "title": "sub.go",
       "summary": "Package sub provides a trivial exported function.",
       "symbols": 2,
-      "lines": 8,
+      "lines": 7,
       "degIn": 2,
       "degOut": 0,
       "pagerank": 0.9969
@@ -124,7 +124,7 @@
       "title": "core.py",
       "summary": "Core package logic for the mini repo.",
       "symbols": 1,
-      "lines": 8,
+      "lines": 7,
       "degIn": 0,
       "degOut": 2,
       "pagerank": 0.5389
@@ -139,7 +139,7 @@
       "title": "util.py",
       "summary": "Shared helpers for the package.",
       "symbols": 1,
-      "lines": 6,
+      "lines": 5,
       "degIn": 2,
       "degOut": 0,
       "pagerank": 0.9969
@@ -154,7 +154,7 @@
       "title": "client.ts",
       "summary": "HTTP client with retry.",
       "symbols": 2,
-      "lines": 10,
+      "lines": 9,
       "degIn": 3,
       "degOut": 4,
       "pagerank": 1.7503
@@ -168,7 +168,7 @@
       "module": "src",
       "title": "helpers.ts",
       "symbols": 1,
-      "lines": 2,
+      "lines": 1,
       "degIn": 2,
       "degOut": 0,
       "pagerank": 1.2828
@@ -182,7 +182,7 @@
       "module": "src",
       "title": "index.ts",
       "symbols": 2,
-      "lines": 5,
+      "lines": 4,
       "degIn": 0,
       "degOut": 2,
       "pagerank": 0.5389
@@ -197,7 +197,7 @@
       "title": "util.ts",
       "summary": "Retry/backoff helpers shared across the client.",
       "symbols": 1,
-      "lines": 5,
+      "lines": 4,
       "degIn": 3,
       "degOut": 0,
       "pagerank": 1.5118
@@ -211,7 +211,7 @@
       "module": "root",
       "title": "tsconfig.json",
       "symbols": 0,
-      "lines": 10,
+      "lines": 9,
       "degIn": 0,
       "degOut": 0,
       "pagerank": 0.5389
