@@ -1295,10 +1295,10 @@ empty string, it disables the tier even when the repository has one.
 spawn, so `<repo>/.codeindex/lsp.json` is code that repository would run on
 your machine. It is read only with `--trust-lsp-config` (on `lsp status`,
 `callers --lsp`, `refs --lsp` and `codeindex mcp`) or
-`CODEINDEX_TRUST_LSP_CONFIG=1`. On `codeindex mcp --repo <dir>` the flag covers
-the pinned repository only: a call that names another `repo` does not get that
-repository's config read (the environment variable still trusts every one).
-Without either, only the configs you put there
+`CODEINDEX_TRUST_LSP_CONFIG=1`. On `codeindex mcp` the flag requires
+`--repo <dir>` and covers that pinned repository; the environment variable
+trusts every repository a call names, so set it only on a server whose callers
+you trust. Without either, only the configs you put there
 yourself count — `CODEINDEX_LSP_CONFIG`, then `~/.config/codeindex/lsp.json`
 (`$XDG_CONFIG_HOME/codeindex/lsp.json` when set) — and `lsp status` reports the
 repository's file as `ignoredConfig`, while an `lsp: true` query says why it
@@ -1508,9 +1508,11 @@ Profiles are `all` (the default), `orient`, `find`, `impact`, `edit`, `risk`
 and `memory` (all four memory tools). Every tool belongs to at least one.
 The MCP initialization response names the available profiles and active selection
 in its `instructions`, so a client can discover this configuration in-session.
-It trims what is **advertised**, not what is answerable: a tool left out of the
-profile still works when called by name, so a narrowed server loses no
-capability. An unknown profile fails at startup rather than quietly advertising
+For read tools it trims what is **advertised**, not what is answerable: a read
+tool left out of the profile still works when called by name, so a narrowed
+server loses no way to answer. A **write** tool left out is refused: a profile
+without `edit` and `memory` is a server that writes nothing, whatever a client
+asks. An unknown profile fails at startup rather than quietly advertising
 everything.
 
 ### Pinning the server to one repository
@@ -1523,8 +1525,11 @@ reflected in the advertised schema, not merely tolerated at call time:
 codeindex mcp --repo /path/to/workspace
 ```
 
-An explicit per-call `repo` still wins, so a pinned server can still answer
-about another checkout. `--server-name <name>` overrides the announced
+The pin is a boundary: a call that names another `repo` is refused, for every
+tool, so the directory a host binds its server to is the only one an agent can
+read or write through it (the pinned repository itself may still be named,
+under any spelling of its path). Run an unpinned server, or one per checkout,
+to answer about several. `--server-name <name>` overrides the announced
 `serverInfo.name` for hosts that embed the server under their own identity.
 Add `--watch` to a pinned server to stop paying a whole-tree walk on every
 call. On Linux the server watches each directory the scan walks, one inotify

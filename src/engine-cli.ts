@@ -304,8 +304,8 @@ Commands:
               symbolic-edit writes, checked before writing: a line argument
               picks a same-file homonym and strict refuses an edit that
               changes structure outside its lines). Flags: --repo <dir> pins ONE
-              repository so the per-tool repo argument becomes optional (an
-              explicit per-call repo still wins); --server-name <name> overrides
+              repository: the per-tool repo argument becomes optional, and a
+              call that names another repository is refused; --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
               tool response (default 1e6; a response under the cap is
               byte-identical, one over it is replaced by an actionable notice,
@@ -313,13 +313,13 @@ Commands:
               --tools <profile[,profile]>
               advertises a named subset (all | orient | find | impact | edit |
               risk | memory, default all) — every advertised tool's schema costs an agent
-              context on EVERY turn, and a tool left out is still answerable
-              when called by name; --watch watches the pinned repo so a call
+              context on EVERY turn; a read tool left out is still answerable
+              when called by name, a write tool left out is refused; --watch watches the pinned repo so a call
               skips the whole-tree walk when nothing changed since the last one
               (Linux; elsewhere it only invalidates eagerly);
-              --trust-lsp-config lets a repo's .codeindex/lsp.json name the
-              servers \`lsp: true\` calls spawn (with --repo: the pinned
-              repository's only, not one a call names)
+              --trust-lsp-config lets the pinned repository's
+              .codeindex/lsp.json name the servers \`lsp: true\` calls spawn
+              (requires --repo)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -1025,6 +1025,9 @@ export function parseMcpFlags(argv: string[]): {
   // A file passed here started a server that then failed every call.
   if (defaultRepo && !statSync(defaultRepo).isDirectory()) throw new Error(`--repo path is not a directory: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
+  // The consent names a repository. Without a pin it covered whichever one a
+  // call named: any directory's lsp.json, i.e. any command line.
+  if (trustLspConfig && !defaultRepo) throw new Error("--trust-lsp-config requires --repo <dir>: it trusts the pinned repository's lsp.json, not any repository a call names");
   return { defaultRepo, serverInfo: name ? { name } : undefined, maxResponseBytes, profile, watch, ...(trustLspConfig ? { trustLspConfig } : {}) };
 }
 

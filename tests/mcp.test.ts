@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -1445,7 +1445,8 @@ describe("MCP persisted-index preload — e2e byte-identity across servers", () 
 // A host that spawns one server per workspace should not have to teach the
 // agent an absolute path it cannot know. The pin makes `repo` optional; these
 // tests hold the line on the two ways that could go wrong: the schema must SAY
-// so (not merely tolerate it), and an explicit per-call repo must still win.
+// so (not merely tolerate it), and the pin must be a boundary: a call that
+// names another repository is refused, for every tool.
 describe("MCP --repo pin", () => {
   interface SchemaTool {
     name: string;
@@ -1546,21 +1547,52 @@ describe("MCP --repo pin", () => {
     });
   }, 20_000);
 
-  it("lets an explicit per-call repo override the pin", async () => {
-    const other = tmpFixtureCopy("ci-pin-override-");
+  it("refuses a per-call repo other than the pin, for reads and writes alike", async () => {
+    const pinned = tmpFixtureCopy("ci-pin-boundary-");
+    const other = tmpFixtureCopy("ci-pin-outside-");
     writeFileSync(join(other, "extra-marker.go"), "package p\nfunc MarkerOnlyHere() {}\n");
+    const before = readFileSync(join(other, "src/client.ts"), "utf8");
     const res = await mcpSession(
       [
         ...handshake,
         { id: 2, method: "tools/call", params: { name: "symbols", arguments: { name: "MarkerOnlyHere" } } },
         { id: 3, method: "tools/call", params: { name: "symbols", arguments: { repo: other, name: "MarkerOnlyHere" } } },
+        { id: 4, method: "tools/call", params: { name: "write_memory", arguments: { repo: other, name: "note", content: "x" } } },
+        {
+          id: 5,
+          method: "tools/call",
+          params: { name: "replace_symbol_body", arguments: { repo: other, namePath: "HttpClient", body: "export class HttpClient {}" } },
+        },
+        { id: 6, method: "tools/call", params: { name: "grep", arguments: { repo: other, pattern: "MarkerOnlyHere" } } },
       ],
       undefined,
-      [CLI, "mcp", "--repo", REPO],
+      [CLI, "mcp", "--repo", pinned],
     );
-    // Pinned repo has no such symbol; the overridden one does.
+    // The pinned repository has no such symbol, and that is the only answer there is.
     expect(JSON.parse(res.get(2)!.result!.content![0]!.text).defs).toEqual([]);
-    expect(JSON.parse(res.get(3)!.result!.content![0]!.text).defs.length).toBeGreaterThan(0);
+    for (const id of [3, 4, 5, 6]) {
+      expect(res.get(id)!.result!.isError, `call ${id}`).toBe(true);
+      expect(res.get(id)!.result!.content![0]!.text, `call ${id}`).toMatch(/this server is pinned to .*: `repo` must name that repository or be left out/);
+    }
+    // Nothing was written outside the pin.
+    expect(readFileSync(join(other, "src/client.ts"), "utf8")).toBe(before);
+    expect(existsSync(join(other, ".codeindex", "memories", "note.md"))).toBe(false);
+  }, 30_000);
+
+  it("still accepts the pinned repository named explicitly, under any spelling of its path", async () => {
+    const pinned = tmpFixtureCopy("ci-pin-spelling-");
+    const alias = join(mkdtempSync(join(tmpdir(), "ci-pin-alias-")), "link");
+    symlinkSync(pinned, alias);
+    const call = (id: number, repo: string) => ({ id, method: "tools/call", params: { name: "symbols", arguments: { repo, name: "HttpClient" } } });
+    const res = await mcpSession(
+      [...handshake, call(2, pinned), call(3, pinned + "/"), call(4, join(pinned, "src", "..")), call(5, alias)],
+      undefined,
+      [CLI, "mcp", "--repo", pinned],
+    );
+    const answers = [2, 3, 4, 5].map((id) => res.get(id)!.result!.content![0]!.text);
+    for (const text of answers) expect(JSON.parse(text).defs.length).toBeGreaterThan(0);
+    // One repository, one answer: the alias is not a second scan under another name.
+    expect(new Set(answers).size).toBe(1);
   }, 30_000);
 
   it("fails fast on a nonexistent pin instead of erroring per call", async () => {
@@ -2232,6 +2264,30 @@ describe("tool profiles and onboarding", () => {
     expect(names).not.toContain("replace_symbol_body");
     expect(res.get(3)!.result!.isError).toBeUndefined();
   }, 20_000);
+
+  it("refuses a write tool the profile leaves out, and runs it under a profile that has it", async () => {
+    const repo = tmpFixtureCopy("ci-profile-write-");
+    const original = readFileSync(join(repo, "src/client.ts"), "utf8");
+    const calls = [
+      { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+      { method: "notifications/initialized" },
+      { id: 2, method: "tools/call", params: { name: "write_memory", arguments: { repo, name: "note", content: "kept" } } },
+      { id: 3, method: "tools/call", params: { name: "insert_after_symbol", arguments: { repo, namePath: "HttpClient", body: "export const added = 1;" } } },
+      { id: 4, method: "tools/call", params: { name: "delete_memory", arguments: { repo, name: "note" } } },
+    ];
+    const readOnly = await mcpSession(calls, undefined, [CLI, "mcp", "--tools", "find,impact"]);
+    for (const id of [2, 3, 4]) {
+      expect(readOnly.get(id)!.result!.isError, `call ${id}`).toBe(true);
+      expect(readOnly.get(id)!.result!.content![0]!.text, `call ${id}`).toMatch(/writes, and this server's tool profile \(find,impact\) leaves it out/);
+    }
+    expect(readFileSync(join(repo, "src/client.ts"), "utf8")).toBe(original);
+    expect(existsSync(join(repo, ".codeindex", "memories", "note.md"))).toBe(false);
+
+    const writing = await mcpSession(calls.slice(0, 4), undefined, [CLI, "mcp", "--tools", "find,edit,memory"]);
+    expect(writing.get(2)!.result!.isError).toBeUndefined();
+    expect(writing.get(3)!.result!.isError).toBeUndefined();
+    expect(readFileSync(join(repo, "src/client.ts"), "utf8")).toContain("export const added = 1;");
+  }, 30_000);
 
   // Iterates the live catalogue, so a tool added later must be placed too.
   it("places every tool in at least one profile, and names only real tools", () => {

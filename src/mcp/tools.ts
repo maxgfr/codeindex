@@ -1082,7 +1082,7 @@ export function toolsFor(
             ...t.inputSchema.properties,
             repo: {
               type: "string",
-              description: `Absolute path to the repository root (optional — defaults to ${defaultRepo})`,
+              description: `Absolute path to the repository root (optional — this server is pinned to ${defaultRepo} and answers for no other)`,
             },
           },
           required: (t.inputSchema.required as readonly string[]).filter((r) => r !== "repo"),

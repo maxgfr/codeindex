@@ -52,7 +52,7 @@ import { explainSemantic } from "./embed/search.js";
 import { resolveEmbedEndpoint, buildEndpointIndex, encodeQueryViaEndpoint, probeEndpoint } from "./embed/endpoint.js";
 import { walk, type WalkResult } from "./walk.js";
 import { watchRepo, type RepoWatch } from "./mcp/watch.js";
-import { toolsFor, OUTPUT_SCHEMAS, profileNames } from "./mcp/tools.js";
+import { toolsFor, OUTPUT_SCHEMAS, TOOL_META, profileNames, toolsInProfiles } from "./mcp/tools.js";
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
   PROGRESS_MESSAGE_SINCE,
@@ -206,9 +206,18 @@ const SCANLESS_TOOLS = new Set([
   "index_status",
 ]);
 
+// Whether two paths are the same directory once symlinks are followed.
+function sameDirectory(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
 // The repository a call is about, in its ONE canonical spelling.
 //
-// An explicit per-call `repo` always wins; `defaultRepo` is the server-level
+// `defaultRepo` is the server-level
 // pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
 // to one workspace, so agents need not know — or restate — the absolute path.
 //
@@ -217,10 +226,24 @@ const SCANLESS_TOOLS = new Set([
 // 5k-file repo) filling all four LRU slots with one repository. resolve() is
 // the same normalization the CLI gives `--repo`; symlinks are deliberately
 // NOT followed, since the root's own name is what onboard reports.
+//
+// A pin is a BOUNDARY: a pinned server answers for that repository and no
+// other. A per-call `repo` used to override it for every tool, the three
+// symbol edits and the memory writes included, so the directory a host bound
+// its server to said nothing about where an agent could read or write. The
+// pinned repository may still be named, under any spelling of its path.
 function repoRoot(args: Record<string, unknown>, defaultRepo?: string): string {
   const requested = str(args.repo) ?? defaultRepo;
   if (!requested) throw new Error("`repo` is required (absolute path to the repository root)");
   const repo = resolve(requested);
+  if (defaultRepo !== undefined && repo !== defaultRepo) {
+    if (!sameDirectory(repo, defaultRepo)) {
+      throw new Error(`this server is pinned to ${defaultRepo}: \`repo\` must name that repository or be left out (got ${requested})`);
+    }
+    // Another spelling of the pin (a symlink to it): the pin's own path is the
+    // one the session cache, the watcher and the answers are keyed on.
+    return defaultRepo;
+  }
   try {
     if (!statSync(repo).isDirectory()) throw new Error("not a directory");
   } catch {
@@ -824,9 +847,8 @@ export interface McpServerOptions {
   // Let a repository's own .codeindex/lsp.json name the language servers the
   // `lsp: true` calls spawn (`codeindex mcp --trust-lsp-config`). Off by
   // default: that file is a command line the repository runs (src/lsp/config.ts).
-  // On a server pinned with `defaultRepo`, the consent covers THAT repository
-  // only: a call naming another `repo` reads the user's own config, as if the
-  // flag were absent.
+  // The consent is for the repository the server is pinned to: without
+  // `defaultRepo` it has no effect (the CLI refuses the flag without --repo).
   trustLspConfig?: boolean;
 }
 
@@ -846,6 +868,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   // name the same session entries the calls do.
   const defaultRepo = opts.defaultRepo === undefined ? undefined : resolve(opts.defaultRepo);
   let tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
+  const profileTools = opts.profile ? toolsInProfiles(opts.profile) : undefined;
   // What a call is validated against: EVERY tool, whatever the profile. A
   // profile trims what is advertised, not what is answerable, so a tool called
   // by name from outside it must be checked like any other — looking it up in
@@ -966,7 +989,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
             protocolVersion,
             capabilities: { tools: {} },
             serverInfo,
-            instructions: `Available tool profiles: ${profileNames().join(", ")}. Active profile: ${opts.profile ?? "all"}. Configure profiles with --tools <profile[,profile]>. Profiles select advertised tools; known tools remain callable.`,
+            instructions: `Available tool profiles: ${profileNames().join(", ")}. Active profile: ${opts.profile ?? "all"}. Configure profiles with --tools <profile[,profile]>. Profiles select advertised tools; a read tool left out stays callable by name, a write tool does not.`,
           },
         });
       } else if (req.method === "ping") {
@@ -1050,12 +1073,21 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     progress?: (message: string) => void,
   ): Promise<Record<string, unknown>> {
     try {
+      // A profile that leaves the write tools out is a promise that this
+      // server writes nothing. Read tools left out stay answerable by name
+      // (the profile only saves the context their schemas cost); a write tool
+      // called by name used to run all the same.
+      if (profileTools && TOOL_META[name]?.write === true && !profileTools.has(name)) {
+        throw new Error(
+          `\`${name}\` writes, and this server's tool profile (${opts.profile}) leaves it out: start the server with a profile that includes it (--tools edit, memory or all)`,
+        );
+      }
       const repo = repoRoot(args, defaultRepo);
       // The operator trusted the repository they pinned, not every directory a
       // client can name: `find_references {repo: "/tmp/x", lsp: true}` ran the
-      // command line /tmp/x/.codeindex/lsp.json held. An unpinned server has
-      // no other repository to mean, so there the flag still covers each call.
-      const trustRepoConfig = opts.trustLspConfig === true && (defaultRepo === undefined || repo === defaultRepo);
+      // command line /tmp/x/.codeindex/lsp.json held. So the consent only
+      // exists on a pinned server, where `repo` is the pin.
+      const trustRepoConfig = opts.trustLspConfig === true && defaultRepo !== undefined;
       const raw = await callTool(name, args, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig });
       // Narrowed or projected, the answer is not what a whole-repo artifact
       // holds, so the size guard must not point at one.

@@ -125,28 +125,40 @@ describe("--trust-lsp-config on the CLI and the MCP server", () => {
     });
     const replies = new Map<number, { result: { content: { text: string }[] } }>();
     for (const line of run.stdout.split("\n")) if (line.trim()) replies.set(JSON.parse(line).id, JSON.parse(line));
-    return repos.map((_, i) => JSON.parse(replies.get(i + 1)!.result.content[0]!.text) as { source: string; ignoredConfig?: { path: string } });
+    return repos.map((_, i) => {
+      const result = replies.get(i + 1)!.result as { content: { text: string }[]; isError?: boolean };
+      // A refused call answers prose, not a status.
+      if (result.isError) return { refused: result.content[0]!.text } as { source?: string; refused?: string; ignoredConfig?: { path: string } };
+      return JSON.parse(result.content[0]!.text) as { source?: string; refused?: string; ignoredConfig?: { path: string } };
+    });
   };
 
-  it("on a pinned mcp server, the flag trusts the pinned repository only", () => {
+  it("on a pinned mcp server, the flag trusts the pinned repository, and no other can be named", () => {
     const pinned = hostileRepo();
     const other = hostileRepo();
     const [own, named] = mcpStatuses(["--repo", pinned.repo, "--trust-lsp-config"], [undefined, other.repo]);
     expect(own).toMatchObject({ source: "repo" });
-    // The repository a call names was not the one the operator trusted: its
-    // config is reported as ignored, and its command never ran.
-    expect(named).toMatchObject({ source: "none", ignoredConfig: { path: other.config } });
+    // The repository a call names is not the one the operator trusted, nor one
+    // this server answers for: the call is refused and its command never ran.
+    expect(named).toMatchObject({ refused: expect.stringMatching(/this server is pinned to/) });
     expect(existsSync(other.marker)).toBe(false);
   });
 
-  it("an unpinned mcp server has no repository to mean: the flag covers each call", () => {
-    const { repo } = hostileRepo();
-    expect(mcpStatuses(["--trust-lsp-config"], [repo])[0]).toMatchObject({ source: "repo" });
-    expect(mcpStatuses([], [repo])[0]).toMatchObject({ source: "none" });
+  it("an unpinned mcp server never reads a repository's lsp.json on the flag's say-so", () => {
+    const { repo, config, marker } = hostileRepo();
+    // The flag names no repository there, so it is refused at startup…
+    const refused = spawnSync(process.execPath, [CLI, "mcp", "--trust-lsp-config"], { encoding: "utf8", input: "", cwd: home });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toMatch(/--trust-lsp-config requires --repo <dir>/);
+    // …and without it the repository's config is only reported as ignored.
+    expect(mcpStatuses([], [repo])[0]).toMatchObject({ source: "none", ignoredConfig: { path: config } });
+    expect(existsSync(marker)).toBe(false);
   });
 
-  it("codeindex mcp accepts --trust-lsp-config", () => {
-    expect(parseMcpFlags(["--trust-lsp-config"])).toMatchObject({ trustLspConfig: true });
+  it("codeindex mcp accepts --trust-lsp-config with --repo only", () => {
+    const { repo } = hostileRepo();
+    expect(parseMcpFlags(["--repo", repo, "--trust-lsp-config"])).toMatchObject({ trustLspConfig: true, defaultRepo: repo });
+    expect(() => parseMcpFlags(["--trust-lsp-config"])).toThrow(/--trust-lsp-config requires --repo <dir>/);
     expect(parseMcpFlags([]).trustLspConfig).toBeUndefined();
   });
 });

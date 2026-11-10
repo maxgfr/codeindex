@@ -22831,7 +22831,7 @@ function toolsFor(defaultRepo, protocolVersion = PROTOCOL_VERSIONS[0], profile) 
         ...t.inputSchema.properties,
         repo: {
           type: "string",
-          description: `Absolute path to the repository root (optional \u2014 defaults to ${defaultRepo})`
+          description: `Absolute path to the repository root (optional \u2014 this server is pinned to ${defaultRepo} and answers for no other)`
         }
       },
       required: t.inputSchema.required.filter((r) => r !== "repo")
@@ -23813,10 +23813,23 @@ function indexedFile(scan2, repo, file) {
     `file not in the index: ${file}` + (near.length ? ` \u2014 did you mean ${near.join(", ")}?` : " (paths are repo-relative, as symbols_overview and find_symbol report them)")
   );
 }
+function sameDirectory(a, b) {
+  try {
+    return realpathSync7(a) === realpathSync7(b);
+  } catch {
+    return false;
+  }
+}
 function repoRoot(args2, defaultRepo) {
   const requested = str(args2.repo) ?? defaultRepo;
   if (!requested) throw new Error("`repo` is required (absolute path to the repository root)");
   const repo = resolve10(requested);
+  if (defaultRepo !== void 0 && repo !== defaultRepo) {
+    if (!sameDirectory(repo, defaultRepo)) {
+      throw new Error(`this server is pinned to ${defaultRepo}: \`repo\` must name that repository or be left out (got ${requested})`);
+    }
+    return defaultRepo;
+  }
   try {
     if (!statSync12(repo).isDirectory()) throw new Error("not a directory");
   } catch {
@@ -24284,6 +24297,7 @@ async function runMcpServer(opts = {}) {
   let protocolVersion = PROTOCOL_VERSIONS[0];
   const defaultRepo = opts.defaultRepo === void 0 ? void 0 : resolve10(opts.defaultRepo);
   let tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
+  const profileTools = opts.profile ? toolsInProfiles(opts.profile) : void 0;
   const callable = new Map(
     toolsFor(defaultRepo).map((t) => [
       t.name,
@@ -24360,7 +24374,7 @@ async function runMcpServer(opts = {}) {
             protocolVersion,
             capabilities: { tools: {} },
             serverInfo,
-            instructions: `Available tool profiles: ${profileNames().join(", ")}. Active profile: ${opts.profile ?? "all"}. Configure profiles with --tools <profile[,profile]>. Profiles select advertised tools; known tools remain callable.`
+            instructions: `Available tool profiles: ${profileNames().join(", ")}. Active profile: ${opts.profile ?? "all"}. Configure profiles with --tools <profile[,profile]>. Profiles select advertised tools; a read tool left out stays callable by name, a write tool does not.`
           }
         });
       } else if (req.method === "ping") {
@@ -24419,8 +24433,13 @@ async function runMcpServer(opts = {}) {
   }
   async function callResult(name2, args2, version, progress) {
     try {
+      if (profileTools && TOOL_META[name2]?.write === true && !profileTools.has(name2)) {
+        throw new Error(
+          `\`${name2}\` writes, and this server's tool profile (${opts.profile}) leaves it out: start the server with a profile that includes it (--tools edit, memory or all)`
+        );
+      }
       const repo = repoRoot(args2, defaultRepo);
-      const trustRepoConfig = opts.trustLspConfig === true && (defaultRepo === void 0 || repo === defaultRepo);
+      const trustRepoConfig = opts.trustLspConfig === true && defaultRepo !== void 0;
       const raw = await callTool(name2, args2, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig });
       const narrowed = str(args2.scope) !== void 0 || strArray(args2.include) !== void 0 || strArray(args2.exclude) !== void 0 || str(args2.name) !== void 0 || args2.concise === true;
       const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
@@ -26611,8 +26630,8 @@ Commands:
               symbolic-edit writes, checked before writing: a line argument
               picks a same-file homonym and strict refuses an edit that
               changes structure outside its lines). Flags: --repo <dir> pins ONE
-              repository so the per-tool repo argument becomes optional (an
-              explicit per-call repo still wins); --server-name <name> overrides
+              repository: the per-tool repo argument becomes optional, and a
+              call that names another repository is refused; --server-name <name> overrides
               the announced serverInfo; --max-response-bytes <n> caps a single
               tool response (default 1e6; a response under the cap is
               byte-identical, one over it is replaced by an actionable notice,
@@ -26620,13 +26639,13 @@ Commands:
               --tools <profile[,profile]>
               advertises a named subset (all | orient | find | impact | edit |
               risk | memory, default all) \u2014 every advertised tool's schema costs an agent
-              context on EVERY turn, and a tool left out is still answerable
-              when called by name; --watch watches the pinned repo so a call
+              context on EVERY turn; a read tool left out is still answerable
+              when called by name, a write tool left out is refused; --watch watches the pinned repo so a call
               skips the whole-tree walk when nothing changed since the last one
               (Linux; elsewhere it only invalidates eagerly);
-              --trust-lsp-config lets a repo's .codeindex/lsp.json name the
-              servers \`lsp: true\` calls spawn (with --repo: the pinned
-              repository's only, not one a call names)
+              --trust-lsp-config lets the pinned repository's
+              .codeindex/lsp.json name the servers \`lsp: true\` calls spawn
+              (requires --repo)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and
@@ -27152,6 +27171,7 @@ function parseMcpFlags(argv) {
   if (defaultRepo && !existsSync13(defaultRepo)) throw new Error(`--repo path does not exist: ${defaultRepo}`);
   if (defaultRepo && !statSync13(defaultRepo).isDirectory()) throw new Error(`--repo path is not a directory: ${defaultRepo}`);
   if (watch && !defaultRepo) throw new Error("--watch requires --repo <dir>");
+  if (trustLspConfig && !defaultRepo) throw new Error("--trust-lsp-config requires --repo <dir>: it trusts the pinned repository's lsp.json, not any repository a call names");
   return { defaultRepo, serverInfo: name2 ? { name: name2 } : void 0, maxResponseBytes, profile, watch, ...trustLspConfig ? { trustLspConfig } : {} };
 }
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
