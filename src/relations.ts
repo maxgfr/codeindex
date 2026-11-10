@@ -24,6 +24,7 @@ import { createBindScope } from "./bind.js";
 import { byStr } from "./sort.js";
 import { refMatches, symbolRefReadings } from "./symref.js";
 import { readText } from "./walk.js";
+import { dirOf } from "./util.js";
 
 // Internal Map-key separator. Written as an ESCAPE, never as a literal NUL: a
 // literal one makes git, grep and file(1) treat this source as binary, and makes
@@ -333,7 +334,6 @@ function goParamCount(signature: string, name: string): number | undefined {
  * inside its own package. Sorted.
  */
 export function goImplementations(scan: RepoScan): GoImplementation[] {
-  const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
   const types = new Map<string, CodeSymbol>(); // `${dir}\0${name}` → the type declaration
   const typesByName = new Map<string, CodeSymbol[]>();
   const methods = new Map<string, Map<string, number | undefined>>(); // `${dir}\0${type}` → method → arity

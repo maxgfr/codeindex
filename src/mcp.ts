@@ -78,6 +78,7 @@ import {
   warmGrammarsForWalk,
   type SessionScanOptions,
 } from "./mcp/session.js";
+import { errMessage } from "./util.js";
 
 // The public surface of this module is unchanged: everything that used to live
 // here is re-exported, so `src/engine.ts`, the tests and any consumer importing
@@ -152,9 +153,6 @@ function wholeNum(v: unknown, key: string): number | undefined {
 function positiveNum(v: unknown): number | undefined {
   const n = num(v);
   return n !== undefined && n > 0 ? n : undefined;
-}
-function errMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 // A `file` argument, as the index spells it: repo-relative, `/`-separated.

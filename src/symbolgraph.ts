@@ -20,6 +20,7 @@ import { goImplementations, resolveRelations } from "./relations.js";
 import { byStr } from "./sort.js";
 import { shortestPaths, type PathHop } from "./paths.js";
 import { symbolRefReadings } from "./symref.js";
+import { dirOf } from "./util.js";
 
 // Internal Map-key separator. Written as an ESCAPE, never as a literal NUL: a
 // literal one makes git, grep and file(1) treat this source as binary, and makes
@@ -203,7 +204,6 @@ const METHOD_KINDS = new Set(["method", "function", "def", "getter", "setter", "
  */
 export function overridePairs(scan: RepoScan, relations: readonly TypeRelation[]): { sub: CodeSymbol; sup: CodeSymbol }[] {
   const langOf = new Map(scan.files.map((f) => [f.rel, f.lang]));
-  const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
   const typeKey = (name: string, file: string): string =>
     familyOf(langOf.get(file) ?? "") === "go" ? `go${SEP}${dirOf(file)}${SEP}${name}` : `${file}${SEP}${name}`;
 

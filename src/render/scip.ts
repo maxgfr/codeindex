@@ -24,6 +24,7 @@ import { createCallBinder } from "../bind.js";
 import { importPairsFor } from "../derived.js";
 import { resolveRelations } from "../relations.js";
 import { manifestCoordinates } from "../workspaces.js";
+import { dirOf } from "../util.js";
 
 export interface RenderScipOptions {
   // URI-encoded absolute path to the index root (SCIP `Metadata.project_root`).
@@ -393,8 +394,6 @@ interface DocDefs {
 }
 
 const endOf = (d: Def): number => d.sym.endLine ?? d.sym.line;
-
-const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 
 // The directory a Go file's package lives in, plus the package clause: files of
 // one directory normally share a package, but `foo_test` is a distinct one.

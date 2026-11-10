@@ -6,6 +6,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { INDEX_DIR } from "../preload.js";
+import { shellQuote } from "../util.js";
 
 // --- protocol versions -------------------------------------------------------
 // The server announced "2024-11-05" hard-coded and never even read the version
@@ -210,10 +211,6 @@ function artifactState(path: string, text: string, bytes: number): "identical" |
 // `wholeRepo` is false for a request the artifact cannot answer however
 // fresh it is — a `scope`d graph, one symbol's entry, a concise projection —
 // and then no artifact is mentioned at all.
-// A path as one shell word.
-function shellArg(s: string): string {
-  return /^[A-Za-z0-9_\-./=@:]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'";
-}
 
 // What wraps a result on the wire (`{"jsonrpc":"2.0","id":…,"result":…}`):
 // an allowance, so the cap holds for any id a client picks.
@@ -230,7 +227,7 @@ export function capResponse(text: string, tool: string, repo: string, maxBytes: 
   const state = artifact ? artifactState(artifact, text, textBytes) : undefined;
   // Quoted: a repository path with a space made the suggested command a
   // broken one.
-  const refresh = `codeindex index --repo ${shellArg(repo)} --out ${shellArg(join(repo, INDEX_DIR))}`;
+  const refresh = `codeindex index --repo ${shellQuote(repo)} --out ${shellQuote(join(repo, INDEX_DIR))}`;
   return (
     JSON.stringify(
       {

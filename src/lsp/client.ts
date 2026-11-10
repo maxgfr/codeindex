@@ -13,7 +13,7 @@
 // didChange. Anything richer belongs in an editor, not in an indexer.
 
 import { createFramer, encodeMessage, fileUri, locationsToRefs, incomingCallsToSites, uniqueIncomingCalls, type LspMessage, type LspRef, type LspIncomingCall } from "./protocol.js";
-import { clampTimerMs } from "../util.js";
+import { clampTimerMs, errMessage } from "../util.js";
 
 export interface LspTransport {
   write(chunk: string): void;
@@ -77,7 +77,7 @@ export class LspTimeout extends Error {
 /** Earlier prepared items remain usable evidence when a later request fails. */
 export class LspIncomingCallsError extends Error {
   constructor(error: unknown, readonly calls: LspIncomingCall[]) {
-    super(error instanceof Error ? error.message : String(error), { cause: error });
+    super(errMessage(error), { cause: error });
     this.name = "LspIncomingCallsError";
   }
 }

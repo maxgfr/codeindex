@@ -8,7 +8,7 @@
 
 import type { RepoScan } from "../scan.js";
 import { findSymbol, type SymbolReferences } from "../query.js";
-import { have } from "../util.js";
+import { errMessage, have } from "../util.js";
 import type { LspCapabilities } from "./client.js";
 import {
   LSP_TRUST_HINT,
@@ -137,7 +137,7 @@ export async function referencesWithLsp(
   } catch (e) {
     // A malformed config is worth saying out loud, but not worth failing a read
     // command over: the static answer is still correct and complete.
-    return { ...statik, lsp: lspUnavailable("(config)", e instanceof Error ? e.message : String(e)) };
+    return { ...statik, lsp: lspUnavailable("(config)", errMessage(e)) };
   }
   if (!config) {
     // A repo config that was there but not trusted is named: the caller asked
@@ -206,7 +206,7 @@ export async function callersWithLsp<T extends object>(
   try {
     config = loadLspConfig(repo, options);
   } catch (error) {
-    return { ...statik, lsp: callersUnavailable("(config)", error instanceof Error ? error.message : String(error)) };
+    return { ...statik, lsp: callersUnavailable("(config)", errMessage(error)) };
   }
   if (!config) {
     const ignored = resolveLspConfigPath(repo, options).ignored;

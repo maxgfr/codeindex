@@ -22,7 +22,7 @@
 // which servers use to exit when their parent is SIGKILLed.
 
 import { realpathSync } from "node:fs";
-import { clampTimerMs, have } from "../util.js";
+import { clampTimerMs, errMessage, have } from "../util.js";
 import { sha1 } from "../hash.js";
 import type { RepoScan } from "../scan.js";
 import { openLspSession, withServerError, type LspSession, type LspTransport } from "./client.js";
@@ -62,7 +62,7 @@ export async function openServer(server: LspServerConfig, root: string): Promise
   } catch (e) {
     transport.close();
     // An `initialize` timeout says nothing about why; the server's stderr may.
-    return { ok: false, reason: withServerError(e instanceof Error ? e.message : String(e), transport) };
+    return { ok: false, reason: withServerError(errMessage(e), transport) };
   }
 }
 

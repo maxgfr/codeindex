@@ -43,6 +43,7 @@ import { isTestPath } from "./tests-map.js";
 import { readText } from "./walk.js";
 import { byStr } from "./sort.js";
 import { codeOnly } from "./complexity.js";
+import { dirOf } from "./util.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -66,7 +67,6 @@ const ENTRY_BASENAME = /(^|\/)(index|main|cli|mod|lib|__main__)\.[a-z]+$/;
 const IDENT_VISIBLE = /^[A-Za-z_]\w{4,}$/;
 
 const SEP = "\u0000";
-const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 
 // One file to walk from, and the names wanted of it (undefined: every export).
 type Step = { rel: string; names?: ReadonlySet<string> };

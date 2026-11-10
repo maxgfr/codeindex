@@ -42,6 +42,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IGNORE_DIRS, walk, type WalkResult } from "../walk.js";
 import { sessionInvalidate } from "./session.js";
+import { errMessage } from "../util.js";
 
 export interface RepoWatch {
   // The repository's walk: the last one (`reused`) when the watcher proves
@@ -82,7 +83,7 @@ function hintWatch(repo: string, warn: (message: string) => void): RepoWatch {
       sessionInvalidate(repo);
     });
   } catch (error) {
-    warn(`MCP watcher unavailable (${error instanceof Error ? error.message : String(error)}); using freshness scans`);
+    warn(`MCP watcher unavailable (${errMessage(error)}); using freshness scans`);
   }
   return {
     walk: async () => ({ walked: walk(repo, {}), reused: false }),
@@ -172,7 +173,7 @@ class DirWatch implements RepoWatch {
       if (dir) rmSync(dir, { recursive: true, force: true });
       // Without a barrier nothing can be proven: the directory watches would
       // be pure cost.
-      this.disable(error instanceof Error ? error.message : String(error));
+      this.disable(errMessage(error));
       return null;
     }
   }
@@ -226,7 +227,7 @@ class DirWatch implements RepoWatch {
       // Gone or unreadable since its parent was listed: the parent's watch
       // saw that change, and the walk skips an unreadable directory anyway.
       if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES") return;
-      this.disable(error instanceof Error ? error.message : String(error));
+      this.disable(errMessage(error));
     }
   }
 

@@ -21,6 +21,7 @@ import { rankHotspots } from "./coupling.js";
 import { gitChurn } from "./git.js";
 import { writeMemory } from "./memory.js";
 import { byStr } from "./sort.js";
+import { errMessage } from "./util.js";
 
 export interface OnboardOptions {
   /** Token budget for the repo-map section (default 900). */
@@ -185,7 +186,7 @@ export function onboardBrief(scan: RepoScan, graph: Graph, opts: OnboardOptions 
   try {
     writeMemory(scan.root, memoryName, brief);
   } catch (e) {
-    return { brief, memoryError: `not saved as the ${memoryName} memory: ${e instanceof Error ? e.message : String(e)}` };
+    return { brief, memoryError: `not saved as the ${memoryName} memory: ${errMessage(e)}` };
   }
   return { brief, memory: memoryName };
 }

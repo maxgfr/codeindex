@@ -29,7 +29,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { clampTimerMs } from "../util.js";
+import { clampTimerMs, errMessage } from "../util.js";
 
 export interface LspServerConfig {
   /** Stable id, used in `source` labels and in `lsp status`. */
@@ -180,7 +180,7 @@ export function loadLspConfig(repo: string, trust: LspTrust = {}): LspConfig | u
   try {
     payload = JSON.parse(readFileSync(path, "utf8"));
   } catch (e) {
-    throw new Error(`${path}: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`${path}: ${errMessage(e)}`);
   }
   return parseLspConfig(payload);
 }

@@ -31,7 +31,7 @@ import { resolveContextFor } from "./derived.js";
 import { tierForPath } from "./modules.js";
 import { isTestCaseFile, isTestPath } from "./tests-map.js";
 import { byStr } from "./sort.js";
-import { escapeRegExp } from "./util.js";
+import { dirOf, escapeRegExp } from "./util.js";
 
 const REFERENCE_KINDS = new Set(["reexport", "reexport-all", "default"]);
 
@@ -116,7 +116,6 @@ interface FileAliases {
 }
 const NO_ALIASES: FileAliases = { modules: new Map(), names: new Map() };
 
-const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 const isGoTest = (rel: string): boolean => rel.endsWith("_test.go");
 
 // A Go import path's package name when the package is not in the repo: its

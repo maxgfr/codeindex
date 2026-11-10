@@ -28,6 +28,7 @@ import type { RepoScan } from "./scan.js";
 import { compileGlobs } from "./glob.js";
 import { findLiteralDuplications } from "./literals.js";
 import { byStr } from "./sort.js";
+import { dirOf, errMessage } from "./util.js";
 
 export type RuleSeverity = "error" | "warn";
 
@@ -132,8 +133,6 @@ const ENTRYPOINT_STEMS = new Set([
 // package — so file-level emptiness says nothing about such a file.
 const PACKAGE_DIR_LANGS = new Set(["go", "java", "kotlin", "scala"]);
 
-const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
-
 function findOrphans(graph: Graph): string[] {
   // Languages some resolved code edge (import, call, use, inheritance)
   // reaches, at either end. A language nothing can import (SQL, shell, a lone
@@ -195,7 +194,7 @@ export function parseRulesText(text: string, source: string): ArchRule[] {
   try {
     return parseRules(payload);
   } catch (e) {
-    throw new Error(`rules config ${source}: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`rules config ${source}: ${errMessage(e)}`);
   }
 }
 

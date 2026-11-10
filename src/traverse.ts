@@ -9,6 +9,7 @@
 import type { Edge, EdgeKind, Graph } from "./types.js";
 import { byStr } from "./sort.js";
 import { shortestPaths } from "./paths.js";
+import { dirOf } from "./util.js";
 
 // Only these edge kinds carry a real "depends on" relation. A doc-link or a
 // mention says something references the name, not that it would break. A
@@ -154,7 +155,6 @@ export interface ClosureOptions {
   goPackages?: boolean;
 }
 
-const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 const isGoSource = (rel: string): boolean => rel.endsWith(".go") && !rel.endsWith("_test.go");
 
 // Reverse dependency closure: every file that transitively IMPORTS, USES, or

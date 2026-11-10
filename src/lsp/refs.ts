@@ -20,6 +20,7 @@ import type { SymbolReferences } from "../query.js";
 import { byStr } from "../sort.js";
 import type { LspSession } from "./client.js";
 import type { LspRef } from "./protocol.js";
+import { errMessage } from "../util.js";
 
 export interface LspAgreement {
   /** Files both tiers report — corroborated by two independent methods. */
@@ -220,7 +221,7 @@ export async function annotateWithLsp(
       lsp: {
         server: serverId,
         ok: false,
-        reason: e instanceof Error ? e.message : String(e),
+        reason: errMessage(e),
         refs: refs.sort(refOrder),
         agreement: agreementOf(refs, statik),
       },

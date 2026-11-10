@@ -28,7 +28,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { compilePattern } from "./grep.js";
-import { escapeRegExp } from "./util.js";
+import { escapeRegExp, shellQuote } from "./util.js";
 
 // Split on whitespace the way a POSIX shell would, or return undefined the
 // moment the line holds anything the shell would expand or interpret. Single
@@ -97,13 +97,7 @@ export function tokenize(line: string): string[] | undefined {
   return lex(line)?.map((t) => t.value);
 }
 
-// Wrap a token so the shell reproduces it verbatim. Single-quoting is total
-// (no escapes are interpreted inside), so the only case needing care is a
-// literal single quote, spliced via the standard '\'' idiom.
-export function shellQuote(s: string): string {
-  if (s !== "" && !/[^A-Za-z0-9_\-./=@:]/.test(s)) return s;
-  return "'" + s.replace(/'/g, `'\\''`) + "'";
-}
+export { shellQuote };
 
 type Dialect = "bre" | "ere" | "rust";
 

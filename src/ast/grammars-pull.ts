@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { dirname, join, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { ENGINE_VERSION } from "../types.js";
+import { errMessage } from "../util.js";
 
 // The slim grammars-pull tier (v2.14.0). The tree-sitter wasm sidecar
 // (scripts/grammars/, ~22 MB) is OPTIONAL and opt-in by presence, exactly like
@@ -274,8 +275,8 @@ export function installGrammarCacheAtomically(
     if (rollbackErrors.length > 0) {
       const rollbackError = rollbackErrors[0];
       throw new Error(
-        `${error instanceof Error ? error.message : String(error)}; rollback failed: ${
-          rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+        `${errMessage(error)}; rollback failed: ${
+          errMessage(rollbackError)
         } (backup preserved at ${swapDir})`,
       );
     }
@@ -325,7 +326,7 @@ export async function pullGrammars(
         ok: false,
         status: "failed",
         cacheDir,
-        message: `codeindex: pull failed — could not fetch the checksum, and the archive is not installed unverified: ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
+        message: `codeindex: pull failed — could not fetch the checksum, and the archive is not installed unverified: ${errMessage(e)} (nothing written)\n`,
       };
     }
   }
@@ -354,7 +355,7 @@ export async function pullGrammars(
       ok: false,
       status: "failed",
       cacheDir,
-      message: `codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
+      message: `codeindex: pull failed — ${errMessage(e)} (nothing written)\n`,
     };
   }
   let tmp: string | undefined;
@@ -379,7 +380,7 @@ export async function pullGrammars(
       ok: false,
       status: "failed",
       cacheDir,
-      message: `codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`,
+      message: `codeindex: pull failed — ${errMessage(e)} (nothing written)\n`,
     };
   }
   return { ok: true, status: "pulled", cacheDir, message: `codeindex: grammars extracted → ${cacheDir}\n` };

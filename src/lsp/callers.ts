@@ -7,6 +7,7 @@ import { byStr } from "../sort.js";
 import { LspIncomingCallsError, type LspSession } from "./client.js";
 import { uniqueIncomingCalls, type LspIncomingCall } from "./protocol.js";
 import { columnOfSymbol, type LspAgreement } from "./refs.js";
+import { errMessage } from "../util.js";
 
 export interface LspCallersBlock {
   server: string;
@@ -57,6 +58,6 @@ export async function collectIncomingCalls(
     return { calls: uniqueIncomingCalls(calls) };
   } catch (error) {
     if (error instanceof LspIncomingCallsError) calls.push(...error.calls);
-    return { calls: uniqueIncomingCalls(calls), reason: error instanceof Error ? error.message : String(error) };
+    return { calls: uniqueIncomingCalls(calls), reason: errMessage(error) };
   }
 }

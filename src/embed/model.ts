@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { errMessage } from "../util.js";
 
 // The deterministic static-embedding tier (v2.10.0). A *static* embedding model
 // is a plain lookup table: token → row vector. Inference is tokenize → gather
@@ -135,7 +136,7 @@ export function loadEmbedModel(dir?: string): StaticEmbedModel | undefined {
     raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
   } catch (e) {
     // A bare SyntaxError names no file; say which asset is broken.
-    throw new Error(`embed model: ${path} is not valid JSON (${e instanceof Error ? e.message : String(e)})`);
+    throw new Error(`embed model: ${path} is not valid JSON (${errMessage(e)})`);
   }
   return parseEmbedModel(raw, path);
 }
@@ -160,7 +161,7 @@ export function tryLoadEmbedModel(dir: string | undefined, load: (dir: string) =
     const model = load(dir);
     return model ? { model } : {};
   } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: errMessage(e) };
   }
 }
 

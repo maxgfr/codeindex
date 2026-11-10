@@ -82,7 +82,7 @@ import {
   endpointModelId,
   probeEndpoint,
 } from "./embed/endpoint.js";
-import { have, sh } from "./util.js";
+import { errMessage, have, sh } from "./util.js";
 import { lspStatus, callersWithLsp, referencesWithLsp } from "./lsp/index.js";
 import { profileNames, toolsInProfiles } from "./mcp/tools.js";
 
@@ -1885,7 +1885,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         // Follows redirects (GitHub → CDN) and verifies sha256 for the default asset.
         body = await fetchEmbedModel(url, sha256);
       } catch (e) {
-        process.stderr.write(`codeindex: pull failed — ${e instanceof Error ? e.message : String(e)} (nothing written)\n`);
+        process.stderr.write(`codeindex: pull failed — ${errMessage(e)} (nothing written)\n`);
         process.exitCode = 1;
         return;
       }
@@ -1896,7 +1896,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
         parseEmbedModel(JSON.parse(body), url);
       } catch (e) {
         process.stderr.write(
-          `codeindex: pull failed — response is not a valid model.json (${e instanceof Error ? e.message : String(e)}) (nothing written)\n`,
+          `codeindex: pull failed — response is not a valid model.json (${errMessage(e)}) (nothing written)\n`,
         );
         process.exitCode = 1;
         return;

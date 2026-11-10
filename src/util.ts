@@ -112,6 +112,22 @@ export function clipInline(s: string, max: number): string {
 export const MAX_TIMER_MS = 2_147_483_647;
 export const clampTimerMs = (ms: number): number => Math.min(ms, MAX_TIMER_MS);
 
+// What went wrong, as text: an Error's message, anything else as a string.
+export function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+// Wrap a token so the shell reproduces it verbatim. Single-quoting is total
+// (no escapes are interpreted inside), so the only case needing care is a
+// literal single quote, spliced via the standard '\'' idiom.
+export function shellQuote(s: string): string {
+  if (s !== "" && !/[^A-Za-z0-9_\-./=@:]/.test(s)) return s;
+  return "'" + s.replace(/'/g, `'\\''`) + "'";
+}
+
+// The directory of a repo-relative posix path: "" for a file at the root.
+export const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+
 // Escape a string for safe inclusion as a literal inside a RegExp.
 export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

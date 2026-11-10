@@ -7,8 +7,7 @@ import { familyOf, importTargets, resolveCallEdges } from "./calls.js";
 import { resolveRelationEdges } from "./relations.js";
 import { docMentionsFor, publishImportPairs, uniqueDefsFor } from "./derived.js";
 import { byStr } from "./sort.js";
-
-const dirOf = (rel: string): string => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+import { dirOf } from "./util.js";
 
 // A symbol name distinctive enough to anchor a doc→code "mention" edge without
 // noise: long, and either mixed-case or snake_case (i.e. not a plain English
