@@ -24290,7 +24290,8 @@ async function runMcpServer(opts = {}) {
   async function callResult(name2, args2, version, progress) {
     try {
       const repo = repoRoot(args2, defaultRepo);
-      const raw = await callTool(name2, args2, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig: opts.trustLspConfig });
+      const trustRepoConfig = opts.trustLspConfig === true && (defaultRepo === void 0 || repo === defaultRepo);
+      const raw = await callTool(name2, args2, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig });
       const narrowed = str(args2.scope) !== void 0 || strArray(args2.include) !== void 0 || strArray(args2.exclude) !== void 0 || str(args2.name) !== void 0 || args2.concise === true;
       const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
       const assemble = (text2) => {
@@ -26492,7 +26493,8 @@ Commands:
               skips the whole-tree walk when nothing changed since the last one
               (Linux; elsewhere it only invalidates eagerly);
               --trust-lsp-config lets a repo's .codeindex/lsp.json name the
-              servers \`lsp: true\` calls spawn
+              servers \`lsp: true\` calls spawn (with --repo: the pinned
+              repository's only, not one a call names)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and

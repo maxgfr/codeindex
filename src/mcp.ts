@@ -827,6 +827,9 @@ export interface McpServerOptions {
   // Let a repository's own .codeindex/lsp.json name the language servers the
   // `lsp: true` calls spawn (`codeindex mcp --trust-lsp-config`). Off by
   // default: that file is a command line the repository runs (src/lsp/config.ts).
+  // On a server pinned with `defaultRepo`, the consent covers THAT repository
+  // only: a call naming another `repo` reads the user's own config, as if the
+  // flag were absent.
   trustLspConfig?: boolean;
 }
 
@@ -1051,7 +1054,12 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   ): Promise<Record<string, unknown>> {
     try {
       const repo = repoRoot(args, defaultRepo);
-      const raw = await callTool(name, args, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig: opts.trustLspConfig });
+      // The operator trusted the repository they pinned, not every directory a
+      // client can name: `find_references {repo: "/tmp/x", lsp: true}` ran the
+      // command line /tmp/x/.codeindex/lsp.json held. An unpinned server has
+      // no other repository to mean, so there the flag still covers each call.
+      const trustRepoConfig = opts.trustLspConfig === true && (defaultRepo === undefined || repo === defaultRepo);
+      const raw = await callTool(name, args, repo, progress, walkRepo, { pool: lspPool, trustRepoConfig });
       // Narrowed or projected, the answer is not what a whole-repo artifact
       // holds, so the size guard must not point at one.
       const narrowed =

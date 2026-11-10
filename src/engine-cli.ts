@@ -318,7 +318,8 @@ Commands:
               skips the whole-tree walk when nothing changed since the last one
               (Linux; elsewhere it only invalidates eagerly);
               --trust-lsp-config lets a repo's .codeindex/lsp.json name the
-              servers \`lsp: true\` calls spawn
+              servers \`lsp: true\` calls spawn (with --repo: the pinned
+              repository's only, not one a call names)
   version     Print the engine version
 
 Flags (accepted before OR after the subcommand: '--repo X scan' and

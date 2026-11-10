@@ -1295,7 +1295,10 @@ empty string, it disables the tier even when the repository has one.
 spawn, so `<repo>/.codeindex/lsp.json` is code that repository would run on
 your machine. It is read only with `--trust-lsp-config` (on `lsp status`,
 `callers --lsp`, `refs --lsp` and `codeindex mcp`) or
-`CODEINDEX_TRUST_LSP_CONFIG=1`. Without either, only the configs you put there
+`CODEINDEX_TRUST_LSP_CONFIG=1`. On `codeindex mcp --repo <dir>` the flag covers
+the pinned repository only: a call that names another `repo` does not get that
+repository's config read (the environment variable still trusts every one).
+Without either, only the configs you put there
 yourself count — `CODEINDEX_LSP_CONFIG`, then `~/.config/codeindex/lsp.json`
 (`$XDG_CONFIG_HOME/codeindex/lsp.json` when set) — and `lsp status` reports the
 repository's file as `ignoredConfig`, while an `lsp: true` query says why it
