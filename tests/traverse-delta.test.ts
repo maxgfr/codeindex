@@ -58,6 +58,36 @@ describe("reverseClosure", () => {
     expect([...got.keys()]).toEqual(["b.ts"]);
   });
 
+  it("Go: a package's importers depend on each of its files, at the depth the package is first reached", () => {
+    // An import names ONE file of the package (its representative); with
+    // goPackages every non-test file of that directory is reached by it.
+    const go = [
+      edge("svc/use.go", "core/a.go", "import"),
+      edge("cmd/main.go", "svc/use.go", "import"),
+      edge("core/c.go", "util/u.go", "import"),
+      edge("tool/t.go", "core/b.go", "use"), // a direct edge to one file only
+    ];
+    // Seeded on a file the import does not name: the package's importer follows.
+    expect([...reverseClosure(go, ["core/b.go"], Infinity, { goPackages: true })]).toEqual([
+      ["svc/use.go", 1],
+      ["tool/t.go", 1],
+      ["cmd/main.go", 2],
+    ]);
+    expect([...reverseClosure(go, ["core/b.go"])]).toEqual([["tool/t.go", 1]]);
+    // Every file of the package as a seed: each importer once, at depth 1.
+    expect([...reverseClosure(go, ["core/a.go", "core/b.go", "core/c.go"], Infinity, { goPackages: true })]).toEqual([
+      ["svc/use.go", 1],
+      ["tool/t.go", 1],
+      ["cmd/main.go", 2],
+    ]);
+    // Reached at depth 2 through util → core, the package is taken there.
+    expect([...reverseClosure(go, ["util/u.go"], Infinity, { goPackages: true })]).toEqual([
+      ["core/c.go", 1],
+      ["svc/use.go", 2],
+      ["cmd/main.go", 3],
+    ]);
+  });
+
   it("never revisits a seed, so a cycle terminates", () => {
     const cyclic = [edge("a.ts", "b.ts", "import"), edge("b.ts", "a.ts", "import")];
     expect(() => reverseClosure(cyclic, ["a.ts"])).not.toThrow();

@@ -13977,12 +13977,19 @@ function closureOver(index, seeds, depth = Infinity) {
   const { dependents, packageImports, goPackages } = index;
   const depthOf = /* @__PURE__ */ new Map();
   const seen = new Set(seeds);
+  const packagesTaken = /* @__PURE__ */ new Set();
   let frontier = [...seeds];
   for (let d = 1; d <= depth && frontier.length; d++) {
     const next = [];
     for (const node of frontier) {
       let incoming = dependents.get(node) ?? [];
-      if (goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf2(node)) ?? []);
+      if (goPackages && isGoSource(node)) {
+        const dir = dirOf2(node);
+        if (!packagesTaken.has(dir)) {
+          packagesTaken.add(dir);
+          incoming = incoming.concat(packageImports.get(dir) ?? []);
+        }
+      }
       for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);

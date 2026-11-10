@@ -202,13 +202,25 @@ export function closureOver(index: DependentsIndex, seeds: string[], depth = Inf
   const { dependents, packageImports, goPackages } = index;
   const depthOf = new Map<string, number>();
   const seen = new Set<string>(seeds);
+  // Go package directories whose importers the walk has already taken. The
+  // first file of a package to be visited marks every importer as seen, so the
+  // package's other files have none left to add — yet each of them used to
+  // concatenate and sort the full importer list again: 3 000 files of one
+  // package with 500 importers cost 80 ms per closure for what one pass gives.
+  const packagesTaken = new Set<string>();
   let frontier = [...seeds];
   for (let d = 1; d <= depth && frontier.length; d++) {
     const next: string[] = [];
     for (const node of frontier) {
       let incoming = dependents.get(node) ?? [];
       // A package's importers depend on each of its non-test files.
-      if (goPackages && isGoSource(node)) incoming = incoming.concat(packageImports.get(dirOf(node)) ?? []);
+      if (goPackages && isGoSource(node)) {
+        const dir = dirOf(node);
+        if (!packagesTaken.has(dir)) {
+          packagesTaken.add(dir);
+          incoming = incoming.concat(packageImports.get(dir) ?? []);
+        }
+      }
       for (const e of incoming.slice().sort((a, b) => byStr(a.from, b.from))) {
         if (seen.has(e.from)) continue;
         seen.add(e.from);
