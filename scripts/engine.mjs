@@ -26746,16 +26746,18 @@ function commandHelp(cmd) {
     return out3;
   };
   const at = lines.findIndex((l) => l.startsWith(`  ${cmd} `));
-  const spec = COMMAND_FLAGS[cmd];
+  const spec = Object.hasOwn(COMMAND_FLAGS, cmd) ? COMMAND_FLAGS[cmd] : void 0;
   const out2 = [`codeindex ${cmd}`, "", ...at === -1 ? [] : block(at)];
   const flagLines = (spec?.flags ?? []).flatMap((f) => {
     const i2 = lines.findIndex((l) => l.startsWith(`  ${f} `) || l === `  ${f}`);
     return i2 === -1 ? [] : block(i2);
   });
   if (flagLines.length) out2.push("", "Flags:", ...flagLines);
-  out2.push("", `Global flags: ${[...GLOBAL_FLAGS].join(", ")} (codeindex --help)`, "");
+  if (spec) out2.push("", `Global flags: ${[...GLOBAL_FLAGS].join(", ")} (codeindex --help)`);
+  out2.push("");
   return out2.join("\n");
 }
+var isHelpFlag = (arg) => arg === "--help" || arg === "-h";
 function parseFlags(args2) {
   const flags2 = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false, positionals: [], given: [] };
   for (let i2 = 0; i2 < args2.length; i2++) {
@@ -27074,6 +27076,10 @@ async function runCli(rawArgv) {
   }
   if (cmd === "rewrite") {
     const line2 = rawArgv.slice(rawArgv.indexOf("rewrite") + 1);
+    if (line2.length === 1 && isHelpFlag(line2[0])) {
+      process.stdout.write(commandHelp("rewrite"));
+      return;
+    }
     if (line2.length !== 1) {
       process.stderr.write("codeindex: rewrite takes the command line as ONE argument: codeindex rewrite '<command line>'\n");
       process.exitCode = 1;
@@ -27089,11 +27095,15 @@ async function runCli(rawArgv) {
     return;
   }
   if (cmd === "mcp") {
+    if (rest.some(isHelpFlag)) {
+      process.stdout.write(commandHelp("mcp"));
+      return;
+    }
     const { runMcpServer: runMcpServer2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
     await runMcpServer2(parseMcpFlags(rest));
     return;
   }
-  if (!(cmd in COMMAND_FLAGS)) {
+  if (!Object.hasOwn(COMMAND_FLAGS, cmd)) {
     const hint = closest(cmd, Object.keys(COMMAND_FLAGS));
     process.stderr.write(`unknown command: ${cmd}${hint ? ` (did you mean ${hint}?)` : ""}
 
@@ -27102,7 +27112,7 @@ ${HELP}`);
     return;
   }
   const dashDash = rest.indexOf("--");
-  if ((dashDash === -1 ? rest : rest.slice(0, dashDash)).some((a) => a === "--help" || a === "-h")) {
+  if ((dashDash === -1 ? rest : rest.slice(0, dashDash)).some(isHelpFlag)) {
     process.stdout.write(commandHelp(cmd));
     return;
   }

@@ -660,16 +660,21 @@ export function commandHelp(cmd: string): string {
     return out;
   };
   const at = lines.findIndex((l) => l.startsWith(`  ${cmd} `));
-  const spec = COMMAND_FLAGS[cmd];
+  // `mcp` and `rewrite` parse their own arguments and are not in COMMAND_FLAGS:
+  // their section of HELP names their flags, and the global ones do not apply.
+  const spec = Object.hasOwn(COMMAND_FLAGS, cmd) ? COMMAND_FLAGS[cmd] : undefined;
   const out = [`codeindex ${cmd}`, "", ...(at === -1 ? [] : block(at))];
   const flagLines = (spec?.flags ?? []).flatMap((f) => {
     const i = lines.findIndex((l) => l.startsWith(`  ${f} `) || l === `  ${f}`);
     return i === -1 ? [] : block(i);
   });
   if (flagLines.length) out.push("", "Flags:", ...flagLines);
-  out.push("", `Global flags: ${[...GLOBAL_FLAGS].join(", ")} (codeindex --help)`, "");
+  if (spec) out.push("", `Global flags: ${[...GLOBAL_FLAGS].join(", ")} (codeindex --help)`);
+  out.push("");
   return out.join("\n");
 }
+
+const isHelpFlag = (arg: string): boolean => arg === "--help" || arg === "-h";
 
 export function parseFlags(args: string[]): CliFlags {
   const flags: CliFlags = { repo: process.cwd(), include: [], exclude: [], gitignore: true, ignoreDirs: [], noAst: false, fuzzy: true, semantic: false, positionals: [], given: [] };
@@ -1115,6 +1120,12 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // words were joined into a DIFFERENT command (`rewrite grep -r 'foo bar'`
     // searched for foo in directory bar).
     const line = rawArgv.slice(rawArgv.indexOf("rewrite") + 1);
+    // `--help` alone is never a command line to rewrite: it exited 1 in
+    // silence, the "run the original" answer, for a user asking how this works.
+    if (line.length === 1 && isHelpFlag(line[0]!)) {
+      process.stdout.write(commandHelp("rewrite"));
+      return;
+    }
     if (line.length !== 1) {
       process.stderr.write("codeindex: rewrite takes the command line as ONE argument: codeindex rewrite '<command line>'\n");
       process.exitCode = 1;
@@ -1135,21 +1146,29 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     // semantics that mean nothing to a long-lived server, and every unknown
     // flag there is fatal. Pinning is OPT-IN — a bare `codeindex mcp` keeps
     // the historical contract where each tool call carries its own `repo`.
+    // Asked before the flags are parsed: parseMcpFlags refuses what it does not
+    // know, so `mcp --help` answered "unknown flag" and exited 2.
+    if (rest.some(isHelpFlag)) {
+      process.stdout.write(commandHelp("mcp"));
+      return;
+    }
     const { runMcpServer } = await import("./mcp.js");
     await runMcpServer(parseMcpFlags(rest));
     return;
   }
 
   // Known command first: a mistyped one used to walk the whole tree (and warm
-  // the grammars) before saying so.
-  if (!(cmd in COMMAND_FLAGS)) {
+  // the grammars) before saying so. An OWN key only: `in` also answered for
+  // what every object inherits, so `codeindex toString --help` printed an empty
+  // help page and exited 0, and `codeindex valueOf --limit 1` crashed.
+  if (!Object.hasOwn(COMMAND_FLAGS, cmd)) {
     const hint = closest(cmd, Object.keys(COMMAND_FLAGS));
     process.stderr.write(`unknown command: ${cmd}${hint ? ` (did you mean ${hint}?)` : ""}\n\n${HELP}`);
     process.exitCode = 2;
     return;
   }
   const dashDash = rest.indexOf("--");
-  if ((dashDash === -1 ? rest : rest.slice(0, dashDash)).some((a) => a === "--help" || a === "-h")) {
+  if ((dashDash === -1 ? rest : rest.slice(0, dashDash)).some(isHelpFlag)) {
     process.stdout.write(commandHelp(cmd));
     return;
   }

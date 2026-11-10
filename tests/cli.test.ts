@@ -61,6 +61,33 @@ describe("flags a command does not read", () => {
     expect(cli(["scan", "-h"]).out).toMatch(/^codeindex scan\n/);
   });
 
+  it("mcp and rewrite, which parse their own arguments, answer --help too", () => {
+    const mcp = cli(["mcp", "--help"]);
+    expect(mcp.status, mcp.err).toBe(0);
+    expect(mcp.out).toMatch(/^codeindex mcp\n/);
+    expect(mcp.out).toMatch(/--max-response-bytes <n>/);
+    expect(mcp.out).not.toMatch(/Global flags/);
+    expect(cli(["mcp", "--repo", REPO, "-h"]).out).toMatch(/^codeindex mcp\n/);
+    const rewrite = cli(["rewrite", "--help"]);
+    expect(rewrite.status, rewrite.err).toBe(0);
+    expect(rewrite.out).toMatch(/^codeindex rewrite\n/);
+    expect(rewrite.out).toMatch(/exits 1 when it has no opinion/);
+    // A command line is still ONE argument, and one that is not help is rewritten or declined.
+    expect(cli(["rewrite", "ls", "--help"]).status).toBe(1);
+  });
+
+  it("a name every object inherits is not a command", () => {
+    for (const name of ["toString", "valueOf", "constructor", "hasOwnProperty", "__proto__"]) {
+      const help = cli([name, "--help"]);
+      expect(help.status, name).toBe(2);
+      expect(help.err, name).toMatch(new RegExp(`^unknown command: ${name}`));
+      expect(help.out, name).toBe("");
+      const flag = cli([name, "--limit", "1", "--repo", "/nonexistent-path-for-sure"]);
+      expect(flag.status, name).toBe(2);
+      expect(flag.err, name).toMatch(new RegExp(`^unknown command: ${name}`));
+    }
+  });
+
   it("a leading --kinds takes its value (it is a value flag)", () => {
     const r = cli(["--kinds", "all", "deadcode", "--repo", REPO]);
     expect(r.status, r.err).toBe(0);
