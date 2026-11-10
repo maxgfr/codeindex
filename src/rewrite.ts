@@ -729,6 +729,12 @@ function hasUpperLiteral(p: string): boolean {
   return literal !== literal.toLowerCase();
 }
 
+// A numbered back-reference in a translated pattern: `\1`…`\9` that is not
+// itself escaped (`\\1` is a backslash, then the digit 1).
+function hasBackReference(js: string): boolean {
+  return /(?:^|[^\\])(?:\\\\)*\\[1-9]/.test(js);
+}
+
 // The one JS pattern the parsed command means, or undefined.
 function toPattern(p: Parsed): string | undefined {
   const parts: string[] = [];
@@ -738,6 +744,11 @@ function toPattern(p: Parsed): string | undefined {
     if (js === undefined) return undefined;
     parts.push(js);
   }
+  // Joined as alternatives, the patterns share ONE group numbering: the `\1`
+  // of a second `-e` then names a group of the first, which took no part in
+  // the match and so matches the empty string. `-e '\(a\)\1' -e '\(b\)\1'`
+  // became `(?:(a)\1)|(?:(b)\1)` and matched every `b`, not `bb`.
+  if (parts.length > 1 && parts.some(hasBackReference)) return undefined;
   let pattern = parts.length === 1 ? parts[0]! : parts.map((s) => `(?:${s})`).join("|");
   if (p.word) {
     // grep -w / rg -w: the match must not touch a word character on either

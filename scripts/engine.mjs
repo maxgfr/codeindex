@@ -24995,6 +24995,9 @@ function hasUpperLiteral(p) {
   const literal2 = p.replace(/\\[pP]\{[^}]*\}|\\[pP][A-Za-z]|\\./g, "");
   return literal2 !== literal2.toLowerCase();
 }
+function hasBackReference(js) {
+  return /(?:^|[^\\])(?:\\\\)*\\[1-9]/.test(js);
+}
 function toPattern(p) {
   const parts2 = [];
   for (const raw of p.patterns) {
@@ -25003,6 +25006,7 @@ function toPattern(p) {
     if (js === void 0) return void 0;
     parts2.push(js);
   }
+  if (parts2.length > 1 && parts2.some(hasBackReference)) return void 0;
   let pattern = parts2.length === 1 ? parts2[0] : parts2.map((s) => `(?:${s})`).join("|");
   if (p.word) {
     const literals = p.patterns.every((s) => (p.fixed || !/[\\^$.*+?()[\]{}|]/.test(s)) && /^\w(?:.*\w)?$/.test(s));

@@ -158,6 +158,16 @@ describe("rewriteCommand — refusals (a bad rewrite is worse than none)", () =>
     expect(rewriteCommand("go test ./...")).toBeUndefined();
   });
 
+  it("refuses several patterns when one holds a back-reference", () => {
+    // Joined as alternatives they would share one group numbering, and the
+    // second `\\1` would name a group of the first: it matched `b`, not `bb`.
+    expect(rewriteCommand(String.raw`grep -r -e '\(a\)\1' -e '\(b\)\1' .`)).toBeUndefined();
+    expect(rewriteCommand(String.raw`grep -rE -e '(a)\1' -e 'plain' .`)).toBeUndefined();
+    // One pattern keeps its back-reference, and several without one still join.
+    expect(rewriteCommand(String.raw`grep -rE -e '(a)\1' .`)).toBe(String.raw`codeindex grep '(a)\1' --ignore-dir .codeindex`);
+    expect(rewriteCommand(String.raw`grep -r -e alpha -e 'a\\1' .`)).toBe(String.raw`codeindex grep '(?:alpha)|(?:a\\1)' --ignore-dir .codeindex`);
+  });
+
   it("refuses a non-recursive grep (already cheap, different semantics)", () => {
     expect(rewriteCommand("grep foo file.ts")).toBeUndefined();
   });
