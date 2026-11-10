@@ -22388,9 +22388,6 @@ function getArtifacts(repo, opts = {}, walked, prepared) {
   if (entry2) return entry2.arts ??= entry2.loadArtifacts?.() ?? buildArtifactsFromScan(scan2, opts);
   return buildArtifactsFromScan(scan2, opts);
 }
-async function warmGrammarsForRepo(repo) {
-  await warmGrammarsForWalk(walk(repo, {}));
-}
 async function warmGrammarsForWalk(walked) {
   await ensureGrammars(grammarKeysForExts(walked.files.map((f) => f.ext)));
 }
@@ -22402,7 +22399,6 @@ var init_session = __esm({
     init_scan();
     init_pool();
     init_preload();
-    init_walk();
     init_loader();
     init_model();
     init_embed();
@@ -23733,7 +23729,6 @@ __export(mcp_exports, {
   toolsFor: () => toolsFor,
   toolsInProfiles: () => toolsInProfiles,
   validateArgs: () => validateArgs,
-  warmGrammarsForRepo: () => warmGrammarsForRepo,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
 import { readFileSync as readFileSync19, realpathSync as realpathSync7, statSync as statSync12 } from "fs";

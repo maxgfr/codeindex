@@ -11,7 +11,7 @@ import { buildArtifactsFromScan, type IndexArtifacts } from "../pipeline.js";
 import { scanRepo, scanSummary, type RepoScan, type ScanOptions, type ScanSummary } from "../scan.js";
 import { scanRepoParallel } from "../pool.js";
 import { needsGrammarWarm, preloadSession, preloadSessionLazy, toCacheMap, type PersistedCacheEntry, type PersistedCacheMap } from "../preload.js";
-import { walk, type WalkResult } from "../walk.js";
+import type { WalkResult } from "../walk.js";
 import { ensureGrammars, grammarKeysForExts } from "../ast/loader.js";
 import { resolveEmbedModelDir, loadEmbedModel, type StaticEmbedModel } from "../embed/model.js";
 import { type EmbeddingIndex } from "../embed/index.js";
@@ -420,7 +420,7 @@ export function getArtifacts(repo: string, opts: SessionScanOptions = {}, walked
   return buildArtifactsFromScan(scan, opts);
 }
 
-// Warm the grammars for the languages CURRENTLY present in `repo`, re-derived on
+// Warm the grammars for the languages CURRENTLY present in a walk, re-derived on
 // EVERY scan-needing call — never frozen on first touch. The server no longer
 // warms every committed grammar at startup; most sessions touch one repo and a
 // handful of languages, so each scan-needing tool warms the walk-derived set
@@ -437,13 +437,9 @@ export function getArtifacts(repo: string, opts: SessionScanOptions = {}, walked
 // filter further), so every extracted file has its grammar loaded; Language.load
 // calls are independent, so warming fewer grammars cannot alter the parse of a
 // loaded one.
-export async function warmGrammarsForRepo(repo: string): Promise<void> {
-  await warmGrammarsForWalk(walk(repo, {}));
-}
-
-// The same warm, against a walk the caller already has.
 //
-// callTool used to walk TWICE per scan-needing call: once here to derive the
+// Against a walk the caller already has: callTool used to walk TWICE per
+// scan-needing call: once here to derive the
 // present languages, then again inside scanRepo. On a large repo that fixed cost
 // dominated every response (the project's own benchmark shows find-symbol,
 // references and file-overview all landing within a few ms of each other on a

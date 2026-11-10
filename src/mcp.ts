@@ -102,7 +102,6 @@ export {
   memoizedEmbedModel,
   scanFingerprint,
   toCacheMap,
-  warmGrammarsForRepo,
   warmGrammarsForWalk,
 } from "./mcp/session.js";
 export type { EmbeddingIndexCacheKey, SessionScanOptions } from "./mcp/session.js";
@@ -868,7 +867,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
   // pre-indexing answer every time. Closed when stdin ends (src/lsp/pool.ts).
   const lspPool = new LspSessionPool();
   // No startup warm: each scan-needing tool warms the present-language grammars
-  // for its repo before it runs (warmGrammarsForRepo re-derives them per call),
+  // for its repo before it runs (warmGrammarsForWalk re-derives them per call),
   // so a session that never scans — or only touches one language — loads no
   // unused wasm, and a language first seen mid-session still gets warmed.
 

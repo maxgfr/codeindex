@@ -5,8 +5,8 @@
 //
 // The engine bundles the web-tree-sitter JS at build time (tsup inlines it), so
 // these packages stay devDependencies — nothing here is needed at skill-use time
-// except the committed wasm bytes. copy-bundle.mjs mirrors scripts/grammars/ into
-// the skill dir; check:build proves both copies are reproducible.
+// except the committed wasm bytes. check:build proves the committed copy is
+// reproducible.
 //
 // TWO TIERS.
 //
