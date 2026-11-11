@@ -143,6 +143,28 @@ describe("the reference embedding server", () => {
     });
   }, 30_000);
 
+  it("answers 408 to a body still trickling past its overall limit, and frees its slot", async () => {
+    await withServer({ BODY_TIMEOUT_MS: "300", BODY_MAX_MS: "1000" }, async ({ base }) => {
+      const port = Number(new URL(base).port);
+      const body = JSON.stringify({ texts: ["a".repeat(200)] });
+      // Eight uploads that each send one more byte every 100 ms: never idle.
+      const uploads = await Promise.all(Array.from({ length: 8 }, () => partialPost(port, body)));
+      let sent = body.length >> 1;
+      const drip = setInterval(() => {
+        for (const u of uploads) if (u.socket.writable) u.socket.write(body[sent] ?? " ");
+        sent++;
+      }, 100);
+      try {
+        await delay(200);
+        expect((await post(base, { texts: ["a"] })).status).toBe(503);
+        expect(await Promise.all(uploads.map((u) => u.status))).toEqual(Array(8).fill(408));
+        expect((await post(base, { texts: ["a"] })).status).toBe(200);
+      } finally {
+        clearInterval(drip);
+      }
+    });
+  }, 30_000);
+
   it("answers 408 only to a body that stopped arriving, not a slow one or one the server was too busy to read", async () => {
     await withServer({ BODY_TIMEOUT_MS: "500" }, async ({ base }) => {
       const port = Number(new URL(base).port);

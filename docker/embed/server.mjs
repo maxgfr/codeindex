@@ -29,9 +29,13 @@ const MAX_TEXT_CHARS = 8192;
 // body must arrive in time: eight uploads that sent their headers and part of
 // a body would otherwise hold every slot until Node's own 300 s request
 // timeout, and every other request was told 503. A body that sends nothing
-// for this long is answered 408; one still arriving is not, however long it
-// takes. Clamped to what a timer can hold: past 2^31-1 ms Node fires it at 1.
-const BODY_IDLE_MS = Math.min(Math.max(Number(process.env.BODY_TIMEOUT_MS) || 10_000, 1), 2 ** 31 - 1);
+// for this long is answered 408, and so is one not complete after
+// BODY_MAX_MS however steadily it trickles: eight clients sending a byte at a
+// time would otherwise hold every slot. 2 MiB over loopback takes far less.
+// Clamped to what a timer can hold: past 2^31-1 ms Node fires it at 1.
+const clampMs = (value, fallback) => Math.min(Math.max(Number(value) || fallback, 1), 2 ** 31 - 1);
+const BODY_IDLE_MS = clampMs(process.env.BODY_TIMEOUT_MS, 10_000);
+const BODY_MAX_MS = Math.max(clampMs(process.env.BODY_MAX_MS, 60_000), BODY_IDLE_MS);
 
 // Offline: only ever read the baked model from the local cache — never the hub.
 env.cacheDir = process.env.MODEL_CACHE_DIR || "/app/models";
@@ -93,18 +97,20 @@ function readBody(req) {
     const chunks = [];
     let total = 0;
     let settled = false;
-    let lastData = Date.now();
+    const started = Date.now();
+    let lastData = started;
     // Checked once more after the I/O already waiting has run: timers fire
     // before it, so with the loop blocked by another request's inference a
     // body that arrived meanwhile would have read as idle.
     const timer = setTimeout(function expire() {
       setImmediate(() => {
         if (settled) return;
-        const idle = Date.now() - lastData;
-        if (idle < BODY_IDLE_MS) timer.refresh();
-        else fail(new BodyTimeoutError(`request body idle for ${BODY_IDLE_MS} ms`));
+        const now = Date.now();
+        if (now - started >= BODY_MAX_MS) fail(new BodyTimeoutError(`request body not complete within ${BODY_MAX_MS} ms`));
+        else if (now - lastData >= BODY_IDLE_MS) fail(new BodyTimeoutError(`request body idle for ${BODY_IDLE_MS} ms`));
+        else timer.refresh();
       });
-    }, BODY_IDLE_MS);
+    }, Math.min(BODY_IDLE_MS, BODY_MAX_MS));
     const fail = (err) => {
       if (settled) return;
       settled = true;
