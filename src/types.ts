@@ -287,6 +287,9 @@ export interface FileRecord {
   // record comes from the regex tier: fewer spans, no idents. Said rather than
   // silent, since the extraction profile claims the AST tier for the language.
   astFallback?: true;
+  // The regex-tier extractor threw on this file, so it has no symbols: said,
+  // because an empty symbol list otherwise reads as a file that declares nothing.
+  extractFailed?: true;
   // Build output detected from the content, whatever the file is named:
   // "minified" JavaScript or a "bundle" (esbuild, webpack). The record keeps its
   // summary and imports, but no symbols, calls or vocabulary — one-letter noise

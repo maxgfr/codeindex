@@ -170,6 +170,7 @@ export function buildCodeRecord(
     record.truncated = code.truncated;
     if (code.callsCapped) record.callsCapped = true;
     if (code.astFallback) record.astFallback = true;
+    if (code.extractFailed) record.extractFailed = true;
     record.generated = code.generated;
     record.relations = code.relations;
     record.terms = code.terms;

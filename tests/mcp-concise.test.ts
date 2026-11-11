@@ -33,10 +33,10 @@ const location = ({ name, kind, file, line, parent }: any) => ({ name, kind, fil
 
 describe("concise MCP read answers", () => {
   it("advertises each concise option and the available/active profiles", async () => {
-    // handshake() is the raw initialize request result.
-    const initialized = await client.request("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } });
-    expect(initialized.result.instructions).toContain("find,impact");
-    for (const name of profileNames()) expect(initialized.result.instructions).toContain(name);
+    // The session's one initialize: a second one is refused.
+    const instructions = (handshake as { result: { instructions: string } }).result.instructions;
+    expect(instructions).toContain("find,impact");
+    for (const name of profileNames()) expect(instructions).toContain(name);
     const listed = await client.request("tools/list", {});
     for (const name of ["find_references", "callers", "symbols_overview", "symbols"]) {
       expect(listed.result.tools.find((t: any) => t.name === name).inputSchema.properties.concise.type).toBe("boolean");

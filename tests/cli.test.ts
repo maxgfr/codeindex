@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -181,7 +181,12 @@ describe("rewrite takes ONE command line", () => {
     expect(existsSync(join(cwd, ".gitmodules"))).toBe(true);
     expect(cli(["rewrite", "grep -r foo ."], cwd).status).toBe(1);
     expect(cli(["rewrite", "grep -r foo src"], cwd).status).toBe(0); // the submodule is not in src
-    expect(cli(["rewrite", "git grep foo"], cwd).status).toBe(0); // git grep skips submodules too
+    // git grep skips submodules too. It needs a repository, whose every file
+    // it tracks for the rewrite to search what it searches.
+    expect(cli(["rewrite", "git grep foo"], cwd).status).toBe(1);
+    execFileSync("git", ["init", "-q", "."], { cwd });
+    execFileSync("git", ["add", ".gitmodules"], { cwd });
+    expect(cli(["rewrite", "git grep foo"], cwd).status).toBe(0);
   });
 });
 

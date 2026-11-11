@@ -26,6 +26,8 @@ export interface CodeInfo {
   // The AST tier failed on a file it has a grammar for — propagated onto the
   // FileRecord.
   astFallback?: true;
+  // The regex extractor threw on this file — propagated onto the FileRecord.
+  extractFailed?: true;
   // Build output (minified code, a bundle): only the summary and imports were
   // extracted (see extract/generated.ts) — propagated onto the FileRecord.
   generated?: GeneratedKind;
@@ -320,7 +322,8 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // again, for this function to discard.
   let astFallback = false;
   const ast = extractAst(rel, codeExt, code, { maxCalls: opts.maxCallsPerFile, imports: false, onFailure: () => (astFallback = true) });
-  const raw = ast ? ast.symbols : extractSymbols(rel, codeExt, code);
+  let extractFailed = false;
+  const raw = ast ? ast.symbols : extractSymbols(rel, codeExt, code, () => (extractFailed = true));
   const kept = raw.slice(0, MAX_FILE_SYMBOLS);
   const symbols = sfc
     ? kept.map((s) => ({
@@ -363,6 +366,7 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
       ? { truncated: true as const }
       : {}),
     ...(astFallback ? { astFallback: true as const } : {}),
+    ...(extractFailed ? { extractFailed: true as const } : {}),
     // A capped list holds exactly the cap; a file with exactly that many call
     // sites reads as capped too, the safe side of the doubt.
     ...(calls.length >= (opts.maxCallsPerFile ?? DEFAULT_MAX_CALLS) ? { callsCapped: true as const } : {}),

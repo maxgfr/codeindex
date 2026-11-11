@@ -409,7 +409,9 @@ export function computeDelta(
     };
     // impactOf's closure per changed file, over the index built once above.
     for (const c of moduleChanges) {
-      const seeds = moduleBySlug.get(c.path)?.members ?? (fileByRel.has(c.path) ? [c.path] : undefined);
+      // The changed file itself. It was looked up as a module slug first, so a
+      // file whose path equals some module's slug seeded that whole module.
+      const seeds = fileByRel.has(c.path) ? [c.path] : undefined;
       if (!seeds) continue;
       for (const [rel, d] of closureOver(dependents, seeds, depth)) {
         reach(rel, d);

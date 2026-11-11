@@ -107,6 +107,7 @@ export function buildCallerIndex(
 function indexCallers(scan: RepoScan, pairs: Set<string>, recall: boolean, only?: ReadonlySet<string>): CallerIndex {
   const binder = createCallBinder(scan, pairs, { recall, only });
   const sites = new Map<string, { def: CodeSymbol; callers: CallerSite[] }>();
+  const callerLines = new Map<{ def: CodeSymbol; callers: CallerSite[] }, Set<string>>();
   for (const f of scan.files) {
     const bind = binder.forFile(f);
     if (!bind) continue;
@@ -121,10 +122,14 @@ function indexCallers(scan: RepoScan, pairs: Set<string>, recall: boolean, only?
       if (!entry) sites.set(key, (entry = { def: hit.def, callers: [] }));
       else if (hit.def.line < entry.def.line) entry.def = hit.def;
       // `foo(a.foo(1))` is two sites on one line that may reach the same
-      // declaration: the caller is that line, once. A file's sites come sorted
-      // by name then line, so the twin is the entry's last caller.
-      const last = entry.callers[entry.callers.length - 1];
-      if (last && last.file === f.rel && last.line === c.line) continue;
+      // declaration: the caller is that line, once. Not only when the twin is
+      // the last caller pushed: `a()` and its alias `b()` on one line reach one
+      // declaration from sites that sort apart, and both were listed.
+      const at = f.rel + "\0" + c.line;
+      let seen = callerLines.get(entry);
+      if (!seen) callerLines.set(entry, (seen = new Set()));
+      if (seen.has(at)) continue;
+      seen.add(at);
       entry.callers.push(
         recall
           ? { file: f.rel, line: c.line, confidence: hit.corroborated ? "corroborated" : "unique-name" }

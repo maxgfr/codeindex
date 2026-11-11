@@ -528,3 +528,23 @@ describe("a receiver that has no name", () => {
     expect(sites("plain(1);")).toEqual(["-.plain"]);
   });
 });
+
+describe("one line calling a declaration under two names", () => {
+  it("lists that line once among its callers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-call-binding-alias-"));
+    try {
+      writeFileSync(join(dir, "m.ts"), "export function a(): number {\n  return 1;\n}\n");
+      // `a` and its alias `b` on line 3, and `a` again on line 4: the sites sort
+      // a@3, a@4, b@3, so the twin of a@3 is not the last caller pushed.
+      writeFileSync(join(dir, "use.ts"), 'import { a, a as b } from "./m";\n\nexport const x = a() + b();\nexport const y = a();\n');
+      const local = scanRepo(dir);
+      const callers = buildCallerIndex(local, importPairsFor(local)).get("a")!.callers;
+      expect(callers).toEqual([
+        { file: "use.ts", line: 3 },
+        { file: "use.ts", line: 4 },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

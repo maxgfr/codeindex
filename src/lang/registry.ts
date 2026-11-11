@@ -49,7 +49,11 @@ for (const e of EXTRACTORS) for (const ext of e.exts) BY_EXT.set(ext, e);
 // no local declaration to mirror. extractCode already runs extractReexports
 // itself and filters by name, so this can't double-add: whichever entry point
 // adds "c" first wins, the other's re-run is a no-op duplicate filtered out.
-export function extractSymbols(rel: string, ext: string, content: string): CodeSymbol[] {
+//
+// `onFailure` hears of an extractor that threw: its file then has no symbols,
+// and the caller records that it failed (FileRecord.extractFailed) instead of
+// presenting the file as one that declares nothing.
+export function extractSymbols(rel: string, ext: string, content: string, onFailure?: () => void): CodeSymbol[] {
   const extractor = BY_EXT.get(ext);
   let symbols: CodeSymbol[];
   if (!extractor) symbols = [];
@@ -61,6 +65,7 @@ export function extractSymbols(rel: string, ext: string, content: string): CodeS
       if (lexis) symbols = annotate(symbols, content, lexis, masked);
     } catch {
       symbols = [];
+      onFailure?.();
     }
   }
   const known = new Set(symbols.map((s) => s.name));

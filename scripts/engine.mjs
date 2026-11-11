@@ -3444,7 +3444,7 @@ var init_dart = __esm({
 });
 
 // src/lang/registry.ts
-function extractSymbols(rel2, ext, content) {
+function extractSymbols(rel2, ext, content, onFailure) {
   const extractor = BY_EXT.get(ext);
   let symbols;
   if (!extractor) symbols = [];
@@ -3456,6 +3456,7 @@ function extractSymbols(rel2, ext, content) {
       if (lexis) symbols = annotate(symbols, content, lexis, masked);
     } catch {
       symbols = [];
+      onFailure?.();
     }
   }
   const known = new Set(symbols.map((s) => s.name));
@@ -10951,7 +10952,8 @@ function extractCode(rel2, ext, content, opts = {}) {
   const codeExt = sfc ? sfc.ext : ext;
   let astFallback = false;
   const ast = extractAst(rel2, codeExt, code, { maxCalls: opts.maxCallsPerFile, imports: false, onFailure: () => astFallback = true });
-  const raw = ast ? ast.symbols : extractSymbols(rel2, codeExt, code);
+  let extractFailed = false;
+  const raw = ast ? ast.symbols : extractSymbols(rel2, codeExt, code, () => extractFailed = true);
   const kept = raw.slice(0, MAX_FILE_SYMBOLS);
   const symbols = sfc ? kept.map((s) => ({
     ...s,
@@ -10972,6 +10974,7 @@ function extractCode(rel2, ext, content, opts = {}) {
     // exists to prevent.
     ...ast?.truncated || raw.length > symbols.length || reexports.length >= MAX_REEXPORTS ? { truncated: true } : {},
     ...astFallback ? { astFallback: true } : {},
+    ...extractFailed ? { extractFailed: true } : {},
     // A capped list holds exactly the cap; a file with exactly that many call
     // sites reads as capped too, the safe side of the doubt.
     ...calls.length >= (opts.maxCallsPerFile ?? DEFAULT_MAX_CALLS) ? { callsCapped: true } : {},
@@ -11133,6 +11136,7 @@ function buildCodeRecord(rel2, ext, size, content, hash, lang, opts = {}) {
     record2.truncated = code.truncated;
     if (code.callsCapped) record2.callsCapped = true;
     if (code.astFallback) record2.astFallback = true;
+    if (code.extractFailed) record2.extractFailed = true;
     record2.generated = code.generated;
     record2.relations = code.relations;
     record2.terms = code.terms;
@@ -11445,7 +11449,7 @@ function optionalArray(value, valid) {
   return value === void 0 || Array.isArray(value) && value.every(valid);
 }
 function record(v, rel2) {
-  return object(v) && v.rel === rel2 && string(v.ext) && count(v.size) && count(v.lines) && sha(v.hash) && string(v.kind) && kinds.has(v.kind) && string(v.lang) && optionalFields(v, fileText, string) && optionalFields(v, fileLists, strings) && strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel2)) && Array.isArray(v.refs) && v.refs.every(ref) && optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) && (v.truncated === void 0 || v.truncated === true) && (v.callsCapped === void 0 || v.callsCapped === true) && (v.astFallback === void 0 || v.astFallback === true) && (v.generated === void 0 || v.generated === "minified" || v.generated === "bundle");
+  return object(v) && v.rel === rel2 && string(v.ext) && count(v.size) && count(v.lines) && sha(v.hash) && string(v.kind) && kinds.has(v.kind) && string(v.lang) && optionalFields(v, fileText, string) && optionalFields(v, fileLists, strings) && strings(v.headings) && Array.isArray(v.symbols) && v.symbols.every((s) => symbol(s, rel2)) && Array.isArray(v.refs) && v.refs.every(ref) && optionalArray(v.calls, call) && optionalArray(v.importAliases, importAlias) && optionalArray(v.relations, relation) && optionalArray(v.literals, literal) && (v.truncated === void 0 || v.truncated === true) && (v.callsCapped === void 0 || v.callsCapped === true) && (v.astFallback === void 0 || v.astFallback === true) && (v.extractFailed === void 0 || v.extractFailed === true) && (v.generated === void 0 || v.generated === "minified" || v.generated === "bundle");
 }
 function entry(v, rel2) {
   return object(v) && sha(v.hash) && record(v.record, rel2) && v.hash === v.record.hash && (v.size === void 0 || count(v.size) && v.size === v.record.size) && (v.mtimeMs === void 0 || typeof v.mtimeMs === "number" && Number.isFinite(v.mtimeMs));
@@ -15390,6 +15394,7 @@ function buildCallerIndex(scan2, importPairs, opts = {}) {
 function indexCallers(scan2, pairs, recall, only) {
   const binder = createCallBinder(scan2, pairs, { recall, only });
   const sites = /* @__PURE__ */ new Map();
+  const callerLines = /* @__PURE__ */ new Map();
   for (const f of scan2.files) {
     const bind = binder.forFile(f);
     if (!bind) continue;
@@ -15400,8 +15405,11 @@ function indexCallers(scan2, pairs, recall, only) {
       let entry2 = sites.get(key);
       if (!entry2) sites.set(key, entry2 = { def: hit.def, callers: [] });
       else if (hit.def.line < entry2.def.line) entry2.def = hit.def;
-      const last = entry2.callers[entry2.callers.length - 1];
-      if (last && last.file === f.rel && last.line === c2.line) continue;
+      const at = f.rel + "\0" + c2.line;
+      let seen = callerLines.get(entry2);
+      if (!seen) callerLines.set(entry2, seen = /* @__PURE__ */ new Set());
+      if (seen.has(at)) continue;
+      seen.add(at);
       entry2.callers.push(
         recall ? { file: f.rel, line: c2.line, confidence: hit.corroborated ? "corroborated" : "unique-name" } : { file: f.rel, line: c2.line }
       );
@@ -21943,7 +21951,7 @@ function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
       if (prev === void 0 || d < prev) depthByRel.set(rel2, d);
     };
     for (const c2 of moduleChanges) {
-      const seeds = moduleBySlug.get(c2.path)?.members ?? (fileByRel.has(c2.path) ? [c2.path] : void 0);
+      const seeds = fileByRel.has(c2.path) ? [c2.path] : void 0;
       if (!seeds) continue;
       for (const [rel2, d] of closureOver(dependents, seeds, depth)) {
         reach(rel2, d);

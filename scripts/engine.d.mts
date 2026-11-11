@@ -80,6 +80,7 @@ interface FileRecord {
     truncated?: true;
     callsCapped?: true;
     astFallback?: true;
+    extractFailed?: true;
     generated?: "minified" | "bundle";
     relations?: RawRelation[];
     terms?: string[];
@@ -533,7 +534,7 @@ declare function categorize(rel: string, ext: string): FileCategory;
 
 declare function extToLang(ext: string): string;
 
-declare function extractSymbols(rel: string, ext: string, content: string): CodeSymbol[];
+declare function extractSymbols(rel: string, ext: string, content: string, onFailure?: () => void): CodeSymbol[];
 declare function languageOf(ext: string): string;
 
 type GeneratedKind = NonNullable<FileRecord["generated"]>;
@@ -544,6 +545,7 @@ interface CodeInfo {
     truncated?: true;
     callsCapped?: true;
     astFallback?: true;
+    extractFailed?: true;
     generated?: GeneratedKind;
     refs: RawRef[];
     pkg?: string;

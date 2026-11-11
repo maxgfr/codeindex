@@ -125,7 +125,7 @@ export function startMcpClient(cmd, args, opts = {}) {
       });
       if (!init.ok) return init;
       this.notify("notifications/initialized", {});
-      return { ok: true, serverInfo: init.result?.serverInfo };
+      return { ok: true, serverInfo: init.result?.serverInfo, result: init.result };
     },
 
     // Kill the child; resolves once it is gone (SIGKILL fallback after 2s).
