@@ -391,6 +391,18 @@ describe("renderMermaidClustered", () => {
   it("is deterministic", () => {
     expect(renderMermaidClustered(graph)).toEqual(renderMermaidClustered(graph));
   });
+
+  it("counts only the edges it could draw: a dangling one is no truncation", () => {
+    const complete = renderMermaidClustered(graph);
+    const withDangling: Graph = {
+      ...graph,
+      moduleEdges: [...graph.moduleEdges, { from: graph.modules[0]!.slug, to: "nowhere", kind: "import", weight: 9, dangling: true } as Edge],
+    };
+    const res = renderMermaidClustered(withDangling);
+    expect(res.totalEdges).toBe(complete.totalEdges);
+    expect(res.content).toBe(complete.content);
+    expect(res.content).not.toContain("truncated to the most-connected");
+  });
 });
 
 // A Graph's edge arrays are PUBLIC and mutable. The traversals memoize the

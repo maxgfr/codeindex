@@ -21653,11 +21653,12 @@ function renderMermaidClustered(graph, opts = {}) {
   const shown = ranked.slice(0, maxModules);
   const shownSet = new Set(shown.map((m) => m.slug));
   const edges = graph.moduleEdges.filter((e) => shownSet.has(e.from) && shownSet.has(e.to)).sort((a, b) => b.weight - a.weight || byStr(a.from, b.from) || byStr(a.to, b.to)).slice(0, maxEdges);
+  const drawable = graph.moduleEdges.filter((e) => !e.dangling).length;
   const lines = [];
   lines.push(
-    `%% ${opts.title ?? "module graph"} \u2014 ${shown.length} of ${graph.modules.length} modules, ${edges.length} of ${graph.moduleEdges.length} edges`
+    `%% ${opts.title ?? "module graph"} \u2014 ${shown.length} of ${graph.modules.length} modules, ${edges.length} of ${drawable} edges`
   );
-  if (shown.length < graph.modules.length || edges.length < graph.moduleEdges.length) {
+  if (shown.length < graph.modules.length || edges.length < drawable) {
     lines.push("%% truncated to the most-connected modules/edges; see graph.json for the full graph");
   }
   lines.push("flowchart LR");
@@ -21677,7 +21678,7 @@ function renderMermaidClustered(graph, opts = {}) {
     shownModules: shown.length,
     totalModules: graph.modules.length,
     shownEdges: edges.length,
-    totalEdges: graph.moduleEdges.length
+    totalEdges: drawable
   };
 }
 var nodeLabel, TIER_LABEL, CLUSTER_MAX_MODULES, CLUSTER_MAX_EDGES, degreeOf;
@@ -27071,8 +27072,7 @@ var SHORT_FLAGS = {
   "-i": "--ignore-case",
   "-l": "--files-with-matches",
   "-o": "--out",
-  "-h": "--help",
-  "-v": "--version"
+  "-h": "--help"
 };
 function editDistance(a, b) {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -27094,12 +27094,21 @@ function closest(word, candidates) {
 }
 var ALL_FLAGS = () => /* @__PURE__ */ new Set([...GLOBAL_FLAGS, ...Object.values(COMMAND_FLAGS).flatMap((c2) => c2.flags)]);
 function unknownFlag(flag) {
+  if (flag === "-v" || flag === "--version") return new Error(`unknown flag: ${flag} (the version is \`codeindex --version\`, before any command)`);
   const hint = SHORT_FLAGS[flag] ?? closest(flag, ALL_FLAGS());
   return new Error(`unknown flag: ${flag}${hint ? ` (did you mean ${hint}?)` : ""}`);
 }
+var UNREAD_GLOBAL_FLAGS = {
+  grep: ["--max-files", "--max-calls", "--no-ast", "--workers", "--index", "--no-index-cache", "--full-hash"],
+  churn: ["--no-gitignore", "--ignore-dir", "--max-files", "--max-bytes", "--max-calls", "--no-ast", "--workers", "--index", "--no-index-cache", "--full-hash"]
+};
 function checkCommandFlags(cmd, flags2) {
   const spec = COMMAND_FLAGS[cmd];
   if (!spec) return;
+  for (const flag of new Set(flags2.given)) {
+    if (UNREAD_GLOBAL_FLAGS[cmd]?.includes(flag)) process.stderr.write(`codeindex: ${flag} has no effect on ${cmd}
+`);
+  }
   for (const flag of flags2.given) {
     if (GLOBAL_FLAGS.has(flag) || spec.flags.includes(flag)) continue;
     const hint = closest(flag, spec.flags);
@@ -27448,7 +27457,7 @@ async function runCli(rawArgv) {
     process.stdout.write(HELP);
     return;
   }
-  if (cmd === "version" || cmd === "--version") {
+  if (cmd === "version" || cmd === "--version" || cmd === "-v") {
     process.stdout.write(ENGINE_VERSION + "\n");
     return;
   }
@@ -28044,7 +28053,16 @@ ${HELP}`);
   } else if (cmd === "lsp") {
     const sub = flags2.positional;
     if (sub !== "status") throw new Error("lsp needs a subcommand: status");
-    emit(JSON.stringify(await lspStatus(await readScan(), flags2.repo, flags2.probe === true, { trustRepoConfig: flags2.trustLspConfig }), null, 2) + "\n", flags2.out);
+    let status;
+    try {
+      status = await lspStatus(await readScan(), flags2.repo, flags2.probe === true, { trustRepoConfig: flags2.trustLspConfig });
+    } catch (e) {
+      process.stderr.write(`codeindex: lsp config is not valid: ${errMessage(e)}
+`);
+      process.exitCode = 1;
+      return;
+    }
+    emit(JSON.stringify(status, null, 2) + "\n", flags2.out);
   } else if (cmd === "grammars") {
     const sub = flags2.positional;
     const cacheDir = sharedGrammarsCacheDir();

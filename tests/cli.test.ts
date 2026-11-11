@@ -185,6 +185,38 @@ describe("rewrite takes ONE command line", () => {
   });
 });
 
+describe("flags a command accepts and never reads", () => {
+  it("are accepted, with a warning naming them", () => {
+    const grep = cli(["grep", "HttpClient", "--max-files", "5", "--no-ast", "--repo", REPO]);
+    expect(grep.status, grep.err).toBe(0);
+    expect(grep.err).toContain("codeindex: --max-files has no effect on grep");
+    expect(grep.err).toContain("codeindex: --no-ast has no effect on grep");
+    // A flag grep does read raises nothing.
+    expect(cli(["grep", "HttpClient", "--max-bytes", "100000", "--repo", REPO]).err).not.toMatch(/no effect/);
+    // Nor does a command that reads them all.
+    expect(cli(["scan", "--max-files", "5", "--no-ast", "--repo", REPO]).err).not.toMatch(/no effect/);
+  });
+
+  it("-v prints the version, and after a command points at codeindex --version", () => {
+    const version = cli(["-v"]);
+    expect(version.status).toBe(0);
+    expect(version.out.trim()).toBe(cli(["--version"]).out.trim());
+    const after = cli(["scan", "-v", "--repo", REPO]);
+    expect(after.status).toBe(2);
+    expect(after.err).toMatch(/unknown flag: -v \(the version is `codeindex --version`, before any command\)/);
+  });
+
+  it("lsp status exits 1 on a malformed config, which is the answer it was asked for", () => {
+    const repo = mkdtempSync(join(tmpdir(), "ci-lsp-bad-"));
+    writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+    const config = join(repo, "lsp.json");
+    writeFileSync(config, "{ not json");
+    const r = spawnSync(process.execPath, [CLI, "lsp", "status", "--repo", repo], { encoding: "utf8", env: { ...process.env, CODEINDEX_LSP_CONFIG: config } });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/codeindex: lsp config is not valid: .*lsp\.json/);
+  });
+});
+
 describe("mcp flags and path arguments read strictly", () => {
   it("a value flag never takes another flag for its value", () => {
     expect(() => parseMcpFlags(["--repo", "--watch"])).toThrow(/--repo requires a directory/);

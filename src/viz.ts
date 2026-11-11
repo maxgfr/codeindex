@@ -165,12 +165,16 @@ export function renderMermaidClustered(
     .sort((a, b) => b.weight - a.weight || byStr(a.from, b.from) || byStr(a.to, b.to))
     .slice(0, maxEdges);
 
+  // Out of the edges this diagram could draw: a dangling edge has no module at
+  // its far end and is never drawn, so counting it in the total (as
+  // renderMermaid does not) reported a truncation even of a complete diagram.
+  const drawable = graph.moduleEdges.filter((e) => !e.dangling).length;
   const lines: string[] = [];
   lines.push(
     `%% ${opts.title ?? "module graph"} — ${shown.length} of ${graph.modules.length} modules, ` +
-      `${edges.length} of ${graph.moduleEdges.length} edges`,
+      `${edges.length} of ${drawable} edges`,
   );
-  if (shown.length < graph.modules.length || edges.length < graph.moduleEdges.length) {
+  if (shown.length < graph.modules.length || edges.length < drawable) {
     lines.push("%% truncated to the most-connected modules/edges; see graph.json for the full graph");
   }
   lines.push("flowchart LR");
@@ -193,6 +197,6 @@ export function renderMermaidClustered(
     shownModules: shown.length,
     totalModules: graph.modules.length,
     shownEdges: edges.length,
-    totalEdges: graph.moduleEdges.length,
+    totalEdges: drawable,
   };
 }

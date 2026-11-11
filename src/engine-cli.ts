@@ -590,7 +590,6 @@ const SHORT_FLAGS: Readonly<Record<string, string>> = {
   "-l": "--files-with-matches",
   "-o": "--out",
   "-h": "--help",
-  "-v": "--version",
 };
 
 // Levenshtein distance, for "did you mean" (short strings, a handful of them).
@@ -617,14 +616,28 @@ function closest(word: string, candidates: Iterable<string>): string | undefined
 const ALL_FLAGS = (): Set<string> => new Set([...GLOBAL_FLAGS, ...Object.values(COMMAND_FLAGS).flatMap((c) => c.flags)]);
 
 function unknownFlag(flag: string): Error {
+  // No subcommand takes --version, so suggesting it after one led nowhere.
+  if (flag === "-v" || flag === "--version") return new Error(`unknown flag: ${flag} (the version is \`codeindex --version\`, before any command)`);
   const hint = SHORT_FLAGS[flag] ?? closest(flag, ALL_FLAGS());
   return new Error(`unknown flag: ${flag}${hint ? ` (did you mean ${hint}?)` : ""}`);
 }
+
+// Global flags a command accepts, as every command does, and never reads:
+// grep searches the tree itself and builds no index, churn reads git. Taking
+// them in silence let `grep --max-files 5` look like it searched five files.
+// A warning, not an error: a script may pass the same flags to every command.
+const UNREAD_GLOBAL_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  grep: ["--max-files", "--max-calls", "--no-ast", "--workers", "--index", "--no-index-cache", "--full-hash"],
+  churn: ["--no-gitignore", "--ignore-dir", "--max-files", "--max-bytes", "--max-calls", "--no-ast", "--workers", "--index", "--no-index-cache", "--full-hash"],
+};
 
 // The flags and positionals `cmd` was given that it does not read.
 function checkCommandFlags(cmd: string, flags: CliFlags): void {
   const spec = COMMAND_FLAGS[cmd];
   if (!spec) return;
+  for (const flag of new Set(flags.given)) {
+    if (UNREAD_GLOBAL_FLAGS[cmd]?.includes(flag)) process.stderr.write(`codeindex: ${flag} has no effect on ${cmd}\n`);
+  }
   for (const flag of flags.given) {
     if (GLOBAL_FLAGS.has(flag) || spec.flags.includes(flag)) continue;
     const hint = closest(flag, spec.flags);
@@ -1106,7 +1119,7 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     process.stdout.write(HELP);
     return;
   }
-  if (cmd === "version" || cmd === "--version") {
+  if (cmd === "version" || cmd === "--version" || cmd === "-v") {
     process.stdout.write(ENGINE_VERSION + "\n");
     return;
   }
@@ -1917,8 +1930,17 @@ export async function runCli(rawArgv: string[]): Promise<void> {
     if (sub !== "status") throw new Error("lsp needs a subcommand: status");
     // A MALFORMED config is the one case that exits 1: here the config IS the
     // question being asked, so swallowing the parse error would answer it
-    // wrongly. Everywhere else an unusable tier degrades on exit 0.
-    emit(JSON.stringify(await lspStatus(await readScan(), flags.repo, flags.probe === true, { trustRepoConfig: flags.trustLspConfig }), null, 2) + "\n", flags.out);
+    // wrongly. Everywhere else an unusable tier degrades on exit 0. (It used to
+    // reach the generic error path, exit 2 — the code for a usage error.)
+    let status;
+    try {
+      status = await lspStatus(await readScan(), flags.repo, flags.probe === true, { trustRepoConfig: flags.trustLspConfig });
+    } catch (e) {
+      process.stderr.write(`codeindex: lsp config is not valid: ${errMessage(e)}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    emit(JSON.stringify(status, null, 2) + "\n", flags.out);
   } else if (cmd === "grammars") {
     const sub = flags.positional;
     const cacheDir = sharedGrammarsCacheDir();
