@@ -730,7 +730,7 @@ var init_text = __esm({
 });
 
 // src/walk.ts
-import { readdirSync, statSync, lstatSync, readFileSync as readFileSync2, realpathSync, existsSync } from "fs";
+import { accessSync, constants as fsConstants, readdirSync, statSync, lstatSync, readFileSync as readFileSync2, realpathSync, existsSync } from "fs";
 import { dirname, join, relative, resolve, sep, extname } from "path";
 function trackedBuildOutputDirs(root) {
   const specs = [...BUILD_OUTPUT_DIRS].map((d) => `:(glob)**/${d}/**`);
@@ -973,6 +973,7 @@ function walk(root, opts = {}) {
       else if (LOCKFILES.has(name2.toLowerCase()) && !opts.includeLockfiles) reason = "lockfile";
       else if ((opts.binaryExtensions ?? BINARY_EXT).has(ext) && !opts.includeBinary) reason = "binary-ext";
       else if (/\.min\.(?:js|css)$/i.test(name2) && !opts.includeMinified) reason = "minified";
+      else if (cannotRead(st.mode, abs)) reason = "unreadable";
       if (reason) {
         excluded++;
         if (reason === "over-max-bytes") oversized.push({ rel: rel2.split(sep).join("/"), size: st.size });
@@ -1007,6 +1008,15 @@ function walk(root, opts = {}) {
 }
 function readText(abs) {
   return readTextEx(abs).text;
+}
+function cannotRead(mode, abs) {
+  if (mode & 4) return false;
+  try {
+    accessSync(abs, fsConstants.R_OK);
+    return false;
+  } catch {
+    return true;
+  }
 }
 function isInside(rootReal, real) {
   if (real === rootReal) return true;
@@ -11294,6 +11304,8 @@ function scanRepo(root, opts = {}) {
     const preUsable = pre && pre.size === f.size && pre.mtimeMs === f.mtimeMs && (pre.record || pre.hash === cached?.hash) ? pre : void 0;
     const read = preUsable ? void 0 : readTextEx(f.abs);
     if (read && !read.ok) {
+      if (--languages[lang] === 0) delete languages[lang];
+      mtimes.delete(f.rel);
       opts.onSkip?.({ rel: f.rel, reason: "unreadable", directory: false, size: f.size });
       continue;
     }

@@ -45,27 +45,33 @@ describe("what cannot be read is said, not dropped", () => {
     }
   });
 
-  it.runIf(canLock)("a file that cannot be read is skipped, and indexed once it can be", () => {
+  it.runIf(canLock)("a file that cannot be read is skipped by the walk itself, counted nowhere, indexed once it can be", () => {
     const root = mkdtempSync(join(tmpdir(), "ci-walk-unreadable-"));
     writeFileSync(join(root, "ok.ts"), "export const ok = 1;\n");
-    writeFileSync(join(root, "secret.ts"), "export function hidden(): number {\n  return 1;\n}\n");
-    chmodSync(join(root, "secret.ts"), 0o000);
+    writeFileSync(join(root, "secret.py"), "def hidden():\n    return 1\n");
+    chmodSync(join(root, "secret.py"), 0o000);
     const skipped: { rel: string; reason: string }[] = [];
     let first;
+    let walked;
     try {
+      walked = walk(root).files.map((f) => f.rel);
       first = scanRepo(root, { onSkip: (s) => skipped.push({ rel: s.rel, reason: s.reason }) });
     } finally {
-      chmodSync(join(root, "secret.ts"), 0o644);
+      chmodSync(join(root, "secret.py"), 0o644);
     }
-    // Not an empty file of the index: no file of it at all, and said so.
+    // The walk, which the freshness proof and `status` also read, leaves it
+    // out: they and the scan agree on the file set.
+    expect(walked).toEqual(["ok.ts"]);
+    // Not an empty file of the index, nor a language with no file in it.
     expect(first.files.map((f) => f.rel)).toEqual(["ok.ts"]);
-    expect(skipped).toEqual([{ rel: "secret.ts", reason: "unreadable" }]);
+    expect(first.languages).toEqual({ typescript: 1 });
+    expect(skipped).toEqual([{ rel: "secret.py", reason: "unreadable" }]);
 
-    // chmod moved its ctime, not its mtime: a scan seeded with the first one's
-    // records must still read it now (an empty record used to be reused here).
-    const cache = new Map(first.files.map((f) => [f.rel, { hash: f.hash, record: f }]));
+    // chmod moved its ctime, not its mtime. A scan seeded with the first one's
+    // records, stat keys included, must still read it now.
+    const cache = new Map(first.files.map((f) => [f.rel, { hash: f.hash, record: f, size: f.size, mtimeMs: first.mtimes.get(f.rel)! }]));
     const second = scanRepo(root, { cache });
-    expect(second.files.map((f) => f.rel)).toEqual(["ok.ts", "secret.ts"]);
+    expect(second.files.map((f) => f.rel)).toEqual(["ok.ts", "secret.py"]);
     expect(second.files[1]!.symbols.map((s) => s.name)).toEqual(["hidden"]);
     expect(second.contentUnchanged).toBe(false);
   });

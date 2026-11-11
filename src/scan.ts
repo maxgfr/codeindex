@@ -540,6 +540,10 @@ export function scanRepo(root: string, opts: ScanOptions = {}): RepoScan {
     // entry, and the next scan simply tries again.
     const read = preUsable ? undefined : readTextEx(f.abs);
     if (read && !read.ok) {
+      // Unreadable between the walk and the read (the walk skips one that
+      // already was): no file of this scan, counted nowhere.
+      if (--languages[lang]! === 0) delete languages[lang];
+      mtimes.delete(f.rel);
       opts.onSkip?.({ rel: f.rel, reason: "unreadable", directory: false, size: f.size });
       continue;
     }

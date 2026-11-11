@@ -240,6 +240,14 @@ function makeStats(entry: Entry): Stats {
   };
 }
 
+// node:fs's constants, as far as the engine reads them.
+export const constants = { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 } as const;
+
+// Every entry of the VFS can be read: access fails only for a missing path.
+export function accessSync(path: string, _mode?: number): void {
+  if (!entries.has(key(path))) throw enoent(path, "access");
+}
+
 export function existsSync(path: string): boolean {
   // Node answers false for "": it names no file. key("") is the root, which exists.
   if (path === "") return false;
@@ -388,6 +396,8 @@ export function watch(): never {
 }
 
 export default {
+  accessSync,
+  constants,
   existsSync,
   statSync,
   lstatSync,
