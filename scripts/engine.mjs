@@ -24797,9 +24797,11 @@ async function runMcpServer(opts = {}) {
   }
   async function callResult(name2, args2, version, progress) {
     try {
-      if (profileTools && TOOL_META[name2]?.write === true && !profileTools.has(name2)) {
+      const writes = TOOL_META[name2]?.write === true && !(name2 === "onboard" && args2.remember === false);
+      if (profileTools && writes && !profileTools.has(name2)) {
+        const including = profileNames().filter((p) => p !== "all" && toolsInProfiles(p).has(name2));
         throw new Error(
-          `\`${name2}\` writes, and this server's tool profile (${opts.profile}) leaves it out: start the server with a profile that includes it (--tools edit, memory or all)`
+          `\`${name2}\` writes, and this server's tool profile (${opts.profile}) leaves it out: start the server with a profile that includes it (--tools ${[...including, "all"].join(", ")})`
         );
       }
       const repo = repoRoot(args2, defaultRepo);

@@ -2382,6 +2382,24 @@ describe("tool profiles and onboarding", () => {
     expect(readFileSync(join(repo, "src/client.ts"), "utf8")).toContain("export const added = 1;");
   }, 30_000);
 
+  it("names the profiles that hold a refused tool, and lets onboard run when it writes nothing", async () => {
+    const repo = tmpFixtureCopy("ci-profile-onboard-");
+    const res = await mcpSession(
+      [
+        { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+        { id: 2, method: "tools/call", params: { name: "onboard", arguments: { repo } } },
+        { id: 3, method: "tools/call", params: { name: "onboard", arguments: { repo, remember: false } } },
+        { id: 4, method: "tools/call", params: { name: "replace_symbol_body", arguments: { repo, namePath: "HttpClient", body: "x" } } },
+      ],
+      undefined,
+      [CLI, "mcp", "--tools", "find"],
+    );
+    expect(res.get(2)!.result!.content![0]!.text).toMatch(/onboard` writes.*\(--tools orient, all\)/);
+    expect(res.get(3)!.result!.isError).toBeUndefined();
+    expect(existsSync(join(repo, ".codeindex", "memories", "onboarding.md"))).toBe(false);
+    expect(res.get(4)!.result!.content![0]!.text).toMatch(/\(--tools edit, all\)/);
+  }, 30_000);
+
   // Iterates the live catalogue, so a tool added later must be placed too.
   it("places every tool in at least one profile, and names only real tools", () => {
     const names = new Set<string>(TOOLS.map((t) => t.name));

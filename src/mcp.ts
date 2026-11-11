@@ -211,8 +211,6 @@ function sameDirectory(a: string, b: string): boolean {
   }
 }
 
-// The repository a call is about, in its ONE canonical spelling.
-//
 // The longest message the server reads: far past any tool call (an edit body
 // of a few MB), and a bound on what one line can make it hold in memory.
 const MAX_MESSAGE_CHARS = 64 * 1024 * 1024;
@@ -250,6 +248,8 @@ async function* boundedLines(input: NodeJS.ReadableStream, max: number): AsyncGe
   else if (buffer) yield buffer.replace(/\r$/, "");
 }
 
+// The repository a call is about, in its ONE canonical spelling.
+//
 // `defaultRepo` is the server-level
 // pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
 // to one workspace, so agents need not know — or restate — the absolute path.
@@ -872,7 +872,7 @@ export interface McpServerOptions {
   // Omitted fields keep the defaults (name "codeindex", ENGINE_VERSION).
   serverInfo?: { name?: string; version?: string };
   // Bind the server to ONE repository, so `repo` becomes optional on every
-  // tool (an explicit per-call `repo` still wins). This is what lets a host
+  // tool, and no call can name another (see repoRoot). This is what lets a host
   // spawn one server per workspace — `codeindex mcp --repo <dir>` — instead of
   // requiring the agent to thread an absolute path through every single call.
   defaultRepo?: string;
@@ -881,9 +881,9 @@ export interface McpServerOptions {
   maxResponseBytes?: number;
   // Advertise a NAMED SUBSET of the tools (see TOOL_PROFILES). Every advertised
   // tool's full schema rides in an agent's context on every turn, so a session
-  // that only ever searches is paying for the graph analytics all day. Trims
-  // what is ADVERTISED, not what is answerable: a tool left out of the profile
-  // still works when called. Undefined = all tools, so no existing setup moves.
+  // that only ever searches is paying for the graph analytics all day. For
+  // read tools it trims what is ADVERTISED, not what is answerable; a write
+  // tool left out is refused. Undefined = all tools, so no existing setup moves.
   profile?: string;
   // Watch the pinned repository (see src/mcp/watch.ts). On Linux the watcher
   // proves when nothing changed, so a call skips the walk and the stat pass;
@@ -1142,9 +1142,12 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
       // server writes nothing. Read tools left out stay answerable by name
       // (the profile only saves the context their schemas cost); a write tool
       // called by name used to run all the same.
-      if (profileTools && TOOL_META[name]?.write === true && !profileTools.has(name)) {
+      // `onboard` writes only its memory, and not with `remember: false`.
+      const writes = TOOL_META[name]?.write === true && !(name === "onboard" && args.remember === false);
+      if (profileTools && writes && !profileTools.has(name)) {
+        const including = profileNames().filter((p) => p !== "all" && toolsInProfiles(p).has(name));
         throw new Error(
-          `\`${name}\` writes, and this server's tool profile (${opts.profile}) leaves it out: start the server with a profile that includes it (--tools edit, memory or all)`,
+          `\`${name}\` writes, and this server's tool profile (${opts.profile}) leaves it out: start the server with a profile that includes it (--tools ${[...including, "all"].join(", ")})`,
         );
       }
       const repo = repoRoot(args, defaultRepo);
