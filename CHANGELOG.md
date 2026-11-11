@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.20](https://github.com/maxgfr/codeindex/compare/v2.31.19...v2.31.20) (2026-11-11)
+
+### Bug Fixes
+
+* **cache:** record where a grammar was read as a digest, not a path ([7be484c](https://github.com/maxgfr/codeindex/commit/7be484c4b7b65e645021768bc76aaeb2dd803587))
+* **calls:** let a type-named receiver reach its bases, and a capitalised value bind as one ([d60836c](https://github.com/maxgfr/codeindex/commit/d60836c601438df1a912e38b0d6f021cb5d73546))
+* **calls:** name a receiver only where the source names one ([939d37d](https://github.com/maxgfr/codeindex/commit/939d37d5a64e99dfe7648234d53ff5502433d59d))
+* **calls:** read a JS this as a bare call only in a plain function ([c89c306](https://github.com/maxgfr/codeindex/commit/c89c3063cc0d75d320f57723512f8e255da5770e))
+* **calls:** read receivers through every wrapper, and bind a type's only to it ([9644142](https://github.com/maxgfr/codeindex/commit/964414236a9a866071af0268a01700230dd975b5))
+* **ci:** build :latest from the release commit even when main moved on ([76e727f](https://github.com/maxgfr/codeindex/commit/76e727f830169d755c8e29676624713420e4f9de))
+* **ci:** fail the embed image job when the registry cannot be asked ([3d14927](https://github.com/maxgfr/codeindex/commit/3d14927242edae1f7697183d675d06436232f60a))
+* **ci:** read the release commit's position without a SIGPIPE ([cbebd2f](https://github.com/maxgfr/codeindex/commit/cbebd2f4d6b826da9cfbedad274fdb7051b1473c))
+* **embed-server:** cap a request body's total read time as well as its idle time ([f9cd27c](https://github.com/maxgfr/codeindex/commit/f9cd27c712093022189134e692fb4465c33e19ea))
+* **embed-server:** give a slot back when a request body stalls ([d8b7ff4](https://github.com/maxgfr/codeindex/commit/d8b7ff47c9b690a916af7a8dd64ad371226e5c4f))
+* **embed-server:** time a request body out on idleness, not its whole length ([d8ff32a](https://github.com/maxgfr/codeindex/commit/d8ff32ae809d531d45562b94851a2b8fe42044c8))
+* **embed:** publish the server fixes as embed image 1.0.2 ([1ac068f](https://github.com/maxgfr/codeindex/commit/1ac068ffb425631b6b8e3ebc74b1400688aea716))
+* **embed:** read an endpoint response that starts with a byte-order mark ([26656eb](https://github.com/maxgfr/codeindex/commit/26656eb3f5d323ba898b7184c8826c1a73013f9d)), closes [Buffer#toString](https://github.com/maxgfr/Buffer/issues/toString)
+* **git:** read filter drivers from config keys, skip dirty submodules, keep git-lfs ([9537060](https://github.com/maxgfr/codeindex/commit/953706096fcb72ea6c98f1aa80b192c41a3ca420))
+* **search:** keep a word's combining marks inside it ([89182da](https://github.com/maxgfr/codeindex/commit/89182da227539dad83d8efae6715f8aa51e9b713))
+* **search:** split a word from the emoji presentation marks before it ([4c540c2](https://github.com/maxgfr/codeindex/commit/4c540c2834f78fe9ed07410e610fdef83cca77a1))
+* **walk:** read a file the process owns by its owner bits ([40caa81](https://github.com/maxgfr/codeindex/commit/40caa8192491cad0ab67cc43c333b0fb162c61a6))
+
+### Performance Improvements
+
+* **extract:** start no regex-tier call name inside a word ([8976fcf](https://github.com/maxgfr/codeindex/commit/8976fcf05b6163119ae6487d4d66c69d92b9f029))
+
 ## [2.31.19](https://github.com/maxgfr/codeindex/compare/v2.31.18...v2.31.19) (2026-11-11)
 
 ### Bug Fixes
