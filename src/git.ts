@@ -76,21 +76,66 @@ const gitArgs = (dir: string): string[] => ["-C", dir, ...GIT_CONFIG];
 // filter is a COMMAND named in config. One the repository declares itself
 // (its .git/config, a worktree config, an included file) runs on a mere
 // `codeindex delta` of a checkout that arrived with it. Each such driver is
-// overridden with empty commands, which git takes as no filter. Drivers from
-// the user's own or the system's config (git-lfs) are the user's choice and
-// stay: without them an LFS file would compare its content to its pointer.
-function repoFilterOverrides(dir: string): string[] {
-  const res = sh("git", ["-C", dir, "config", "--show-scope", "--get-regexp", "^filter\\."]);
+// overridden with empty commands, which git takes as no filter.
+//
+// Kept: drivers from the user's own or the system's config (their choice),
+// and git-lfs's standard driver wherever it is declared — `git lfs install
+// --local` writes it into the repository, and it runs the user's installed
+// git-lfs, not a command the repository chose. Without it an LFS file would
+// compare its content to its pointer. Any other driver disabled this way may
+// make a stat-dirty file it filters read as modified: the price of not running
+// it.
+//
+// Driver names are read from the config KEYS alone (`filter.<name>.<var>`,
+// the name being everything up to the last dot): parsed off `key value`
+// lines, a value holding `x.clean ` named a driver that does not exist, and
+// the real one ran. An older git without --show-scope (before 2.26) gets every
+// driver overridden but git-lfs's: failing closed.
+// Exported for its test only.
+export function repoFilterOverrides(dir: string): string[] {
+  let res = sh("git", ["-C", dir, "config", "--show-scope", "--name-only", "--get-regexp", "^filter\\."]);
+  const scoped = res.ok || res.status === 1; // 1: no filter configured at all
+  if (!scoped) res = sh("git", ["-C", dir, "config", "--name-only", "--get-regexp", "^filter\\."]);
   if (!res.ok) return [];
   const drivers = new Set<string>();
   for (const line of res.stdout.split("\n")) {
-    const m = /^(\S+)\tfilter\.(.+)\.(?:clean|smudge|process|required) /.exec(line);
-    if (m && m[1] !== "global" && m[1] !== "system") drivers.add(m[2]!);
+    if (!line) continue;
+    const [scope, key] = scoped ? (line.split("\t") as [string, string | undefined]) : ["unknown", line];
+    if (!key || !key.startsWith("filter.") || scope === "global" || scope === "system") continue;
+    const name = key.slice("filter.".length, key.lastIndexOf("."));
+    if (name) drivers.add(name);
   }
-  return [...drivers].sort().flatMap((d) => ["-c", `filter.${d}.clean=`, "-c", `filter.${d}.smudge=`, "-c", `filter.${d}.process=`, "-c", `filter.${d}.required=false`]);
+  return [...drivers]
+    .filter((d) => !(d === "lfs" && isStandardLfsDriver(dir)))
+    .sort()
+    .flatMap((d) => ["-c", `filter.${d}.clean=`, "-c", `filter.${d}.smudge=`, "-c", `filter.${d}.process=`, "-c", `filter.${d}.required=false`]);
 }
 
-// gitArgs for a command that may read worktree files through filters.
+// What `git lfs install` writes, and nothing else: each variable the lfs
+// driver sets in effect holds git-lfs's own value.
+const LFS_STANDARD: Readonly<Record<string, string>> = {
+  clean: "git-lfs clean -- %f",
+  smudge: "git-lfs smudge -- %f",
+  process: "git-lfs filter-process",
+  required: "true",
+};
+function isStandardLfsDriver(dir: string): boolean {
+  const res = sh("git", ["-C", dir, "config", "--get-regexp", "^filter\\.lfs\\."]);
+  if (!res.ok) return false;
+  for (const line of res.stdout.split("\n")) {
+    if (!line) continue;
+    const space = line.indexOf(" ");
+    const variable = (space === -1 ? line : line.slice(0, space)).slice("filter.lfs.".length);
+    const value = space === -1 ? "" : line.slice(space + 1);
+    if (LFS_STANDARD[variable] !== value) return false;
+  }
+  return true;
+}
+
+// gitArgs for a command that may read worktree files through filters. A
+// submodule's worktree is not looked into (--ignore-submodules=dirty, passed by
+// each diff): git would run THAT repository's filters there, which the
+// overrides above do not list. Its commit moving is still a change.
 const worktreeGitArgs = (dir: string): string[] => [...gitArgs(dir), ...repoFilterOverrides(dir)];
 
 // A user-supplied ref that git would read as an OPTION: `--output=/tmp/x` as a
@@ -177,7 +222,7 @@ export function resolveBaseRef(
 export function diffFiles(dir: string, spec: DiffSpec): DiffFile[] {
   const out: DiffFile[] = [];
   if (!diffable(spec)) return out;
-  const ns = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
+  const ns = sh("git", [...worktreeGitArgs(dir), "diff", "--ignore-submodules=dirty", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
   if (ns.ok) {
     const toks = ns.stdout.split("\0");
     let i = 0;
@@ -199,7 +244,7 @@ export function diffFiles(dir: string, spec: DiffSpec): DiffFile[] {
   }
 
   const byPath = new Map(out.map((f) => [f.path, f]));
-  const num = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
+  const num = sh("git", [...worktreeGitArgs(dir), "diff", "--ignore-submodules=dirty", "--no-color", "--relative", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
   if (num.ok) {
     const toks = num.stdout.split("\0");
     let i = 0;
@@ -237,6 +282,7 @@ export function diffHunks(dir: string, spec: DiffSpec): Map<string, Hunk[]> {
   const res = sh("git", [
     ...worktreeGitArgs(dir),
     "diff",
+    "--ignore-submodules=dirty",
     "--no-color",
     "--no-ext-diff",
     "--no-textconv",
@@ -559,7 +605,7 @@ function firstLine(text: string): string {
 export function changedSince(dir: string, ref: string): Set<string> {
   const out = new Set<string>();
   if (optionLike(ref)) return out;
-  const diff = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref, "--"]);
+  const diff = sh("git", [...worktreeGitArgs(dir), "diff", "--ignore-submodules=dirty", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref, "--"]);
   if (diff.ok) for (const p of diff.stdout.split("\0")) if (p) out.add(p);
   for (const p of untrackedFiles(dir)) out.add(p);
   return out;

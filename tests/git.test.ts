@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedSince, diffFiles, diffHunks, gitChurn, resolveBaseRef, untrackedFiles } from "../src/git.js";
+import { changedSince, diffFiles, diffHunks, gitChurn, repoFilterOverrides, resolveBaseRef, untrackedFiles } from "../src/git.js";
 import { walk } from "../src/walk.js";
 
 // git hardening: the locale its messages are read in, and refs that git would
@@ -122,5 +122,61 @@ describe("a repository's own git config cannot run a command", () => {
     expect([...diffHunks(dir, { mergeBase: "HEAD" }).keys()]).toEqual(["a.txt"]);
     expect([...changedSince(dir, "HEAD")].sort()).toEqual([".gitattributes", "a.txt"]);
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it("is not fooled by a filter command that mentions another driver's variable", () => {
+    const dir = repoWithCommit();
+    const marker = join(mkdtempSync(join(tmpdir(), "ci-git-mark-")), "ran");
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
+    writeFileSync(join(dir, ".gitattributes"), "*.txt filter=x\n");
+    // Parsed off `key value` lines, this named a driver "x.clean y" that does not exist.
+    git("config", "filter.x.clean", `sh -c 'touch ${marker}; cat' y.clean z a.required b`);
+    expect(diffFiles(dir, { mergeBase: "HEAD" }).map((f) => f.path)).toEqual(["a.txt"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("does not look into a dirty submodule, whose own filters it does not know", () => {
+    const dir = repoWithCommit();
+    const marker = join(mkdtempSync(join(tmpdir(), "ci-git-mark-")), "ran");
+    const sub = join(dir, "sub");
+    const at = (where: string, ...args: string[]) =>
+      execFileSync("git", ["-C", where, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], { stdio: "pipe" });
+    mkdirSync(sub);
+    at(sub, "init", "-q");
+    writeFileSync(join(sub, ".gitattributes"), "*.txt filter=y\n");
+    writeFileSync(join(sub, "s.txt"), "s\n");
+    at(sub, "add", "-A");
+    at(sub, "commit", "-q", "-m", "s");
+    at(dir, "add", "sub");
+    at(dir, "commit", "-q", "-m", "gitlink");
+    at(sub, "config", "filter.y.clean", `sh -c 'touch ${marker}; cat'`);
+    // Same size, new mtime: git must read it through the filter to compare.
+    writeFileSync(join(sub, "s.txt"), "t\n");
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(join(sub, "s.txt"), later, later);
+    // The control: a plain worktree diff runs the submodule's filter.
+    at(dir, "diff", "--name-only");
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+    expect(diffFiles(dir, { mergeBase: "HEAD" }).map((f) => f.path)).toEqual(["a.txt"]);
+    expect([...diffHunks(dir, { mergeBase: "HEAD" }).keys()]).toEqual(["a.txt"]);
+    expect([...changedSince(dir, "HEAD")]).toEqual(["a.txt"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("keeps git-lfs's standard driver, even declared in the repository, and no lookalike", () => {
+    const dir = repoWithCommit();
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
+    git("config", "filter.lfs.clean", "git-lfs clean -- %f");
+    git("config", "filter.lfs.smudge", "git-lfs smudge -- %f");
+    git("config", "filter.lfs.process", "git-lfs filter-process");
+    git("config", "filter.lfs.required", "true");
+    git("config", "filter.mine.clean", "tr a-z A-Z");
+    const overrides = repoFilterOverrides(dir);
+    expect(overrides).toContain("filter.mine.clean=");
+    expect(overrides.some((o) => o.startsWith("filter.lfs."))).toBe(false);
+    // A driver named lfs that runs something else is the repository's command.
+    git("config", "filter.lfs.process", "sh -c 'touch /tmp/x'");
+    expect(repoFilterOverrides(dir)).toContain("filter.lfs.process=");
   });
 });
