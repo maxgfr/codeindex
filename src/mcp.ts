@@ -72,11 +72,8 @@ import {
   getScanSummary,
   memoizedEmbeddingIndex,
   memoizedEmbedModel,
-  scanFingerprint,
   sessionForgetFile,
-  sessionInvalidate,
   warmGrammarsForWalk,
-  type SessionScanOptions,
 } from "./mcp/session.js";
 import { errMessage } from "./util.js";
 

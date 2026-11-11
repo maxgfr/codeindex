@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileArgReadings, resolveFileArg } from "./patharg.js";
 import { SCHEMA_VERSION, EXTRACTOR_VERSION, type FileRecord, type Graph } from "./types.js";
 import { ENGINE_VERSION } from "./types.js";
@@ -60,7 +60,7 @@ import { resolutionReport } from "./resolution.js";
 import { hierarchyFor, resolveContextFor, symbolGraphFor } from "./derived.js";
 import { EDGE_KINDS, dependencyPath, impactOf, neighborsOf } from "./traverse.js";
 import { deltaOfDiff, emptyDelta, formatDeltaPanel, readDeltaDiff } from "./delta.js";
-import { explainQuery, searchIndex } from "./bm25.js";
+import { explainQuery } from "./bm25.js";
 import { checkRules, parseRulesText, rulesReport } from "./rules.js";
 import {
   EMBED_VERSION,

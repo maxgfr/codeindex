@@ -26,7 +26,6 @@ import { fileURLToPath } from "node:url";
 import { buildIndexArtifacts } from "../src/pipeline.js";
 import { renderGraphJson } from "../src/render/graph-json.js";
 import { renderSymbolsJson } from "../src/render/symbols-json.js";
-import { grammarKeysForExts } from "../src/ast/loader.js";
 import { searchIndex } from "../src/bm25.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));

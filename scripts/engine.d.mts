@@ -202,7 +202,6 @@ declare function readTextEx(abs: string): TextRead;
  * the overwhelmingly common case.
  */
 declare class OffsetMap {
-    private readonly text;
     private readonly ascii;
     /** charToByteTable[i] = byte offset of char index i. Length = text.length + 1. */
     private readonly table;

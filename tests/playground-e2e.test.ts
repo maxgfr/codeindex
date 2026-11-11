@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, extname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RUN = process.env.CODEINDEX_PLAYGROUND_E2E === "1";

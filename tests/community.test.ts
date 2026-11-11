@@ -1,7 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectCommunities, louvainCommunities } from "../src/community.js";
 import { buildIndexArtifacts } from "../src/pipeline.js";

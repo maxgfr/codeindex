@@ -693,17 +693,15 @@ var init_text = __esm({
     };
     strictUtf8 = new TextDecoder("utf-8", { fatal: true });
     OffsetMap = class {
-      constructor(text) {
-        this.text = text;
-        this.ascii = !/[^\x00-\x7F]/.test(text);
-        this.table = this.ascii ? null : buildCharToByte(text);
-        this.lineStarts = buildLineStarts(text);
-      }
-      text;
       ascii;
       /** charToByteTable[i] = byte offset of char index i. Length = text.length + 1. */
       table;
       lineStarts;
+      constructor(text) {
+        this.ascii = !/[^\x00-\x7F]/.test(text);
+        this.table = this.ascii ? null : buildCharToByte(text);
+        this.lineStarts = buildLineStarts(text);
+      }
       /** UTF-8 byte offset of a JS string index. */
       byteOf(charIndex) {
         if (this.ascii) return charIndex;

@@ -43,7 +43,7 @@ class BrowserBuffer extends Uint8Array {
   // the subclass outright. The widening buys assignability; the body below is
   // exhaustive over the shapes the engine actually passes.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  static from(value: any, encoding?: any): BrowserBuffer {
+  static override from(value: any, encoding?: any): BrowserBuffer {
     if (typeof value === "string") {
       if (encoding === "hex") {
         const out = new BrowserBuffer(value.length >> 1);
@@ -129,7 +129,7 @@ class BrowserBuffer extends Uint8Array {
     return super.subarray(begin, end) as BrowserBuffer;
   }
 
-  toString(encoding?: string, start?: number, end?: number): string {
+  override toString(encoding?: string, start?: number, end?: number): string {
     const view = start !== undefined || end !== undefined ? this.subarray(start ?? 0, end ?? this.length) : this;
     switch ((encoding ?? "utf8").toLowerCase()) {
       case "utf8":

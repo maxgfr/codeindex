@@ -13,7 +13,6 @@ import { buildIndexArtifacts } from "../src/pipeline.js";
 const EXPORTS = fileURLToPath(new URL("./fixtures/exports-monorepo", import.meta.url));
 const NX = fileURLToPath(new URL("./fixtures/nx-monorepo", import.meta.url));
 const MIXED = fileURLToPath(new URL("./fixtures/mixed-monorepo", import.meta.url));
-const FIXED_TIME = "2026-01-01T00:00:00.000Z";
 
 function scratchRepo(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "ui-mono-"));
@@ -196,7 +195,6 @@ describe("multiple go modules + replace directives", () => {
   });
 
   it("builds the mixed TS+Go+Python repo with zero dangling edges", () => {
-    const dir = join(mkdtempSync(join(tmpdir(), "ui-mixed-")), ".ultraindex");
     const { graph } = buildIndexArtifacts(MIXED);
     expect(graph.fileEdges.filter((e) => e.dangling)).toEqual([]);
     // The replace-directive edge is present in the graph, not just resolvable.

@@ -13,7 +13,7 @@ import { scanRepoParallel } from "../pool.js";
 import { needsGrammarWarm, preloadSession, preloadSessionLazy, toCacheMap, type PersistedCacheEntry, type PersistedCacheMap } from "../preload.js";
 import type { WalkResult } from "../walk.js";
 import { ensureGrammars, grammarKeysForExts, grammarLandscape } from "../ast/loader.js";
-import { resolveEmbedModelDir, loadEmbedModel, type StaticEmbedModel } from "../embed/model.js";
+import { loadEmbedModel, type StaticEmbedModel } from "../embed/model.js";
 import { type EmbeddingIndex } from "../embed/index.js";
 import { sha1 } from "../hash.js";
 import { headCommit } from "../git.js";

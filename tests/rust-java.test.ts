@@ -13,7 +13,6 @@ import { buildIndexArtifacts } from "../src/pipeline.js";
 
 const CARGO = fileURLToPath(new URL("./fixtures/mini-cargo", import.meta.url));
 const MAVEN = fileURLToPath(new URL("./fixtures/mini-maven", import.meta.url));
-const FIXED_TIME = "2026-01-01T00:00:00.000Z";
 
 function scratchRepo(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "ui-rs-"));
@@ -107,7 +106,6 @@ describe("resolveImport — Rust", () => {
     });
   });
   it("builds the cargo workspace with zero dangling edges", () => {
-    const dir = join(mkdtempSync(join(tmpdir(), "ui-cargo-")), ".ultraindex");
     const { graph } = buildIndexArtifacts(CARGO);
     expect(graph.fileEdges.filter((e) => e.dangling)).toEqual([]);
     expect(
@@ -142,7 +140,6 @@ describe("resolveImport — Java", () => {
     expect(resolveImport(from, ".java", "com.google.common.collect.ImmutableList", ctx).kind).toBe("external");
   });
   it("builds the maven layout with zero dangling edges", () => {
-    const dir = join(mkdtempSync(join(tmpdir(), "ui-maven-")), ".ultraindex");
     const { graph } = buildIndexArtifacts(MAVEN);
     expect(graph.fileEdges.filter((e) => e.dangling)).toEqual([]);
     expect(graph.fileEdges.some((e) => e.from === from && e.to.endsWith("User.java"))).toBe(true);

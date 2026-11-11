@@ -125,7 +125,7 @@ export class OffsetMap {
   private readonly table: Int32Array | null
   private readonly lineStarts: Int32Array
 
-  constructor(private readonly text: string) {
+  constructor(text: string) {
     // eslint-disable-next-line no-control-regex
     this.ascii = !/[^\x00-\x7F]/.test(text)
     this.table = this.ascii ? null : buildCharToByte(text)

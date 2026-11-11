@@ -25,7 +25,7 @@ import { buildEmbeddingIndex, deserializeEmbeddings, embeddingUnits, serializeEm
 import { readEmbeddingsFile } from "../src/embed/persist.js";
 import { explainSemantic, searchSemantic } from "../src/embed/search.js";
 import { explainQuery, searchIndex } from "../src/bm25.js";
-import { scanRepo, type RepoScan } from "../src/scan.js";
+import type { RepoScan } from "../src/scan.js";
 import type { CodeSymbol, FileRecord } from "../src/types.js";
 
 const MODEL_DIR = fileURLToPath(new URL("./fixtures/embed-model", import.meta.url));
