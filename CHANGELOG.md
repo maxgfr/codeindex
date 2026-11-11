@@ -2,6 +2,46 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.19](https://github.com/maxgfr/codeindex/compare/v2.31.18...v2.31.19) (2026-11-11)
+
+### Bug Fixes
+
+* **browser:** make existsSync, mkdirSync and ascii decoding answer as Node does ([fa9d801](https://github.com/maxgfr/codeindex/commit/fa9d801c7755f47b6932f855c07f15c20fcd9104))
+* **cache:** close four gaps in how cached records are tied to grammar builds ([22a145a](https://github.com/maxgfr/codeindex/commit/22a145a80b81043b5238347ae56607ec788d10b4))
+* **cache:** tie cached records to the build of the grammar that parsed them ([0e76a0a](https://github.com/maxgfr/codeindex/commit/0e76a0a0e20000aaa1d2b67c48b2eccaae70ffb2))
+* **calls:** a call on an unnamed receiver, or on this/self, is not a bare call ([1eecbd6](https://github.com/maxgfr/codeindex/commit/1eecbd65c62785bc2997b841ea3a897bfb4bbc8a))
+* **calls:** restore Rust self::f() and JS prototype this.f(), read generic and indexed receivers right ([da30437](https://github.com/maxgfr/codeindex/commit/da30437bfe3984a42125c39780a09573f4c60414))
+* check an edit's target again at write time, and bound what the engine reads back ([11de1ed](https://github.com/maxgfr/codeindex/commit/11de1ed323df16559a5a00e549ed18528eb7fa6d))
+* **cli:** read path arguments as paths, and mcp flags strictly ([874c4a7](https://github.com/maxgfr/codeindex/commit/874c4a768681508e65ce9eaca07b5cde273c6a38))
+* **cli:** say when a global flag has no effect, and make lsp status and -v answer right ([c14ef15](https://github.com/maxgfr/codeindex/commit/c14ef15099bb49b2a97da939883538a1e21c1962))
+* **edit:** insert before a file's first declaration below its licence header ([31c3b53](https://github.com/maxgfr/codeindex/commit/31c3b53f2d96757a8564d76fa33ae8f16b90849e))
+* **edit:** never overwrite a change made while an edit was prepared, and write memories atomically ([cb34e8e](https://github.com/maxgfr/codeindex/commit/cb34e8e3575bedf6cbd2c6920fdea6b4d737711f))
+* **embed:** bound the server before it reads a request, and version its image for real ([461b70f](https://github.com/maxgfr/codeindex/commit/461b70f211eec5e77417e3e61cd96c813a8471ee))
+* **embed:** keep the embedding server local, reproducible and able to recover ([3abda64](https://github.com/maxgfr/codeindex/commit/3abda6439dd4ad2ba95446d5d62649fa7ca3e161))
+* **embed:** keep words written with combining marks whole ([5a86166](https://github.com/maxgfr/codeindex/commit/5a8616698df1ab837683003b9d2010a846541171))
+* **embed:** notice a model swapped behind the endpoint at once, and cap a chunked response ([a9cf980](https://github.com/maxgfr/codeindex/commit/a9cf980b59ffd1014e5a93bfc806ca4793797ea2))
+* **embed:** tokenize words of every script instead of dropping them ([1f6f987](https://github.com/maxgfr/codeindex/commit/1f6f987382eb01411e805dcf5be56231f3eb42b7))
+* flag a failed extractor, list a caller line once, seed a delta from the changed file ([fb01c2c](https://github.com/maxgfr/codeindex/commit/fb01c2cddffe1f714a009ab76ddd31cc5e317a99))
+* **git:** keep a repository's own clean/process filter from running on delta ([aae031d](https://github.com/maxgfr/codeindex/commit/aae031de83cba6f41db9ee8e9af2e4602f272125))
+* **grep:** search the same files on both backends, and bound an MCP search ([8a942b3](https://github.com/maxgfr/codeindex/commit/8a942b3535d75e786052a28c257d0df4819b7db7))
+* **ignore:** read a reversed bracket range as git does instead of dropping the rule ([78d86be](https://github.com/maxgfr/codeindex/commit/78d86bea1a34fec2fca91533b7e029a29da4a667))
+* **mcp:** let onboard run when it writes nothing, and name the profiles a refused tool is in ([e2fa14a](https://github.com/maxgfr/codeindex/commit/e2fa14a560b8ed4ae1aa80558b6b5a80afa219d9))
+* **mcp:** make the --repo pin a boundary, and a profile without write tools read-only ([f5fe67e](https://github.com/maxgfr/codeindex/commit/f5fe67ee7b8973b7c7cb33ddd159669341fe9877))
+* **mcp:** one initialize per session, an answer to every request, and a bounded message ([f7d1144](https://github.com/maxgfr/codeindex/commit/f7d1144d99a7a57bc327c42e3773494a0bf10153))
+* **query:** return copies of the scan's symbol records ([eb58224](https://github.com/maxgfr/codeindex/commit/eb58224facd578950153042ac583a3f1489a671f))
+* **rewrite:** rewrite git grep only where it searches the files the engine does ([6607109](https://github.com/maxgfr/codeindex/commit/6607109712f64562e0ed074dded4cf78944d5752))
+* **scan:** do not count the newline that ends a file as one more line ([fe57fdd](https://github.com/maxgfr/codeindex/commit/fe57fdd5ebdb3d0dd2c9121477aa693bc624f2c9))
+* **search:** give a file named with a pipe its own imports in the import PageRank ([029567e](https://github.com/maxgfr/codeindex/commit/029567edc68cb6e1af76201b34ab92fb04ff4cb2))
+* validate what the engine reads back from ripgrep, embedding files, endpoints and lsp.json ([1bea07c](https://github.com/maxgfr/codeindex/commit/1bea07c52997122c5f739b2c2d3bc68b41fdd215))
+* **walk:** decide in the walk that a file cannot be read, so every caller agrees ([02f49b1](https://github.com/maxgfr/codeindex/commit/02f49b11b4b8445adb445783457d00f426ca21bb))
+* **walk:** report what cannot be read instead of dropping or emptying it ([02a7368](https://github.com/maxgfr/codeindex/commit/02a7368bbd4bb73dbf0a72c17b9b467114ebb933))
+* **workspaces:** match an astral character in a workspace glob, and test two fixes that had none ([f94e566](https://github.com/maxgfr/codeindex/commit/f94e5667c1b0be7299dcd988ad96a44def738e82))
+
+### Performance Improvements
+
+* **bind:** ask once per file whether it is a test case ([64e3ceb](https://github.com/maxgfr/codeindex/commit/64e3ceb7e884e83c48188ce044b4534807b093ea))
+* **resolve:** memoize the Ruby lib-root and PHP PSR-4 probes, as C's ([c840844](https://github.com/maxgfr/codeindex/commit/c840844d5172131700bd19314b9cf28a1b5118bd))
+
 ## [2.31.18](https://github.com/maxgfr/codeindex/compare/v2.31.17...v2.31.18) (2026-11-11)
 
 
