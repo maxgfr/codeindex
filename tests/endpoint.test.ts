@@ -204,6 +204,15 @@ describe("endpoint client — protocol contract", () => {
     expect(await embedViaEndpoint(["x"], { url: m.url })).toEqual([[1, 0]]);
   });
 
+  it("reads a response that starts with a UTF-8 byte-order mark, as res.text() did", async () => {
+    const m = await mock((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('﻿{"vectors":[[1,0]]}');
+      return true;
+    });
+    expect(await embedViaEndpoint(["x"], { url: m.url })).toEqual([[1, 0]]);
+  });
+
   it("aborts on timeout", async () => {
     const m = await mock((_req, _res) => true /* never responds */);
     await expect(embedViaEndpoint(["x"], { url: m.url, timeoutMs: 150 })).rejects.toThrow();

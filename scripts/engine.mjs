@@ -19545,7 +19545,7 @@ async function readCapped(res, max, url) {
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 function capText(text) {
   if (text.length <= ENDPOINT_MAX_TEXT_CHARS) return text;

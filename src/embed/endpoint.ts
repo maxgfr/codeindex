@@ -90,6 +90,8 @@ const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
 // The body of a response, read as it arrives and abandoned past `max` bytes:
 // a chunked response declares no length, and res.text() held it whole first.
+// Decoded as res.text() decodes, a leading UTF-8 byte-order mark dropped:
+// Buffer#toString kept it, and JSON.parse refused the response.
 async function readCapped(res: Response, max: number, url: string): Promise<string> {
   if (!res.body) return "";
   const reader = res.body.getReader();
@@ -105,7 +107,7 @@ async function readCapped(res: Response, max: number, url: string): Promise<stri
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 function capText(text: string): string {
@@ -185,8 +187,12 @@ export async function encodeQueryViaEndpoint(query: string, opts: EmbedEndpointO
 // A fixed text whose vector identifies the model behind an endpoint. The URL
 // alone does not: the image behind localhost:8756 can change between two runs,
 // and mixing its vectors with another model's would misrank silently. One tiny
-// request; the int8 quantization absorbs float noise, and if the vector still
-// wobbles the only cost is a cache miss.
+// request; the int8 quantization absorbs float noise. A vector that still
+// wobbles (a server whose floats depend on batching or hardware) is not
+// harmless: each new fingerprint is a model the index has no vectors for, so
+// the CLI rebuilds its cache and the MCP server, which asks on every search,
+// re-embeds the whole corpus on each search where it changed. The reference
+// image computes on CPU and answers the same vector every time.
 const CANARY = "codeindex endpoint fingerprint: parse the request, retry on timeout";
 
 // `endpoint@<hash of the canary's int8 vector>` — the modelId an endpoint index
