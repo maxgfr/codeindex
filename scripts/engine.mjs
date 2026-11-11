@@ -16114,7 +16114,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
       return r;
     };
     const readInScope = (receiver, e, self) => {
-      if (SELF_NAMES.has(receiver) && family === "js" && e?.parent === void 0) return BARE;
+      if (receiver === "this" && family === "js" && e !== void 0 && e.parent === void 0 && e.kind === "function") return BARE;
       if (SELF_NAMES.has(receiver)) return self(e?.parent);
       if (receiver === "super") {
         const cls = classAround(e);

@@ -661,3 +661,35 @@ describe("a construction call binds the method of the type it builds", () => {
     }
   });
 });
+
+// A JS `this` with no class is read as a bare call only in a plain function
+// (a constructor function, a prototype method): elsewhere it is not the
+// file's free function of that name.
+describe("a JS this or self outside a class", () => {
+  it("binds the free function from a plain function only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-call-binding-this-"));
+    try {
+      writeFileSync(
+        join(dir, "a.js"),
+        [
+          "function b() {}",
+          "function close() {}",
+          "function setup() {}",
+          "const o = { a() { this.b(); }, b() {} };",
+          "function run() { self.close(); }",
+          "function Widget() { this.setup(); }",
+          "const arrow = () => { this.close(); };",
+          "",
+        ].join("\n"),
+      );
+      const local = scanRepo(dir);
+      const edges = buildSymbolGraph(local, importPairsFor(local))
+        .edges.filter((e) => e.kind === "calls")
+        .map((e) => `${e.from} -> ${e.to}`)
+        .sort();
+      expect(edges).toEqual(["a.js#Widget -> a.js#setup"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

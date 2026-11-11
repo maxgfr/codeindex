@@ -818,7 +818,11 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       // `Widget.prototype.draw = function` — names an object only the runtime
       // knows: the call is read as the bare call it was before keyword
       // receivers were recorded, so `this.setup()` still reaches `setup`.
-      if (SELF_NAMES.has(receiver) && family === "js" && e?.parent === undefined) return BARE;
+      // Only `this`, and only in a plain function: in an object literal's
+      // method (`const o = { a() { this.b(); } }`) it is the literal, in an
+      // arrow function the enclosing scope's, and a JS `self` is a variable —
+      // none of them the file's free function of that name.
+      if (receiver === "this" && family === "js" && e !== undefined && e.parent === undefined && e.kind === "function") return BARE;
       if (SELF_NAMES.has(receiver)) return self(e?.parent);
       // `super.f()` (Python's `super().f()`): a member of the enclosing class's
       // base — never the override it is called from. A base this file declares
