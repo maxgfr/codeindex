@@ -27,3 +27,6 @@ scripts/grammars-extended.staging-*/
 #   cp -R scripts/grammars site/playground/grammars
 site/playground/grammars/
 site/playground/engine.browser.mjs
+
+# macOS Finder metadata
+.DS_Store
