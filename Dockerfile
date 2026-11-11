@@ -32,7 +32,7 @@ WORKDIR /app
 COPY --chown=node:node scripts/engine.mjs scripts/engine.d.mts scripts/cli.mjs ./scripts/
 # AST tier: tree-sitter grammars must sit next to engine.mjs (scripts/grammars)
 # for the loader's same-directory resolution to find them — see
-# resolveGrammarDir() in engine.mjs.
+# resolveGrammarsDir() in engine.mjs.
 COPY --chown=node:node scripts/grammars ./scripts/grammars
 # README.md carries the browser guide, the semantic tier and the versioning
 # rules that used to live under docs/ — one file, so the image documents itself

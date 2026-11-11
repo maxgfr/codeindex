@@ -13,6 +13,10 @@ scripts/embed-asset/.venv/
 # never in git: `node scripts/fetch-grammars.mjs --extended` regenerates it, and
 # `codeindex grammars pull` is how a consumer gets it.
 scripts/grammars-extended/
+# What fetch-grammars.mjs builds before swapping it in; left behind only when
+# the script is killed mid-copy.
+scripts/grammars.staging-*/
+scripts/grammars-extended.staging-*/
 
 # The playground serves the engine bundle and the grammars from its own
 # directory, but both live in scripts/ (the bundle is published to npm as

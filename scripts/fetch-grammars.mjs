@@ -61,8 +61,9 @@ const CORE = {
 // by name, so they would cost wasm weight for no symbol recall.
 //
 // Dart is also absent, for a harder reason: `tree-sitter-dart` DOES publish a
-// wasm, but web-tree-sitter 0.26 cannot load it (Language.load rejects — an ABI
-// mismatch). Shipping it would put 742 KiB in the asset that never loads and
+// wasm, but web-tree-sitter cannot load it (Language.load rejects — an ABI
+// mismatch; re-checked 2026-11 with web-tree-sitter 0.27.2 and tree-sitter-dart
+// 1.0.0). Shipping it would put 742 KiB in the asset that never loads and
 // advertise AST support that silently degrades, so Dart gets a regex extractor
 // (src/lang/dart.ts) instead. Revisit when the grammar republishes.
 const EXTENDED = {
