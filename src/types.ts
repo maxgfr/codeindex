@@ -113,7 +113,8 @@ export const SCHEMA_VERSION = 5;
 // `Parser(t).parse()` → "Parser"), "?" otherwise; a C# generic call is named
 // for its method, not its type argument (`x.Get<Widget>()` → Get), a Java/C#
 // `new List<T>()` for its type; Go's `pkg.Fn[T](x)` is a call; the regex tier
-// no longer starts a call name inside a word.
+// no longer starts a call name inside a word; a prose word keeps its combining
+// marks (a Devanagari word is one term, not its letters).
 export const EXTRACTOR_VERSION = 22;
 
 // The receiver of a call made ON something that has no simple name: a literal,

@@ -269,15 +269,15 @@ var init_util = __esm({
       "our"
     ]);
     NON_ASCII = /[^\x00-\x7F]/;
-    NON_WORD = /[^\p{L}\p{N}_]+/u;
+    NON_WORD = /[^\p{L}\p{M}\p{N}_]+/u;
     ASCII_CASE_1 = /([a-z0-9])([A-Z])/g;
     ASCII_CASE_2 = /([A-Z]+)([A-Z][a-z])/g;
     ASCII_GLUE = /[^a-z0-9_]+/g;
     ASCII_SPLIT = /[^A-Za-z0-9]+/;
     UNICODE_CASE_1 = new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu");
     UNICODE_CASE_2 = new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu");
-    UNICODE_GLUE = /[^\p{L}\p{N}_]+/gu;
-    UNICODE_SPLIT = /[^\p{L}\p{N}]+/u;
+    UNICODE_GLUE = /[^\p{L}\p{M}\p{N}_]+/gu;
+    UNICODE_SPLIT = /[^\p{L}\p{M}\p{N}]+/u;
   }
 });
 

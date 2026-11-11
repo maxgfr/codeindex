@@ -144,4 +144,15 @@ describe("references and search", () => {
     expect(subtokens("parseÉcoleNormale")).toEqual(["parseecolenormale", "parse", "ecole", "normale"]);
     expect(keywords("où est København")).toEqual(["ou", "est", "København"]);
   });
+
+  // A vowel sign or a virama is part of its word: the query side and the index
+  // side both cut `नमस्ते` into letters, and agreed on nothing worth matching.
+  it("keeps a word's combining marks inside it, on both sides of a search", () => {
+    expect(subtokens("नमस्ते")).toEqual(["नमस्ते"]);
+    expect(subtokens("हिन्दी भाषा")).toEqual(["हिन्दी", "भाषा"]);
+    expect(keywords("हिन्दी भाषा")).toEqual(["हिन्दी", "भाषा"]);
+    const root = repo({ "src/greet.ts": "// नमस्ते दुनिया\nexport const greet = 1;\n", "src/other.ts": "export const other = 2;\n" });
+    const { results } = explainQuery(scanRepo(root), "नमस्ते");
+    expect(results.map((r) => r.file)).toEqual(["src/greet.ts"]);
+  });
 });

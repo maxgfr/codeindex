@@ -165,8 +165,10 @@ export function foldText(s: string): string {
 // (gin's `Default`, `Use`). 1-char noise is never reclaimed.
 // Letters and digits of every script: an ASCII-only split dropped every
 // non-Latin word, so `конфигурация` or `日本語` could not be searched, and
-// `Œuvre` lost its first letter.
-const NON_WORD = /[^\p{L}\p{N}_]+/u;
+// `Œuvre` lost its first letter. With their combining marks: a Devanagari
+// vowel sign or virama is part of its word (`नमस्ते`), and splitting on it cut
+// the word into letters. foldText has already dropped Latin diacritics.
+const NON_WORD = /[^\p{L}\p{M}\p{N}_]+/u;
 
 export function keywords(question: string, keep?: (raw: string) => boolean): string[] {
   const seen = new Set<string>();
@@ -259,8 +261,9 @@ const ASCII_GLUE = /[^a-z0-9_]+/g;
 const ASCII_SPLIT = /[^A-Za-z0-9]+/;
 const UNICODE_CASE_1 = /([\p{Ll}\p{N}])(\p{Lu})/gu;
 const UNICODE_CASE_2 = /(\p{Lu}+)(\p{Lu}\p{Ll})/gu;
-const UNICODE_GLUE = /[^\p{L}\p{N}_]+/gu;
-const UNICODE_SPLIT = /[^\p{L}\p{N}]+/u;
+// Marks stay inside their word, as in NON_WORD above.
+const UNICODE_GLUE = /[^\p{L}\p{M}\p{N}_]+/gu;
+const UNICODE_SPLIT = /[^\p{L}\p{M}\p{N}]+/u;
 
 export function subtokens(raw: string): string[] {
   const ascii = !NON_ASCII.test(raw);
