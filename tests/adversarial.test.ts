@@ -72,6 +72,15 @@ describe("perf: linear on adversarial input", () => {
     expect(ms).toBeLessThan(1500);
   });
 
+  // `\s*[?!]?\s*\.` in the call regex: two `\s*` side by side, retried from
+  // every start position, were quadratic on an identifier before a long run of
+  // spaces — 6 s for 32 000 of them.
+  it("perf: an identifier followed by 200k spaces in the regex tier", () => {
+    const { value, ms } = timed(() => collectCallsRegex("x" + " ".repeat(200_000) + "= 1;\nfoo(1);\n"));
+    expect(value.map((c) => c.name)).toEqual(["foo"]);
+    expect(ms).toBeLessThan(1500);
+  });
+
   // Greedy longest-match wordpiece tried every end for every start: cubic on a
   // word the vocabulary keeps matching piece by piece.
   it("perf: an 8,000-character word through the embedding tokenizer", () => {

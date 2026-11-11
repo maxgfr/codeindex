@@ -49,8 +49,8 @@ const STRICT = new Set(["js", "go"]);
 // Families where a call's SHAPE says what it can reach. A bare `f()` is never
 // a method (a method needs `self.f()` / `c.F()`), and `x.f()` on a variable is
 // never a free function (a module-level function is reached through its
-// module). JS/TS is left out on purpose: `this.f()` reaches the extractor with
-// no receiver at all, so a bare-looking call may well be a method.
+// module). JS/TS is left out on purpose: a bare-looking call there may well be
+// a method (a prototype method's `this.f()` is read as bare, see readInScope).
 const SHAPED = new Set(["go", "python"]);
 
 // Families whose unit of visibility is the DIRECTORY: a file sees every
@@ -83,9 +83,9 @@ const MAX_BASE_HOPS = 8;
 // file imports a local enum's variant by name.
 const PRELUDE_VARIANTS = new Set(["Ok", "Err", "Some", "None"]);
 
-// Receivers that name the enclosing object. JS/TS/Java `this` and Rust `self`
-// never get here (the extractor reads no receiver from them); PHP's `$this`
-// does, as "this".
+// Receivers that name the enclosing object: JS/TS/Java/C#/C++ `this`, Rust and
+// Ruby `self` (recorded by both tiers), PHP's `$this` (as "this"), Python's
+// `self`/`cls`.
 const SELF_NAMES = new Set(["self", "cls", "this", "Self"]);
 
 const FUNCTION_KINDS = new Set(["function", "method", "def", "constructor", "operator"]);
@@ -814,6 +814,11 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     };
     // The part of `read` that depends on the enclosing declaration `e`.
     const readInScope = (receiver: string, e: CodeSymbol | undefined, self: (t: string | undefined) => Reading): Reading => {
+      // A JS `this` with no enclosing class — a constructor function, a
+      // `Widget.prototype.draw = function` — names an object only the runtime
+      // knows: the call is read as the bare call it was before keyword
+      // receivers were recorded, so `this.setup()` still reaches `setup`.
+      if (SELF_NAMES.has(receiver) && family === "js" && e?.parent === undefined) return BARE;
       if (SELF_NAMES.has(receiver)) return self(e?.parent);
       // `super.f()` (Python's `super().f()`): a member of the enclosing class's
       // base — never the override it is called from. A base this file declares

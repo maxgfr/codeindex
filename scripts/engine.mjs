@@ -8334,6 +8334,7 @@ function readName(node) {
 }
 function readReceiver(node, onCallNode = false) {
   if (!node || node.namedChildren.length === 0) return void 0;
+  if (node.type === "generic_function") return readReceiver(node.childForFieldName("function"), onCallNode);
   let obj = null;
   let field = "";
   for (const candidate of RECEIVER_FIELDS) {
@@ -8344,12 +8345,16 @@ function readReceiver(node, onCallNode = false) {
     }
   }
   if (obj?.type === "super" || obj?.type === "crate" && node.type === "scoped_identifier") return obj.type;
+  if (obj?.type === "self" && node.type === "scoped_identifier") return void 0;
   if (obj?.type === "composite_literal") {
     const type = obj.childForFieldName("type");
     const name3 = type ? readTypeName(type) : void 0;
     return name3 && /^[A-Za-z_]\w*$/.test(name3) ? name3 : void 0;
   }
   if (!obj) return void 0;
+  while (PARENTHESIZED.test(obj.type) && obj.namedChildren.length === 1) obj = obj.namedChildren[0];
+  if (obj.type === "call" && obj.childForFieldName("function")?.text === "super") return "super";
+  if (UNNAMED_OBJECT.test(obj.type) || obj.childForFieldName("arguments") !== null && obj.type !== "composite_literal") return UNNAMED_RECEIVER;
   const name2 = readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : void 0);
   const kept = receiverName(name2);
   if (kept !== void 0) return kept;
@@ -8381,7 +8386,7 @@ function readTypeName(node) {
   visit(node);
   return last;
 }
-var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, RECEIVER_FIELDS, RUBY_VARIABLE, SELF_NODE, BASE_NODE, TYPE_LEAF;
+var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, RECEIVER_FIELDS, RUBY_VARIABLE, UNNAMED_OBJECT, PARENTHESIZED, SELF_NODE, BASE_NODE, TYPE_LEAF;
 var init_node = __esm({
   "src/ast/node.ts"() {
     "use strict";
@@ -8391,6 +8396,8 @@ var init_node = __esm({
     UNNAMED_CHAIN = /* @__PURE__ */ new Set(["reference_declarator", "parenthesized_declarator"]);
     RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "argument", "receiver", "table"];
     RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
+    UNNAMED_OBJECT = /^(?:subscript(?:_expression)?|index_expression|indexing_expression|element_access_expression|element_reference|array_access|parenthesized_expression|parenthesized_primary_expression|binary_expression|binary_operator|await_expression|conditional_expression|ternary_expression)$/;
+    PARENTHESIZED = /^(?:parenthesized_expression|parenthesized_primary_expression)$/;
     SELF_NODE = /^(this|self)(?:_expression)?$/;
     BASE_NODE = /^base(?:_expression)?$/;
     TYPE_LEAF = /identifier|constant|(^|_)name$/;
@@ -10819,7 +10826,7 @@ function collectCallsRegex(content, symbols = [], maxCalls = DEFAULT_MAX_CALLS) 
   const out2 = /* @__PURE__ */ new Map();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
-  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*[?!]?\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
+  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*(?:[?!]\s*)?\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i2 = 0; i2 < lines.length; i2++) {
     const line2 = lines[i2];
     const trimmed = line2.trimStart();
@@ -15991,6 +15998,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
       return r;
     };
     const readInScope = (receiver, e, self) => {
+      if (SELF_NAMES.has(receiver) && family === "js" && e?.parent === void 0) return BARE;
       if (SELF_NAMES.has(receiver)) return self(e?.parent);
       if (receiver === "super") {
         const cls = classAround(e);

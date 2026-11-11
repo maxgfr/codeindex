@@ -548,3 +548,54 @@ describe("one line calling a declaration under two names", () => {
     }
   });
 });
+
+// Cases the review of the receiver changes found: each bound correctly before
+// keyword and unnamed receivers were recorded, or never did.
+describe("receivers the binder must still read right", () => {
+  const SOURCES: Record<string, string> = {
+    // Rust `self::f()` is a path into the current module, not an instance call.
+    "m.rs": "fn helper() {}\nstruct K;\nimpl K {\n    fn helper(&self) {}\n    fn m(&self) {\n        self::helper();\n    }\n}\nfn free() {\n    self::helper();\n}\nfn only() {}\nfn caller() {\n    self::only();\n}\n",
+    // A prototype method's `this` has no class the extractor knows.
+    "w.js": "function Widget() {\n  this.setup();\n}\nWidget.prototype.setup = function () {};\nWidget.prototype.draw = function () {\n  return this.setup();\n};\n",
+    // A generic method call has a receiver; it is not the same-file function.
+    "g.rs": 'fn collect() {}\nfn parse() {}\nfn run(xs: Vec<u8>) {\n    let v = xs.iter().collect::<Vec<_>>();\n    let n = "1".parse::<u8>();\n}\n',
+    // The last name inside an index or a call's arguments is not the receiver.
+    "i.ts": "export function run(): void {}\nexport function go(): void {}\nexport class Thing {\n  constructor(c: number) {}\n  go(): void {}\n}\nexport function m(items: { run(): void }[], i: number, cfg: number): void {\n  items[i].run();\n  new Thing(cfg).go();\n}\n",
+  };
+  let dir: string;
+  let local: RepoScan;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "ci-call-binding-review-"));
+    for (const [rel, content] of Object.entries(SOURCES)) writeFileSync(join(dir, rel), content);
+    local = scanRepo(dir);
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const edgesFrom = (file: string): string[] =>
+    buildSymbolGraph(local, importPairsFor(local))
+      .edges.filter((e) => e.kind === "calls" && e.from.startsWith(file + "#"))
+      .map((e) => `${e.from} -> ${e.to}`)
+      .sort();
+  const callsIn = (rel: string) => local.files.find((f) => f.rel === rel)!.calls!;
+
+  it("Rust self::f() calls the module's function", () => {
+    expect(edgesFrom("m.rs")).toEqual(["m.rs#K/m -> m.rs#helper", "m.rs#caller -> m.rs#only", "m.rs#free -> m.rs#helper"]);
+  });
+
+  it("a JS prototype method's this.f() reaches f", () => {
+    expect(edgesFrom("w.js")).toEqual(["w.js#Widget -> w.js#setup", "w.js#draw -> w.js#setup"]);
+  });
+
+  it("a generic method call keeps its receiver and binds no same-file function", () => {
+    expect(callsIn("g.rs").filter((c) => c.name === "collect" || c.name === "parse")).toEqual([
+      { name: "collect", line: 4, receiver: "?" },
+      { name: "parse", line: 5, receiver: "?" },
+    ]);
+    expect(edgesFrom("g.rs")).toEqual([]);
+  });
+
+  it("an index or a constructor call is an unnamed receiver, not the name inside it", () => {
+    expect(callsIn("i.ts")).toContainEqual({ name: "run", line: 8, receiver: "?" });
+    expect(callsIn("i.ts")).toContainEqual({ name: "go", line: 9, receiver: "?" });
+    expect(edgesFrom("i.ts")).toEqual(["i.ts#m -> i.ts#Thing"]);
+  });
+});
