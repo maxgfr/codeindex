@@ -126,7 +126,7 @@ export function collectCallsRegex(
   // `a!.b()`): without them the call read as the bare `b()`.
   // `\s*(?:[?!]\s*)?\.` and not `\s*[?!]?\s*\.`: two `\s*` side by side made an
   // identifier followed by a long run of spaces quadratic (6 s for 32 000).
-  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*(?:[?!]\s*)?\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
+  const CALL_RE = /(?:\bnew\s+)?(?:(?<![\w$])([A-Za-z_$][\w$]*)\s*(?:[?!]\s*)?\.\s*)?(?<![\w$])([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     // Cheap comment guard: a line-leading comment marker means no calls here

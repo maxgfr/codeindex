@@ -10924,7 +10924,7 @@ function collectCallsRegex(content, symbols = [], maxCalls = DEFAULT_MAX_CALLS) 
   const out2 = /* @__PURE__ */ new Map();
   const ownDefLines = new Set(symbols.map((s) => `${s.name} ${s.line}`));
   const lines = content.split("\n");
-  const CALL_RE = /(?:\bnew\s+)?(?:([A-Za-z_$][\w$]*)\s*(?:[?!]\s*)?\.\s*)?([A-Za-z_$][\w$]*)\s*\(/g;
+  const CALL_RE = /(?:\bnew\s+)?(?:(?<![\w$])([A-Za-z_$][\w$]*)\s*(?:[?!]\s*)?\.\s*)?(?<![\w$])([A-Za-z_$][\w$]*)\s*\(/g;
   for (let i2 = 0; i2 < lines.length; i2++) {
     const line2 = lines[i2];
     const trimmed = line2.trimStart();

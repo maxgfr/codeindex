@@ -81,6 +81,15 @@ describe("perf: linear on adversarial input", () => {
     expect(ms).toBeLessThan(1500);
   });
 
+  // A match could start inside a word, so each of its n characters began a
+  // scan of the rest: 1.1 s for 20 000, 54 s with 20 000 spaces after them —
+  // a long hex or base64 literal reaches it.
+  it("perf: a 100k-character word followed by 100k spaces in the regex tier", () => {
+    const { value, ms } = timed(() => collectCallsRegex("x".repeat(100_000) + " ".repeat(100_000) + "= 1;\nfoo(1);\n"));
+    expect(value.map((c) => c.name)).toEqual(["foo"]);
+    expect(ms).toBeLessThan(1500);
+  });
+
   // Greedy longest-match wordpiece tried every end for every start: cubic on a
   // word the vocabulary keeps matching piece by piece.
   it("perf: an 8,000-character word through the embedding tokenizer", () => {
