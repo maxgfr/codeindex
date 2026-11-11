@@ -1234,6 +1234,9 @@ export const SPECS: Record<string, LangSpec> = {
     calls: {
       function_call_expression: "function",
       member_call_expression: "member",
+      // `$a?->run()` and `A::create()` / `self::make()`.
+      nullsafe_member_call_expression: "member",
+      scoped_call_expression: "member",
       object_creation_expression: "constructor",
     },
     extraMembers: phpPromotedProperties,

@@ -152,6 +152,11 @@ export function readName(node: TSNode | null): string | undefined {
   // Go's `pkg.Fn[Widget](x)` calls Fn — not their last type argument.
   if (node.type === "generic_name") return readName(kids[0]!);
   if (node.type === "generic_type") return readName(node.childForFieldName("type") ?? kids[0]!);
+  // Go's `New[T]()`, `Fn[T](a, b)`: a call on an index whose index is a type
+  // calls the generic function. Any other index (`handlers[key]()`) calls a
+  // value no name here says — not the index, as the last-child rule read it.
+  if (isGoInstantiation(node)) return readName(node.childForFieldName("operand"));
+  if (node.type === "index_expression" && node.childForFieldName("operand")) return undefined;
   const seg =
     node.childForFieldName("name") ??
     node.childForFieldName("property") ??
@@ -199,16 +204,28 @@ export function readReceiver(node: TSNode | null, onCallNode = false, typeCalls?
   // had none, and bound by name.
   if (node.type === "generic_function") return readReceiver(node.childForFieldName("function"), onCallNode, typeCalls);
   if (node.type === "generic_type") return readReceiver(node.childForFieldName("type"), onCallNode, typeCalls);
+  if (isGoInstantiation(node)) return readReceiver(node.childForFieldName("operand"), onCallNode, typeCalls);
+  // Solidity wraps every callee in an `expression` node.
+  if (node.type === "expression" && node.namedChildren.length === 1) return readReceiver(node.namedChildren[0]!, onCallNode, typeCalls);
   let obj: TSNode | null = null;
   let field = "";
-  for (const candidate of RECEIVER_FIELDS) {
-    obj = node.childForFieldName(candidate);
-    if (obj) {
-      field = candidate;
-      break;
+  // Kotlin's navigation_expression and Elixir's dot name no field for their
+  // object; PHP's static call names it `scope`.
+  if (node.type === "navigation_expression") [obj, field] = [node.namedChildren[0]!, "object"];
+  else if (node.type === "dot") [obj, field] = [node.childForFieldName("left"), "object"];
+  else if (node.type === "scoped_call_expression") [obj, field] = [node.childForFieldName("scope"), "object"];
+  else {
+    for (const candidate of RECEIVER_FIELDS) {
+      obj = node.childForFieldName(candidate);
+      if (obj) {
+        field = candidate;
+        break;
+      }
     }
   }
   if (!obj) return undefined;
+  // PHP's `self::`/`static::` are the class's own scope, `parent::` its base.
+  if (obj.type === "relative_scope") return obj.text === "parent" ? "super" : "self";
   if (onCallNode && field !== "object" && field !== "receiver") return undefined;
   // `super` and Rust's `crate` are keywords, leaves readName does not take for
   // a name. Rust's `crate::f()`/`super::f()` name a module the binder resolves
@@ -235,14 +252,22 @@ const RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "ar
 // `items[idx].run()`, the block parameter for `xs.map { |user| user }.save`.
 function receiverOf(start: TSNode, typeCalls: TypeCalls | undefined): string | undefined {
   let obj = start;
-  // Parentheses, TS's `a!` and Go's `&T{…}` are transparent: `(x).f()` is a
-  // call on x, `(&T{}).M()` one on a T.
+  // Transparent: parentheses, a non-null assertion (TS's `a!`, C#'s `a!`,
+  // Kotlin's `a!!`), Rust's `a?`, a dereference or an address (`(*p).f()`,
+  // `(&x)->f()`, Go's `(&T{}).M()`): a call on what they wrap.
   for (;;) {
     const only = obj.namedChildren.length === 1 ? obj.namedChildren[0]! : undefined;
     if (only && TRANSPARENT.test(obj.type)) obj = only;
-    else if (obj.type === "unary_expression" && obj.childForFieldName("operand")?.type === "composite_literal") obj = obj.childForFieldName("operand")!;
-    else break;
+    else if (only && obj.type === "postfix_unary_expression" && obj.text.endsWith("!")) obj = only;
+    else if (POINTER.test(obj.type) && /^[*&]|!$/.test(obj.text)) {
+      const inner = obj.childForFieldName("operand") ?? obj.childForFieldName("argument") ?? obj.childForFieldName("value") ?? only;
+      if (!inner) break;
+      obj = inner;
+    } else break;
   }
+  // tree-sitter-typescript reads `x && y!.f()` as `(x && y)!.f()`: the call
+  // is on y.
+  if (obj.type === "binary_expression" && start.type === "non_null_expression") obj = obj.childForFieldName("right") ?? obj;
   const kids = obj.namedChildren;
   if (kids.length === 0) {
     // The enclosing instance, written as a keyword node rather than as a
@@ -250,6 +275,7 @@ function receiverOf(start: TSNode, typeCalls: TypeCalls | undefined): string | u
     // already record. Without it `this.save()` read as the bare `save()` and
     // bound to a same-file FUNCTION of that name instead of the class's own
     // method. C#'s `base.f()` stays a call in the class's own scope.
+    if (obj.type === "this") return thisReceiver(obj);
     const self = SELF_NODE.exec(obj.type);
     if (self) return self[1];
     if (obj.type === "super") return "super";
@@ -257,8 +283,21 @@ function receiverOf(start: TSNode, typeCalls: TypeCalls | undefined): string | u
     // Ruby's `@repo`, `@@registry` and `$stdout` are leaves of their own node
     // types; a literal is a leaf with no name.
     if (IDENT_LEAF.test(obj.type) || RUBY_VARIABLE.test(obj.type)) return receiverName(obj.text) ?? UNNAMED_RECEIVER;
+    // An Elixir module (`Repo`, `Repo.Sub`): its last segment.
+    if (obj.type === "alias") return receiverName(obj.text.slice(obj.text.lastIndexOf(".") + 1)) ?? UNNAMED_RECEIVER;
     return UNNAMED_RECEIVER;
   }
+  if (/^super(?:_expression)?$/.test(obj.type)) return "super";
+  if (SELF_NODE.test(obj.type)) return SELF_NODE.exec(obj.type)![1];
+  // Rust's `<T as Trait>::f()` calls the trait's f; `<T>::f()` T's.
+  if (obj.type === "bracketed_type") {
+    const inner = kids[0]!;
+    return typeReceiver(readTypeName(inner.type === "qualified_type" ? (inner.childForFieldName("alias") ?? inner.childForFieldName("type")) : inner));
+  }
+  // C#'s `s?.repo.Save()`: the access the condition leads to.
+  if (obj.type === "conditional_access_expression") return receiverOf(kids[kids.length - 1]!, typeCalls);
+  // Kotlin's `a.b.save()`: the last segment of the inner access.
+  if (obj.type === "navigation_expression") return receiverOf(kids[kids.length - 1]!, typeCalls);
   // A method called on a composite literal (Go's `addrs.Check{…}.Absolute()`)
   // or on a `new` is called on what it builds; the literal's last child is
   // its body, whose last identifier is any field value at all.
@@ -272,16 +311,31 @@ function receiverOf(start: TSNode, typeCalls: TypeCalls | undefined): string | u
   }
   // A generic type or name (Rust's `Vec::<u8>::new()`) names its constructor.
   if (GENERIC.test(obj.type)) return typeReceiver(readTypeName(obj.childForFieldName("type") ?? kids[0]!));
-  // A cast names the type the value is read as: `(obj as Repo).save()`.
-  if (CAST.test(obj.type)) return typeReceiver(readTypeName(obj.childForFieldName("type") ?? kids[kids.length - 1]!));
+  // A cast names the type the value is read as: `(obj as Repo).save()`, Go's
+  // `w.(Flusher).Flush()`, TS's `(<Repo>r).save()`. Only a type that IS a
+  // name: an array, a union or an object type names nothing the call is on
+  // (`(rows as Row[]).filter()` is no call on a Row).
+  if (CAST.test(obj.type)) {
+    const type =
+      obj.type === "type_assertion" && kids[0]?.type === "type_arguments"
+        ? kids[0].namedChildren[0]
+        : (obj.childForFieldName("type") ?? obj.childForFieldName("right") ?? kids[kids.length - 1]);
+    return castReceiver(type ?? null);
+  }
   if (INDEXED.test(obj.type)) return UNNAMED_RECEIVER;
   // A Ruby call with neither arguments nor a block reads an attribute
   // (`user.profile.save`): its method is the receiver's name.
+  // `Service.new.call`: a `new` with no arguments is still a construction.
   const rubyRead = obj.type === "call" && obj.childForFieldName("method") !== null && obj.childForFieldName("arguments") === null && obj.childForFieldName("block") === null;
-  if (rubyRead) return receiverName(readName(obj.childForFieldName("method"))) ?? UNNAMED_RECEIVER;
+  if (rubyRead && obj.childForFieldName("method")!.text !== "new") return receiverName(readName(obj.childForFieldName("method"))) ?? UNNAMED_RECEIVER;
   if (CALL_NODE.test(obj.type) || obj.childForFieldName("arguments") !== null) return calledReceiver(obj, typeCalls);
-  // A member access: the name of its last segment.
-  const seg = obj.childForFieldName("name") ?? obj.childForFieldName("property") ?? obj.childForFieldName("attribute") ?? obj.childForFieldName("field");
+  // A member access: the name of its last segment (Zig names it `member`).
+  const seg =
+    obj.childForFieldName("name") ??
+    obj.childForFieldName("property") ??
+    obj.childForFieldName("attribute") ??
+    obj.childForFieldName("field") ??
+    obj.childForFieldName("member");
   if (seg) return receiverOf(seg, typeCalls) ?? UNNAMED_RECEIVER;
   // A wrapper around one name (PHP's `$x` is a variable_name around a name).
   if (kids.length === 1 && NAME_WRAPPER.test(obj.type)) return receiverOf(kids[0]!, typeCalls);
@@ -327,13 +381,59 @@ function typeReceiver(name: string | undefined): string {
   return name !== undefined && /^[A-Za-z_$][\w$]*$/.test(name) ? name : UNNAMED_RECEIVER;
 }
 
+// The type a cast names, when it is a name: through a pointer (`*Named`), a
+// generic's constructor, a qualified name's last segment.
+function castReceiver(type: TSNode | null): string {
+  let t = type;
+  while (t && POINTER_TYPE.test(t.type) && t.namedChildren.length === 1) t = t.namedChildren[0]!;
+  return t && NAMED_TYPE.test(t.type) ? typeReceiver(readTypeName(t)) : UNNAMED_RECEIVER;
+}
+
+// A `this` is the enclosing instance when what binds it is a class or a
+// function: the nearest of them, arrow functions passed through. In a JS
+// object literal's method it is the literal, and at the top of a module (an
+// arrow there included) nothing the file declares: those calls are on
+// something unnamed. Java's `this` always sits in a class, enum or interface
+// body; other grammars' roots are not a `program`.
+function thisReceiver(node: TSNode): string {
+  for (let n = node.parent; n; n = n.parent) {
+    if (THIS_OWNER.test(n.type)) return "this";
+    if (n.type === "method_definition") return n.parent?.type === "class_body" ? "this" : UNNAMED_RECEIVER;
+    if (n.type === "program") return UNNAMED_RECEIVER;
+  }
+  return "this";
+}
+const THIS_OWNER =
+  /^(?:function_declaration|function_expression|function|generator_function|generator_function_declaration|class_body|enum_body|enum_body_declarations|interface_body|annotation_type_body)$/;
+
+// Go's generic instantiation used as a callee: an index_expression (Go's has
+// an `operand` field) whose index reads as a type — a type node, a
+// capitalised name or one of Go's predeclared types.
+function isGoInstantiation(node: TSNode): boolean {
+  if (node.type !== "index_expression" || !node.childForFieldName("operand")) return false;
+  const index = node.childForFieldName("index");
+  if (!index) return false;
+  if (/type/.test(index.type)) return true;
+  return index.type === "identifier" && (/^[A-Z]/.test(index.text) || GO_PREDECLARED.has(index.text));
+}
+const GO_PREDECLARED = new Set(
+  "any bool byte comparable complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr".split(" "),
+);
+
 const RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
-const TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression)$/;
+const TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression|try_expression)$/;
+// A dereference or an address of (Go/Rust unary, C/C++ pointer, Rust
+// reference), or Kotlin's `a!!`: transparent when its operator says so.
+const POINTER = /^(?:unary_expression|pointer_expression|reference_expression)$/;
+const POINTER_TYPE = /^(?:pointer_type|reference_type)$/;
+// A type that is a name: a plain, qualified, nested or generic type name.
+const NAMED_TYPE =
+  /^(?:type_identifier|identifier|generic_type|generic_name|qualified_type|qualified_name|qualified_identifier|nested_type_identifier|scoped_type_identifier|scoped_identifier|user_type|simple_identifier)$/;
 const NAME_WRAPPER = /^variable_name$/;
 const GENERIC = /^generic_(?:type|name)$/;
 // Constructions, across the grammars: `new T(…)` (JS/TS, Java, C#, PHP).
 const NEW_NODE = /^(?:new_expression|object_creation_expression|instance_expression)$/;
-const CAST = /^(?:as_expression|satisfies_expression|cast_expression|type_assertion)$/;
+const CAST = /^(?:as_expression|satisfies_expression|cast_expression|type_assertion|type_assertion_expression)$/;
 // An index into something: no name of its own, whatever names it holds.
 const INDEXED =
   /^(?:subscript(?:_expression)?|index_expression|indexing_expression|element_access_expression|element_reference|array_access|bracket_index_expression|slice_expression)$/;

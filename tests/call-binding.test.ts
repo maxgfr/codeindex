@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { scanRepo, type RepoScan } from "../src/scan.js";
 import { buildCallerIndex } from "../src/callers.js";
 import { resolveCallEdges } from "../src/calls.js";
@@ -618,7 +618,7 @@ describe("a receiver is named only where the source names one", () => {
     ["a.lua", "local function m(items, idx)\n  items[idx].run()\nend\n", [[2, "run", "?"]]],
     ["a.rb", "def run(xs, a, b)\n  xs.map { |user| user }.save\n  xs.select { |u| u.active }.count\n  User.new(1).save\n  xs.map(&:id).compact\n  (a + b).f\n  user.profile.save\nend\n", [[2, "save", "?"], [3, "count", "?"], [4, "save", "User"], [5, "compact", "?"], [6, "f", "?"], [7, "save", "profile"]]],
     ["a.java", "class A {\n  void m(int c) {\n    new Thing(c).go();\n    make(c).go();\n    new ArrayList<String>().add(s);\n  }\n}\n", [[3, "go", "Thing"], [4, "go", "?"], [5, "add", "ArrayList"]]],
-    ["a.rs", "fn m(c: u8) {\n    Thing::new(c).go();\n    make(c).go();\n    (*s).clone();\n}\n", [[2, "go", "Thing"], [3, "go", "?"], [4, "clone", "?"]]],
+    ["a.rs", "fn m(c: u8) {\n    Thing::new(c).go();\n    make(c).go();\n    (*s).clone();\n}\n", [[2, "go", "Thing"], [3, "go", "?"], [4, "clone", "s"]]],
   ];
   let dir: string;
   let local: RepoScan;
@@ -679,6 +679,17 @@ describe("a JS this or self outside a class", () => {
           "function run() { self.close(); }",
           "function Widget() { this.setup(); }",
           "const arrow = () => { this.close(); };",
+          // What binds `this` decides, not the kind of the enclosing symbol.
+          "const Gadget = function () { this.setup(); };",
+          "Widget.prototype.tick = () => { this.close(); };",
+          "function outer() { const p = { m() { this.b(); } }; return p; }",
+          "class K {",
+          "  m() {",
+          "    const f = () => this.own();",
+          "    return f;",
+          "  }",
+          "  own() {}",
+          "}",
           "",
         ].join("\n"),
       );
@@ -687,7 +698,105 @@ describe("a JS this or self outside a class", () => {
         .edges.filter((e) => e.kind === "calls")
         .map((e) => `${e.from} -> ${e.to}`)
         .sort();
-      expect(edges).toEqual(["a.js#Widget -> a.js#setup"]);
+      expect(edges).toEqual(["a.js#Gadget -> a.js#setup", "a.js#Widget -> a.js#setup", "a.js#m/f -> a.js#K/own"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The third review's shapes: type assertions, dereferences, non-null and
+// try operators, a trait's path, conditional access, casts that name no type,
+// a `new` with no arguments, PHP static and null-safe calls, and the grammars
+// whose access names no object field (Kotlin, Elixir, Solidity, Zig).
+describe("a receiver is named through wrappers, in every grammar", () => {
+  const CASES: [string, string, [number, string, string][]][] = [
+    ["b.go", "package p\nfunc m(w W, t T) {\n\tw.(Flusher).Flush()\n\tt.(*Named).Method()\n\t(*p).M()\n\t(&x).M()\n\tNew[T]()\n\tFn[T](a, b)\n\tpkg.New[string]().Run()\n}\n",
+    [[3, "Flush", "Flusher"], [4, "Method", "Named"], [5, "M", "p"], [6, "M", "x"], [7, "New", "-"], [8, "Fn", "-"], [9, "New", "pkg"], [9, "Run", "?"]]],
+    ["b.zig", "fn run(self: *App) void {\n    self.parser.parse();\n    std.debug.print(\"x\", .{});\n}\n", [[2, "parse", "parser"], [3, "print", "debug"]]],
+    ["b.cs", "class A {\n  void M(S s, R repo) {\n    repo!.Save();\n    s.repo!.Save();\n    s?.repo.Save();\n    ((Repo)x).Save();\n    ((Repo[])x).Save();\n  }\n}\n",
+    [[3, "Save", "repo"], [4, "Save", "repo"], [5, "Save", "repo"], [6, "Save", "Repo"], [7, "Save", "?"]]],
+    ["b.rs", "fn m(s: S) {\n    <T as Parser>::parse();\n    s?.get();\n    (*s).get();\n    (&x).go();\n    <T>::make();\n}\n", [[2, "parse", "Parser"], [3, "get", "s"], [4, "get", "s"], [5, "go", "x"], [6, "make", "T"]]],
+    ["b.c", "void m(struct s *p) {\n  (*p).go();\n  (&x)->go();\n}\n", [[2, "go", "p"], [3, "go", "x"]]],
+    ["b.ts", "function f(x: boolean) {\n  x && onDisk!.bytes();\n  (rows as Row[]).filter(g);\n  (x as { a: Foo }).run();\n  (x as A | B).run();\n  (<Repo>make(cfg)).save();\n  (<Repo>r).save();\n  (r as Map<K, V>).get(k);\n  (r satisfies ns.Repo).save();\n}\n",
+    [[2, "bytes", "onDisk"], [3, "filter", "?"], [4, "run", "?"], [5, "run", "?"], [6, "save", "Repo"], [7, "save", "Repo"], [8, "get", "Map"], [9, "save", "Repo"]]],
+    ["b.rb", "def run\n  Service.new.call\n  Mod::Service.new.call\n  user.profile.save\nend\n", [[2, "call", "Service"], [3, "call", "Service"], [4, "save", "profile"]]],
+    ["b.php", "<?php\nfunction run($a) {\n  A::create();\n  $a?->run();\n  self::make();\n  parent::boot();\n  static::build();\n}\n", [[3, "create", "A"], [4, "run", "a"], [5, "make", "self"], [6, "boot", "super"], [7, "build", "self"]]],
+    ["b.kt", "class Repo { fun save() {} }\nfun main(r: Repo) {\n  r.save()\n  r?.save()\n  r!!.save()\n  a.b.save()\n  a.b().save()\n  Repo().save()\n  (r as Repo).save()\n  items[0].save()\n  this.save()\n  Repo.Companion.create()\n  lower().save()\n}\n",
+    [[3, "save", "r"], [4, "save", "r"], [5, "save", "r"], [6, "save", "b"], [7, "save", "?"], [8, "save", "Repo"], [9, "save", "Repo"], [10, "save", "?"], [11, "save", "this"], [12, "create", "Companion"], [13, "save", "?"]]],
+    ["b.ex", "defmodule M do\n  def run(x) do\n    Repo.save(x)\n    x.field.go()\n  end\nend\n", [[3, "save", "Repo"]]],
+    ["b.sol", "contract C {\n  function f() public {\n    token.transfer(a, 1);\n    this.g();\n  }\n}\n", [[3, "transfer", "token"], [4, "g", "this"]]],
+  ];
+  let dir: string;
+  let local: RepoScan;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "ci-call-binding-shapes3-"));
+    for (const [rel, src] of CASES) writeFileSync(join(dir, rel), src);
+    local = scanRepo(dir);
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  for (const [rel, , expected] of CASES) {
+    it(`reads each receiver in ${rel}`, () => {
+      const calls = local.files.find((f) => f.rel === rel)!.calls ?? [];
+      const got = expected.map(([line, name]) => [line, name, calls.filter((c) => c.line === line && c.name === name).map((c) => c.receiver ?? "-").join(",")]);
+      expect(got).toEqual(expected);
+    });
+  }
+
+  it("a Go call on a map index is no call to the index's name", () => {
+    const dir2 = mkdtempSync(join(tmpdir(), "ci-call-binding-goidx-"));
+    try {
+      writeFileSync(join(dir2, "a.go"), "package p\nfunc m() {\n\thandler[r.URL.Path](w, r)\n\tfns[i]()\n}\n");
+      const names = scanRepo(dir2).files[0]!.calls!.map((c) => c.name);
+      expect(names).not.toContain("Path");
+      expect(names).not.toContain("i");
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
+});
+
+// A receiver that names a type reaches that type's members, a trait's it may
+// implement, or nothing; one imported from outside the repo reaches nothing;
+// a Go receiver that is a function of the package is a call's result.
+describe("a type-named receiver binds only to that type", () => {
+  const FILES: Record<string, string> = {
+    "js/encode.ts": "export function encode(s: string): number[] { return []; }\n",
+    "js/index.ts": 'import { encode } from "./encode";\nexport function serialize(h: string) {\n  const a = encode(h);\n  return new TextEncoder().encode(h);\n}\n',
+    "py/store.py": "class Store:\n    def resolve(self):\n        pass\n",
+    "py/use.py": "from pathlib import Path\nfrom store import Store\n\ndef run(p):\n    return Path(p).resolve()\n\ndef own(s):\n    return Store().resolve()\n",
+    "rs/Cargo.toml": '[package]\nname = "rs"\nversion = "0.1.0"\n',
+    "rs/src/lib.rs": "mod error;\nmod factory;\nuse crate::error::Error as AppError;\nuse crate::factory::Factory;\nstruct Store;\nimpl Store {\n    fn map(&self) {}\n    fn get(&self) {}\n}\nstruct Cli;\nfn run() {\n    Some(1).map(|x| x);\n    Vec::<u8>::new().get(0);\n    Store::new().get();\n    AppError::raise();\n    Cli::command();\n}\n",
+    "rs/src/error.rs": "pub struct Error;\nimpl Error {\n    pub fn raise() {}\n}\n",
+    "rs/src/factory.rs": "pub trait Factory {\n    fn command() {}\n}\n",
+    "go/a/checker.go": "package a\n\ntype Checker struct{}\n\nfunc NewChecker() *Checker { return &Checker{} }\n\nfunc (c *Checker) Files() {}\n\ntype Other struct{}\n\nfunc (o *Other) Files() {}\n",
+    "go/a/use.go": "package a\n\nfunc run() {\n\tNewChecker().Files()\n\tChecker{}.Files()\n}\n",
+    "rb/net.rb": "class Net::HTTPResponse\n  def self.read_new(sock)\n  end\nend\nclass Net::HTTP\n  def self.new(a)\n  end\nend\n",
+    "rb/use.rb": "def run(sock)\n  HTTPResponse.read_new(sock)\n  StringIO.new(1)\nend\n",
+  };
+  it("binds each site as the source says", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-call-binding-typed-"));
+    try {
+      for (const [rel, src] of Object.entries(FILES)) {
+        mkdirSync(dirname(join(dir, rel)), { recursive: true });
+        writeFileSync(join(dir, rel), src);
+      }
+      const local = scanRepo(dir);
+      const sites: string[] = [];
+      for (const entry of buildCallerIndex(local, importPairsFor(local)).values())
+        for (const c of entry.callers) sites.push(`${c.file}:${c.line} -> ${entry.def.parent ? entry.def.parent + "." : ""}${entry.def.name}`);
+      expect(sites.sort()).toEqual([
+        "go/a/use.go:4 -> NewChecker",
+        "go/a/use.go:5 -> Checker.Files",
+        "js/index.ts:3 -> encode",
+        "py/use.py:8 -> Store",
+        "py/use.py:8 -> Store.resolve",
+        "rb/use.rb:2 -> Net::HTTPResponse.read_new",
+        "rs/src/lib.rs:14 -> Store.get",
+        "rs/src/lib.rs:15 -> Error.raise",
+        "rs/src/lib.rs:16 -> Factory.command",
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -105,10 +105,44 @@ function readGo(node: TSNode, out: ImportAlias[]): void {
   }
 }
 
+// Rust: `use crate::error::Error as ClapError` renames an item; a lowercase
+// alias (`use crate::util as u`) a module, as Rust names them. `from` is the
+// whole path, which resolution maps to the item's file. Only renames: an
+// un-renamed `use` binds the item's own name.
+function readRust(node: TSNode, out: ImportAlias[], prefix = ""): void {
+  if (node.type === "use_declaration") {
+    const arg = node.childForFieldName("argument");
+    if (arg) readRust(arg, out, prefix);
+  } else if (node.type === "use_as_clause") {
+    const path = node.childForFieldName("path")?.text;
+    const alias = node.childForFieldName("alias")?.text;
+    if (!path || !alias || alias === "_") return;
+    const from = prefix ? `${prefix}::${path}` : path;
+    const name = from.slice(from.lastIndexOf("::") + 2);
+    if (alias === name) return;
+    out.push(/^[a-z]/.test(alias) ? { local: alias, name: "*", from } : { local: alias, name, from });
+  } else if (node.type === "scoped_use_list") {
+    const path = node.childForFieldName("path")?.text;
+    const next = path ? (prefix ? `${prefix}::${path}` : path) : prefix;
+    const list = node.childForFieldName("list");
+    if (list) for (const c of list.namedChildren) readRust(c, out, next);
+  } else if (node.type === "use_list") {
+    for (const c of node.namedChildren) readRust(c, out, prefix);
+  }
+}
+
 /** The import aliases a file's top level binds, deduped and sorted (local, name, from). */
 export function readImportAliases(root: TSNode, lang: string): ImportAlias[] {
   const read =
-    lang === "typescript" || lang === "javascript" ? readJs : lang === "python" ? readPython : lang === "go" ? readGo : undefined;
+    lang === "typescript" || lang === "javascript"
+      ? readJs
+      : lang === "python"
+        ? readPython
+        : lang === "go"
+          ? readGo
+          : lang === "rust"
+            ? (node: TSNode, out: ImportAlias[]) => readRust(node, out)
+            : undefined;
   if (!read) return [];
   const found: ImportAlias[] = [];
   for (const node of root.namedChildren) read(node, found);

@@ -53,6 +53,13 @@ const STRICT = new Set(["js", "go"]);
 // a method (a prototype method's `this.f()` is read as bare, see readInScope).
 const SHAPED = new Set(["go", "python"]);
 
+// Families where a capitalised receiver with no declared type is a TYPE by
+// convention (`Path(p).resolve()`, `Repo.find()`, `new TextEncoder().encode()`):
+// its call reaches that type's members or nothing. Not Go or C#, where a
+// capitalised name is as often a value — an exported field, a property.
+const TYPE_CASE = new Set(["js", "python", "java", "ruby", "rust", "kotlin", "scala", "php", "c", "swift", "dart"]);
+const TRAIT_KINDS = new Set(["trait", "interface", "protocol"]);
+
 // Families whose unit of visibility is the DIRECTORY: a file sees every
 // declaration of its package mates without importing them.
 const PACKAGE_DIR = new Set(["go", "java"]);
@@ -492,6 +499,13 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
   const recall = opts.recall === true;
   const only = opts.only;
   const scope = createBindScope(scan, pairs, opts.ctx);
+  // Interface-like types any type may take members from (`Cli::command()` is
+  // CommandFactory's): a member declared in one, as (file, trait) — a struct
+  // elsewhere may share the trait's name. Read once.
+  let traits: Set<string> | undefined;
+  const inTrait = (d: CodeSymbol): boolean =>
+    d.parent !== undefined &&
+    (traits ??= new Set(scan.files.flatMap((f) => f.symbols.filter((s) => TRAIT_KINDS.has(s.kind)).map((s) => `${f.rel}\0${s.name}`)))).has(`${d.file}\0${d.parent}`);
 
   // Declarations nested in a FUNCTION (a closure, a helper `def` inside a
   // test): they have a `parent`, but it is not a type, so they are not
@@ -698,6 +712,19 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       }
       return best?.name ?? e.parent;
     };
+    // The type a `this`/`self` inside `e` is: its parent when that is a type
+    // this file declares, else the innermost such type around it. A local
+    // inside a method (`const f = () => this.own()`) has the METHOD for its
+    // parent, and `this` read as an instance of a type named `m`.
+    const typeAround = (e: CodeSymbol | undefined): string | undefined => {
+      if (e?.parent === undefined || ownTypes.has(e.parent)) return e?.parent;
+      let best: CodeSymbol | undefined;
+      for (const s of f.symbols) {
+        if (s.endLine === undefined || s.line > e.line || e.line > s.endLine || !ownTypes.has(s.name)) continue;
+        if (!best || s.line > best.line) best = s;
+      }
+      return best?.name ?? e.parent;
+    };
     // What this Rust file's `use` declarations name, as `E` and `E::V`: inside
     // an enum's own file, `use self::E::*` (its spec reads "self::E") or
     // `use self::E::V` brings the variants into scope for a bare call.
@@ -751,15 +778,24 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     // file declares and the receiver is known to be; `typeHint` the type the
     // receiver names at all. A reading is shared by every site that reads the
     // same way, and memoizes what each callee name resolves to under it.
+    // `typed`: the receiver itself names a type (TYPE_CASE), so only a member
+    // of `typeHint` is what it calls.
     interface Reading {
       shape: Shape;
       receiver?: string;
       selfType?: string;
       typeHint?: string;
+      typed?: boolean;
       results: Map<string, Resolved | null>;
     }
-    const reading = (shape: Shape, receiver?: string, selfType?: string, typeHint?: string): Reading =>
-      ({ shape, receiver, selfType, typeHint, results: new Map() });
+    const reading = (shape: Shape, receiver?: string, selfType?: string, typeHint?: string, typed?: boolean): Reading =>
+      ({ shape, receiver, selfType, typeHint, typed, results: new Map() });
+    const namesType = (receiver: string): boolean => TYPE_CASE.has(family) && /^[A-Z]/.test(receiver);
+    // A Go receiver that is a function of the package: the receiver of
+    // `NewChecker(cfg).Files()`, a call's result, not a value or type of that
+    // name.
+    const goFunction = (receiver: string): boolean =>
+      family === "go" && /^[A-Z]/.test(receiver) && (ownFree.get(receiver)?.kind === "function" || corroborated(receiver, "free").some((d) => d.kind === "function" && d.parent === undefined));
     const BARE = reading("bare");
     const OUTSIDE = reading("outside");
     // A member call on something with no name: some object's method, with
@@ -790,10 +826,14 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         if (rustModules?.has(receiver)) r = reading("module", receiver);
         else if (aliases.modules.has(receiver)) r = reading("module", receiver);
         else if (ownTypes.has(receiver)) r = self(receiver); // `Greeter.make()` next to Greeter
+        // Imported from outside the repo (`from pathlib import Path`): nothing
+        // here is what it calls.
+        else if (!recall && aliases.names.get(receiver)?.files === null) r = OUTSIDE;
+        else if (!recall && goFunction(receiver)) r = UNNAMED;
         else if (!SHAPED.has(family)) {
           // A variable named after a type this file declares: `store.get()`.
           const named = typeNamedLike(receiver);
-          r = named ? self(named) : reading("foreign", receiver, undefined, aliases.names.get(receiver)?.name ?? receiver);
+          r = named ? self(named) : reading("foreign", receiver, undefined, aliases.names.get(receiver)?.name ?? receiver, namesType(receiver));
         }
         if (r) {
           byReceiver.set(receiver, r);
@@ -818,12 +858,11 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       // `Widget.prototype.draw = function` — names an object only the runtime
       // knows: the call is read as the bare call it was before keyword
       // receivers were recorded, so `this.setup()` still reaches `setup`.
-      // Only `this`, and only in a plain function: in an object literal's
-      // method (`const o = { a() { this.b(); } }`) it is the literal, in an
-      // arrow function the enclosing scope's, and a JS `self` is a variable —
-      // none of them the file's free function of that name.
-      if (receiver === "this" && family === "js" && e !== undefined && e.parent === undefined && e.kind === "function") return BARE;
-      if (SELF_NAMES.has(receiver)) return self(e?.parent);
+      // Only `this`: a JS `self` is a variable. The extractor has already
+      // made a `this` that a function does not bind — an object literal's
+      // method's, a module's — an unnamed receiver.
+      if (receiver === "this" && family === "js" && e?.parent === undefined) return BARE;
+      if (SELF_NAMES.has(receiver)) return self(typeAround(e));
       // `super.f()` (Python's `super().f()`): a member of the enclosing class's
       // base — never the override it is called from. A base this file declares
       // is read like `self`; one declared elsewhere names the type to prefer.
@@ -841,11 +880,20 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       // A variable named after a type this file declares: `engine := New()`.
       const named = d === undefined ? typeNamedLike(receiver) : undefined;
       if (named) return self(named);
-      return reading("foreign", receiver, undefined, d?.type ?? aliases.names.get(receiver)?.name ?? receiver);
+      return reading("foreign", receiver, undefined, d?.type ?? aliases.names.get(receiver)?.name ?? receiver, d === undefined && namesType(receiver));
     };
 
     const resolve = (name: string, how: Reading): Resolved | null => {
       const { shape, receiver, selfType, typeHint } = how;
+      // A receiver that names a type reaches that type's members — its own,
+      // or a trait's or interface's it may implement — or nothing:
+      // `new TextEncoder().encode()` is no call to a free function `encode`.
+      const prefer = (list: CodeSymbol[]): CodeSymbol[] => {
+        if (!how.typed || recall) return preferParent(list, typeHint, receiver);
+        // Ruby and C++ qualify a nested type's name (`Net::HTTPResponse`).
+        const own = list.filter((d) => d.parent === typeHint || (d.parent !== undefined && d.parent.slice(Math.max(d.parent.lastIndexOf(":"), d.parent.lastIndexOf(".")) + 1) === typeHint));
+        return own.length ? own : list.filter(inTrait);
+      };
       if (shape === "outside") return null;
       // Rust: a tuple variant is reached through its enum (`ParseResult::Ok(…)`,
       // whose receiver names the enum), bare only where its own file imports
@@ -936,7 +984,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
 
       // 3. Everything the file reaches by stated evidence.
       const reached = corroborated(callee, pool);
-      const stated = preferParent(family === "rust" ? reached.filter(reachable) : reached, typeHint, receiver);
+      const stated = prefer(family === "rust" ? reached.filter(reachable) : reached);
       if (stated.length) {
         const chosen = pickCandidate(f.rel, stated);
         return chosen ? { hit: { def: chosen, corroborated: true }, local: false } : null;
@@ -959,7 +1007,7 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         // never calls into tests, examples or scripts.
         guesses = guesses.filter((d) => !isTestCase(d.file) && (tail || !isTail(d.file)));
       }
-      const chosen = pickCandidate(f.rel, preferParent(guesses, typeHint, receiver));
+      const chosen = pickCandidate(f.rel, prefer(guesses));
       return chosen ? { hit: { def: chosen, corroborated: false }, local: false } : null;
     };
 
