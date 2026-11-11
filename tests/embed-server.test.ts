@@ -4,7 +4,7 @@
 // logic on every run of the suite.
 import { spawn, type ChildProcess } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +57,32 @@ const post = async (base: string, body: unknown, headers: Record<string, string>
   return { status: r.status, body: (await r.json()) as Record<string, unknown> };
 };
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A POST written over a raw socket: its headers and half its body now, the
+// rest on finish(). `status` is the response's status code, or null if the
+// connection closed without one.
+function partialPost(port: number, body: string): Promise<{ socket: Socket; status: Promise<number | null>; finish: () => void }> {
+  return new Promise((resolve) => {
+    const socket = connect(port, "127.0.0.1");
+    socket.on("error", () => {});
+    let received = "";
+    const status = new Promise<number | null>((done) => {
+      socket.on("data", (c) => {
+        received += c;
+        const m = /^HTTP\/1\.1 (\d{3})/.exec(received);
+        if (m) done(Number(m[1]));
+      });
+      socket.on("close", () => done(null));
+    });
+    const half = body.length >> 1;
+    socket.once("connect", () => {
+      socket.write(`POST /embed HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body.slice(0, half)}`);
+      resolve({ socket, status, finish: () => socket.writable && socket.write(body.slice(half)) });
+    });
+  });
+}
+
 describe("the reference embedding server", () => {
   it("refuses a request from a web page, and serves a program's", async () => {
     await withServer({}, async ({ base }) => {
@@ -75,14 +101,41 @@ describe("the reference embedding server", () => {
     });
   });
 
-  it("runs at most 8 requests at once, large bodies included", async () => {
-    await withServer({ SLOW_MS: "400" }, async ({ base }) => {
-      // 64 texts of 8 192 characters: the engine's largest batch, ~524 KB,
-      // a body that arrives in many reads.
-      const big = { texts: Array.from({ length: 64 }, () => "x".repeat(8192)) };
-      const results = await Promise.all(Array.from({ length: 24 }, () => post(base, big)));
-      expect(results.filter((r) => r.status === 200)).toHaveLength(8);
-      expect(results.filter((r) => r.status === 503)).toHaveLength(16);
+  // 24 requests whose bodies are all still arriving: a server that counts a
+  // request only once its body is read admits every one of them.
+  it("runs at most 8 requests at once, counting those whose body is still arriving", async () => {
+    await withServer({ SLOW_MS: "200" }, async ({ base }) => {
+      const port = Number(new URL(base).port);
+      const body = JSON.stringify({ texts: ["a"] });
+      const uploads = await Promise.all(Array.from({ length: 24 }, () => partialPost(port, body)));
+      // The 16 over the bound are answered before their body is complete.
+      const early = await Promise.all(uploads.map((u) => Promise.race([u.status, delay(1000).then(() => "pending")])));
+      expect(early.filter((s) => s === 503)).toHaveLength(16);
+      expect(early.filter((s) => s === "pending")).toHaveLength(8);
+      for (const u of uploads) u.finish();
+      const statuses = await Promise.all(uploads.map((u) => u.status));
+      expect(statuses.filter((s) => s === 200)).toHaveLength(8);
+      expect(statuses.filter((s) => s === 503)).toHaveLength(16);
+      expect((await post(base, { texts: ["a"] })).status).toBe(200);
+    });
+  }, 30_000);
+
+  it("gives a slot back when a body stalls, or its client leaves", async () => {
+    await withServer({ BODY_TIMEOUT_MS: "500" }, async ({ base }) => {
+      const port = Number(new URL(base).port);
+      const body = JSON.stringify({ texts: ["a"] });
+      // Eight uploads that never finish hold every slot...
+      const stalled = await Promise.all(Array.from({ length: 8 }, () => partialPost(port, body)));
+      await delay(100);
+      expect((await post(base, { texts: ["a"] })).status).toBe(503);
+      // ...until the body deadline answers them 408.
+      expect(await Promise.all(stalled.map((u) => u.status))).toEqual(Array(8).fill(408));
+      expect((await post(base, { texts: ["a"] })).status).toBe(200);
+      // A client that hangs up mid-body frees its slot at once.
+      const gone = await Promise.all(Array.from({ length: 8 }, () => partialPost(port, body)));
+      await delay(100);
+      for (const u of gone) u.socket.destroy();
+      await delay(100);
       expect((await post(base, { texts: ["a"] })).status).toBe(200);
     });
   }, 30_000);

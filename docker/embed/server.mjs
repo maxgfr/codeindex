@@ -25,6 +25,11 @@ const PORT = Number(process.env.PORT) || 8756;
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2 MiB
 const MAX_TEXTS = 256;
 const MAX_TEXT_CHARS = 8192;
+// A request holds a slot (MAX_IN_FLIGHT below) while its body is read, so a
+// body must arrive in time: eight uploads that sent their headers and part of
+// a body would otherwise hold every slot until Node's own 300 s request
+// timeout, and every other request was told 503. Past this, 408.
+const BODY_TIMEOUT_MS = Number(process.env.BODY_TIMEOUT_MS) || 10_000;
 
 // Offline: only ever read the baked model from the local cache — never the hub.
 env.cacheDir = process.env.MODEL_CACHE_DIR || "/app/models";
@@ -71,6 +76,7 @@ function json(res, status, body, { close } = {}) {
 // Thrown when the request body exceeds MAX_BODY_BYTES — a distinct type so the
 // handler can map it to HTTP 413 instead of the generic 400/500 paths.
 class BodyTooLargeError extends Error {}
+class BodyTimeoutError extends Error {}
 
 // Reads the body with a hard cap enforced AS DATA ARRIVES: once the running
 // total crosses MAX_BODY_BYTES the promise rejects immediately and every
@@ -85,9 +91,11 @@ function readBody(req) {
     const chunks = [];
     let total = 0;
     let settled = false;
+    const timer = setTimeout(() => fail(new BodyTimeoutError(`request body not received within ${BODY_TIMEOUT_MS} ms`)), BODY_TIMEOUT_MS);
     const fail = (err) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       reject(err);
     };
     req.on("data", (chunk) => {
@@ -102,9 +110,12 @@ function readBody(req) {
     req.on("end", () => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       resolve(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", fail);
+    // A client gone before its body ended gives its slot back.
+    req.on("close", () => fail(new Error("request closed before its body ended")));
   });
 }
 
@@ -116,7 +127,9 @@ async function embed(req, res) {
   } catch (e) {
     if (e instanceof BodyTooLargeError) {
       json(res, 413, { error: e.message }, { close: true });
-    } else {
+    } else if (e instanceof BodyTimeoutError) {
+      json(res, 408, { error: e.message }, { close: true });
+    } else if (!res.destroyed) {
       json(res, 400, { error: "failed to read request body" });
     }
     return;
