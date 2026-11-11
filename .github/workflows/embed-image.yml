@@ -58,13 +58,23 @@ jobs:
       # `:1.0.0` mean whatever main last held, and a host that had pulled it
       # never got the changes made under the same number. A change to the
       # server is released by bumping docker/embed/VERSION.
+      #
+      # Only "not found" means unpublished. Any other failure (a registry
+      # outage, a refused login) fails the job: read as unpublished, it pushed
+      # the version tag again over the image it names.
       - name: Version tag already published?
         id: published
+        env:
+          IMAGE: ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}
         run: |
-          if docker buildx imagetools inspect "ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}" > /dev/null 2>&1; then
+          if out="$(docker buildx imagetools inspect "$IMAGE" 2>&1)"; then
             echo "tag=" >> "$GITHUB_OUTPUT"
+          elif printf '%s\n' "$out" | grep -q ': not found$'; then
+            echo "tag=$IMAGE" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$out" >&2
+            echo "::error::could not tell whether $IMAGE is published"
+            exit 1
           fi
 
       - name: Build and push
