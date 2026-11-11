@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanRepo, type RepoScan } from "../src/scan.js";
-import { findReferences, findSymbol, symbolAt, symbolsOverview } from "../src/query.js";
+import { findReferences, findSymbol, resolveSymbolRef, symbolAt, symbolsOverview } from "../src/query.js";
 import { shortestPaths } from "../src/paths.js";
 import { callPath } from "../src/symbolgraph.js";
 import { symbolGraphFor } from "../src/derived.js";
@@ -366,5 +366,19 @@ describe("MCP query surfaces", () => {
       expect(res.isError, `${tool} ${JSON.stringify(args)}`).toBe(true);
     }
     expect((await call("neighbors", { target: "src/client.ts", kinds: ["bogus"] })).content[0].text).toMatch(/bogus/);
+  });
+});
+
+describe("query answers are the caller's to keep", () => {
+  it("editing a returned symbol changes no later answer", () => {
+    const local = scanRepo(fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url)));
+    const overview = symbolsOverview(local, "src/client.ts");
+    const before = JSON.stringify(symbolsOverview(local, "src/client.ts"));
+    for (const s of overview) s.name = "edited";
+    const resolved = resolveSymbolRef(local, "HttpClient")!;
+    resolved.defs[0]!.file = "elsewhere.ts";
+    expect(JSON.stringify(symbolsOverview(local, "src/client.ts"))).toBe(before);
+    expect(resolveSymbolRef(local, "HttpClient")!.defs[0]!.file).toBe("src/client.ts");
+    expect(local.files.find((f) => f.rel === "src/client.ts")!.symbols.some((s) => s.name === "edited")).toBe(false);
   });
 });

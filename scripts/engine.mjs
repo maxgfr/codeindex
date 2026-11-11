@@ -16453,7 +16453,7 @@ function* allSymbols(scan2) {
 function symbolsOverview(scan2, rel2) {
   const f = fileByRelFor(scan2).get(rel2);
   if (!f) return [];
-  return [...f.symbols].filter((s) => !REFERENCE_KINDS5.has(s.kind)).sort((a, b) => a.line - b.line || byStr(a.name, b.name));
+  return f.symbols.filter((s) => !REFERENCE_KINDS5.has(s.kind)).sort((a, b) => a.line - b.line || byStr(a.name, b.name)).map((s) => ({ ...s }));
 }
 function symbolAt(scan2, rel2, line2) {
   const f = fileByRelFor(scan2).get(rel2);
@@ -16538,7 +16538,7 @@ function resolveSymbolRef(scan2, ref2) {
   const byName = symbolsByNameFor(scan2);
   for (const reading of symbolRefReadings(ref2)) {
     const defs = (byName.get(reading.name) ?? []).filter((s) => !REFERENCE_KINDS5.has(s.kind) && refMatches(reading, s));
-    if (defs.length) return { reading, defs: defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line) };
+    if (defs.length) return { reading, defs: defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line).map((s) => ({ ...s })) };
   }
   return void 0;
 }

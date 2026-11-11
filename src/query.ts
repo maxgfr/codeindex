@@ -22,10 +22,18 @@ function* allSymbols(scan: RepoScan): Generator<CodeSymbol> {
 
 // All symbols declared in one file, in declaration order — the fastest way to
 // understand a file without reading it.
+//
+// Copies, as findReferences' sites are: these are the scan's own records, and
+// the scan is memoized per session. A consumer that edited an answer (renamed
+// a symbol for display) changed every later answer, the graph built after it
+// included.
 export function symbolsOverview(scan: RepoScan, rel: string): CodeSymbol[] {
   const f = fileByRelFor(scan).get(rel);
   if (!f) return [];
-  return [...f.symbols].filter((s) => !REFERENCE_KINDS.has(s.kind)).sort((a, b) => a.line - b.line || byStr(a.name, b.name));
+  return f.symbols
+    .filter((s) => !REFERENCE_KINDS.has(s.kind))
+    .sort((a, b) => a.line - b.line || byStr(a.name, b.name))
+    .map((s) => ({ ...s }));
 }
 
 export interface SymbolAt {
@@ -190,10 +198,10 @@ export interface ResolvedSymbolRef {
 export function resolveSymbolRef(scan: RepoScan, ref: string): ResolvedSymbolRef | undefined {
   const byName = symbolsByNameFor(scan);
   for (const reading of symbolRefReadings(ref)) {
-    // filter creates an owned array before sorting, so callers cannot change
-    // the cached declaration order or contents.
+    // An owned array of owned records: callers can change neither the cached
+    // declaration order nor the declarations themselves (see symbolsOverview).
     const defs = (byName.get(reading.name) ?? []).filter((s) => !REFERENCE_KINDS.has(s.kind) && refMatches(reading, s));
-    if (defs.length) return { reading, defs: defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line) };
+    if (defs.length) return { reading, defs: defs.sort((a, b) => byStr(a.file, b.file) || a.line - b.line).map((s) => ({ ...s })) };
   }
   return undefined;
 }
