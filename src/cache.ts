@@ -3,7 +3,7 @@
 // assertions alone do not make a stat-matching record safe to reuse.
 import { EXTRACTOR_VERSION, SCHEMA_VERSION } from "./types.js";
 import type { FileRecord } from "./types.js";
-import { grammarFile, grammarKeysForExts, sameGrammarFile, type GrammarFile } from "./ast/loader.js";
+import { grammarFile, grammarKeysForExts, RUNTIME_GRAMMAR_KEY, sameGrammarFile, type GrammarFile } from "./ast/loader.js";
 
 export type PersistedCacheEntry = { hash: string; record: FileRecord; size?: number; mtimeMs?: number };
 export type PersistedCacheMap = Map<string, PersistedCacheEntry>;
@@ -136,7 +136,8 @@ export function extractionProfile(
   const profile: ExtractionProfile = maxCallsPerFile === undefined ? { grammars } : { grammars, maxCallsPerFile };
   if (!known) return profile;
   const grammarFiles: Record<string, GrammarFile> = {};
-  for (const key of grammars) {
+  // The runtime too, whenever any grammar parsed: it is half of every parse.
+  for (const key of grammars.length ? [RUNTIME_GRAMMAR_KEY, ...grammars] : []) {
     const file = grammarFile(key, known.profile?.grammarFiles?.[key]);
     if (file) grammarFiles[key] = file;
   }
@@ -150,7 +151,25 @@ export function sameExtractionProfile(a: ExtractionProfile | undefined, b: Extra
     a !== undefined &&
     a.maxCallsPerFile === b.maxCallsPerFile &&
     a.grammars.join(",") === b.grammars.join(",") &&
-    b.grammars.every((key) => same(key, a.grammarFiles?.[key]))
+    (b.grammars.length ? [RUNTIME_GRAMMAR_KEY, ...b.grammars] : []).every((key) => same(key, a.grammarFiles?.[key]))
+  );
+}
+
+// Whether `stored` records the grammar builds exactly as `current` read them —
+// path, engine and stat keys included. When it does not, the index proves the
+// same builds by hashing them on every run, and is worth writing again so the
+// next run can take the stat shortcut instead.
+export function sameGrammarStamps(stored: ExtractionProfile | undefined, current: ExtractionProfile): boolean {
+  const a = stored?.grammarFiles ?? {};
+  const b = current.grammarFiles ?? {};
+  const keys = Object.keys(b);
+  return (
+    keys.length === Object.keys(a).length &&
+    keys.every((k) => {
+      const x = a[k];
+      const y = b[k]!;
+      return x !== undefined && x.sha1 === y.sha1 && x.size === y.size && x.mtimeMs === y.mtimeMs && x.path === y.path && x.engine === y.engine;
+    })
   );
 }
 
@@ -161,7 +180,13 @@ function parseGrammarFiles(value: unknown): Record<string, GrammarFile> | undefi
     // One malformed entry is dropped, not the rest: its grammar then reads as
     // unrecorded and only its records are re-extracted.
     if (object(file) && sha(file.sha1) && count(file.size) && typeof file.mtimeMs === "number" && Number.isFinite(file.mtimeMs)) {
-      out[key] = { sha1: file.sha1, size: file.size, mtimeMs: file.mtimeMs };
+      out[key] = {
+        sha1: file.sha1,
+        size: file.size,
+        mtimeMs: file.mtimeMs,
+        ...(typeof file.path === "string" ? { path: file.path } : {}),
+        ...(typeof file.engine === "string" ? { engine: file.engine } : {}),
+      };
     }
   }
   return out;
@@ -216,7 +241,9 @@ export function extractedAlike(
     let verdict = verdicts.get(key);
     if (verdict === undefined) {
       const now = current.ast(key);
-      verdict = astBefore.has(key) === now && (!now || same(key, stored?.grammarFiles?.[key]));
+      verdict =
+        astBefore.has(key) === now &&
+        (!now || (same(key, stored?.grammarFiles?.[key]) && same(RUNTIME_GRAMMAR_KEY, stored?.grammarFiles?.[RUNTIME_GRAMMAR_KEY])));
       verdicts.set(key, verdict);
     }
     return verdict;

@@ -108,12 +108,22 @@ describe("the extraction profile gates record reuse", { timeout: 120_000 }, () =
     const repo = freshRepo();
     const out = join(scratch(), "out");
     const profile = (): unknown => (JSON.parse(read(out, "cache.json")) as { extraction?: unknown }).extraction;
-    const build = { sha1: expect.stringMatching(/^[a-f0-9]{40}$/), size: expect.any(Number), mtimeMs: expect.any(Number) };
+    const build = {
+      sha1: expect.stringMatching(/^[a-f0-9]{40}$/),
+      size: expect.any(Number),
+      mtimeMs: expect.any(Number),
+      path: expect.stringMatching(/typescript\.wasm$/),
+      engine: ENGINE_VERSION,
+    };
     index(repo, out);
-    // Each grammar at the AST tier, with the build of it that parsed the records.
-    expect(profile()).toEqual({ grammars: expect.arrayContaining(["typescript"]), grammarFiles: expect.objectContaining({ typescript: build }) });
+    // Each grammar at the AST tier, with the build of it that parsed the
+    // records, and the runtime that ran them.
+    expect(profile()).toEqual({
+      grammars: expect.arrayContaining(["typescript"]),
+      grammarFiles: expect.objectContaining({ typescript: build, "web-tree-sitter": expect.objectContaining({ sha1: expect.any(String) }) }),
+    });
     const first = profile() as { grammars: string[]; grammarFiles: Record<string, unknown> };
-    expect(Object.keys(first.grammarFiles).sort()).toEqual([...first.grammars].sort());
+    expect(Object.keys(first.grammarFiles).sort()).toEqual(["web-tree-sitter", ...first.grammars].sort());
     index(repo, out, "--max-calls", "7");
     expect(profile()).toEqual({ ...first, maxCallsPerFile: 7 });
     index(repo, out, "--no-ast");
@@ -140,11 +150,26 @@ describe("the extraction profile gates record reuse", { timeout: 120_000 }, () =
     expect(run()).toEqual({ reused: true, build: cold.build });
     const graph = read(out, "graph.json");
 
-    // Same bytes, another mtime (a reinstall, a CI cache restore): still the same build.
+    // Same bytes, another mtime (a reinstall, a CI cache restore): still the
+    // same build, and nothing is re-extracted. The new stat keys are written
+    // once, so the runs after it take the stat shortcut again instead of
+    // hashing the wasm on every one.
     const wasm = join(grammars, "typescript.wasm");
     const later = new Date(Date.now() + 60_000);
     utimesSync(wasm, later, later);
+    const stamp = (): number => (JSON.parse(read(out, "cache.json")) as { extraction: { grammarFiles: Record<string, { mtimeMs: number }> } }).extraction.grammarFiles.typescript!.mtimeMs;
+    const touched = run();
+    expect(touched.build).toBe(cold.build);
+    expect(read(out, "graph.json")).toBe(graph);
+    expect(stamp()).toBe(later.getTime());
     expect(run()).toEqual({ reused: true, build: cold.build });
+
+    // Another runtime (web-tree-sitter.wasm) is another parse of every file.
+    const runtime = join(grammars, "web-tree-sitter.wasm");
+    appendFileSync(runtime, Buffer.from([0x00, 0x05, 0x04, 0x61, 0x75, 0x64, 0x74]));
+    expect(run().reused).toBe(false);
+    expect(read(out, "graph.json")).toBe(graph);
+    expect(run().reused).toBe(true);
 
     // Another build: the same grammar with one more custom section, which
     // loads and parses alike but is not the file the records came from.

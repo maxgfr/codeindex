@@ -8101,11 +8101,11 @@ function grammarPath(key, dirs = resolveGrammarsTier().dirs) {
   }
   return void 0;
 }
-function grammarLandscape() {
+function grammarLandscape(keys = allGrammarKeys()) {
   const { dirs } = resolveGrammarsTier();
   if (!dirs.some((dir) => existsSync2(join2(dir, "web-tree-sitter.wasm")))) return "";
   const parts2 = [];
-  for (const key of allGrammarKeys().sort()) {
+  for (const key of [RUNTIME_GRAMMAR_KEY, ...[...keys].sort()]) {
     const path = grammarPath(key, dirs);
     if (!path) continue;
     try {
@@ -8121,10 +8121,10 @@ function grammarFile(key, known) {
   if (!path) return void 0;
   try {
     const st = statSync2(path);
-    if (known && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
+    if (known && known.path === path && known.engine === ENGINE_VERSION && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
     const seen = grammarFiles.get(path);
     if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen;
-    const file = { sha1: sha1(readFileSync4(path)), size: st.size, mtimeMs: st.mtimeMs };
+    const file = { sha1: sha1(readFileSync4(path)), size: st.size, mtimeMs: st.mtimeMs, path, engine: ENGINE_VERSION };
     grammarFiles.set(path, file);
     return file;
   } catch {
@@ -8204,7 +8204,7 @@ function parserFor(key) {
   parser.setLanguage(lang);
   return parser;
 }
-var CORE_GRAMMARS, EXTENDED_GRAMMARS, EXT_GRAMMAR, EMBEDDED_GRAMMARS, CPP_HEADER, EXTENDED_DIR, grammarFiles, runtimeReady, parser, loaded, failed;
+var CORE_GRAMMARS, EXTENDED_GRAMMARS, EXT_GRAMMAR, EMBEDDED_GRAMMARS, CPP_HEADER, EXTENDED_DIR, RUNTIME_GRAMMAR_KEY, grammarFiles, runtimeReady, parser, loaded, failed;
 var init_loader = __esm({
   "src/ast/loader.ts"() {
     "use strict";
@@ -8277,6 +8277,7 @@ var init_loader = __esm({
     };
     CPP_HEADER = /^[ \t]*(?:namespace(?:[ \t]+[A-Za-z_][\w:]*)?\s*\{|using[ \t]+namespace[ \t]|template[ \t]*<|class[ \t]+(?:[A-Z_][A-Z0-9_]*[ \t]+)?[A-Za-z_]\w*(?:[ \t]+final)?[ \t]*(?:[:;{]|$)|(?:public|private|protected)[ \t]*:(?!:)|#[ \t]*include[ \t]*<[a-z_]+>|extern[ \t]+"C\+\+")/m;
     EXTENDED_DIR = "grammars-extended";
+    RUNTIME_GRAMMAR_KEY = "web-tree-sitter";
     grammarFiles = /* @__PURE__ */ new Map();
     runtimeReady = false;
     parser = null;
@@ -11500,21 +11501,37 @@ function extractionProfile(files, maxCallsPerFile, ast, known) {
   const profile = maxCallsPerFile === void 0 ? { grammars } : { grammars, maxCallsPerFile };
   if (!known) return profile;
   const grammarFiles2 = {};
-  for (const key of grammars) {
+  for (const key of grammars.length ? [RUNTIME_GRAMMAR_KEY, ...grammars] : []) {
     const file = grammarFile(key, known.profile?.grammarFiles?.[key]);
     if (file) grammarFiles2[key] = file;
   }
   return { ...profile, grammarFiles: grammarFiles2 };
 }
 function sameExtractionProfile(a, b, same = sameGrammarFile) {
-  return a !== void 0 && a.maxCallsPerFile === b.maxCallsPerFile && a.grammars.join(",") === b.grammars.join(",") && b.grammars.every((key) => same(key, a.grammarFiles?.[key]));
+  return a !== void 0 && a.maxCallsPerFile === b.maxCallsPerFile && a.grammars.join(",") === b.grammars.join(",") && (b.grammars.length ? [RUNTIME_GRAMMAR_KEY, ...b.grammars] : []).every((key) => same(key, a.grammarFiles?.[key]));
+}
+function sameGrammarStamps(stored, current) {
+  const a = stored?.grammarFiles ?? {};
+  const b = current.grammarFiles ?? {};
+  const keys = Object.keys(b);
+  return keys.length === Object.keys(a).length && keys.every((k) => {
+    const x = a[k];
+    const y = b[k];
+    return x !== void 0 && x.sha1 === y.sha1 && x.size === y.size && x.mtimeMs === y.mtimeMs && x.path === y.path && x.engine === y.engine;
+  });
 }
 function parseGrammarFiles(value) {
   if (!object(value)) return void 0;
   const out2 = {};
   for (const [key, file] of Object.entries(value)) {
     if (object(file) && sha(file.sha1) && count(file.size) && typeof file.mtimeMs === "number" && Number.isFinite(file.mtimeMs)) {
-      out2[key] = { sha1: file.sha1, size: file.size, mtimeMs: file.mtimeMs };
+      out2[key] = {
+        sha1: file.sha1,
+        size: file.size,
+        mtimeMs: file.mtimeMs,
+        ...typeof file.path === "string" ? { path: file.path } : {},
+        ...typeof file.engine === "string" ? { engine: file.engine } : {}
+      };
     }
   }
   return out2;
@@ -11544,7 +11561,7 @@ function extractedAlike(stored, current) {
     let verdict = verdicts.get(key);
     if (verdict === void 0) {
       const now = current.ast(key);
-      verdict = astBefore.has(key) === now && (!now || same(key, stored?.grammarFiles?.[key]));
+      verdict = astBefore.has(key) === now && (!now || same(key, stored?.grammarFiles?.[key]) && same(RUNTIME_GRAMMAR_KEY, stored?.grammarFiles?.[RUNTIME_GRAMMAR_KEY]));
       verdicts.set(key, verdict);
     }
     return verdict;
@@ -22534,7 +22551,7 @@ function sessionGet(key) {
   return entry2;
 }
 function sessionPut(entry2) {
-  entry2.grammars ??= grammarLandscape();
+  entry2.grammars ??= landscapeOf(entry2.scan);
   const i2 = sessionCaches.findIndex((e) => e.key === entry2.key);
   if (i2 >= 0) sessionCaches.splice(i2, 1);
   sessionCaches.unshift(entry2);
@@ -22596,13 +22613,16 @@ function sessionKey(repo, opts) {
   });
 }
 function againstGrammars(entry2) {
-  const now = grammarLandscape();
+  const now = landscapeOf(entry2.scan);
   if (entry2.grammars === now) return;
   entry2.grammars = now;
   entry2.walked = void 0;
   const kept = /* @__PURE__ */ new Map();
   for (const [rel2, cached] of entry2.cacheMap) if (cached.record.kind !== "code") kept.set(rel2, cached);
   entry2.cacheMap = kept;
+}
+function landscapeOf(scan2) {
+  return grammarLandscape(grammarKeysForExts(new Set(scan2.files.map((f) => f.ext))));
 }
 function getScan(repo, opts = {}, walked) {
   const key = sessionKey(repo, opts);
@@ -27468,7 +27488,10 @@ function unchangedIndex(repo, opts, maxCalls, outDir, embedFresh) {
   if (!proof) return void 0;
   const { fresh: fresh2, walked, drift } = proof;
   const kinds2 = walked.map((f) => ({ kind: classify(f.rel, f.ext), ext: f.ext }));
-  if (drift.unchanged !== walked.length || drift.indexed !== walked.length || fresh2.meta.commit !== proof.commit || !sameExtractionProfile(fresh2.meta.extraction, extractionProfile(kinds2, maxCalls, grammarReady)) || !embedFresh(fresh2.meta.embed)) {
+  const profile = extractionProfile(kinds2, maxCalls, grammarReady, { profile: fresh2.meta.extraction });
+  if (drift.unchanged !== walked.length || drift.indexed !== walked.length || fresh2.meta.commit !== proof.commit || !sameExtractionProfile(fresh2.meta.extraction, profile) || // Same builds, recorded under other stat keys (a reinstall touched them):
+  // the full path rewrites them, so later runs need not hash the wasm again.
+  !sameGrammarStamps(fresh2.meta.extraction, profile) || !embedFresh(fresh2.meta.embed)) {
     return void 0;
   }
   const onDisk = persistedArtifacts(repo, { contentUnchanged: true, commit: proof.commit }, fresh2.meta, outDir);
@@ -27806,8 +27829,9 @@ ${HELP}`);
     const fastpath = symbolsReused && onDisk.bytes("graph") !== void 0;
     const restampedGraph = symbolsReused && !fastpath && meta.commit !== scan2.commit ? onDisk.graph() : void 0;
     if (fastpath) {
-      if (scan2.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction)) writeCache(meta);
-      else writeFreshness(meta);
+      if (scan2.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction) || !sameGrammarStamps(persisted?.meta.extraction, extraction)) {
+        writeCache(meta);
+      } else writeFreshness(meta);
       process.stderr.write(
         `codeindex: ${scan2.files.length} files \u2192 ${outDir}/graph.json + symbols.json${scan2.capped ? " (capped)" : ""} (unchanged \u2014 artifacts reused)
 `

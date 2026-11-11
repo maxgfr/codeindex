@@ -195,7 +195,17 @@ export interface GrammarFile {
   sha1: string;
   size: number;
   mtimeMs: number;
+  // Where it was read, and by which engine. The (size, mtime) shortcut below
+  // holds only for the same file under the same engine: npm writes every file
+  // it installs with one fixed mtime, so an upgraded package's wasm of equal
+  // size would otherwise pass for the old build. Absent in an index written
+  // before they were recorded: the file is then hashed.
+  path?: string;
+  engine?: string;
 }
+
+// The tree-sitter runtime every grammar is parsed with, tracked like one.
+export const RUNTIME_GRAMMAR_KEY = "web-tree-sitter";
 
 // The wasm ensureGrammars would load for `key`: the first resolved dir holding it.
 function grammarPath(key: string, dirs: readonly string[] = resolveGrammarsTier().dirs): string | undefined {
@@ -210,11 +220,14 @@ function grammarPath(key: string, dirs: readonly string[] = resolveGrammarsTier(
 // wasm: one string that changes when a grammar appears, disappears or is
 // replaced on disk — a `grammars pull` beside a running server. Stats only.
 // A long-lived process compares it with the one its records were built under.
-export function grammarLandscape(): string {
+//
+// `keys` restricts it to the grammars a caller's files can use: a grammar
+// pulled for a language the repository does not have changes nothing for it.
+export function grammarLandscape(keys: readonly string[] = allGrammarKeys()): string {
   const { dirs } = resolveGrammarsTier();
   if (!dirs.some((dir) => existsSync(join(dir, "web-tree-sitter.wasm")))) return "";
   const parts: string[] = [];
-  for (const key of allGrammarKeys().sort()) {
+  for (const key of [RUNTIME_GRAMMAR_KEY, ...[...keys].sort()]) {
     const path = grammarPath(key, dirs);
     if (!path) continue;
     try {
@@ -239,10 +252,10 @@ export function grammarFile(key: string, known?: GrammarFile): GrammarFile | und
   if (!path) return undefined;
   try {
     const st = statSync(path);
-    if (known && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
+    if (known && known.path === path && known.engine === ENGINE_VERSION && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
     const seen = grammarFiles.get(path);
     if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen;
-    const file: GrammarFile = { sha1: sha1(readFileSync(path)), size: st.size, mtimeMs: st.mtimeMs };
+    const file: GrammarFile = { sha1: sha1(readFileSync(path)), size: st.size, mtimeMs: st.mtimeMs, path, engine: ENGINE_VERSION };
     grammarFiles.set(path, file);
     return file;
   } catch {

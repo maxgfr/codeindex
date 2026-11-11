@@ -168,7 +168,7 @@ function sessionGet(key: string): SessionEntry | undefined {
 }
 
 function sessionPut(entry: SessionEntry): SessionEntry {
-  entry.grammars ??= grammarLandscape();
+  entry.grammars ??= landscapeOf(entry.scan);
   const i = sessionCaches.findIndex((e) => e.key === entry.key);
   if (i >= 0) sessionCaches.splice(i, 1);
   sessionCaches.unshift(entry);
@@ -292,13 +292,19 @@ export { toCacheMap };
 // One limit: a grammar this process has already LOADED is not reloaded when its
 // file is replaced, so the re-extraction then still runs on the build in memory.
 function againstGrammars(entry: SessionEntry): void {
-  const now = grammarLandscape();
+  const now = landscapeOf(entry.scan);
   if (entry.grammars === now) return;
   entry.grammars = now;
   entry.walked = undefined;
   const kept: SessionCacheMap = new Map();
   for (const [rel, cached] of entry.cacheMap) if (cached.record.kind !== "code") kept.set(rel, cached);
   entry.cacheMap = kept;
+}
+
+// The grammars this scan's files can be parsed with (and the runtime): one
+// pulled for a language the repository does not have leaves its records alone.
+function landscapeOf(scan: RepoScan): string {
+  return grammarLandscape(grammarKeysForExts(new Set(scan.files.map((f) => f.ext))));
 }
 
 // The memoizing replacement for scanRepo inside callTool. Exported for tests.

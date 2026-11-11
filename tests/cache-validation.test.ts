@@ -6,8 +6,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { readPersistedIndex, toCacheMap } from "../src/preload.js";
 import { extractedAlike, parseExtractionProfile, sameExtractionProfile } from "../src/cache.js";
+import { grammarFile, grammarLandscape } from "../src/ast/loader.js";
 import { scanRepo } from "../src/scan.js";
-import { EXTRACTOR_VERSION, SCHEMA_VERSION } from "../src/types.js";
+import { ENGINE_VERSION, EXTRACTOR_VERSION, SCHEMA_VERSION } from "../src/types.js";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/mini-repo", import.meta.url));
 const CLI = fileURLToPath(new URL("../scripts/cli.mjs", import.meta.url));
@@ -126,9 +127,18 @@ describe("what the cache may reuse", () => {
   it("a record parsed by another build of its grammar is not reused", () => {
     const loaded = ["c", "cpp", "javascript", "typescript"];
     const file = (sha1: string) => ({ sha1, size: 1, mtimeMs: 1 });
-    const stored = { grammars: loaded, grammarFiles: Object.fromEntries(loaded.map((k) => [k, file(k === "typescript" ? "a".repeat(40) : "b".repeat(40))])) };
+    const stored = {
+      grammars: loaded,
+      grammarFiles: {
+        ...Object.fromEntries(loaded.map((k) => [k, file(k === "typescript" ? "a".repeat(40) : "b".repeat(40))])),
+        "web-tree-sitter": file("d".repeat(40)),
+      },
+    };
     // Only typescript.wasm was re-vendored since the index was written.
-    const now = extractedAlike(stored, { ast: (k) => loaded.includes(k), sameGrammar: (key, was) => was?.sha1 === (key === "typescript" ? "c" : "b").repeat(40) });
+    const now = extractedAlike(stored, {
+      ast: (k) => loaded.includes(k),
+      sameGrammar: (key, was) => was?.sha1 === (key === "typescript" ? "c" : key === "web-tree-sitter" ? "d" : "b").repeat(40),
+    });
     expect(now("code", ".ts")).toBe(false);
     expect(now("code", ".vue")).toBe(false); // its script runs through the TS grammar
     expect(now("code", ".h")).toBe(true);
@@ -138,10 +148,34 @@ describe("what the cache may reuse", () => {
     expect(unrecorded("code", ".ts")).toBe(false);
     // …and nothing is asked of a grammar at the regex tier then and now.
     expect(extractedAlike({ grammars: [] }, { ast: () => false, sameGrammar: () => false })("code", ".ts")).toBe(true);
+    // Another runtime parses every grammar's files anew: nothing at the AST tier is reused.
+    const runtimeSwapped = extractedAlike(stored, { ast: (k) => loaded.includes(k), sameGrammar: (key, was) => key !== "web-tree-sitter" && was !== undefined });
+    for (const ext of [".ts", ".h", ".c"]) expect(runtimeSwapped("code", ext), ext).toBe(false);
     // The whole-profile comparison reads the builds off the stored side.
-    expect(sameExtractionProfile(stored, { grammars: loaded }, (key, was) => was?.sha1 === (key === "typescript" ? "a" : "b").repeat(40))).toBe(true);
+    expect(
+      sameExtractionProfile(stored, { grammars: loaded }, (key, was) => was?.sha1 === (key === "typescript" ? "a" : key === "web-tree-sitter" ? "d" : "b").repeat(40)),
+    ).toBe(true);
     expect(sameExtractionProfile(stored, { grammars: loaded }, () => false)).toBe(false);
     expect(sameExtractionProfile({ grammars: loaded }, { grammars: loaded }, (_key, was) => was !== undefined)).toBe(false);
+  });
+
+  it("trusts a recorded build's stat keys only for the same file under the same engine", () => {
+    const real = grammarFile("typescript")!;
+    expect(real).toMatchObject({ engine: ENGINE_VERSION, path: expect.stringMatching(/typescript\.wasm$/) });
+    // Equal stat keys: the recorded identity is taken without reading the file.
+    const recorded = { ...real, sha1: "0".repeat(40) };
+    expect(grammarFile("typescript", recorded)!.sha1).toBe("0".repeat(40));
+    // Another engine (npm installs every file with one fixed mtime), another
+    // path, or no record of either: the file is hashed.
+    for (const other of [{ ...recorded, engine: "0.0.0" }, { ...recorded, path: "/elsewhere/typescript.wasm" }, { sha1: recorded.sha1, size: recorded.size, mtimeMs: recorded.mtimeMs }]) {
+      expect(grammarFile("typescript", other)!.sha1).toBe(real.sha1);
+    }
+  });
+
+  it("a grammar landscape covers the runtime and the grammars asked for, no others", () => {
+    const ts = grammarLandscape(["typescript"]);
+    expect(ts).toMatch(/^web-tree-sitter:\d+:[\d.]+,typescript:\d+:[\d.]+$/);
+    expect(grammarLandscape(["go", "typescript"])).toContain("go:");
   });
 
   it("a persisted profile keeps well-formed grammar builds and drops malformed ones", () => {

@@ -381,6 +381,8 @@ interface GrammarFile {
     sha1: string;
     size: number;
     mtimeMs: number;
+    path?: string;
+    engine?: string;
 }
 declare function resolveGrammarsDir(opts?: {
     moduleDir?: string;

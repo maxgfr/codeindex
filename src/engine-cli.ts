@@ -38,7 +38,7 @@ import {
 import { indexStatus } from "./status.js";
 import { freshArtifacts, proveFresh, renderFreshness, FRESHNESS_FILE, type FreshnessScanOptions } from "./freshness.js";
 import { classify } from "./classify.js";
-import { compatibleEntries, extractionProfile, sameExtractionProfile } from "./cache.js";
+import { compatibleEntries, extractionProfile, sameExtractionProfile, sameGrammarStamps } from "./cache.js";
 import { walk, type WalkResult } from "./walk.js";
 import { implementationsOf, typeEntry } from "./relations.js";
 import { callPath, neighborhood } from "./symbolgraph.js";
@@ -965,11 +965,15 @@ function unchangedIndex(
   if (!proof) return undefined;
   const { fresh, walked, drift } = proof;
   const kinds = walked.map((f) => ({ kind: classify(f.rel, f.ext), ext: f.ext }));
+  const profile = extractionProfile(kinds, maxCalls, grammarReady, { profile: fresh.meta.extraction });
   if (
     drift.unchanged !== walked.length ||
     drift.indexed !== walked.length ||
     fresh.meta.commit !== proof.commit ||
-    !sameExtractionProfile(fresh.meta.extraction, extractionProfile(kinds, maxCalls, grammarReady)) ||
+    !sameExtractionProfile(fresh.meta.extraction, profile) ||
+    // Same builds, recorded under other stat keys (a reinstall touched them):
+    // the full path rewrites them, so later runs need not hash the wasm again.
+    !sameGrammarStamps(fresh.meta.extraction, profile) ||
     !embedFresh(fresh.meta.embed)
   ) {
     return undefined;
@@ -1485,7 +1489,9 @@ export async function runCli(rawArgv: string[]): Promise<void> {
       // would (a cache written before profiles existed, or a --max-calls switch
       // on a tree with no code to re-extract); the meta is carried forward
       // verbatim since the guard just proved it describes the disk.
-      if (scan.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction)) writeCache(meta);
+      if (scan.cacheDirty || !sameExtractionProfile(persisted?.meta.extraction, extraction) || !sameGrammarStamps(persisted?.meta.extraction, extraction)) {
+        writeCache(meta);
+      }
       else writeFreshness(meta);
       process.stderr.write(
         `codeindex: ${scan.files.length} files → ${outDir}/graph.json + symbols.json${scan.capped ? " (capped)" : ""} (unchanged — artifacts reused)\n`,
