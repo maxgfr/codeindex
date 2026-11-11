@@ -72,6 +72,27 @@ export interface DiffSpec {
 
 const gitArgs = (dir: string): string[] => ["-C", dir, ...GIT_CONFIG];
 
+// A worktree diff compares a stat-dirty file through its clean filter, and a
+// filter is a COMMAND named in config. One the repository declares itself
+// (its .git/config, a worktree config, an included file) runs on a mere
+// `codeindex delta` of a checkout that arrived with it. Each such driver is
+// overridden with empty commands, which git takes as no filter. Drivers from
+// the user's own or the system's config (git-lfs) are the user's choice and
+// stay: without them an LFS file would compare its content to its pointer.
+function repoFilterOverrides(dir: string): string[] {
+  const res = sh("git", ["-C", dir, "config", "--show-scope", "--get-regexp", "^filter\\."]);
+  if (!res.ok) return [];
+  const drivers = new Set<string>();
+  for (const line of res.stdout.split("\n")) {
+    const m = /^(\S+)\tfilter\.(.+)\.(?:clean|smudge|process|required) /.exec(line);
+    if (m && m[1] !== "global" && m[1] !== "system") drivers.add(m[2]!);
+  }
+  return [...drivers].sort().flatMap((d) => ["-c", `filter.${d}.clean=`, "-c", `filter.${d}.smudge=`, "-c", `filter.${d}.process=`, "-c", `filter.${d}.required=false`]);
+}
+
+// gitArgs for a command that may read worktree files through filters.
+const worktreeGitArgs = (dir: string): string[] => [...gitArgs(dir), ...repoFilterOverrides(dir)];
+
 // A user-supplied ref that git would read as an OPTION: `--output=/tmp/x` as a
 // delta base or a changedSince ref made `git diff` write a file. No branch, tag
 // or sha starts with "-", so such a ref is refused before git sees it; every
@@ -156,7 +177,7 @@ export function resolveBaseRef(
 export function diffFiles(dir: string, spec: DiffSpec): DiffFile[] {
   const out: DiffFile[] = [];
   if (!diffable(spec)) return out;
-  const ns = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
+  const ns = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
   if (ns.ok) {
     const toks = ns.stdout.split("\0");
     let i = 0;
@@ -178,7 +199,7 @@ export function diffFiles(dir: string, spec: DiffSpec): DiffFile[] {
   }
 
   const byPath = new Map(out.map((f) => [f.path, f]));
-  const num = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
+  const num = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
   if (num.ok) {
     const toks = num.stdout.split("\0");
     let i = 0;
@@ -214,7 +235,7 @@ export function diffHunks(dir: string, spec: DiffSpec): Map<string, Hunk[]> {
   const map = new Map<string, Hunk[]>();
   if (!diffable(spec)) return map;
   const res = sh("git", [
-    ...gitArgs(dir),
+    ...worktreeGitArgs(dir),
     "diff",
     "--no-color",
     "--no-ext-diff",
@@ -538,7 +559,7 @@ function firstLine(text: string): string {
 export function changedSince(dir: string, ref: string): Set<string> {
   const out = new Set<string>();
   if (optionLike(ref)) return out;
-  const diff = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref, "--"]);
+  const diff = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref, "--"]);
   if (diff.ok) for (const p of diff.stdout.split("\0")) if (p) out.add(p);
   for (const p of untrackedFiles(dir)) out.add(p);
   return out;

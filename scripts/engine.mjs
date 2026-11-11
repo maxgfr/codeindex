@@ -1148,6 +1148,16 @@ function headCommit(dir) {
   const res = sh("git", ["-C", dir, "rev-parse", "HEAD"]);
   return res.ok ? res.stdout.trim().slice(0, COMMIT_CHARS) : void 0;
 }
+function repoFilterOverrides(dir) {
+  const res = sh("git", ["-C", dir, "config", "--show-scope", "--get-regexp", "^filter\\."]);
+  if (!res.ok) return [];
+  const drivers = /* @__PURE__ */ new Set();
+  for (const line2 of res.stdout.split("\n")) {
+    const m = /^(\S+)\tfilter\.(.+)\.(?:clean|smudge|process|required) /.exec(line2);
+    if (m && m[1] !== "global" && m[1] !== "system") drivers.add(m[2]);
+  }
+  return [...drivers].sort().flatMap((d) => ["-c", `filter.${d}.clean=`, "-c", `filter.${d}.smudge=`, "-c", `filter.${d}.process=`, "-c", `filter.${d}.required=false`]);
+}
 function emptyTreeId(dir) {
   const res = sh("git", [...gitArgs(dir), "hash-object", "-t", "tree", "--stdin"], { input: "" });
   return res.ok ? res.stdout.trim() : void 0;
@@ -1195,7 +1205,7 @@ function resolveBaseRef(dir, base) {
 function diffFiles(dir, spec) {
   const out2 = [];
   if (!diffable(spec)) return out2;
-  const ns = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
+  const ns = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--name-status", ...rangeArgs(spec)]);
   if (ns.ok) {
     const toks = ns.stdout.split("\0");
     let i2 = 0;
@@ -1216,7 +1226,7 @@ function diffFiles(dir, spec) {
     }
   }
   const byPath = new Map(out2.map((f) => [f.path, f]));
-  const num2 = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
+  const num2 = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "-M", "--numstat", ...rangeArgs(spec)]);
   if (num2.ok) {
     const toks = num2.stdout.split("\0");
     let i2 = 0;
@@ -1245,7 +1255,7 @@ function diffHunks(dir, spec) {
   const map = /* @__PURE__ */ new Map();
   if (!diffable(spec)) return map;
   const res = sh("git", [
-    ...gitArgs(dir),
+    ...worktreeGitArgs(dir),
     "diff",
     "--no-color",
     "--no-ext-diff",
@@ -1445,14 +1455,14 @@ function firstLine(text) {
 function changedSince(dir, ref2) {
   const out2 = /* @__PURE__ */ new Set();
   if (optionLike(ref2)) return out2;
-  const diff = sh("git", [...gitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref2, "--"]);
+  const diff = sh("git", [...worktreeGitArgs(dir), "diff", "--no-color", "--relative", "-z", "--name-only", "--end-of-options", ref2, "--"]);
   if (diff.ok) {
     for (const p of diff.stdout.split("\0")) if (p) out2.add(p);
   }
   for (const p of untrackedFiles(dir)) out2.add(p);
   return out2;
 }
-var COMMIT_CHARS, GIT_CONFIG, gitArgs, optionLike, rangeArgs, diffable, NO_COMMITS_REF, C_ESCAPES, LOG_MAX_BYTES, SINCE_DATE, LOG_MEMO, LOG_MEMO_MAX;
+var COMMIT_CHARS, GIT_CONFIG, gitArgs, worktreeGitArgs, optionLike, rangeArgs, diffable, NO_COMMITS_REF, C_ESCAPES, LOG_MAX_BYTES, SINCE_DATE, LOG_MEMO, LOG_MEMO_MAX;
 var init_git = __esm({
   "src/git.ts"() {
     "use strict";
@@ -1478,6 +1488,7 @@ var init_git = __esm({
       "log.showRoot=true"
     ];
     gitArgs = (dir) => ["-C", dir, ...GIT_CONFIG];
+    worktreeGitArgs = (dir) => [...gitArgs(dir), ...repoFilterOverrides(dir)];
     optionLike = (ref2) => ref2.startsWith("-");
     rangeArgs = (spec) => spec.staged ? ["--cached"] : ["--end-of-options", spec.mergeBase];
     diffable = (spec) => spec.staged === true || typeof spec.mergeBase === "string" && !optionLike(spec.mergeBase);

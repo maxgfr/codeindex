@@ -105,4 +105,22 @@ describe("a repository's own git config cannot run a command", () => {
     expect(gitChurn(dir).ok).toBe(true);
     expect(existsSync(marker)).toBe(false);
   });
+
+  it("a clean or process filter the repository declares is not run by a worktree diff", () => {
+    const dir = repoWithCommit();
+    const marker = join(mkdtempSync(join(tmpdir(), "ci-git-mark-")), "ran");
+    const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" });
+    writeFileSync(join(dir, ".gitattributes"), "*.txt filter=x\n");
+    git("config", "filter.x.clean", `sh -c 'touch ${marker}; cat'`);
+    git("config", "filter.x.process", `sh -c 'touch ${marker}; exit 1'`);
+    // The control: left to itself, git runs it for a stat-dirty file.
+    git("diff", "--name-only");
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    expect(diffFiles(dir, { mergeBase: "HEAD" }).map((f) => f.path)).toEqual(["a.txt"]);
+    expect([...diffHunks(dir, { mergeBase: "HEAD" }).keys()]).toEqual(["a.txt"]);
+    expect([...changedSince(dir, "HEAD")].sort()).toEqual([".gitattributes", "a.txt"]);
+    expect(existsSync(marker)).toBe(false);
+  });
 });
