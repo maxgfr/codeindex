@@ -142,8 +142,10 @@ class BrowserBuffer extends Uint8Array {
         return utf16leDecoder.decode(view);
       case "latin1":
       case "binary":
-      case "ascii":
         return decodeLatin1(view);
+      case "ascii":
+        // Node's ascii decoding drops the high bit of every byte.
+        return decodeLatin1(view.map((byte) => byte & 0x7f));
       case "hex": {
         let out = "";
         for (const byte of view) out += HEX[byte >> 4]! + HEX[byte & 15]!;

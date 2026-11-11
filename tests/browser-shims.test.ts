@@ -16,6 +16,9 @@ import * as shimPath from "../src/browser/path.js";
 import { createHash as shimCreateHash } from "../src/browser/crypto.js";
 import { Buffer as ShimBuffer } from "../src/browser/globals.js";
 import * as vfs from "../src/browser/fs.js";
+import * as nodeFs from "node:fs";
+import { tmpdir } from "node:os";
+import { join as nodeJoin } from "node:path";
 
 describe("path shim", () => {
   // Chosen for the cases import resolution actually hits: relative specifiers,
@@ -265,5 +268,40 @@ describe("VFS", () => {
     vfs.resetVfs();
     expect(vfs.residentBytes()).toBe(0);
     expect(vfs.existsSync("/r/a.ts")).toBe(false);
+  });
+
+  it("mkdirSync and existsSync answer as node:fs does", () => {
+    vfs.resetVfs();
+    const real = nodeFs.mkdtempSync(nodeJoin(tmpdir(), "ci-shim-mkdir-"));
+    const both = <T>(fn: (fs: typeof nodeFs | typeof vfs, root: string) => T): [unknown, unknown] => {
+      const run = (fs: typeof nodeFs | typeof vfs, root: string): unknown => {
+        try {
+          return fn(fs, root);
+        } catch (e) {
+          return (e as NodeJS.ErrnoException).code;
+        }
+      };
+      return [run(vfs, "/m"), run(nodeFs, real)];
+    };
+    const same = (fn: (fs: typeof nodeFs | typeof vfs, root: string) => unknown) => {
+      const [shim, node] = both(fn);
+      expect(shim).toEqual(node);
+    };
+    vfs.mkdirSync("/m", { recursive: true });
+    // A missing parent without recursive, then an existing directory.
+    same((fs, r) => fs.mkdirSync(`${r}/a/b`));
+    same((fs, r) => fs.mkdirSync(`${r}/a`));
+    same((fs, r) => fs.mkdirSync(`${r}/a`));
+    // Recursive: the first directory it made, or undefined when it made none.
+    const [shimFirst, nodeFirst] = both((fs, r) => fs.mkdirSync(`${r}/x/y/z`, { recursive: true }));
+    expect(shimFirst).toBe("/m/x");
+    expect(nodeFirst).toBe(nodeJoin(real, "x"));
+    same((fs, r) => fs.mkdirSync(`${r}/x/y`, { recursive: true }));
+    expect(vfs.existsSync("")).toBe(nodeFs.existsSync(""));
+  });
+
+  it("decodes ascii by dropping the high bit, like node:Buffer", () => {
+    const bytes = new Uint8Array([0x41, 0xc1, 0xff, 0x7f, 0x80]);
+    expect(ShimBuffer.from(bytes).toString("ascii")).toBe(Buffer.from(bytes).toString("ascii"));
   });
 });

@@ -241,6 +241,8 @@ function makeStats(entry: Entry): Stats {
 }
 
 export function existsSync(path: string): boolean {
+  // Node answers false for "": it names no file. key("") is the root, which exists.
+  if (path === "") return false;
   return entries.has(key(path));
 }
 
@@ -305,9 +307,32 @@ export function chmodSync(path: string, mode: number): void {
   entry.mode = mode;
 }
 
-export function mkdirSync(path: string, _options?: { recursive?: boolean }): string | undefined {
-  ensureDir(path);
-  return undefined;
+// As node:fs does: without `recursive`, the parent must exist and the path must
+// not; with it, an existing directory is fine and the return value is the first
+// directory created (undefined when none was).
+export function mkdirSync(path: string, options?: { recursive?: boolean }): string | undefined {
+  const k = key(path);
+  if (!options?.recursive) {
+    if (entries.has(k)) throw eexist(path, "mkdir");
+    const parent = entries.get(key(dirname(k)));
+    if (!parent) throw enoent(path, "mkdir");
+    if (parent.kind !== "dir") throw enotdir(path, "mkdir");
+    ensureDir(k);
+    return undefined;
+  }
+  let first: string | undefined;
+  for (let dir = k; !entries.has(dir); dir = key(dirname(dir))) first = dir;
+  ensureDir(k);
+  return first;
+}
+
+function eexist(path: string, syscall: string): NodeJS.ErrnoException {
+  const err = new Error(`EEXIST: file already exists, ${syscall} '${path}'`) as NodeJS.ErrnoException;
+  err.code = "EEXIST";
+  err.errno = -17;
+  err.syscall = syscall;
+  err.path = path;
+  return err;
 }
 
 export function mkdtempSync(prefix: string): string {
