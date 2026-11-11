@@ -991,9 +991,9 @@ describe("MCP search — embedding index memoization (endpoint tier)", () => {
       const secondBody = JSON.parse(second.result!.content![0]!.text) as { tier: string };
       expect(secondBody.tier).toBe("endpoint");
 
-      // Same repo state → the corpus index is memoized: only the (per-query)
-      // encode call happens again, not a whole new corpus build.
-      expect(mock.calls).toBe(callsAfterFirst + 1);
+      // Same repo state → the corpus index is memoized: only the model check
+      // and the (per-query) encode call happen again, not a corpus build.
+      expect(mock.calls).toBe(callsAfterFirst + 2);
     } finally {
       session.close();
     }
@@ -1020,10 +1020,9 @@ describe("MCP search — embedding index memoization (endpoint tier)", () => {
       // Same model, a comment appended: no unit text changed, nothing is re-sent.
       writeFileSync(clientFile, readFileSync(clientFile, "utf8") + "\n// touched\n");
       expect(await corpusTexts(2)).toBe(0);
-      // Another model now answers at that URL. The old vectors were kept for
-      // every unchanged unit and ranked against the new model's query vector.
+      // Another model now answers at that URL, and NOTHING in the repository
+      // changed: the memo answered from the old model's index until a file did.
       mock.vector = [0, 1];
-      writeFileSync(clientFile, readFileSync(clientFile, "utf8") + "// touched again\n");
       expect(await corpusTexts(3)).toBe(whole);
     } finally {
       session.close();

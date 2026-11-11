@@ -19452,6 +19452,23 @@ function resolveTimeout(opts) {
   const env = Number(process.env.CODEINDEX_EMBED_TIMEOUT_MS);
   return Number.isFinite(env) && env > 0 ? clampTimerMs(env) : 3e4;
 }
+async function readCapped(res, max, url) {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      throw new Error(`embedding endpoint ${url} sent more than the ${max} bytes accepted`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 function capText(text) {
   if (text.length <= ENDPOINT_MAX_TEXT_CHARS) return text;
   const last = text.charCodeAt(ENDPOINT_MAX_TEXT_CHARS - 1);
@@ -19473,11 +19490,11 @@ async function embedViaEndpoint(texts, opts = {}) {
     });
     if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
     const declared = Number(res.headers.get("content-length"));
-    if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-      throw new Error(`embedding endpoint ${url} sent ${declared} bytes, past the ${MAX_RESPONSE_BYTES} accepted`);
+    const max = opts.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+    if (Number.isFinite(declared) && declared > max) {
+      throw new Error(`embedding endpoint ${url} sent ${declared} bytes, past the ${max} accepted`);
     }
-    const raw = await res.text();
-    if (raw.length > MAX_RESPONSE_BYTES) throw new Error(`embedding endpoint ${url} sent more than the ${MAX_RESPONSE_BYTES} bytes accepted`);
+    const raw = await readCapped(res, opts.maxResponseBytes ?? MAX_RESPONSE_BYTES, url);
     const data = JSON.parse(raw);
     const vectors = data.vectors;
     if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number" && Number.isFinite(x)))) {
@@ -24449,9 +24466,10 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       const endpoint = resolveEmbedEndpoint();
       if (endpoint) {
         try {
+          const modelId = await endpointModelId();
           const index = await memoizedEmbeddingIndex(
-            { mode: "endpoint", identity: endpoint, scan: scan2 },
-            async (previous) => buildEndpointIndex(scan2, { previous, modelId: await endpointModelId() })
+            { mode: "endpoint", identity: `${endpoint}\0${modelId}`, scan: scan2 },
+            (previous) => buildEndpointIndex(scan2, { previous, modelId })
           );
           const queryVec = await encodeQueryViaEndpoint(query);
           return answer(explainSemantic(scan2, query, index, { ...lexOpts, queryVec }), "endpoint");

@@ -191,6 +191,19 @@ describe("endpoint client — protocol contract", () => {
     await expect(embedViaEndpoint(["x"], { url: m.url })).rejects.toThrow(/past the 67108864 accepted/);
   });
 
+  it("refuses a chunked response past the cap, which declares no length", async () => {
+    const m = await mock((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      // Written in pieces with no content-length: Node sends it chunked.
+      for (let i = 0; i < 8; i++) res.write(" ".repeat(64 * 1024));
+      res.end('{"vectors":[[1,0]]}');
+      return true;
+    });
+    await expect(embedViaEndpoint(["x"], { url: m.url, maxResponseBytes: 128 * 1024 })).rejects.toThrow(/sent more than the 131072 bytes accepted/);
+    // Under the cap, the same response is read as before.
+    expect(await embedViaEndpoint(["x"], { url: m.url })).toEqual([[1, 0]]);
+  });
+
   it("aborts on timeout", async () => {
     const m = await mock((_req, _res) => true /* never responds */);
     await expect(embedViaEndpoint(["x"], { url: m.url, timeoutMs: 150 })).rejects.toThrow();

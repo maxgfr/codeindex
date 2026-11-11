@@ -1337,6 +1337,7 @@ interface EmbedEndpointOptions {
     headers?: Record<string, string>;
     batchSize?: number;
     concurrency?: number;
+    maxResponseBytes?: number;
 }
 declare function resolveEmbedEndpoint(opts?: EmbedEndpointOptions): string | undefined;
 declare function embedEndpointUrl(base: string): string;

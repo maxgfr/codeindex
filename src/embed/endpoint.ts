@@ -37,6 +37,8 @@ export interface EmbedEndpointOptions {
   // 245k units is 3,835 batches; sent one after another, their round trips
   // add up to most of the build.
   concurrency?: number;
+  // The largest response read, in bytes (default 64 MiB).
+  maxResponseBytes?: number;
 }
 
 // Resolve the configured endpoint BASE url, or undefined when neither opts.url
@@ -86,6 +88,26 @@ export const ENDPOINT_MAX_TEXT_CHARS = 8192;
 // dimensions as JSON is ~5 MB, and the reference model answers 384 of them.
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
+// The body of a response, read as it arrives and abandoned past `max` bytes:
+// a chunked response declares no length, and res.text() held it whole first.
+async function readCapped(res: Response, max: number, url: string): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      throw new Error(`embedding endpoint ${url} sent more than the ${max} bytes accepted`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function capText(text: string): string {
   if (text.length <= ENDPOINT_MAX_TEXT_CHARS) return text;
   // Never end on half a surrogate pair: it would not survive JSON as itself.
@@ -114,11 +136,11 @@ export async function embedViaEndpoint(texts: string[], opts: EmbedEndpointOptio
     if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
     // Bounded: what the endpoint sends back is read into memory whole.
     const declared = Number(res.headers.get("content-length"));
-    if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-      throw new Error(`embedding endpoint ${url} sent ${declared} bytes, past the ${MAX_RESPONSE_BYTES} accepted`);
+    const max = opts.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+    if (Number.isFinite(declared) && declared > max) {
+      throw new Error(`embedding endpoint ${url} sent ${declared} bytes, past the ${max} accepted`);
     }
-    const raw = await res.text();
-    if (raw.length > MAX_RESPONSE_BYTES) throw new Error(`embedding endpoint ${url} sent more than the ${MAX_RESPONSE_BYTES} bytes accepted`);
+    const raw = await readCapped(res, opts.maxResponseBytes ?? MAX_RESPONSE_BYTES, url);
     const data = JSON.parse(raw) as { vectors?: unknown };
     const vectors = data.vectors;
     if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number" && Number.isFinite(x)))) {

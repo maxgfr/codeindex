@@ -647,8 +647,13 @@ async function callTool(
           // model swapped behind the same URL during a session kept the old
           // model's vectors for every unit whose text had not changed, and
           // ranked them against the new model's query vector.
-          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: endpoint, scan }, async (previous) =>
-            buildEndpointIndex(scan, { previous, modelId: await endpointModelId() }),
+          //
+          // Asked on every search, not only when the corpus is rebuilt: keyed
+          // by URL alone, the memo answered from the old model's index until
+          // some file changed. One fixed text per search is the price.
+          const modelId = await endpointModelId();
+          const index = await memoizedEmbeddingIndex({ mode: "endpoint", identity: `${endpoint}\0${modelId}`, scan }, (previous) =>
+            buildEndpointIndex(scan, { previous, modelId }),
           );
           const queryVec = await encodeQueryViaEndpoint(query);
           return answer(explainSemantic(scan, query, index, { ...lexOpts, queryVec }), "endpoint");
