@@ -144,6 +144,10 @@ export interface ResolveContext {
   // C/C++: the file an include spec reaches through cIncludeRoots (null: none),
   // keyed by spec — that probe never looks at the including file.
   cRootMemo?: Map<string, string | null>;
+  // The same for a Ruby bare `require` through rubyLibRoots, and for a PHP
+  // namespace through composer's PSR-4 map: neither looks at the requiring file.
+  rubyRootMemo?: Map<string, string | null>;
+  phpPsr4Memo?: Map<string, string | null>;
   // Per-directory sorted file lists by extension ("<ext>\0<dir>"), for the
   // Go-package "first file in the directory" rule.
   dirFilesMemo?: Map<string, string[]>;
@@ -1521,11 +1525,22 @@ function resolveRuby(fromRel: string, spec: string, ctx: ResolveContext): Resolu
     const hit = firstExisting(ctx, [base + ".rb", posix.join(base, "index.rb")]);
     return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
   }
-  for (const root of ctx.rubyLibRoots) {
-    const hit = firstExisting(ctx, [posix.join(root, spec + ".rb")]);
-    if (hit) return { kind: "resolved", target: hit };
+  // The lib-root probe depends on the spec alone (as C's include roots do), and
+  // a stdlib `require "json"` probed every lib root of the repo in every file.
+  const memo = (ctx.rubyRootMemo ??= new Map());
+  let target = memo.get(spec);
+  if (target === undefined) {
+    target = null;
+    for (const root of ctx.rubyLibRoots) {
+      const hit = firstExisting(ctx, [posix.join(root, spec + ".rb")]);
+      if (hit) {
+        target = hit;
+        break;
+      }
+    }
+    memo.set(spec, target);
   }
-  return { kind: "external" };
+  return target ? { kind: "resolved", target } : { kind: "external" };
 }
 
 // PHP: relative `require/include` against the file's dir; `use Namespace\Class`
@@ -1538,13 +1553,23 @@ function resolvePhp(fromRel: string, spec: string, ctx: ResolveContext): Resolut
     return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
   }
   const ns = spec.replace(/^\\+/, "");
-  for (const { prefix, dir } of ctx.phpPsr4) {
-    if (prefix && ns !== prefix && !ns.startsWith(prefix + "\\")) continue;
-    const rest = prefix ? ns.slice(prefix.length).replace(/^\\+/, "") : ns;
-    const hit = firstExisting(ctx, [posix.join(dir, rest.replace(/\\/g, "/")) + ".php"]);
-    if (hit) return { kind: "resolved", target: hit };
+  // PSR-4 depends on the namespace alone: one probe of the prefixes per name.
+  const memo = (ctx.phpPsr4Memo ??= new Map());
+  let target = memo.get(ns);
+  if (target === undefined) {
+    target = null;
+    for (const { prefix, dir } of ctx.phpPsr4) {
+      if (prefix && ns !== prefix && !ns.startsWith(prefix + "\\")) continue;
+      const rest = prefix ? ns.slice(prefix.length).replace(/^\\+/, "") : ns;
+      const hit = firstExisting(ctx, [posix.join(dir, rest.replace(/\\/g, "/")) + ".php"]);
+      if (hit) {
+        target = hit;
+        break;
+      }
+    }
+    memo.set(ns, target);
   }
-  return { kind: "external" };
+  return target ? { kind: "resolved", target } : { kind: "external" };
 }
 
 // C#: `using X.Y` → files declaring `namespace X.Y` (exact), else the first file
@@ -1607,7 +1632,8 @@ function resolveLua(fromRel: string, spec: string, ctx: ResolveContext): Resolut
   const fromDir = fromRel.includes("/") ? posix.dirname(fromRel) : "";
   const roots = ctx.luaRoots ?? [""];
   const enclosing = roots.filter((r) => !r || fromDir === r || fromDir.startsWith(r + "/")).reverse();
-  const order = [...enclosing, fromDir, ...roots.filter((r) => !enclosing.includes(r))];
+  const inEnclosing = new Set(enclosing); // was enclosing.includes() per root: roots²
+  const order = [...enclosing, fromDir, ...roots.filter((r) => !inEnclosing.has(r))];
   for (const root of order) {
     const hit = firstExisting(ctx, [posix.join(root, name + ".lua"), posix.join(root, name, "init.lua")]);
     if (hit) return { kind: "resolved", target: hit };

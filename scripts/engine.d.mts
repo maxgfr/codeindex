@@ -758,6 +758,8 @@ interface ResolveContext {
     jsMemo?: Map<string, Resolution>;
     pyMemo?: Map<string, Resolution>;
     cRootMemo?: Map<string, string | null>;
+    rubyRootMemo?: Map<string, string | null>;
+    phpPsr4Memo?: Map<string, string | null>;
     dirFilesMemo?: Map<string, string[]>;
 }
 declare function buildResolveContext(scan: RepoScan): ResolveContext;

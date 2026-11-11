@@ -12970,11 +12970,20 @@ function resolveRuby(fromRel, spec, ctx) {
     const hit = firstExisting(ctx, [base + ".rb", posix2.join(base, "index.rb")]);
     return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
   }
-  for (const root of ctx.rubyLibRoots) {
-    const hit = firstExisting(ctx, [posix2.join(root, spec + ".rb")]);
-    if (hit) return { kind: "resolved", target: hit };
+  const memo = ctx.rubyRootMemo ??= /* @__PURE__ */ new Map();
+  let target = memo.get(spec);
+  if (target === void 0) {
+    target = null;
+    for (const root of ctx.rubyLibRoots) {
+      const hit = firstExisting(ctx, [posix2.join(root, spec + ".rb")]);
+      if (hit) {
+        target = hit;
+        break;
+      }
+    }
+    memo.set(spec, target);
   }
-  return { kind: "external" };
+  return target ? { kind: "resolved", target } : { kind: "external" };
 }
 function resolvePhp(fromRel, spec, ctx) {
   if (spec.startsWith(".")) {
@@ -12984,13 +12993,22 @@ function resolvePhp(fromRel, spec, ctx) {
     return hit ? { kind: "resolved", target: hit } : { kind: "dangling", reason: "missing-module" };
   }
   const ns = spec.replace(/^\\+/, "");
-  for (const { prefix, dir } of ctx.phpPsr4) {
-    if (prefix && ns !== prefix && !ns.startsWith(prefix + "\\")) continue;
-    const rest = prefix ? ns.slice(prefix.length).replace(/^\\+/, "") : ns;
-    const hit = firstExisting(ctx, [posix2.join(dir, rest.replace(/\\/g, "/")) + ".php"]);
-    if (hit) return { kind: "resolved", target: hit };
+  const memo = ctx.phpPsr4Memo ??= /* @__PURE__ */ new Map();
+  let target = memo.get(ns);
+  if (target === void 0) {
+    target = null;
+    for (const { prefix, dir } of ctx.phpPsr4) {
+      if (prefix && ns !== prefix && !ns.startsWith(prefix + "\\")) continue;
+      const rest = prefix ? ns.slice(prefix.length).replace(/^\\+/, "") : ns;
+      const hit = firstExisting(ctx, [posix2.join(dir, rest.replace(/\\/g, "/")) + ".php"]);
+      if (hit) {
+        target = hit;
+        break;
+      }
+    }
+    memo.set(ns, target);
   }
-  return { kind: "external" };
+  return target ? { kind: "resolved", target } : { kind: "external" };
 }
 function resolveCsharp(spec, ctx) {
   const exact = ctx.csharpNamespaces.get(spec);
@@ -13032,7 +13050,8 @@ function resolveLua(fromRel, spec, ctx) {
   const fromDir = fromRel.includes("/") ? posix2.dirname(fromRel) : "";
   const roots = ctx.luaRoots ?? [""];
   const enclosing = roots.filter((r) => !r || fromDir === r || fromDir.startsWith(r + "/")).reverse();
-  const order = [...enclosing, fromDir, ...roots.filter((r) => !enclosing.includes(r))];
+  const inEnclosing = new Set(enclosing);
+  const order = [...enclosing, fromDir, ...roots.filter((r) => !inEnclosing.has(r))];
   for (const root of order) {
     const hit = firstExisting(ctx, [posix2.join(root, name2 + ".lua"), posix2.join(root, name2, "init.lua")]);
     if (hit) return { kind: "resolved", target: hit };
