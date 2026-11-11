@@ -163,4 +163,13 @@ describe("pathological patterns answer in linear time", () => {
     expect(detected.ms).toBeLessThan(BUDGET_MS);
     expect(detected.value.packages.map((p) => p.dir)).toEqual(["packages/" + long, "packages/kept"].sort());
   });
+
+  it("workspace globs match a name holding a character outside the BMP", () => {
+    // Past two wildcards the linear matcher runs, which compares UTF-16 units.
+    const root = mkdtempSync(join(tmpdir(), "codeindex-wildcard-astral-"));
+    mkdirSync(join(root, "packages", "a1b2c3😀x"), { recursive: true });
+    writeFileSync(join(root, "packages", "a1b2c3😀x", "package.json"), JSON.stringify({ name: "astral" }));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/a*b*c*😀x"] }));
+    expect(detectWorkspaces(root).packages.map((p) => p.name)).toEqual(["astral"]);
+  });
 });

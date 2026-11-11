@@ -2285,6 +2285,16 @@ describe("tools/call is validated before the repo is touched", () => {
     expect(text(3)).toMatch(/`limit` must be a number/);
     expect(text(4)).toMatch(/`name` is required/);
   }, 20_000);
+
+  it("bounds grep's time budget: the server answers nothing else while a search runs", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "tools/call", params: { name: "grep", arguments: { repo: REPO, pattern: "HttpClient", timeoutMs: 120_001 } } },
+      { id: 2, method: "tools/call", params: { name: "grep", arguments: { repo: REPO, pattern: "HttpClient", timeoutMs: 120_000 } } },
+    ]);
+    expect(res.get(1)!.result!.isError).toBe(true);
+    expect(res.get(1)!.result!.content![0]!.text).toMatch(/`timeoutMs` must be at most 120000/);
+    expect(res.get(2)!.result!.isError).toBeUndefined();
+  }, 20_000);
 });
 
 // The playground indexed socialgouv/egapro on a guessed `master` while the

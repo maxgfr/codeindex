@@ -291,6 +291,17 @@ describe("computeDelta", () => {
     expect(mod!.score).toBeLessThanOrEqual(100);
   });
 
+  it("seeds a changed file's blast radius from the file, even when a module's slug equals its path", () => {
+    const target = graph.files.find((f) => f.rel === "src/util.ts")!;
+    const change = { files: [{ path: target.rel, status: "modified" as const }], hunks: new Map([[target.rel, [{ start: 1, end: 5 }]]]), base };
+    const plain = computeDelta(graph, symbols, change).modules.find((m) => m.slug === "src")!.impact;
+    // A module named like the file, holding every other file: looked up as a
+    // slug first, the file used to seed that whole module's closure.
+    const others = graph.files.filter((f) => f.rel !== target.rel).map((f) => f.rel);
+    const collide: Graph = { ...graph, modules: [...graph.modules, { ...graph.modules[0]!, slug: target.rel, members: others }] };
+    expect(computeDelta(collide, symbols, change).modules.find((m) => m.slug === "src")!.impact).toEqual(plain);
+  });
+
   it("lists a file the index does not know as unindexed rather than scoring it", () => {
     const res = computeDelta(graph, symbols, { files: [{ path: "not/indexed.ts", status: "modified" }], hunks: new Map(), base });
     expect(res.unindexed).toEqual(["not/indexed.ts"]);

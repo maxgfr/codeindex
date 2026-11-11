@@ -17525,7 +17525,9 @@ function expandGlobDirs(root, pat) {
       }
     } else if (seg.includes("*")) {
       const matchSeg = wildcardMatcher(
-        [...seg].map((ch) => ch === "*" ? { kind: "star" } : { kind: "lit", ch })
+        // By UTF-16 unit, as the matcher reads its subject: an astral character
+        // taken whole as one `lit` never matched its two units.
+        seg.split("").map((ch) => ch === "*" ? { kind: "star" } : { kind: "lit", ch })
       );
       for (const d of dirs) {
         for (const sub of subdirsOf(root, d)) {
