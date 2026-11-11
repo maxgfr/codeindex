@@ -28,8 +28,10 @@ const MAX_TEXT_CHARS = 8192;
 // A request holds a slot (MAX_IN_FLIGHT below) while its body is read, so a
 // body must arrive in time: eight uploads that sent their headers and part of
 // a body would otherwise hold every slot until Node's own 300 s request
-// timeout, and every other request was told 503. Past this, 408.
-const BODY_TIMEOUT_MS = Number(process.env.BODY_TIMEOUT_MS) || 10_000;
+// timeout, and every other request was told 503. A body that sends nothing
+// for this long is answered 408; one still arriving is not, however long it
+// takes. Clamped to what a timer can hold: past 2^31-1 ms Node fires it at 1.
+const BODY_IDLE_MS = Math.min(Math.max(Number(process.env.BODY_TIMEOUT_MS) || 10_000, 1), 2 ** 31 - 1);
 
 // Offline: only ever read the baked model from the local cache — never the hub.
 env.cacheDir = process.env.MODEL_CACHE_DIR || "/app/models";
@@ -91,7 +93,18 @@ function readBody(req) {
     const chunks = [];
     let total = 0;
     let settled = false;
-    const timer = setTimeout(() => fail(new BodyTimeoutError(`request body not received within ${BODY_TIMEOUT_MS} ms`)), BODY_TIMEOUT_MS);
+    let lastData = Date.now();
+    // Checked once more after the I/O already waiting has run: timers fire
+    // before it, so with the loop blocked by another request's inference a
+    // body that arrived meanwhile would have read as idle.
+    const timer = setTimeout(function expire() {
+      setImmediate(() => {
+        if (settled) return;
+        const idle = Date.now() - lastData;
+        if (idle < BODY_IDLE_MS) timer.refresh();
+        else fail(new BodyTimeoutError(`request body idle for ${BODY_IDLE_MS} ms`));
+      });
+    }, BODY_IDLE_MS);
     const fail = (err) => {
       if (settled) return;
       settled = true;
@@ -100,6 +113,7 @@ function readBody(req) {
     };
     req.on("data", (chunk) => {
       if (settled) return; // over-cap: drain and discard, never buffer further
+      lastData = Date.now();
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
         fail(new BodyTooLargeError(`request body exceeds ${MAX_BODY_BYTES} byte limit`));

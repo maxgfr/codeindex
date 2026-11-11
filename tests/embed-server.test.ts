@@ -24,6 +24,9 @@ let failures = Number(process.env.FAIL_LOADS ?? 0);
 export async function pipeline() {
   if (failures-- > 0) throw new Error("model cache not mounted: /secret/path");
   return async (texts) => {
+    // BLOCK_MS: hold the event loop, as inference on the main thread does.
+    const until = Date.now() + Number(process.env.BLOCK_MS ?? 0);
+    while (Date.now() < until);
     await new Promise((r) => setTimeout(r, Number(process.env.SLOW_MS ?? 0)));
     return { tolist: () => texts.map(() => [1, 0]) };
   };
@@ -137,6 +140,39 @@ describe("the reference embedding server", () => {
       for (const u of gone) u.socket.destroy();
       await delay(100);
       expect((await post(base, { texts: ["a"] })).status).toBe(200);
+    });
+  }, 30_000);
+
+  it("answers 408 only to a body that stopped arriving, not a slow one or one the server was too busy to read", async () => {
+    await withServer({ BODY_TIMEOUT_MS: "500" }, async ({ base }) => {
+      const port = Number(new URL(base).port);
+      // A steady upload that takes twice the deadline.
+      const body = JSON.stringify({ texts: ["a".repeat(100)] });
+      const socket = connect(port, "127.0.0.1");
+      await new Promise((r) => socket.once("connect", r));
+      let received = "";
+      socket.on("data", (c) => (received += c));
+      socket.write(`POST /embed HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n`);
+      for (let i = 0; i < body.length; i += 25) {
+        socket.write(body.slice(i, i + 25));
+        await delay(250);
+      }
+      await new Promise((r) => socket.once("close", r));
+      expect(received).toMatch(/^HTTP\/1\.1 200/);
+    });
+    // The loop is held 1.5 s by another request's inference while a body
+    // arrives: that body was read once the loop was free, not timed out.
+    await withServer({ BODY_TIMEOUT_MS: "500", BLOCK_MS: "1500" }, async ({ base }) => {
+      const port = Number(new URL(base).port);
+      const body = JSON.stringify({ texts: ["b"] });
+      // Its headers are read and its deadline armed; then the loop is held.
+      const late = await partialPost(port, body);
+      await delay(100);
+      const busy = post(base, { texts: ["a"] });
+      await delay(300);
+      late.finish();
+      expect(await late.status).toBe(200);
+      expect((await busy).status).toBe(200);
     });
   }, 30_000);
 
