@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { readPersistedIndex, toCacheMap } from "../src/preload.js";
-import { extractedAlike, parseExtractionProfile, sameExtractionProfile } from "../src/cache.js";
+import { extractedAlike, parseExtractionProfile, sameExtractionProfile, sameGrammarStamps } from "../src/cache.js";
 import { grammarFile, grammarLandscape } from "../src/ast/loader.js";
 import { scanRepo } from "../src/scan.js";
 import { ENGINE_VERSION, EXTRACTOR_VERSION, SCHEMA_VERSION } from "../src/types.js";
@@ -161,15 +161,25 @@ describe("what the cache may reuse", () => {
 
   it("trusts a recorded build's stat keys only for the same file under the same engine", () => {
     const real = grammarFile("typescript")!;
-    expect(real).toMatchObject({ engine: ENGINE_VERSION, path: expect.stringMatching(/typescript\.wasm$/) });
+    // Where it was read is a digest: a committed index names no home directory.
+    expect(real).toMatchObject({ engine: ENGINE_VERSION, at: expect.stringMatching(/^[a-f0-9]{16}$/) });
+    expect(JSON.stringify(real)).not.toContain("typescript.wasm");
     // Equal stat keys: the recorded identity is taken without reading the file.
     const recorded = { ...real, sha1: "0".repeat(40) };
     expect(grammarFile("typescript", recorded)!.sha1).toBe("0".repeat(40));
     // Another engine (npm installs every file with one fixed mtime), another
-    // path, or no record of either: the file is hashed.
-    for (const other of [{ ...recorded, engine: "0.0.0" }, { ...recorded, path: "/elsewhere/typescript.wasm" }, { sha1: recorded.sha1, size: recorded.size, mtimeMs: recorded.mtimeMs }]) {
+    // place, or no record of either: the file is hashed.
+    for (const other of [{ ...recorded, engine: "0.0.0" }, { ...recorded, at: "0".repeat(16) }, { sha1: recorded.sha1, size: recorded.size, mtimeMs: recorded.mtimeMs }]) {
       expect(grammarFile("typescript", other)!.sha1).toBe(real.sha1);
     }
+  });
+
+  it("two installs of one build read the same stamps, so neither rewrites the index", () => {
+    const real = grammarFile("typescript")!;
+    const elsewhere = { ...real, at: "0".repeat(16) };
+    const profile = (file: typeof real) => ({ grammars: ["typescript"], grammarFiles: { typescript: file } });
+    expect(sameGrammarStamps(profile(elsewhere), profile(real))).toBe(true);
+    expect(sameGrammarStamps(profile({ ...real, mtimeMs: real.mtimeMs + 1 }), profile(real))).toBe(false);
   });
 
   it("a grammar landscape covers the runtime and the grammars asked for, no others", () => {

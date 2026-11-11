@@ -195,12 +195,14 @@ export interface GrammarFile {
   sha1: string;
   size: number;
   mtimeMs: number;
-  // Where it was read, and by which engine. The (size, mtime) shortcut below
-  // holds only for the same file under the same engine: npm writes every file
-  // it installs with one fixed mtime, so an upgraded package's wasm of equal
-  // size would otherwise pass for the old build. Absent in an index written
-  // before they were recorded: the file is then hashed.
-  path?: string;
+  // Where it was read (a digest of its absolute path), and by which engine.
+  // The (size, mtime) shortcut below holds only for the same file under the
+  // same engine: npm writes every file it installs with one fixed mtime, so an
+  // upgraded package's wasm of equal size would otherwise pass for the old
+  // build. A digest, not the path: a committed index published the user's home
+  // directory. Absent in an index written before they were recorded (or that
+  // recorded a `path`): the file is then hashed.
+  at?: string;
   engine?: string;
 }
 
@@ -252,10 +254,11 @@ export function grammarFile(key: string, known?: GrammarFile): GrammarFile | und
   if (!path) return undefined;
   try {
     const st = statSync(path);
-    if (known && known.path === path && known.engine === ENGINE_VERSION && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
+    const at = sha1(path).slice(0, 16);
+    if (known && known.at === at && known.engine === ENGINE_VERSION && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
     const seen = grammarFiles.get(path);
     if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen;
-    const file: GrammarFile = { sha1: sha1(readFileSync(path)), size: st.size, mtimeMs: st.mtimeMs, path, engine: ENGINE_VERSION };
+    const file: GrammarFile = { sha1: sha1(readFileSync(path)), size: st.size, mtimeMs: st.mtimeMs, at, engine: ENGINE_VERSION };
     grammarFiles.set(path, file);
     return file;
   } catch {

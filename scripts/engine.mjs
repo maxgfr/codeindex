@@ -8145,10 +8145,11 @@ function grammarFile(key, known) {
   if (!path) return void 0;
   try {
     const st = statSync2(path);
-    if (known && known.path === path && known.engine === ENGINE_VERSION && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
+    const at = sha1(path).slice(0, 16);
+    if (known && known.at === at && known.engine === ENGINE_VERSION && known.size === st.size && known.mtimeMs === st.mtimeMs) return known;
     const seen = grammarFiles.get(path);
     if (seen && seen.size === st.size && seen.mtimeMs === st.mtimeMs) return seen;
-    const file = { sha1: sha1(readFileSync4(path)), size: st.size, mtimeMs: st.mtimeMs, path, engine: ENGINE_VERSION };
+    const file = { sha1: sha1(readFileSync4(path)), size: st.size, mtimeMs: st.mtimeMs, at, engine: ENGINE_VERSION };
     grammarFiles.set(path, file);
     return file;
   } catch {
@@ -11593,7 +11594,7 @@ function sameGrammarStamps(stored, current) {
   return keys.length === Object.keys(a).length && keys.every((k) => {
     const x = a[k];
     const y = b[k];
-    return x !== void 0 && x.sha1 === y.sha1 && x.size === y.size && x.mtimeMs === y.mtimeMs && x.path === y.path && x.engine === y.engine;
+    return x !== void 0 && x.sha1 === y.sha1 && x.size === y.size && x.mtimeMs === y.mtimeMs && x.engine === y.engine;
   });
 }
 function parseGrammarFiles(value) {
@@ -11605,7 +11606,7 @@ function parseGrammarFiles(value) {
         sha1: file.sha1,
         size: file.size,
         mtimeMs: file.mtimeMs,
-        ...typeof file.path === "string" ? { path: file.path } : {},
+        ...typeof file.at === "string" ? { at: file.at } : {},
         ...typeof file.engine === "string" ? { engine: file.engine } : {}
       };
     }

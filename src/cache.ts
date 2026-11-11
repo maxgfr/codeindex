@@ -156,9 +156,11 @@ export function sameExtractionProfile(a: ExtractionProfile | undefined, b: Extra
 }
 
 // Whether `stored` records the grammar builds exactly as `current` read them —
-// path, engine and stat keys included. When it does not, the index proves the
-// same builds by hashing them on every run, and is worth writing again so the
-// next run can take the stat shortcut instead.
+// engine and stat keys included. When it does not, the index proves the same
+// builds by hashing them on every run, and is worth writing again so the next
+// run can take the stat shortcut instead. Not where they were read: two
+// installs of one version (same bytes, same npm mtime) alternating on one
+// index rewrote it on every switch.
 export function sameGrammarStamps(stored: ExtractionProfile | undefined, current: ExtractionProfile): boolean {
   const a = stored?.grammarFiles ?? {};
   const b = current.grammarFiles ?? {};
@@ -168,7 +170,7 @@ export function sameGrammarStamps(stored: ExtractionProfile | undefined, current
     keys.every((k) => {
       const x = a[k];
       const y = b[k]!;
-      return x !== undefined && x.sha1 === y.sha1 && x.size === y.size && x.mtimeMs === y.mtimeMs && x.path === y.path && x.engine === y.engine;
+      return x !== undefined && x.sha1 === y.sha1 && x.size === y.size && x.mtimeMs === y.mtimeMs && x.engine === y.engine;
     })
   );
 }
@@ -184,7 +186,7 @@ function parseGrammarFiles(value: unknown): Record<string, GrammarFile> | undefi
         sha1: file.sha1,
         size: file.size,
         mtimeMs: file.mtimeMs,
-        ...(typeof file.path === "string" ? { path: file.path } : {}),
+        ...(typeof file.at === "string" ? { at: file.at } : {}),
         ...(typeof file.engine === "string" ? { engine: file.engine } : {}),
       };
     }

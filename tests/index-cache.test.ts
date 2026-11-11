@@ -112,10 +112,11 @@ describe("the extraction profile gates record reuse", { timeout: 120_000 }, () =
       sha1: expect.stringMatching(/^[a-f0-9]{40}$/),
       size: expect.any(Number),
       mtimeMs: expect.any(Number),
-      path: expect.stringMatching(/typescript\.wasm$/),
+      at: expect.stringMatching(/^[a-f0-9]{16}$/),
       engine: ENGINE_VERSION,
     };
     index(repo, out);
+    expect(read(out, "cache.json")).not.toContain(".wasm");
     // Each grammar at the AST tier, with the build of it that parsed the
     // records, and the runtime that ran them.
     expect(profile()).toEqual({
