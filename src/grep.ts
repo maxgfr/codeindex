@@ -609,6 +609,12 @@ function runScan(job: ScanJob, onEvent: (ev: ScanEvent) => void): { stoppedAt?: 
       }
       // Short slices: a message posted between the load and the receive is
       // caught by the counter, and one still in flight by the next slice.
+      //
+      // A worker that dies outside JavaScript (out of memory) posts nothing,
+      // and this loop cannot tell: the `exit` event, threadId and the port all
+      // change only on the event loop, which this synchronous call never
+      // yields to (checked on Node 18 and 24). Such a search ends at its
+      // deadline and reads as timed out; MCP caps that deadline at 120 s.
       Atomics.wait(sig, 0, seen, Math.min(left, 50));
     }
   } finally {
