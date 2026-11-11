@@ -1,6 +1,6 @@
 {
   "name": "codeindex-embed",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "description": "codeindex rich-tier embedding server: all-MiniLM-L6-v2 served over HTTP via transformers.js. NOT part of the zero-dependency engine — these deps belong to the image only.",
