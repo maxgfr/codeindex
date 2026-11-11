@@ -133,6 +133,25 @@ describe("resolution", () => {
     expect(read(root, "x.ts")).toBe(edited);
   });
 
+  it("inserts before a file's first declaration below its licence header, not above it", () => {
+    const body = "export function first(): number {\n  return 1;\n}\n";
+    for (const header of ["// Copyright 2026 Acme.\n// SPDX-License-Identifier: MIT\n", "/**\n * Copyright 2026 Acme.\n * Licensed under the MIT license.\n */\n"]) {
+      const root = repo({ "x.ts": header + body });
+      insertBeforeSymbol(scanRepo(root), "first", "export const zero = 0;", "x.ts");
+      const out = read(root, "x.ts");
+      expect(out.startsWith(header), out).toBe(true);
+      expect(out.indexOf("export const zero")).toBeLessThan(out.indexOf("export function first"));
+    }
+    // A header followed by the declaration's own doc: the doc stays with it.
+    const root = repo({ "y.ts": "// Copyright 2026 Acme.\n/** Says one. */\n" + body });
+    insertBeforeSymbol(scanRepo(root), "first", "export const zero = 0;", "y.ts");
+    expect(read(root, "y.ts")).toMatch(/^\/\/ Copyright 2026 Acme\.\n\nexport const zero = 0;\n\n\/\*\* Says one\. \*\/\nexport function first/);
+    // A doc comment that is not legal text still moves with its declaration.
+    const plain = repo({ "z.ts": "/** The first. */\n" + body });
+    insertBeforeSymbol(scanRepo(plain), "first", "export const zero = 0;", "z.ts");
+    expect(read(plain, "z.ts")).toMatch(/^export const zero = 0;\n\n\/\*\* The first\. \*\//);
+  });
+
   it.runIf(process.platform !== "win32")("refuses to follow a file swapped for a link out of the repository", () => {
     const src = "export function a(): number {\n  return 1;\n}\n";
     const root = repo({ "x.ts": src, "kept/y.ts": src });

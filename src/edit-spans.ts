@@ -6,6 +6,7 @@
 // Both answer "undefined"/"no further" whenever the text is not conclusive. An
 // edit that cannot place itself exactly is refused by the caller; one that
 // guesses writes invalid code and reports success, which is strictly worse.
+import { isLicense, stripCommentMarkers } from "./extract/doc-text.js";
 
 // --- where a regex-tier declaration ends -------------------------------------
 //
@@ -293,19 +294,40 @@ function blockStart(lines: readonly string[], end: number, lang: string): number
 
 // The 0-based index of the first line of the comment/decorator run directly
 // above lines[decl] (decl itself when there is none).
+//
+// A run that opens the FILE and holds a licence or copyright notice is the
+// file's header, not the declaration's doc, even with no blank line before the
+// declaration: it stays where it is, and the run starts below it. Climbing into
+// it, insert_before_symbol put new code above the licence.
 export function leadingBlockStart(lines: readonly string[], decl: number, lang: string): number {
   let top = decl;
+  // Each unit of the run (a line comment, a block comment, an attribute), top first.
+  const units: { start: number; end: number }[] = [];
   for (let i = decl - 1; i >= 0; ) {
     const t = lines[i]!.trim();
     if (t === "") break;
     if (isLineComment(t, lang, i) || (isAttributeStart(t, lang) && bracketBalance(t) === 0)) {
+      units.unshift({ start: i, end: i });
       top = i--;
       continue;
     }
     const start = blockStart(lines, i, lang);
     if (start === undefined) break;
+    units.unshift({ start, end: i });
     top = start;
     i = start - 1;
   }
-  return top;
+  if (top !== 0 || units.length === 0) return top;
+  // From the file's first line: the header is every leading unit up to the
+  // last one that holds legal text; what follows it is the declaration's own.
+  let headerEnd = -1;
+  for (const unit of units) {
+    if (lines.slice(unit.start, unit.end + 1).some((line) => isLegalLine(stripCommentMarkers(line)))) headerEnd = unit.end;
+  }
+  return headerEnd === -1 ? top : headerEnd + 1;
 }
+
+const isLegalLine = (text: string): boolean => {
+  const t = text.trim();
+  return /^(?:copyright\b|\(c\)\s*\d|©|spdx-license-identifier\b|@license\b|@copyright\b)/i.test(t) || isLicense(t);
+};

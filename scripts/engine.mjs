@@ -16778,24 +16778,33 @@ function blockStart(lines, end, lang) {
 }
 function leadingBlockStart(lines, decl, lang) {
   let top = decl;
+  const units = [];
   for (let i2 = decl - 1; i2 >= 0; ) {
     const t = lines[i2].trim();
     if (t === "") break;
     if (isLineComment(t, lang, i2) || isAttributeStart(t, lang) && bracketBalance(t) === 0) {
+      units.unshift({ start: i2, end: i2 });
       top = i2--;
       continue;
     }
     const start2 = blockStart(lines, i2, lang);
     if (start2 === void 0) break;
+    units.unshift({ start: start2, end: i2 });
     top = start2;
     i2 = start2 - 1;
   }
-  return top;
+  if (top !== 0 || units.length === 0) return top;
+  let headerEnd = -1;
+  for (const unit of units) {
+    if (lines.slice(unit.start, unit.end + 1).some((line2) => isLegalLine(stripCommentMarkers(line2)))) headerEnd = unit.end;
+  }
+  return headerEnd === -1 ? top : headerEnd + 1;
 }
-var BRACE_LANGS, MAX_SPAN_LINES, TRAILER, leadingSpace, SLASH_COMMENTS, HASH_COMMENTS, DASH_COMMENTS, AT_ATTRIBUTES, HASH_ATTRIBUTES, BRACKET_ATTRIBUTES, MAX_BLOCK_LINES, RUST_INNER;
+var BRACE_LANGS, MAX_SPAN_LINES, TRAILER, leadingSpace, SLASH_COMMENTS, HASH_COMMENTS, DASH_COMMENTS, AT_ATTRIBUTES, HASH_ATTRIBUTES, BRACKET_ATTRIBUTES, MAX_BLOCK_LINES, RUST_INNER, isLegalLine;
 var init_edit_spans = __esm({
   "src/edit-spans.ts"() {
     "use strict";
+    init_doc_text();
     BRACE_LANGS = /* @__PURE__ */ new Set(["swift", "kotlin", "dart"]);
     MAX_SPAN_LINES = 1e4;
     TRAILER = /^\s*[;,]?\s*(?:\/\/.*)?$/;
@@ -16826,6 +16835,10 @@ var init_edit_spans = __esm({
     BRACKET_ATTRIBUTES = /* @__PURE__ */ new Set(["csharp", "cpp"]);
     MAX_BLOCK_LINES = 200;
     RUST_INNER = /^(?:\/\/!|\/\*!|#!\[)/;
+    isLegalLine = (text) => {
+      const t = text.trim();
+      return /^(?:copyright\b|\(c\)\s*\d|©|spdx-license-identifier\b|@license\b|@copyright\b)/i.test(t) || isLicense(t);
+    };
   }
 });
 
