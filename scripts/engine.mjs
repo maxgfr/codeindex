@@ -973,7 +973,7 @@ function walk(root, opts = {}) {
       else if (LOCKFILES.has(name2.toLowerCase()) && !opts.includeLockfiles) reason = "lockfile";
       else if ((opts.binaryExtensions ?? BINARY_EXT).has(ext) && !opts.includeBinary) reason = "binary-ext";
       else if (/\.min\.(?:js|css)$/i.test(name2) && !opts.includeMinified) reason = "minified";
-      else if (cannotRead(st.mode, abs)) reason = "unreadable";
+      else if (cannotRead(st, abs)) reason = "unreadable";
       if (reason) {
         excluded++;
         if (reason === "over-max-bytes") oversized.push({ rel: rel2.split(sep).join("/"), size: st.size });
@@ -1009,8 +1009,10 @@ function walk(root, opts = {}) {
 function readText(abs) {
   return readTextEx(abs).text;
 }
-function cannotRead(mode, abs) {
-  if (mode & 4) return false;
+function cannotRead(st, abs) {
+  const uid = process.getuid?.();
+  if (uid === 0) return false;
+  if (uid === void 0 ? (st.mode & 4) !== 0 : st.uid === uid ? (st.mode & 256) !== 0 : (st.mode & 36) === 36) return false;
   try {
     accessSync(abs, fsConstants.R_OK);
     return false;

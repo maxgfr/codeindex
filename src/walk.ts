@@ -527,7 +527,7 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       // Whatever the case of the name, like the lockfile and extension tests
       // above: `LIB.MIN.JS` is as minified as `lib.min.js`, and was indexed.
       else if (/\.min\.(?:js|css)$/i.test(name) && !opts.includeMinified) reason = "minified";
-      else if (cannotRead(st.mode, abs)) reason = "unreadable";
+      else if (cannotRead(st, abs)) reason = "unreadable";
       if (reason) {
         excluded++;
         if (reason === "over-max-bytes") oversized.push({ rel: rel.split(sep).join("/"), size: st.size });
@@ -575,11 +575,18 @@ export function readText(abs: string): string {
 // scan reads it, so every caller of the walk agrees on the file set: `scan`,
 // the freshness proof and `status` alike. Found unreadable only by the read, a
 // file was dropped by the scan yet counted by the walk-based proofs, and the
-// index read as stale for as long as the file stayed unreadable. A file anyone
-// may read (the common 644) costs no syscall; otherwise access(2) decides,
-// which also knows about groups, ACLs and root.
-function cannotRead(mode: number, abs: string): boolean {
-  if (mode & 0o004) return false;
+// index read as stale for as long as the file stayed unreadable.
+//
+// Most files cost no syscall: one the process owns is read by its owner bits
+// (the 600 of a umask-077 tree), one it does not by its group AND other bits
+// both granting it, and root reads anything. Otherwise access(2) decides,
+// which knows the process's groups and ACLs. The other-bit test alone, as
+// before, passed a 044 file the process owns, which POSIX denies its owner.
+// Where there are no uids (Windows), the mode is all there is to read.
+function cannotRead(st: { mode: number; uid: number }, abs: string): boolean {
+  const uid = process.getuid?.();
+  if (uid === 0) return false;
+  if (uid === undefined ? (st.mode & 0o004) !== 0 : st.uid === uid ? (st.mode & 0o400) !== 0 : (st.mode & 0o044) === 0o044) return false;
   try {
     accessSync(abs, fsConstants.R_OK);
     return false;

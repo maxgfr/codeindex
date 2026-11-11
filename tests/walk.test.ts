@@ -45,6 +45,21 @@ describe("what cannot be read is said, not dropped", () => {
     }
   });
 
+  // POSIX reads a file's owner by its owner bits alone: a 044 file the process
+  // owns is closed to it, a 600 one open.
+  it.runIf(canLock)("reads its own files by their owner bits", () => {
+    const root = tree(["mine.ts", "others.ts"]);
+    chmodSync(join(root, "mine.ts"), 0o600);
+    chmodSync(join(root, "others.ts"), 0o044);
+    try {
+      const skipped: WalkSkip[] = [];
+      expect(walk(root, { onSkip: (s) => skipped.push(s) }).files.map((f) => f.rel)).toEqual(["mine.ts"]);
+      expect(skipped.map((s) => [s.rel, s.reason])).toEqual([["others.ts", "unreadable"]]);
+    } finally {
+      chmodSync(join(root, "others.ts"), 0o644);
+    }
+  });
+
   it.runIf(canLock)("a file that cannot be read is skipped by the walk itself, counted nowhere, indexed once it can be", () => {
     const root = mkdtempSync(join(tmpdir(), "ci-walk-unreadable-"));
     writeFileSync(join(root, "ok.ts"), "export const ok = 1;\n");
