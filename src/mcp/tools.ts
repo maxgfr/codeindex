@@ -943,12 +943,14 @@ export const TOOL_META: Record<string, ToolMeta> = {
   scan_summary: { title: "Scan summary" },
   graph: { title: "Link graph" },
   symbols: { title: "Symbol index" },
-  callers: { title: "Caller index" },
+  // openWorld for the same reason as lsp_status: with `lsp: true` the call
+  // spawns a language server the user configured.
+  callers: { title: "Caller index", openWorld: true },
   workspaces: { title: "Monorepo workspaces" },
   churn: { title: "Git churn" },
   symbols_overview: { title: "File symbol overview" },
   find_symbol: { title: "Find symbol" },
-  find_references: { title: "Find references" },
+  find_references: { title: "Find references", openWorld: true },
   symbol_at: { title: "Symbol at a line" },
   repo_map: { title: "Repository map" },
   onboard: { title: "Project brief", write: true, destructive: false, idempotent: true },

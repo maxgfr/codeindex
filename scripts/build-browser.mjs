@@ -33,7 +33,7 @@ const shim = (name) => join(root, "src", "browser", `${name}.ts`);
 // Node builtins the engine imports. Matched under both spellings because the
 // source is not uniform about the `node:` prefix and third-party code inside
 // the bundle (web-tree-sitter) uses the bare form.
-const BUILTINS = "fs|path|crypto|os|url|child_process|worker_threads|readline|zlib";
+const BUILTINS = "fs|path|crypto|os|url|child_process|worker_threads|zlib";
 
 const browserShims = {
   name: "browser-shims",

@@ -11,7 +11,6 @@
 // The entrypoint is the `codeindex` bin, i.e. scripts/cli.mjs.)
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createInterface } from "node:readline";
 import { ENGINE_VERSION } from "./types.js";
 import { renderGraphJson } from "./render/graph-json.js";
 import { buildCallerIndex, lookupCallerEntry, rawCallerSitesFor, type CallerEntry } from "./callers.js";
@@ -214,6 +213,43 @@ function sameDirectory(a: string, b: string): boolean {
 
 // The repository a call is about, in its ONE canonical spelling.
 //
+// The longest message the server reads: far past any tool call (an edit body
+// of a few MB), and a bound on what one line can make it hold in memory.
+const MAX_MESSAGE_CHARS = 64 * 1024 * 1024;
+
+// The lines of `input`, as strings, with `undefined` in place of a line longer
+// than `max` — whose characters are dropped as they arrive instead of kept.
+// UTF-8 is decoded across chunk boundaries (setEncoding), as readline did.
+async function* boundedLines(input: NodeJS.ReadableStream, max: number): AsyncGenerator<string | undefined> {
+  input.setEncoding("utf8");
+  let buffer = "";
+  let dropping = false;
+  for await (const chunk of input as AsyncIterable<string>) {
+    let from = 0;
+    for (let nl = chunk.indexOf("\n"); nl !== -1; nl = chunk.indexOf("\n", from)) {
+      const piece = chunk.slice(from, nl);
+      from = nl + 1;
+      if (dropping || buffer.length + piece.length > max) {
+        yield undefined;
+      } else {
+        yield (buffer + piece).replace(/\r$/, "");
+      }
+      buffer = "";
+      dropping = false;
+    }
+    if (dropping) continue;
+    const rest = chunk.slice(from);
+    if (buffer.length + rest.length > max) {
+      buffer = "";
+      dropping = true;
+    } else {
+      buffer += rest;
+    }
+  }
+  if (dropping) yield undefined;
+  else if (buffer) yield buffer.replace(/\r$/, "");
+}
+
 // `defaultRepo` is the server-level
 // pin (`codeindex mcp --repo <dir>`) that lets a host bind one server process
 // to one workspace, so agents need not know — or restate — the absolute path.
@@ -928,9 +964,16 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     outstanding.add(settled);
   };
 
-  const rl = createInterface({ input: process.stdin, terminal: false });
+  let initialized = false;
   try {
-    for await (const line of rl) {
+    for await (const line of boundedLines(process.stdin, MAX_MESSAGE_CHARS)) {
+      if (line === undefined) {
+        // Too long to be a request this server would answer: what came is
+        // discarded, not buffered (readline held a whole line in memory, of any
+        // size, before handing it over), and the client is told.
+        send({ id: null, error: { code: -32600, message: `invalid request: a message is limited to ${MAX_MESSAGE_CHARS} characters` } });
+        continue;
+      }
       const trimmed = line.trim();
       if (!trimmed) continue;
       let parsed: unknown;
@@ -986,7 +1029,18 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     const respond = (body: Record<string, unknown>): Reply => (notification ? undefined : { id: req.id ?? null, ...body });
 
     try {
+      // A notification's method sent WITH an id is a request, and a request is
+      // answered: `notifications/cancelled` with an id used to get no reply at
+      // all, leaving the client waiting on it. What it asks is still done.
+      if (!notification && req.method.startsWith("notifications/")) {
+        if (req.method === "notifications/cancelled") cancel(req.params?.requestId);
+        return respond({ error: { code: -32600, message: `invalid request: ${req.method} is a notification and carries no id` } });
+      }
       if (req.method === "initialize") {
+        // Once per session. A second one renegotiated the protocol version under
+        // calls already running at the first, and re-shaped the tool list.
+        if (initialized) return respond({ error: { code: -32600, message: "invalid request: the session is already initialized" } });
+        initialized = true;
         protocolVersion = negotiateProtocol(req.params?.protocolVersion);
         tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
         return respond({
@@ -1004,10 +1058,7 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
       } else if (req.method === "tools/call") {
         return toolsCall(req, respond);
       } else if (req.method === "notifications/cancelled") {
-        const cancelled = req.params?.requestId;
-        if ((typeof cancelled === "string" || typeof cancelled === "number") && pendingCalls.has(cancelled)) {
-          cancelledCalls.add(cancelled);
-        }
+        cancel(req.params?.requestId);
         return undefined;
       } else {
         return respond({ error: { code: -32601, message: `method not found: ${req.method}` } });
@@ -1015,6 +1066,10 @@ export async function runMcpServer(opts: McpServerOptions = {}): Promise<void> {
     } catch (e) {
       return respond({ error: { code: -32603, message: errMessage(e) } });
     }
+  }
+
+  function cancel(requestId: unknown): void {
+    if ((typeof requestId === "string" || typeof requestId === "number") && pendingCalls.has(requestId)) cancelledCalls.add(requestId);
   }
 
   function toolsCall(req: RpcRequest, respond: (body: Record<string, unknown>) => Reply): Reply | Promise<Reply> {

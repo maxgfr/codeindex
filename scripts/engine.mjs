@@ -23844,12 +23844,14 @@ var init_tools = __esm({
       scan_summary: { title: "Scan summary" },
       graph: { title: "Link graph" },
       symbols: { title: "Symbol index" },
-      callers: { title: "Caller index" },
+      // openWorld for the same reason as lsp_status: with `lsp: true` the call
+      // spawns a language server the user configured.
+      callers: { title: "Caller index", openWorld: true },
       workspaces: { title: "Monorepo workspaces" },
       churn: { title: "Git churn" },
       symbols_overview: { title: "File symbol overview" },
       find_symbol: { title: "Find symbol" },
-      find_references: { title: "Find references" },
+      find_references: { title: "Find references", openWorld: true },
       symbol_at: { title: "Symbol at a line" },
       repo_map: { title: "Repository map" },
       onboard: { title: "Project brief", write: true, destructive: false, idempotent: true },
@@ -23935,7 +23937,6 @@ __export(mcp_exports, {
 });
 import { readFileSync as readFileSync19, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
 import { basename as basename5, isAbsolute as isAbsolute9, join as join28, relative as relative9, resolve as resolve10, sep as sep7 } from "path";
-import { createInterface } from "readline";
 function isRpcRequest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const req = value;
@@ -23989,6 +23990,35 @@ function sameDirectory(a, b) {
   } catch {
     return false;
   }
+}
+async function* boundedLines(input, max) {
+  input.setEncoding("utf8");
+  let buffer = "";
+  let dropping = false;
+  for await (const chunk of input) {
+    let from = 0;
+    for (let nl = chunk.indexOf("\n"); nl !== -1; nl = chunk.indexOf("\n", from)) {
+      const piece = chunk.slice(from, nl);
+      from = nl + 1;
+      if (dropping || buffer.length + piece.length > max) {
+        yield void 0;
+      } else {
+        yield (buffer + piece).replace(/\r$/, "");
+      }
+      buffer = "";
+      dropping = false;
+    }
+    if (dropping) continue;
+    const rest = chunk.slice(from);
+    if (buffer.length + rest.length > max) {
+      buffer = "";
+      dropping = true;
+    } else {
+      buffer += rest;
+    }
+  }
+  if (dropping) yield void 0;
+  else if (buffer) yield buffer.replace(/\r$/, "");
 }
 function repoRoot(args2, defaultRepo) {
   const requested = str(args2.repo) ?? defaultRepo;
@@ -24493,9 +24523,13 @@ async function runMcpServer(opts = {}) {
     const settled = reply.finally(() => outstanding.delete(settled));
     outstanding.add(settled);
   };
-  const rl = createInterface({ input: process.stdin, terminal: false });
+  let initialized = false;
   try {
-    for await (const line2 of rl) {
+    for await (const line2 of boundedLines(process.stdin, MAX_MESSAGE_CHARS)) {
+      if (line2 === void 0) {
+        send({ id: null, error: { code: -32600, message: `invalid request: a message is limited to ${MAX_MESSAGE_CHARS} characters` } });
+        continue;
+      }
       const trimmed = line2.trim();
       if (!trimmed) continue;
       let parsed2;
@@ -24539,7 +24573,13 @@ async function runMcpServer(opts = {}) {
     const notification = !("id" in req);
     const respond = (body2) => notification ? void 0 : { id: req.id ?? null, ...body2 };
     try {
+      if (!notification && req.method.startsWith("notifications/")) {
+        if (req.method === "notifications/cancelled") cancel(req.params?.requestId);
+        return respond({ error: { code: -32600, message: `invalid request: ${req.method} is a notification and carries no id` } });
+      }
       if (req.method === "initialize") {
+        if (initialized) return respond({ error: { code: -32600, message: "invalid request: the session is already initialized" } });
+        initialized = true;
         protocolVersion = negotiateProtocol(req.params?.protocolVersion);
         tools = toolsFor(defaultRepo, protocolVersion, opts.profile);
         return respond({
@@ -24557,10 +24597,7 @@ async function runMcpServer(opts = {}) {
       } else if (req.method === "tools/call") {
         return toolsCall(req, respond);
       } else if (req.method === "notifications/cancelled") {
-        const cancelled = req.params?.requestId;
-        if ((typeof cancelled === "string" || typeof cancelled === "number") && pendingCalls.has(cancelled)) {
-          cancelledCalls.add(cancelled);
-        }
+        cancel(req.params?.requestId);
         return void 0;
       } else {
         return respond({ error: { code: -32601, message: `method not found: ${req.method}` } });
@@ -24568,6 +24605,9 @@ async function runMcpServer(opts = {}) {
     } catch (e) {
       return respond({ error: { code: -32603, message: errMessage(e) } });
     }
+  }
+  function cancel(requestId) {
+    if ((typeof requestId === "string" || typeof requestId === "number") && pendingCalls.has(requestId)) cancelledCalls.add(requestId);
   }
   function toolsCall(req, respond) {
     const params = req.params ?? {};
@@ -24645,7 +24685,7 @@ async function runMcpServer(opts = {}) {
     }
   }
 }
-var NotFound, SCANLESS_TOOLS;
+var NotFound, SCANLESS_TOOLS, MAX_MESSAGE_CHARS;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -24712,6 +24752,7 @@ var init_mcp = __esm({
       "scan_summary",
       "index_status"
     ]);
+    MAX_MESSAGE_CHARS = 64 * 1024 * 1024;
   }
 });
 

@@ -691,6 +691,56 @@ describe("MCP server", () => {
     expect(res.find((reply) => reply.id === 1)!.result).toEqual({});
     expect(res.find((reply) => reply.id === 2)!.result!.tools!.length).toBeGreaterThan(0);
   }, 20_000);
+
+  it("is initialized once: a second initialize is refused, the first negotiation stands", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+      { id: 2, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+      { id: 3, method: "tools/list" },
+    ]);
+    expect(res.get(1)!.result!.protocolVersion).toBe("2025-06-18");
+    expect(res.get(2)!.error).toEqual({ code: -32600, message: "invalid request: the session is already initialized" });
+    // Still the 2025-06-18 tool list: titles come with it.
+    expect((res.get(3)!.result!.tools as { title?: string }[]).every((t) => typeof t.title === "string")).toBe(true);
+  }, 20_000);
+
+  it("answers a notification's method sent with an id, and still does what it asks", async () => {
+    const res = await mcpSession([
+      { id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },
+      { id: 2, method: "notifications/cancelled", params: { requestId: 99 } },
+      { id: 3, method: "notifications/initialized" },
+      { id: 4, method: "ping" },
+    ]);
+    expect(res.get(2)!.error).toEqual({ code: -32600, message: "invalid request: notifications/cancelled is a notification and carries no id" });
+    expect(res.get(3)!.error!.code).toBe(-32600);
+    expect(res.get(4)!.result).toEqual({});
+  }, 20_000);
+
+  it("refuses a message past the size limit without holding it, and goes on", async () => {
+    // 65 MiB of one line, then an ordinary request.
+    const child = spawn(process.execPath, [CLI, "mcp"], { stdio: ["pipe", "pipe", "inherit"] });
+    const replies: RpcMsg[] = [];
+    let buf = "";
+    const done = new Promise<void>((resolve) => {
+      child.stdout.on("data", (chunk: Buffer) => {
+        buf += chunk.toString();
+        for (let nl = buf.indexOf("\n"); nl !== -1; nl = buf.indexOf("\n")) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (line.trim()) replies.push(JSON.parse(line) as RpcMsg);
+          if (replies.length === 2) resolve();
+        }
+      });
+    });
+    const block = "x".repeat(1024 * 1024);
+    for (let i = 0; i < 65; i++) child.stdin.write(block);
+    child.stdin.write("\n" + JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" }) + "\n");
+    await done;
+    child.kill();
+    expect(replies[0]).toMatchObject({ id: null, error: { code: -32600 } });
+    expect(replies[0]!.error!.message).toMatch(/a message is limited to 67108864 characters/);
+    expect(replies[1]).toMatchObject({ id: 7, result: {} });
+  }, 60_000);
 });
 
 // --- Fix C: embedding index memoization -------------------------------------
@@ -2044,6 +2094,9 @@ describe("tool metadata is gated on the negotiated version", () => {
     // Only the tools that can reach a configured embedding endpoint leave the box.
     expect(byName.get("search")!.openWorldHint).toBe(true);
     expect(byName.get("graph")!.openWorldHint).toBe(false);
+    // With `lsp: true` these spawn the language server the user configured.
+    expect(byName.get("find_references")!.openWorldHint).toBe(true);
+    expect(byName.get("callers")!.openWorldHint).toBe(true);
   });
 });
 
