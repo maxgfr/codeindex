@@ -51,7 +51,9 @@ jobs:
         run: |
           git fetch origin main
           gated="$(git rev-parse "$GATED")"
-          child="$(git rev-list --first-parent --reverse "$gated..origin/main" | head -n 1)"
+          # sed, not head: head exits at its first line, and under the runner's
+          # `bash -eo pipefail` the SIGPIPE it leaves rev-list fails the step.
+          child="$(git rev-list --first-parent --reverse "$gated..origin/main" | sed -n 1p)"
           if [ -n "$child" ] && [ "$(git rev-parse "$child^")" = "$gated" ] && git log -1 --format=%s "$child" | grep -q '^chore(release): '; then
             git checkout --detach "$child"
           fi
