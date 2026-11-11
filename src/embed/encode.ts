@@ -26,16 +26,34 @@ const QUANT = 127;
 // "verify","auth","token" as separate words to wordpiece), then any
 // non-alphanumeric run splits. Mirrors the boundary rules bm25 `subtokens` uses,
 // keeping the two search tiers tokenizing code identifiers alike.
+//
+// Letters and digits of every script are words, as in subtokens and in BERT's
+// basic tokenizer: the split used to be [^a-z0-9], so after folding, every word
+// outside Latin script (Cyrillic, Greek, Arabic, CJK…) vanished before the
+// vocabulary was even asked — a Russian doc comment embedded as nothing. A
+// Han ideograph is a word of its own, as BERT splits it. ASCII text takes the
+// original path and tokenizes byte-identically.
 export function basicTokenize(text: string): string[] {
-  const spaced = foldText(text)
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const folded = foldText(text);
   const out: string[] = [];
-  for (const part of spaced.toLowerCase().split(/[^a-z0-9]+/)) {
+  if (!NON_ASCII_RE.test(folded)) {
+    const spaced = folded.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+    for (const part of spaced.toLowerCase().split(/[^a-z0-9]+/)) {
+      if (part) out.push(part);
+    }
+    return out;
+  }
+  const spaced = folded
+    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1 $2")
+    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2")
+    .replace(/(\p{Script=Han})/gu, " $1 ");
+  for (const part of spaced.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     if (part) out.push(part);
   }
   return out;
 }
+
+const NON_ASCII_RE = /[^\x00-\x7F]/;
 
 // BERT's max_input_chars_per_word: a longer "word" (a hex blob, base64) is one
 // UNK. Trying every end for every start was cubic in the word's length: 104 s

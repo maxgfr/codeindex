@@ -204,6 +204,11 @@ describe("tokenizer + wordpiece", () => {
     expect(basicTokenize("verifyAuthToken")).toEqual(["verify", "auth", "token"]);
     expect(basicTokenize("HTTPClient")).toEqual(["http", "client"]);
     expect(basicTokenize("café_login")).toEqual(["cafe", "login"]);
+    // Words of every script, not only Latin: these used to vanish entirely.
+    expect(basicTokenize("Проверка токена")).toEqual(["проверка", "токена"]);
+    expect(basicTokenize("λόγος userΣpace")).toEqual(["λογος", "user", "σpace"]);
+    expect(basicTokenize("验证token令牌")).toEqual(["验", "证", "token", "令", "牌"]);
+    expect(basicTokenize("verifyAuthToken — ok")).toEqual(["verify", "auth", "token", "ok"]);
   });
 
   it("greedy longest-match wordpiece with ## continuations", () => {

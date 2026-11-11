@@ -25,7 +25,8 @@ import { errMessage } from "../util.js";
 // header record carries its unit's text hash (see serializeEmbeddings).
 // 3: a word over MAX_WORD_CHARS encodes as UNK (encode.ts), so a vector cached
 // for a unit holding one is not reused.
-export const EMBED_VERSION = 3;
+// 4: words outside Latin script are tokenized instead of dropped (basicTokenize).
+export const EMBED_VERSION = 4;
 
 // The default sub-directory a `pull` writes into and a `status` reports.
 export const DEFAULT_EMBED_DIRNAME = "models";

@@ -1254,7 +1254,7 @@ declare function searchIndex(scan: RepoScan, query: string, opts?: SearchOptions
  */
 declare function explainQuery(scan: RepoScan, query: string, opts?: SearchOptions): ExplainedSearch;
 
-declare const EMBED_VERSION = 3;
+declare const EMBED_VERSION = 4;
 interface StaticEmbedModel {
     modelId: string;
     dim: number;

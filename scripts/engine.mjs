@@ -19019,7 +19019,7 @@ var init_model = __esm({
   "src/embed/model.ts"() {
     "use strict";
     init_util();
-    EMBED_VERSION = 3;
+    EMBED_VERSION = 4;
     DEFAULT_EMBED_DIRNAME = "models";
     DEFAULT_EMBED_URL = "https://github.com/maxgfr/codeindex/releases/download/embed-model-v1/model.json";
     EMBED_ASSET_SHA256 = "163ad053eab4e9a80d421ed4164f32292c83290f02fbbe6fe4b9b1cd6ea18d34";
@@ -19031,9 +19031,17 @@ var init_model = __esm({
 
 // src/embed/encode.ts
 function basicTokenize(text) {
-  const spaced = foldText(text).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const folded = foldText(text);
   const out2 = [];
-  for (const part of spaced.toLowerCase().split(/[^a-z0-9]+/)) {
+  if (!NON_ASCII_RE.test(folded)) {
+    const spaced2 = folded.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+    for (const part of spaced2.toLowerCase().split(/[^a-z0-9]+/)) {
+      if (part) out2.push(part);
+    }
+    return out2;
+  }
+  const spaced = folded.replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2").replace(new RegExp("(\\p{Script=Han})", "gu"), " $1 ");
+  for (const part of spaced.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     if (part) out2.push(part);
   }
   return out2;
@@ -19120,12 +19128,13 @@ function intDot(a, b) {
   for (let i2 = 0; i2 < n; i2++) dot += a[i2] * b[i2];
   return dot;
 }
-var QUANT, MAX_WORD_CHARS, longestPiece;
+var QUANT, NON_ASCII_RE, MAX_WORD_CHARS, longestPiece;
 var init_encode = __esm({
   "src/embed/encode.ts"() {
     "use strict";
     init_util();
     QUANT = 127;
+    NON_ASCII_RE = /[^\x00-\x7F]/;
     MAX_WORD_CHARS = 100;
     longestPiece = /* @__PURE__ */ new WeakMap();
   }
