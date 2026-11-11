@@ -31,12 +31,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # main's head, not the commit that triggered Release. On the
-          # workflow_run path head_sha is the commit BEFORE the version bump:
-          # building it pushed `:latest` over the image release.yml had just
-          # built from the tag, so `latest` announced the previous
-          # ENGINE_VERSION after every release. site.yml does the same.
-          ref: main
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      # The commit whose gate just passed, or the release commit made from it.
+      # head_sha alone is the commit BEFORE the version bump: building it
+      # pushed `:latest` over the image release.yml had just built from the
+      # tag, so `latest` announced the previous ENGINE_VERSION after every
+      # release. main's head alone may be a later push whose own Release has
+      # not passed yet. So: main's head when it is the release commit cut from
+      # head_sha (`chore(release)`, parent head_sha), head_sha otherwise.
+      - name: Pick the gated commit
+        if: github.event_name == 'workflow_run'
+        run: |
+          git fetch origin main
+          gated="$(git rev-parse "${{ github.event.workflow_run.head_sha }}")"
+          tip="$(git rev-parse origin/main)"
+          if [ "$(git rev-parse "$tip^" 2>/dev/null)" = "$gated" ] && git log -1 --format=%s "$tip" | grep -q '^chore(release): '; then
+            git checkout --detach "$tip"
+          fi
+          git log -1 --format='building %h %s'
 
       - name: Short SHA
         id: sha
