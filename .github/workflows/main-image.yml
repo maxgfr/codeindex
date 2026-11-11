@@ -39,16 +39,21 @@ jobs:
       # pushed `:latest` over the image release.yml had just built from the
       # tag, so `latest` announced the previous ENGINE_VERSION after every
       # release. main's head alone may be a later push whose own Release has
-      # not passed yet. So: main's head when it is the release commit cut from
-      # head_sha (`chore(release)`, parent head_sha), head_sha otherwise.
+      # not passed yet. So: the release commit cut from head_sha — the commit
+      # right after it in main's first-parent history, when that one is a
+      # `chore(release)` — and head_sha otherwise. Not main's head: a commit
+      # pushed after the release commit, before this step ran, made the head
+      # something else, and the pre-bump commit was built again.
       - name: Pick the gated commit
         if: github.event_name == 'workflow_run'
+        env:
+          GATED: ${{ github.event.workflow_run.head_sha }}
         run: |
           git fetch origin main
-          gated="$(git rev-parse "${{ github.event.workflow_run.head_sha }}")"
-          tip="$(git rev-parse origin/main)"
-          if [ "$(git rev-parse "$tip^" 2>/dev/null)" = "$gated" ] && git log -1 --format=%s "$tip" | grep -q '^chore(release): '; then
-            git checkout --detach "$tip"
+          gated="$(git rev-parse "$GATED")"
+          child="$(git rev-list --first-parent --reverse "$gated..origin/main" | head -n 1)"
+          if [ -n "$child" ] && [ "$(git rev-parse "$child^")" = "$gated" ] && git log -1 --format=%s "$child" | grep -q '^chore(release): '; then
+            git checkout --detach "$child"
           fi
           git log -1 --format='building %h %s'
 
