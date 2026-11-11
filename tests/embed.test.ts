@@ -209,6 +209,10 @@ describe("tokenizer + wordpiece", () => {
     expect(basicTokenize("λόγος userΣpace")).toEqual(["λογος", "user", "σpace"]);
     expect(basicTokenize("验证token令牌")).toEqual(["验", "证", "token", "令", "牌"]);
     expect(basicTokenize("verifyAuthToken — ok")).toEqual(["verify", "auth", "token", "ok"]);
+    // Scripts written with combining marks stay whole words.
+    expect(basicTokenize("हिन्दी भाषा")).toHaveLength(2);
+    expect(basicTokenize("שָׁלוֹם עוֹלָם")).toEqual(["שלום", "עולם"]);
+    expect(basicTokenize("مَرْحَبًا")).toEqual(["مرحبا"]);
   });
 
   it("greedy longest-match wordpiece with ## continuations", () => {

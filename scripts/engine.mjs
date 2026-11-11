@@ -19107,8 +19107,8 @@ function basicTokenize(text) {
     }
     return out2;
   }
-  const spaced = folded.replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2").replace(new RegExp("(\\p{Script=Han})", "gu"), " $1 ");
-  for (const part of spaced.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+  const spaced = folded.replace(new RegExp("\\p{Mn}", "gu"), "").replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2").replace(new RegExp("(\\p{Script=Han})", "gu"), " $1 ");
+  for (const part of spaced.toLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u)) {
     if (part) out2.push(part);
   }
   return out2;

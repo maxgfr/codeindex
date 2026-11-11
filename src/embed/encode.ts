@@ -43,11 +43,15 @@ export function basicTokenize(text: string): string[] {
     }
     return out;
   }
+  // As BERT's basic tokenizer: non-spacing marks are dropped (it strips them
+  // after NFD), spacing ones stay inside their word. Split on any non-letter,
+  // a Devanagari vowel sign cut a Hindi word into single letters.
   const spaced = folded
+    .replace(/\p{Mn}/gu, "")
     .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1 $2")
     .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2")
     .replace(/(\p{Script=Han})/gu, " $1 ");
-  for (const part of spaced.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+  for (const part of spaced.toLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u)) {
     if (part) out.push(part);
   }
   return out;
