@@ -161,7 +161,8 @@ describe("the extraction profile gates record reuse", { timeout: 120_000 }, () =
     const touched = run();
     expect(touched.build).toBe(cold.build);
     expect(read(out, "graph.json")).toBe(graph);
-    expect(stamp()).toBe(later.getTime());
+    // The mtime as the filesystem reads it back (Linux rounds to …497.999).
+    expect(stamp()).toBe(statSync(wasm).mtimeMs);
     expect(run()).toEqual({ reused: true, build: cold.build });
 
     // Another runtime (web-tree-sitter.wasm) is another parse of every file.
