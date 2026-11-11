@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deleteMemory, listMemories, memoryRefusal, readMemory, writeMemory } from "../src/memory.js";
@@ -50,4 +50,14 @@ it("rejects hard-linked memories without exposing or changing shared files", () 
   writeMemory(repo, "topic/own", "owned");
   expect(listMemories(repo)).toEqual(["topic/own"]);
   expect(readMemory(repo, "topic/own")).toBe("owned\n");
+});
+
+it("writes a memory by renaming a complete file over it, leaving nothing beside it", () => {
+  const root = mkdtempSync(join(tmpdir(), "codeindex-memory-atomic-")); roots.push(root);
+  const repo = join(root, "repo"); mkdirSync(repo);
+  writeMemory(repo, "topic/note", "first");
+  writeMemory(repo, "topic/note", "second");
+  expect(readMemory(repo, "topic/note")).toBe("second\n");
+  expect(readdirSync(join(repo, ".codeindex", "memories", "topic"))).toEqual(["note.md"]);
+  expect(listMemories(repo)).toEqual(["topic/note"]);
 });

@@ -16830,7 +16830,7 @@ var init_edit_spans = __esm({
 });
 
 // src/edit.ts
-import { chmodSync, mkdtempSync as mkdtempSync2, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync6, writeFileSync as writeFileSync2 } from "fs";
+import { chmodSync, mkdtempSync as mkdtempSync2, readFileSync as readFileSync9, realpathSync as realpathSync3, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync6, writeFileSync as writeFileSync2 } from "fs";
 import { basename as basename4, dirname as dirname5, extname as extname3, isAbsolute as isAbsolute4, join as join14, posix as posix5, relative as relative5 } from "path";
 function resolveUniqueSymbol(scan2, namePath, file, line2) {
   let matches = findSymbol(scan2, namePath, { maxResults: Infinity });
@@ -16892,6 +16892,7 @@ function readDocument(abs) {
     lines,
     eols,
     newline: eols[0] || "\n",
+    stamp: sha1(read.buf),
     text() {
       let out2 = "";
       for (let i2 = 0; i2 < this.lines.length; i2++) out2 += this.lines[i2] + this.eols[i2];
@@ -16920,6 +16921,9 @@ function spliceLines(doc, index, count2, inserted) {
 }
 function bodyLines(body2) {
   return body2.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "").split("\n");
+}
+function fileStamp(abs) {
+  return sha1(readFileSync9(abs));
 }
 function atomicWrite(abs, content, cleanup = rmSync2, root) {
   const target = realpathSync3(abs);
@@ -17073,6 +17077,7 @@ function applyEdit(scan2, namePath, body2, op, file, opts = {}) {
     target: op === "replace" ? target : void 0
   });
   if (warnings.length && opts.strict) throw new Error(`edit refused (strict), nothing written: ${warnings.join("; ")}`);
+  if (fileStamp(abs) !== doc.stamp) throw new Error(`edit refused, nothing written: ${sym.file} changed while the edit was prepared \u2014 re-scan and retry`);
   atomicWrite(abs, doc.encode(), rmSync2, scan2.root);
   const result = op === "replace" ? { file: sym.file, startLine: target.line, endLine: target.line + newLines.length - 1, lines: newLines.length } : { file: sym.file, startLine: index + 1, endLine: index + inserted.length, lines: inserted.length };
   if (warnings.length) result.warnings = warnings;
@@ -17115,8 +17120,8 @@ var init_edit = __esm({
 });
 
 // src/memory.ts
-import { lstatSync as lstatSync3, realpathSync as realpathSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync9, rmSync as rmSync3, statSync as statSync7, writeFileSync as writeFileSync3 } from "fs";
-import { dirname as dirname6, join as join15 } from "path";
+import { lstatSync as lstatSync3, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync10, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync3, statSync as statSync7, writeFileSync as writeFileSync3 } from "fs";
+import { basename as basename5, dirname as dirname6, join as join15 } from "path";
 function sanitize(name2) {
   const clean = name2.replace(/^mem:/, "").replace(/\.md$/, "");
   if (!clean) throw new Error("memory name is empty");
@@ -17150,12 +17155,18 @@ function writeMemory(repo, name2, content) {
   const path = memoryPath(repo, name2);
   mkdirSync2(dirname6(path), { recursive: true });
   memoryPath(repo, name2);
-  writeFileSync3(path, content.endsWith("\n") ? content : content + "\n");
+  const temp = join15(dirname6(path), `.${basename5(path)}.${process.pid}.tmp`);
+  try {
+    writeFileSync3(temp, content.endsWith("\n") ? content : content + "\n", { flag: "wx" });
+    renameSync3(temp, path);
+  } finally {
+    rmSync3(temp, { force: true });
+  }
   return sanitize(name2);
 }
 function readMemory(repo, name2) {
   try {
-    return readFileSync9(memoryPath(repo, name2), "utf8");
+    return readFileSync10(memoryPath(repo, name2), "utf8");
   } catch {
     return void 0;
   }
@@ -18444,7 +18455,7 @@ var init_pipeline = __esm({
 
 // src/grep.ts
 import { Worker as Worker2, MessageChannel, receiveMessageOnPort } from "worker_threads";
-import { readFileSync as readFileSync10 } from "fs";
+import { readFileSync as readFileSync11 } from "fs";
 import { isAbsolute as isAbsolute5 } from "path";
 function foreignSyntax(p) {
   let inClass = false;
@@ -18751,7 +18762,7 @@ function runScan(job, onEvent) {
   } catch {
     let stoppedAt;
     scanFiles(job, {
-      readFile: (abs) => readFileSync10(abs),
+      readFile: (abs) => readFileSync11(abs),
       clip: clipLine,
       emit: (ev) => "stoppedAt" in ev ? stoppedAt = ev.stoppedAt : onEvent(ev),
       progress: () => {
@@ -18895,7 +18906,7 @@ try {
 
 // src/embed/model.ts
 import { createHash as createHash3 } from "crypto";
-import { existsSync as existsSync8, readFileSync as readFileSync11 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync12 } from "fs";
 import { join as join18 } from "path";
 function resolveEmbedModelDir(repo) {
   const env = process.env.CODEINDEX_EMBED_DIR;
@@ -18944,7 +18955,7 @@ function loadEmbedModel(dir) {
   if (!existsSync8(path)) return void 0;
   let raw;
   try {
-    raw = JSON.parse(readFileSync11(path, "utf8"));
+    raw = JSON.parse(readFileSync12(path, "utf8"));
   } catch (e) {
     throw new Error(`embed model: ${path} is not valid JSON (${errMessage(e)})`);
   }
@@ -19645,7 +19656,7 @@ var init_coupling = __esm({
 });
 
 // src/onboard.ts
-import { existsSync as existsSync9, readFileSync as readFileSync12 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync13 } from "fs";
 import { join as join19, resolve as resolve7 } from "path";
 function taglineFromReadme(text) {
   let level = 0;
@@ -19680,7 +19691,7 @@ function tagline(root) {
     const path = join19(root, name2);
     if (!existsSync9(path)) continue;
     try {
-      return taglineFromReadme(readFileSync12(path, "utf8"));
+      return taglineFromReadme(readFileSync13(path, "utf8"));
     } catch {
       continue;
     }
@@ -19751,7 +19762,7 @@ var init_onboard = __esm({
 });
 
 // src/lsp/config.ts
-import { existsSync as existsSync10, readFileSync as readFileSync13 } from "fs";
+import { existsSync as existsSync10, readFileSync as readFileSync14 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join20, resolve as resolve8 } from "path";
 function repoLspConfigTrusted(trust = {}) {
@@ -19829,7 +19840,7 @@ function loadLspConfig(repo, trust = {}) {
   if (!path || !existsSync10(path)) return void 0;
   let payload;
   try {
-    payload = JSON.parse(readFileSync13(path, "utf8"));
+    payload = JSON.parse(readFileSync14(path, "utf8"));
   } catch (e) {
     throw new Error(`${path}: ${errMessage(e)}`);
   }
@@ -19864,14 +19875,14 @@ var init_config2 = __esm({
 });
 
 // src/lsp/refs.ts
-import { readFileSync as readFileSync14 } from "fs";
+import { readFileSync as readFileSync15 } from "fs";
 import { join as join21 } from "path";
 function lspUnavailable(server, reason) {
   return { server, ok: false, reason, refs: [], agreement: { both: [], lspOnly: [], staticOnly: [] } };
 }
 function columnOfSymbol(root, rel2, line2, name2) {
   try {
-    const text = readFileSync14(join21(root, rel2), "utf8").split(/\r?\n/)[line2 - 1];
+    const text = readFileSync15(join21(root, rel2), "utf8").split(/\r?\n/)[line2 - 1];
     return text === void 0 ? 0 : nameColumn(text, name2);
   } catch {
     return 0;
@@ -19973,7 +19984,7 @@ function refOrder(a, b) {
 }
 function readTextOrEmpty(root, rel2) {
   try {
-    return readFileSync14(join21(root, rel2), "utf8");
+    return readFileSync15(join21(root, rel2), "utf8");
   } catch {
     return "";
   }
@@ -20399,7 +20410,7 @@ var init_client = __esm({
 });
 
 // src/lsp/callers.ts
-import { readFileSync as readFileSync15 } from "fs";
+import { readFileSync as readFileSync16 } from "fs";
 import { join as join22 } from "path";
 function callersAgreement(calls, statik) {
   const sites = "callers" in statik ? statik.callers : void 0;
@@ -20422,7 +20433,7 @@ async function collectIncomingCalls(scan2, defs, session, languageId) {
   if (!session.capabilities.callHierarchy) return { calls, reason: "server does not provide textDocument/prepareCallHierarchy" };
   try {
     for (const def of defs) {
-      const text = readFileSync15(join22(scan2.root, def.file), "utf8");
+      const text = readFileSync16(join22(scan2.root, def.file), "utf8");
       session.didOpen(def.file, text, languageId ?? def.lang);
       calls.push(...await session.incomingCalls(def.file, def.line, columnOfSymbol(scan2.root, def.file, def.line, def.name)));
     }
@@ -22256,7 +22267,7 @@ var init_patharg = __esm({
 });
 
 // src/coverage.ts
-import { readFileSync as readFileSync16 } from "fs";
+import { readFileSync as readFileSync17 } from "fs";
 import { extname as extname4, join as join24 } from "path";
 function oversizedNaming(scan2, name2) {
   if (!scan2.oversized?.length || !/^[A-Za-z_$][\w$]*$/.test(name2)) return [];
@@ -22270,7 +22281,7 @@ function oversizedNaming(scan2, name2) {
     if (o.size > MAX_PROBE_BYTES || classify(o.rel, extname4(o.rel).toLowerCase()) !== "code") continue;
     let text;
     try {
-      text = readFileSync16(join24(scan2.root, o.rel), "utf8");
+      text = readFileSync17(join24(scan2.root, o.rel), "utf8");
     } catch {
       continue;
     }
@@ -22353,11 +22364,11 @@ var init_concise = __esm({
 });
 
 // src/embed/persist.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync17, renameSync as renameSync3, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync18, renameSync as renameSync4, rmSync as rmSync4, writeFileSync as writeFileSync4 } from "fs";
 import { dirname as dirname7 } from "path";
 function readEmbeddingsFile(path) {
   try {
-    return deserializeEmbeddings(readFileSync17(path));
+    return deserializeEmbeddings(readFileSync18(path));
   } catch {
     return void 0;
   }
@@ -22367,7 +22378,7 @@ function writeEmbeddingsFileAtomic(path, bytes) {
   try {
     mkdirSync3(dirname7(path), { recursive: true });
     writeFileSync4(tmp, bytes);
-    renameSync3(tmp, path);
+    renameSync4(tmp, path);
     return true;
   } catch {
     rmSync4(tmp, { force: true });
@@ -22812,7 +22823,7 @@ var init_watch = __esm({
 });
 
 // src/mcp/protocol.ts
-import { readFileSync as readFileSync18, statSync as statSync11 } from "fs";
+import { readFileSync as readFileSync19, statSync as statSync11 } from "fs";
 import { join as join27 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 function validateArgs(schema, args2) {
@@ -22874,7 +22885,7 @@ function artifactState(path, text, bytes) {
   }
   if (size !== bytes && size !== bytes + 1) return "stale";
   try {
-    const disk = readFileSync18(path, "utf8");
+    const disk = readFileSync19(path, "utf8");
     return disk === text || disk === text + "\n" ? "identical" : "stale";
   } catch {
     return "absent";
@@ -23936,8 +23947,8 @@ __export(mcp_exports, {
   validateArgs: () => validateArgs,
   warmGrammarsForWalk: () => warmGrammarsForWalk
 });
-import { readFileSync as readFileSync19, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
-import { basename as basename5, isAbsolute as isAbsolute9, join as join28, relative as relative9, resolve as resolve10, sep as sep7 } from "path";
+import { readFileSync as readFileSync20, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
+import { basename as basename6, isAbsolute as isAbsolute9, join as join28, relative as relative9, resolve as resolve10, sep as sep7 } from "path";
 function isRpcRequest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const req = value;
@@ -23979,8 +23990,8 @@ function indexedFile(scan2, repo, file) {
   if (byRel.has(rel2)) return rel2;
   const unseen = notIndexedFile(scan2, repo, file);
   if (unseen) throw new Error(unseen);
-  const name2 = basename5(rel2);
-  const near = scan2.files.filter((f) => basename5(f.rel) === name2).map((f) => f.rel).sort(byStr).slice(0, 5);
+  const name2 = basename6(rel2);
+  const near = scan2.files.filter((f) => basename6(f.rel) === name2).map((f) => f.rel).sort(byStr).slice(0, 5);
   throw new Error(
     `file not in the index: ${file}` + (near.length ? ` \u2014 did you mean ${near.join(", ")}?` : " (paths are repo-relative, as symbols_overview and find_symbol report them)")
   );
@@ -24464,7 +24475,7 @@ async function callTool(name2, args2, repo, progress, walkRepo = async (r) => ({
       }
       let text;
       try {
-        text = readFileSync19(abs, "utf8");
+        text = readFileSync20(abs, "utf8");
       } catch {
         throw unreadable;
       }
@@ -24764,7 +24775,7 @@ __export(rewrite_exports, {
   shellQuote: () => shellQuote,
   tokenize: () => tokenize2
 });
-import { existsSync as existsSync12, readFileSync as readFileSync20 } from "fs";
+import { existsSync as existsSync12, readFileSync as readFileSync21 } from "fs";
 import { dirname as dirname8, join as join29, relative as relative10, resolve as resolve11, sep as sep8 } from "path";
 function lex(line2) {
   const out2 = [];
@@ -25332,7 +25343,7 @@ function submodulesAround(cwd) {
     if (existsSync12(modules)) {
       let text;
       try {
-        text = readFileSync20(modules, "utf8");
+        text = readFileSync21(modules, "utf8");
       } catch {
         return [];
       }
@@ -26582,7 +26593,7 @@ init_patharg();
 init_types();
 init_types();
 init_loader();
-import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync21, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync13, lstatSync as lstatSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync22, renameSync as renameSync5, rmSync as rmSync6, statSync as statSync13, writeFileSync as writeFileSync6 } from "fs";
 import { isAbsolute as isAbsolute10, join as join30, resolve as resolve12 } from "path";
 init_pipeline();
 init_hash();
@@ -27278,7 +27289,7 @@ function writeArtifact(path, data) {
   const temp = `${path}.tmp-${process.pid}`;
   try {
     writeFileSync6(temp, data);
-    renameSync4(temp, path);
+    renameSync5(temp, path);
     return;
   } catch {
     rmSync6(temp, { force: true });
@@ -27611,7 +27622,7 @@ ${HELP}`);
     const embedPath = join30(outDir, "embeddings.bin");
     const artifactSha = (path) => {
       try {
-        return sha1(readFileSync21(path));
+        return sha1(readFileSync22(path));
       } catch {
         return void 0;
       }
@@ -27651,7 +27662,7 @@ ${HELP}`);
       const text = renderFreshness(scan2, out2, extraction, { size: cacheStat.size, mtimeMs: cacheStat.mtimeMs });
       let current;
       try {
-        current = readFileSync21(freshnessPath, "utf8");
+        current = readFileSync22(freshnessPath, "utf8");
       } catch {
         current = void 0;
       }
@@ -28105,7 +28116,7 @@ ${HELP}`);
   } else if (cmd === "rules") {
     if (!flags2.config) throw new Error("rules needs --config <codeindex.rules.json>");
     const configPath = [resolve12(flags2.config), resolve12(flags2.repo, flags2.config)].find((p) => existsSync13(p)) ?? resolve12(flags2.config);
-    const rules = parseRulesText(readFileSync21(configPath, "utf8"), configPath);
+    const rules = parseRulesText(readFileSync22(configPath, "utf8"), configPath);
     const { scan: scan2, graph } = await readArtifacts();
     const report = rulesReport(checkRules(graph, rules, { scan: scan2 }));
     emit(JSON.stringify(report, null, 2) + "\n", flags2.out);

@@ -3,8 +3,8 @@
 // <repo>/.codeindex/memories/<name>.md; names may contain `/` for topic
 // subdirectories. Plain files, no daemon; the value is the discipline (small
 // named notes read on relevance) rather than any machinery.
-import { lstatSync, realpathSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { errMessage } from "./util.js";
 
 const MEMORY_DIR = [".codeindex", "memories"];
@@ -51,7 +51,17 @@ export function writeMemory(repo: string, name: string, content: string): string
   const path = memoryPath(repo, name);
   mkdirSync(dirname(path), { recursive: true });
   memoryPath(repo, name); // validate newly created parents before following them
-  writeFileSync(path, content.endsWith("\n") ? content : content + "\n");
+  // Written beside its place, then renamed over it: a reader never sees half a
+  // note, and a process killed mid-write leaves the previous one intact. The
+  // name starts with a dot and does not end in .md, so listMemories never
+  // advertises it.
+  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(temp, content.endsWith("\n") ? content : content + "\n", { flag: "wx" });
+    renameSync(temp, path);
+  } finally {
+    rmSync(temp, { force: true });
+  }
   return sanitize(name);
 }
 

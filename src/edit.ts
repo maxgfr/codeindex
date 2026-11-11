@@ -9,7 +9,7 @@
 // where the index says, its span must be known exactly, and the edited text is
 // re-extracted so a change to the file's structure OUTSIDE the edited lines is
 // reported (or, with `strict`, refused) instead of silently accepted.
-import { chmodSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, posix, relative } from "node:path";
 import type { CodeSymbol } from "./types.js";
 import type { RepoScan } from "./scan.js";
@@ -117,6 +117,7 @@ interface SourceDocument {
   lines: string[];
   eols: string[];
   newline: string; // the file's first terminator, for new lines with no neighbour to copy
+  stamp: string; // sha1 of the very bytes the document was decoded from
   text(): string;
   encode(): Buffer;
 }
@@ -144,6 +145,7 @@ function readDocument(abs: string): SourceDocument {
     lines,
     eols,
     newline: eols[0] || "\n",
+    stamp: sha1(read.buf),
     text() {
       let out = "";
       for (let i = 0; i < this.lines.length; i++) out += this.lines[i]! + this.eols[i]!;
@@ -196,6 +198,12 @@ function bodyLines(body: string): string[] {
 // followed, and the edit landed outside the repository.
 export function atomicWriteText(abs: string, content: string, cleanup: typeof rmSync = rmSync, root?: string): void {
   atomicWrite(abs, content, cleanup, root);
+}
+
+// What identifies a file's current bytes, cheaply: its content hash. (size,
+// mtime) alone misses a same-size rewrite within the clock's resolution.
+function fileStamp(abs: string): string {
+  return sha1(readFileSync(abs));
 }
 
 function atomicWrite(abs: string, content: string | Buffer, cleanup: typeof rmSync = rmSync, root?: string): void {
@@ -438,6 +446,11 @@ function applyEdit(scan: RepoScan, namePath: string, body: string, op: Operation
     target: op === "replace" ? target : undefined,
   });
   if (warnings.length && opts.strict) throw new Error(`edit refused (strict), nothing written: ${warnings.join("; ")}`);
+  // The bytes the edit was computed from, compared with the file's now: one
+  // another writer changed in between (an editor saving, a formatter) would
+  // otherwise be overwritten with an edit of its previous content, and that
+  // writer's change lost without a word.
+  if (fileStamp(abs) !== doc.stamp) throw new Error(`edit refused, nothing written: ${sym.file} changed while the edit was prepared — re-scan and retry`);
   atomicWrite(abs, doc.encode(), rmSync, scan.root);
   const result: EditResult =
     op === "replace"
