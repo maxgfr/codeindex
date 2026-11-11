@@ -8430,7 +8430,8 @@ function receiverOf(start2, typeCalls) {
     if (obj.type === "this") return thisReceiver(obj);
     const self = SELF_NODE.exec(obj.type);
     if (self) return self[1];
-    if (obj.type === "super") return "super";
+    if (/^super(?:_expression)?$/.test(obj.type)) return "super";
+    if (obj.text === "__MODULE__") return "self";
     if (BASE_NODE.test(obj.type)) return void 0;
     if (IDENT_LEAF.test(obj.type) || RUBY_VARIABLE.test(obj.type)) return receiverName(obj.text) ?? UNNAMED_RECEIVER;
     if (obj.type === "alias") return receiverName(obj.text.slice(obj.text.lastIndexOf(".") + 1)) ?? UNNAMED_RECEIVER;
@@ -8442,6 +8443,7 @@ function receiverOf(start2, typeCalls) {
     const inner = kids[0];
     return typeReceiver(readTypeName(inner.type === "qualified_type" ? inner.childForFieldName("alias") ?? inner.childForFieldName("type") : inner));
   }
+  if (obj.type === "qualified_name") return receiverOf(kids[kids.length - 1], typeCalls);
   if (obj.type === "conditional_access_expression") return receiverOf(kids[kids.length - 1], typeCalls);
   if (obj.type === "navigation_expression") return receiverOf(kids[kids.length - 1], typeCalls);
   if (obj.type === "composite_literal" || NEW_NODE.test(obj.type)) {
@@ -8465,12 +8467,17 @@ function receiverOf(start2, typeCalls) {
 function calledReceiver(call2, typeCalls) {
   const callee = call2.childForFieldName("function") ?? call2.childForFieldName("method") ?? call2.childForFieldName("name") ?? call2.childForFieldName("callee") ?? call2.namedChildren[0] ?? null;
   if (callee?.text === "super") return "super";
-  const name2 = readName(callee);
+  let bare = callee;
+  while (bare && bare.type === "expression" && bare.namedChildren.length === 1) bare = bare.namedChildren[0];
+  if (bare?.type === "template_function" && /^(?:static|dynamic|reinterpret|const)_cast$/.test(bare.childForFieldName("name")?.text ?? "")) {
+    return castReceiver(bare.childForFieldName("arguments")?.namedChildren[0] ?? null);
+  }
+  const name2 = readName(bare);
   if (name2 === "new") {
     const owner = readReceiver(callee) ?? readReceiver(call2, true);
     return owner !== void 0 && TYPE_LIKE.test(owner) ? owner : UNNAMED_RECEIVER;
   }
-  if (typeCalls === void 0 || typeCalls === "plain" && callee.namedChildren.length > 0) return UNNAMED_RECEIVER;
+  if (typeCalls === void 0 || typeCalls === "plain" && bare.namedChildren.length > 0) return UNNAMED_RECEIVER;
   return name2 !== void 0 && TYPE_LIKE.test(name2) ? name2 : UNNAMED_RECEIVER;
 }
 function typeReceiver(name2) {
@@ -8478,11 +8485,13 @@ function typeReceiver(name2) {
 }
 function castReceiver(type) {
   let t = type;
+  if (t?.type === "type_descriptor") t = t.childForFieldName("type");
   while (t && POINTER_TYPE.test(t.type) && t.namedChildren.length === 1) t = t.namedChildren[0];
   return t && NAMED_TYPE.test(t.type) ? typeReceiver(readTypeName(t)) : UNNAMED_RECEIVER;
 }
 function thisReceiver(node) {
   for (let n = node.parent; n; n = n.parent) {
+    if (n.type === "function_expression" && n.parent?.type === "pair" && n.parent.parent?.type === "object") return UNNAMED_RECEIVER;
     if (THIS_OWNER.test(n.type)) return "this";
     if (n.type === "method_definition") return n.parent?.type === "class_body" ? "this" : UNNAMED_RECEIVER;
     if (n.type === "program") return UNNAMED_RECEIVER;
@@ -8494,7 +8503,8 @@ function isGoInstantiation(node) {
   const index = node.childForFieldName("index");
   if (!index) return false;
   if (/type/.test(index.type)) return true;
-  return index.type === "identifier" && (/^[A-Z]/.test(index.text) || GO_PREDECLARED.has(index.text));
+  const named = index.type === "unary_expression" && index.text.startsWith("*") ? index.childForFieldName("operand") : index;
+  return named?.type === "identifier" && (/^[A-Z]/.test(named.text) || GO_PREDECLARED.has(named.text));
 }
 function receiverName(name2) {
   if (!name2) return void 0;
@@ -8532,7 +8542,7 @@ var init_node = __esm({
       "any bool byte comparable complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr".split(" ")
     );
     RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
-    TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression|try_expression)$/;
+    TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression|try_expression|expression)$/;
     POINTER = /^(?:unary_expression|pointer_expression|reference_expression)$/;
     POINTER_TYPE = /^(?:pointer_type|reference_type)$/;
     NAMED_TYPE = /^(?:type_identifier|identifier|generic_type|generic_name|qualified_type|qualified_name|qualified_identifier|nested_type_identifier|scoped_type_identifier|scoped_identifier|user_type|simple_identifier)$/;
@@ -9876,6 +9886,8 @@ var init_specs = __esm({
         // contract's ABI, `internal`/`private` is not.
         exported: (header, name2) => /\b(public|external)\b/.test(header) ? true : /\b(internal|private)\b/.test(header) ? false : byCapital(header, name2) || true,
         calls: { call_expression: "function" },
+        // `IToken(token).transfer(…)`: a cast to a contract or interface.
+        typeCalls: "plain",
         nameFrom: {
           // `uint256 public constant MAX = 5` leads with its TYPE, and `type_name`
           // ends in "name", so the generic reader's last resort would return the type.
@@ -10123,7 +10135,7 @@ function readRust(node, out2, prefix = "") {
     const from = prefix ? `${prefix}::${path}` : path;
     const name2 = from.slice(from.lastIndexOf("::") + 2);
     if (alias === name2) return;
-    out2.push(/^[a-z]/.test(alias) ? { local: alias, name: "*", from } : { local: alias, name: name2, from });
+    out2.push({ local: alias, name: name2, from });
   } else if (node.type === "scoped_use_list") {
     const path = node.childForFieldName("path")?.text;
     const next = path ? prefix ? `${prefix}::${path}` : path : prefix;
@@ -10133,8 +10145,23 @@ function readRust(node, out2, prefix = "") {
     for (const c2 of node.namedChildren) readRust(c2, out2, prefix);
   }
 }
+function readPhp(node, out2) {
+  if (node.type === "namespace_use_declaration") {
+    for (const c2 of node.namedChildren) readPhp(c2, out2);
+  } else if (node.type === "namespace_use_clause") {
+    const alias = node.childForFieldName("alias")?.text ?? node.namedChildren.find((c2, i2) => i2 > 0 && c2.type === "name")?.text;
+    const path = node.namedChildren.find((c2) => c2.type === "qualified_name" || c2.type === "name");
+    if (!alias || !path || path.text === alias) return;
+    const from = path.text.replace(/^\\/, "");
+    const name2 = from.slice(from.lastIndexOf("\\") + 1);
+    if (alias !== name2) out2.push({ local: alias, name: name2, from });
+  } else if (node.type === "namespace_definition") {
+    const body2 = node.childForFieldName("body");
+    for (const c2 of body2?.namedChildren ?? []) readPhp(c2, out2);
+  }
+}
 function readImportAliases(root, lang) {
-  const read = lang === "typescript" || lang === "javascript" ? readJs : lang === "python" ? readPython : lang === "go" ? readGo : lang === "rust" ? (node, out3) => readRust(node, out3) : void 0;
+  const read = lang === "typescript" || lang === "javascript" ? readJs : lang === "python" ? readPython : lang === "go" ? readGo : lang === "rust" ? (node, out3) => readRust(node, out3) : lang === "php" ? readPhp : void 0;
   if (!read) return [];
   const found = [];
   for (const node of root.namedChildren) read(node, found);
@@ -15895,6 +15922,7 @@ function createBindScope(scan2, pairs, ctxIn) {
       const r = resolveImport(f.rel, f.ext, spec, ctx);
       return r.kind === "resolved" && r.target !== f.rel ? r.target : null;
     };
+    const external = (spec) => !(f.lang === "rust" && /^(?:crate|super|self)::/.test(spec)) && resolveImport(f.rel, f.ext, spec, ctx).kind === "external";
     const addModule = (local, targets) => {
       const prev = a.modules.get(local);
       if (prev === void 0 || prev === null) a.modules.set(local, targets);
@@ -15918,6 +15946,10 @@ function createBindScope(scan2, pairs, ctxIn) {
           addModule(al.local, t ? [t] : null);
           continue;
         }
+        if (f.lang === "rust" && t && (t.endsWith(`/${al.name}.rs`) || t.endsWith(`/${al.name}/mod.rs`) || t === `${al.name}.rs`)) {
+          addModule(al.local, [t]);
+          continue;
+        }
         if (f.lang === "python") {
           const sub = resolved(al.from.endsWith(".") ? al.from + al.name : `${al.from}.${al.name}`);
           if (sub && sub !== t) {
@@ -15927,7 +15959,7 @@ function createBindScope(scan2, pairs, ctxIn) {
         }
         if (a.names.has(al.local)) continue;
         const name2 = al.name === "default" ? (t ? defaultOf(t) : void 0) ?? al.local : al.name;
-        a.names.set(al.local, { name: name2, files: t ? [t] : null });
+        a.names.set(al.local, { name: name2, files: t ? [t] : null, ...t ? {} : { external: external(al.from) } });
       }
     }
     files.set(f.rel, a);
@@ -15954,6 +15986,25 @@ function createCallBinder(scan2, pairs, opts = {}) {
   const only = opts.only;
   const scope = createBindScope(scan2, pairs, opts.ctx);
   let traits;
+  let bases;
+  const ancestorsOf = (type) => {
+    if (!bases) {
+      bases = /* @__PURE__ */ new Map();
+      for (const file of scan2.files)
+        for (const r of file.relations ?? []) {
+          const from = lastSegment(r.from);
+          const list = bases.get(from) ?? [];
+          list.push(lastSegment(r.to));
+          bases.set(from, list);
+        }
+    }
+    const out2 = /* @__PURE__ */ new Set();
+    const queue = [type];
+    while (queue.length && out2.size < 32) {
+      for (const b of bases.get(queue.shift()) ?? []) if (!out2.has(b) && b !== type) out2.add(b), queue.push(b);
+    }
+    return out2;
+  };
   const inTrait = (d) => d.parent !== void 0 && (traits ??= new Set(scan2.files.flatMap((f) => f.symbols.filter((s) => TRAIT_KINDS.has(s.kind)).map((s) => `${f.rel}\0${s.name}`)))).has(`${d.file}\0${d.parent}`);
   let byRel;
   const fnParentsMemo = /* @__PURE__ */ new Map();
@@ -16119,6 +16170,17 @@ function createCallBinder(scan2, pairs, opts = {}) {
       }
       return best?.name ?? e.parent;
     };
+    let ownByLast;
+    const ownTypeByLast = (name2) => {
+      if (!ownByLast) {
+        ownByLast = /* @__PURE__ */ new Map();
+        for (const t of ownTypes) {
+          const k = lastSegment(t);
+          if (k !== t) ownByLast.set(k, ownByLast.has(k) ? null : t);
+        }
+      }
+      return ownByLast.get(name2) ?? void 0;
+    };
     const typeAround = (e) => {
       if (e?.parent === void 0 || ownTypes.has(e.parent)) return e?.parent;
       let best;
@@ -16157,13 +16219,26 @@ function createCallBinder(scan2, pairs, opts = {}) {
     };
     const preferParent = (list, typeHint, receiver) => {
       if (typeHint !== void 0 && list.some((d) => d.parent === typeHint)) return list.filter((d) => d.parent === typeHint);
+      if (typeHint !== void 0 && list.some((d) => d.parent !== void 0 && lastSegment(d.parent) === typeHint))
+        return list.filter((d) => d.parent !== void 0 && lastSegment(d.parent) === typeHint);
       const lower = receiver?.toLowerCase();
       if (lower !== void 0 && list.some((d) => d.parent?.toLowerCase() === lower)) return list.filter((d) => d.parent?.toLowerCase() === lower);
       return list;
     };
     const reading = (shape, receiver, selfType, typeHint, typed) => ({ shape, receiver, selfType, typeHint, typed, results: /* @__PURE__ */ new Map() });
-    const namesType = (receiver) => TYPE_CASE.has(family) && /^[A-Z]/.test(receiver);
-    const goFunction = (receiver) => family === "go" && /^[A-Z]/.test(receiver) && (ownFree.get(receiver)?.kind === "function" || corroborated(receiver, "free").some((d) => d.kind === "function" && d.parent === void 0));
+    const receiverKind = (receiver) => {
+      const own = ownAny.get(receiver);
+      const defs = [...own ? [own] : [], ...corroborated(receiver, "any"), ...exportedGroup(receiver, family, "any")?.list ?? []];
+      if (defs.some((d) => TYPE_KINDS3.has(d.kind))) return "type";
+      if (defs.some((d) => CALLABLE_KINDS.has(d.kind) && d.parent === void 0)) return "function";
+      return defs.length ? "value" : "unknown";
+    };
+    const namesType = (receiver) => {
+      if (!TYPE_CASE.has(family) || !/^[A-Z]/.test(receiver) || !/[a-z]/.test(receiver)) return false;
+      const kind = receiverKind(receiver);
+      return kind === "type" || kind === "unknown" || kind === "function" && !CAPITAL_FUNCTIONS.has(family);
+    };
+    const functionResult = (receiver) => CAPITAL_FUNCTIONS.has(family) && /^[A-Z]/.test(receiver) && receiverKind(receiver) === "function";
     const BARE = reading("bare");
     const OUTSIDE = reading("outside");
     const UNNAMED = reading("foreign", UNNAMED_RECEIVER);
@@ -16187,8 +16262,9 @@ function createCallBinder(scan2, pairs, opts = {}) {
         if (rustModules?.has(receiver)) r = reading("module", receiver);
         else if (aliases.modules.has(receiver)) r = reading("module", receiver);
         else if (ownTypes.has(receiver)) r = self(receiver);
-        else if (!recall && aliases.names.get(receiver)?.files === null) r = OUTSIDE;
-        else if (!recall && goFunction(receiver)) r = UNNAMED;
+        else if (ownTypeByLast(receiver)) r = self(ownTypeByLast(receiver));
+        else if (!recall && aliases.names.get(receiver)?.external === true) r = OUTSIDE;
+        else if (!recall && functionResult(receiver)) r = UNNAMED;
         else if (!SHAPED.has(family)) {
           const named = typeNamedLike(receiver);
           r = named ? self(named) : reading("foreign", receiver, void 0, aliases.names.get(receiver)?.name ?? receiver, namesType(receiver));
@@ -16230,8 +16306,11 @@ function createCallBinder(scan2, pairs, opts = {}) {
       const { shape, receiver, selfType, typeHint } = how;
       const prefer = (list) => {
         if (!how.typed || recall) return preferParent(list, typeHint, receiver);
-        const own = list.filter((d) => d.parent === typeHint || d.parent !== void 0 && d.parent.slice(Math.max(d.parent.lastIndexOf(":"), d.parent.lastIndexOf(".")) + 1) === typeHint);
-        return own.length ? own : list.filter(inTrait);
+        const own = list.filter((d) => d.parent !== void 0 && lastSegment(d.parent) === typeHint);
+        if (own.length) return own;
+        const up = typeHint !== void 0 ? ancestorsOf(typeHint) : /* @__PURE__ */ new Set();
+        const inherited = list.filter((d) => d.parent !== void 0 && up.has(lastSegment(d.parent)));
+        return inherited.length ? inherited : list.filter(inTrait);
       };
       if (shape === "outside") return null;
       const bareRust = family === "rust" && shape === "bare";
@@ -16314,7 +16393,7 @@ function createCallBinder(scan2, pairs, opts = {}) {
   };
   return { forFile };
 }
-var REFERENCE_KINDS3, STRICT, SHAPED, TYPE_CASE, TRAIT_KINDS, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, INLINE_SUPER, MAX_BASE_HOPS, PRELUDE_VARIANTS, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, isGoTest, declaredRe, aliasMemo, newTables;
+var REFERENCE_KINDS3, STRICT, SHAPED, TYPE_CASE, TRAIT_KINDS, TYPE_KINDS3, CALLABLE_KINDS, CAPITAL_FUNCTIONS, lastSegment, PACKAGE_DIR, PRIVATE_REACH, NOT_CALLABLE, INLINE_SUPER, MAX_BASE_HOPS, PRELUDE_VARIANTS, SELF_NAMES, FUNCTION_KINDS2, MAX_HOPS, NO_ALIASES, isGoTest, declaredRe, aliasMemo, newTables;
 var init_bind = __esm({
   "src/bind.ts"() {
     "use strict";
@@ -16332,6 +16411,10 @@ var init_bind = __esm({
     SHAPED = /* @__PURE__ */ new Set(["go", "python"]);
     TYPE_CASE = /* @__PURE__ */ new Set(["js", "python", "java", "ruby", "rust", "kotlin", "scala", "php", "c", "swift", "dart"]);
     TRAIT_KINDS = /* @__PURE__ */ new Set(["trait", "interface", "protocol"]);
+    TYPE_KINDS3 = /* @__PURE__ */ new Set(["class", "struct", "interface", "trait", "enum", "type", "union", "record", "object", "protocol", "module", "namespace", "contract", "library"]);
+    CALLABLE_KINDS = /* @__PURE__ */ new Set(["function", "macro"]);
+    CAPITAL_FUNCTIONS = /* @__PURE__ */ new Set(["go", "c"]);
+    lastSegment = (name2) => name2.slice(Math.max(name2.lastIndexOf(":"), name2.lastIndexOf(".")) + 1);
     PACKAGE_DIR = /* @__PURE__ */ new Set(["go", "java"]);
     PRIVATE_REACH = { go: "package", java: "package", python: "import", rust: "path" };
     NOT_CALLABLE = /* @__PURE__ */ new Set(["mod", "module", "package", "namespace"]);
@@ -19776,7 +19859,7 @@ var init_endpoint = __esm({
 // src/repomap.ts
 function tierOf2(s) {
   const member = s.parent !== void 0;
-  if (TYPE_KINDS3.has(s.kind) || CALLABLE_KINDS.has(s.kind)) return member ? 2 : TYPE_KINDS3.has(s.kind) ? 0 : 1;
+  if (TYPE_KINDS4.has(s.kind) || CALLABLE_KINDS2.has(s.kind)) return member ? 2 : TYPE_KINDS4.has(s.kind) ? 0 : 1;
   return member ? 4 : 3;
 }
 function mostSalient(symbols, max) {
@@ -19833,7 +19916,7 @@ ${node.rel}:
 (${files} of ${ranked.length} code files shown, ~${Math.ceil(out2.length / CHARS_PER_TOKEN)} tokens)
 `;
 }
-var CHARS_PER_TOKEN, SKIP_KINDS, TYPE_KINDS3, CALLABLE_KINDS, MAX_MISSES;
+var CHARS_PER_TOKEN, SKIP_KINDS, TYPE_KINDS4, CALLABLE_KINDS2, MAX_MISSES;
 var init_repomap = __esm({
   "src/repomap.ts"() {
     "use strict";
@@ -19841,7 +19924,7 @@ var init_repomap = __esm({
     init_sort();
     CHARS_PER_TOKEN = 4;
     SKIP_KINDS = /* @__PURE__ */ new Set(["reexport", "reexport-all", "package"]);
-    TYPE_KINDS3 = /* @__PURE__ */ new Set([
+    TYPE_KINDS4 = /* @__PURE__ */ new Set([
       "class",
       "struct",
       "interface",
@@ -19855,7 +19938,7 @@ var init_repomap = __esm({
       "object",
       "module"
     ]);
-    CALLABLE_KINDS = /* @__PURE__ */ new Set(["function", "def", "fn", "func", "method", "constructor", "macro"]);
+    CALLABLE_KINDS2 = /* @__PURE__ */ new Set(["function", "def", "fn", "func", "method", "constructor", "macro"]);
     MAX_MISSES = 32;
   }
 });
@@ -21569,7 +21652,7 @@ function isTail(rel2) {
   return tierForPath(dirOf(rel2) || "(root)") === 2 || /(^|\/)testdata\//.test(rel2);
 }
 function isCallable(s) {
-  if (CALLABLE_KINDS2.has(s.kind)) return true;
+  if (CALLABLE_KINDS3.has(s.kind)) return true;
   if (s.kind !== "const" || !s.signature) return false;
   const family = familyOf(s.lang);
   return family === "js" ? FN_INITIALIZER.test(s.signature) : family === "python" && PY_LAMBDA.test(s.signature);
@@ -21884,7 +21967,7 @@ function capDeadCode(all, limit) {
   if (limit === void 0 || all.length <= limit) return all;
   return { total: all.length, shown: limit, truncated: true, candidates: all.slice(0, limit) };
 }
-var REFERENCE_KINDS8, CALLABLE_KINDS2, FN_INITIALIZER, PY_LAMBDA, CONTAINER_KINDS2, ENTRY_BASENAME, IDENT_VISIBLE, SEP4, JVM_LANGS;
+var REFERENCE_KINDS8, CALLABLE_KINDS3, FN_INITIALIZER, PY_LAMBDA, CONTAINER_KINDS2, ENTRY_BASENAME, IDENT_VISIBLE, SEP4, JVM_LANGS;
 var init_deadcode = __esm({
   "src/deadcode.ts"() {
     "use strict";
@@ -21900,7 +21983,7 @@ var init_deadcode = __esm({
     init_complexity();
     init_util();
     REFERENCE_KINDS8 = /* @__PURE__ */ new Set(["reexport", "reexport-all", "default"]);
-    CALLABLE_KINDS2 = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator", "class", "macro"]);
+    CALLABLE_KINDS3 = /* @__PURE__ */ new Set(["function", "method", "def", "constructor", "operator", "class", "macro"]);
     FN_INITIALIZER = /^[\w$]+\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\(|[\w$]+\s*=>)/;
     PY_LAMBDA = /^\w+\s*(?::[^=]*)?=\s*lambda\b/;
     CONTAINER_KINDS2 = /* @__PURE__ */ new Set(["class", "interface", "struct", "trait", "object", "enum", "record", "protocol", "module", "type"]);

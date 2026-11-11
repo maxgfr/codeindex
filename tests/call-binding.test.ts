@@ -802,3 +802,86 @@ describe("a type-named receiver binds only to that type", () => {
     }
   });
 });
+
+// The fourth review's cases: a type-named receiver reaches what the type
+// inherits or mixes in; a capitalised VALUE (a constant, a field, a
+// `require`d module) binds as a value; an Elixir module calls its own
+// functions; a Solidity cast binds the interface; a Rust alias whose crate
+// path the resolver cannot place (no Cargo.toml) is not read as outside.
+describe("a type-named receiver, its bases, and the values that look like types", () => {
+  const REPOS: Record<string, Record<string, string>> = {
+    inh_py: {"base.py": "class Base:\n    def run(self):\n        pass\n    @classmethod\n    def make(cls):\n        pass\n", "child.py": "from base import Base\n\nclass Child(Base):\n    pass\n", "main.py": "from child import Child\n\ndef inst():\n    Child(1).run()\n\ndef static():\n    Child.make()\n"},
+    inh_java: {"p/Base.java": "package p;\npublic class Base {\n  public void run() {}\n  public static void make() {}\n}\n", "p/Child.java": "package p;\npublic class Child extends Base {}\n", "p/Main.java": "package p;\npublic class Main {\n  void inst() { new Child().run(); }\n  void stat() { Child.make(); }\n}\n"},
+    inh_rb: {"base.rb": "class Base\n  def run; end\n  def self.make; end\nend\n", "child.rb": "require_relative \"base\"\nclass Child < Base\nend\n", "main.rb": "require_relative \"child\"\ndef inst\n  Child.new.run\nend\ndef stat\n  Child.make\nend\n"},
+    inh_php: {"Base.php": "<?php\nclass Base { public function run() {} public static function make() {} }\n", "Child.php": "<?php\nclass Child extends Base {}\n", "main.php": "<?php\nfunction inst() { (new Child())->run(); }\nfunction stat() { Child::make(); }\n"},
+    val_js: {"client.js": "export class Client { get() {} }\n", "utils.js": "exports.format = function format() {};\n", "utils2.js": "export function shape() {}\n", "main.js": "import { Client } from \"./client.js\";\nimport * as NS from \"./utils2.js\";\nconst Utils = require(\"./utils\");\nconst API = new Client();\nexport function constant() { API.get(); }\nexport function cjs() { Utils.format(); }\nexport function ns() { NS.shape(); }\nexport function lower() { const api = new Client(); api.get(); }\n"},
+    val_py: {"registry.py": "class Registry:\n    def register(self, x):\n        pass\n\nREGISTRY = Registry()\n", "main.py": "from registry import REGISTRY\nfrom registry import Registry\n\ndef constant():\n    REGISTRY.register(1)\n\ndef lower():\n    registry = Registry()\n    registry.register(1)\n"},
+    val_java: {"p/Client.java": "package p;\npublic class Client { public void get() {} }\n", "p/Color.java": "package p;\npublic enum Color { RED, GREEN; public String describe() { return \"\"; } }\n", "p/Main.java": "package p;\npublic class Main {\n  static final Client API = new Client();\n  void constant() { API.get(); }\n  void enumConst() { Color.RED.describe(); }\n  void lower(Client client) { client.get(); }\n}\n"},
+    val_cpp: {"world.h": "class UWorld {\n public:\n  void Tick();\n  void SpawnActor();\n};\n", "game.cpp": "#include \"world.h\"\nUWorld* World;\nvoid Update() { World->Tick(); }\nvoid Lower(UWorld* w) { w->SpawnActor(); }\nvoid Local() { UWorld* W = Get(); W->SpawnActor(); }\n"},
+    val_rb: {"utils.rb": "module Utils\n  module_function\n  def helper; end\nend\nmodule App\n  module Util\n    def self.run; end\n  end\nend\nmodule Greeter\n  def hello; end\nend\nclass Person\n  include Greeter\nend\nclass Log\n  def info; end\nend\nLOGGER = Log.new\n", "main.rb": "require_relative \"utils\"\ndef a\n  Utils.helper\nend\ndef b\n  App::Util.run\nend\ndef c\n  Person.new.hello\nend\ndef d\n  LOGGER.info\nend\n"},
+    elixir: {"lib/a.ex": "defmodule App.Worker do\n  def run(x) do\n    App.Worker.step(x)\n    __MODULE__.step(x)\n    Worker.step(x)\n    step(x)\n    App.Other.go(x)\n  end\n  def step(x), do: x\nend\n", "lib/b.ex": "defmodule App.Other do\n  def go(x), do: x\n  def step(x), do: x\nend\n"},
+    solidity: {"a.sol": "contract Token {\n  function transfer(address to, uint v) public {}\n}\ncontract Vault {\n  Token token;\n  struct S { Token t; }\n  S s;\n  function a() public { token.transfer(msg.sender, 1); }\n  function b() public { s.t.transfer(msg.sender, 1); }\n  function c() public { this.a(); }\n  function d() public { Token(address(0)).transfer(msg.sender, 1); }\n}\n"},
+    out_rust_nocargo: {"lib.rs": "pub mod models;\npub mod sub;\n", "models.rs": "pub struct User;\nimpl User {\n    pub fn find() {}\n}\n", "sub.rs": "use crate::models::User as U;\nuse crate::models::User;\npub fn aliased() { U::find(); }\npub fn plain() { User::find(); }\n"},
+    cast_c: {"a.cpp": "struct Repo { void save(); };\nvoid f(void* p) { ((Repo*)p)->save(); }\nvoid g(void* p) { static_cast<Repo*>(p)->save(); }\n"},
+  };
+  const EXPECTED: Record<string, string[]> = {
+    inh_py: ["main.py#inst -> base.py#Base/run", "main.py#inst -> child.py#Child", "main.py#static -> base.py#Base/make"],
+    inh_java: ["p/Main.java#Main/inst -> p/Base.java#Base/run", "p/Main.java#Main/inst -> p/Child.java#Child", "p/Main.java#Main/stat -> p/Base.java#Base/make"],
+    inh_rb: ["main.rb#inst -> base.rb#Base/run", "main.rb#stat -> base.rb#Base/make"],
+    inh_php: ["main.php#inst -> Base.php#Base/run", "main.php#inst -> Child.php#Child", "main.php#stat -> Base.php#Base/make"],
+    val_js: ["main.js#API -> client.js#Client", "main.js#cjs -> utils.js#format", "main.js#constant -> client.js#Client/get", "main.js#lower -> client.js#Client", "main.js#lower -> client.js#Client/get", "main.js#ns -> utils2.js#shape"],
+    val_py: ["main.py#constant -> registry.py#Registry/register", "main.py#lower -> registry.py#Registry", "main.py#lower -> registry.py#Registry/register", "registry.py#REGISTRY -> registry.py#Registry"],
+    val_java: ["p/Main.java#Main/API -> p/Client.java#Client", "p/Main.java#Main/constant -> p/Client.java#Client/get", "p/Main.java#Main/enumConst -> p/Color.java#Color/describe", "p/Main.java#Main/lower -> p/Client.java#Client/get"],
+    val_cpp: ["game.cpp#Local -> world.h#UWorld/SpawnActor", "game.cpp#Lower -> world.h#UWorld/SpawnActor", "game.cpp#Update -> world.h#UWorld/Tick"],
+    val_rb: ["main.rb#a -> utils.rb#Utils/helper", "main.rb#b -> utils.rb#Util/run", "main.rb#c -> utils.rb#Greeter/hello", "main.rb#d -> utils.rb#Log/info"],
+    elixir: ["lib/a.ex#App.Worker/run -> lib/a.ex#App.Worker/step", "lib/a.ex#App.Worker/run -> lib/b.ex#App.Other/go"],
+    solidity: ["a.sol#Vault/a -> a.sol#Token/transfer", "a.sol#Vault/c -> a.sol#Vault/a", "a.sol#Vault/d -> a.sol#Token", "a.sol#Vault/d -> a.sol#Token/transfer"],
+    out_rust_nocargo: ["sub.rs#aliased -> models.rs#User/find", "sub.rs#plain -> models.rs#User/find"],
+    cast_c: ["a.cpp#f -> a.cpp#Repo/save", "a.cpp#g -> a.cpp#Repo/save"],
+  };
+  for (const [name, files] of Object.entries(REPOS)) {
+    it(`binds ${name} as the source says`, () => {
+      const dir = mkdtempSync(join(tmpdir(), `ci-call-binding-${name}-`));
+      try {
+        for (const [rel, src] of Object.entries(files)) {
+          mkdirSync(dirname(join(dir, rel)), { recursive: true });
+          writeFileSync(join(dir, rel), src);
+        }
+        const local = scanRepo(dir);
+        const edges = buildSymbolGraph(local, importPairsFor(local))
+          .edges.filter((e) => e.kind === "calls")
+          .map((e) => `${e.from} -> ${e.to}`)
+          .sort();
+        expect(edges).toEqual(EXPECTED[name]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe("the receiver forms the fourth review left", () => {
+  const CASES: [string, string, [number, string, string][]][] = [
+    ["c.kt", "open class B { open fun go() {} }\nclass C : B() {\n  override fun go() { super.go() }\n}\n", [[3, "go", "super"]]],
+    ["c.cpp", "struct Repo { void save(); };\nvoid f(void* p) {\n  ((Repo*)p)->save();\n  static_cast<Repo*>(p)->save();\n}\n", [[3, "save", "Repo"], [4, "save", "Repo"]]],
+    ["c.php", "<?php\nfunction f() {\n  \\App\\Models\\User::find();\n}\n", [[3, "find", "User"]]],
+    ["c.go", "package p\nfunc f() {\n\tNew[*T]()\n}\n", [[3, "New", "-"]]],
+    ["c.js", "function init() {}\nconst o = {\n  stop: function () { this.init(); },\n};\n", [[3, "init", "?"]]],
+    ["c.ex", "defmodule App.Worker do\n  def run(x) do\n    __MODULE__.step(x)\n  end\nend\n", [[3, "step", "self"]]],
+  ];
+  let dir: string;
+  let local: RepoScan;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "ci-call-binding-shapes4-"));
+    for (const [rel, src] of CASES) writeFileSync(join(dir, rel), src);
+    local = scanRepo(dir);
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  for (const [rel, , expected] of CASES) {
+    it(`reads each receiver in ${rel}`, () => {
+      const calls = local.files.find((f) => f.rel === rel)!.calls ?? [];
+      const got = expected.map(([line, name]) => [line, name, calls.filter((c) => c.line === line && c.name === name).map((c) => c.receiver ?? "-").join(",")]);
+      expect(got).toEqual(expected);
+    });
+  }
+});

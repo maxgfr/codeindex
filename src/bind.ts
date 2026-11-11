@@ -59,6 +59,15 @@ const SHAPED = new Set(["go", "python"]);
 // capitalised name is as often a value — an exported field, a property.
 const TYPE_CASE = new Set(["js", "python", "java", "ruby", "rust", "kotlin", "scala", "php", "c", "swift", "dart"]);
 const TRAIT_KINDS = new Set(["trait", "interface", "protocol"]);
+// What a declaration of a receiver's name says the receiver is.
+const TYPE_KINDS = new Set(["class", "struct", "interface", "trait", "enum", "type", "union", "record", "object", "protocol", "module", "namespace", "contract", "library"]);
+const CALLABLE_KINDS = new Set(["function", "macro"]);
+// Families where a capitalised FUNCTION is ordinary (Go's exported ones,
+// C/C++'s `GetWorld()`, a `CHECK(x)` macro): a receiver naming one is the
+// result of a call to it, not a type of that name.
+const CAPITAL_FUNCTIONS = new Set(["go", "c"]);
+// The last segment of a qualified type name (`Net::HTTPResponse`, `App.Worker`).
+const lastSegment = (name: string): string => name.slice(Math.max(name.lastIndexOf(":"), name.lastIndexOf(".")) + 1);
 
 // Families whose unit of visibility is the DIRECTORY: a file sees every
 // declaration of its package mates without importing them.
@@ -120,7 +129,9 @@ interface FileAliases {
   modules: Map<string, string[] | null>;
   // bare name → the declaration it renames, and the files it comes from (null
   // when that module is outside the repo).
-  names: Map<string, { name: string; files: string[] | null }>;
+  // `external`: resolution said the module is outside the repo, rather than
+  // failing to place it.
+  names: Map<string, { name: string; files: string[] | null; external?: boolean }>;
 }
 const NO_ALIASES: FileAliases = { modules: new Map(), names: new Map() };
 
@@ -395,6 +406,10 @@ export function createBindScope(scan: RepoScan, pairs: Set<string>, ctxIn?: Reso
       const r = resolveImport(f.rel, f.ext, spec, ctx!);
       return r.kind === "resolved" && r.target !== f.rel ? r.target : null;
     };
+    // A Rust path from the crate itself is never outside it, even where the
+    // resolver cannot place it (a crate's sources indexed without Cargo.toml).
+    const external = (spec: string): boolean =>
+      !(f.lang === "rust" && /^(?:crate|super|self)::/.test(spec)) && resolveImport(f.rel, f.ext, spec, ctx!).kind === "external";
     const addModule = (local: string, targets: string[] | null): void => {
       const prev = a!.modules.get(local);
       if (prev === undefined || prev === null) a!.modules.set(local, targets);
@@ -420,6 +435,12 @@ export function createBindScope(scan: RepoScan, pairs: Set<string>, ctxIn?: Reso
           addModule(al.local, t ? [t] : null);
           continue;
         }
+        // A Rust rename of a MODULE (`use crate::util as u`) resolves to the
+        // module's own file; of an item, to the file declaring it.
+        if (f.lang === "rust" && t && (t.endsWith(`/${al.name}.rs`) || t.endsWith(`/${al.name}/mod.rs`) || t === `${al.name}.rs`)) {
+          addModule(al.local, [t]);
+          continue;
+        }
         if (f.lang === "python") {
           // `from pkg import mod as m` binds a SUBMODULE when pkg/mod.py exists.
           const sub = resolved(al.from.endsWith(".") ? al.from + al.name : `${al.from}.${al.name}`);
@@ -430,7 +451,7 @@ export function createBindScope(scan: RepoScan, pairs: Set<string>, ctxIn?: Reso
         }
         if (a.names.has(al.local)) continue;
         const name = al.name === "default" ? (t ? defaultOf(t) : undefined) ?? al.local : al.name;
-        a.names.set(al.local, { name, files: t ? [t] : null });
+        a.names.set(al.local, { name, files: t ? [t] : null, ...(t ? {} : { external: external(al.from) }) });
       }
     }
     files.set(f.rel, a);
@@ -503,6 +524,27 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
   // CommandFactory's): a member declared in one, as (file, trait) — a struct
   // elsewhere may share the trait's name. Read once.
   let traits: Set<string> | undefined;
+  // Every base a type states anywhere (extends, implements, a Ruby include),
+  // by last segment, read once: `Child.make()` reaches `Base.make`.
+  let bases: Map<string, string[]> | undefined;
+  const ancestorsOf = (type: string): Set<string> => {
+    if (!bases) {
+      bases = new Map();
+      for (const file of scan.files)
+        for (const r of file.relations ?? []) {
+          const from = lastSegment(r.from);
+          const list = bases.get(from) ?? [];
+          list.push(lastSegment(r.to));
+          bases.set(from, list);
+        }
+    }
+    const out = new Set<string>();
+    const queue = [type];
+    while (queue.length && out.size < 32) {
+      for (const b of bases.get(queue.shift()!) ?? []) if (!out.has(b) && b !== type) out.add(b), queue.push(b);
+    }
+    return out;
+  };
   const inTrait = (d: CodeSymbol): boolean =>
     d.parent !== undefined &&
     (traits ??= new Set(scan.files.flatMap((f) => f.symbols.filter((s) => TRAIT_KINDS.has(s.kind)).map((s) => `${f.rel}\0${s.name}`)))).has(`${d.file}\0${d.parent}`);
@@ -712,6 +754,19 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       }
       return best?.name ?? e.parent;
     };
+    // A type this file declares, found by its last segment, when that is
+    // unambiguous.
+    let ownByLast: Map<string, string | null> | undefined;
+    const ownTypeByLast = (name: string): string | undefined => {
+      if (!ownByLast) {
+        ownByLast = new Map();
+        for (const t of ownTypes) {
+          const k = lastSegment(t);
+          if (k !== t) ownByLast.set(k, ownByLast.has(k) ? null : t);
+        }
+      }
+      return ownByLast.get(name) ?? undefined;
+    };
     // The type a `this`/`self` inside `e` is: its parent when that is a type
     // this file declares, else the innermost such type around it. A local
     // inside a method (`const f = () => this.own()`) has the METHOD for its
@@ -766,6 +821,9 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     // named after (`engine` → Engine).
     const preferParent = (list: CodeSymbol[], typeHint: string | undefined, receiver: string | undefined): CodeSymbol[] => {
       if (typeHint !== undefined && list.some((d) => d.parent === typeHint)) return list.filter((d) => d.parent === typeHint);
+      // A module or class named with its namespace (`App.Worker`, `Net::HTTP`).
+      if (typeHint !== undefined && list.some((d) => d.parent !== undefined && lastSegment(d.parent) === typeHint))
+        return list.filter((d) => d.parent !== undefined && lastSegment(d.parent) === typeHint);
       const lower = receiver?.toLowerCase();
       if (lower !== undefined && list.some((d) => d.parent?.toLowerCase() === lower)) return list.filter((d) => d.parent?.toLowerCase() === lower);
       return list;
@@ -790,12 +848,29 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
     }
     const reading = (shape: Shape, receiver?: string, selfType?: string, typeHint?: string, typed?: boolean): Reading =>
       ({ shape, receiver, selfType, typeHint, typed, results: new Map() });
-    const namesType = (receiver: string): boolean => TYPE_CASE.has(family) && /^[A-Z]/.test(receiver);
-    // A Go receiver that is a function of the package: the receiver of
-    // `NewChecker(cfg).Files()`, a call's result, not a value or type of that
-    // name.
-    const goFunction = (receiver: string): boolean =>
-      family === "go" && /^[A-Z]/.test(receiver) && (ownFree.get(receiver)?.kind === "function" || corroborated(receiver, "free").some((d) => d.kind === "function" && d.parent === undefined));
+    // What a capitalised receiver is, by what the repo declares under its
+    // name: a type, a free function, a value (a constant, a field, a
+    // property), or nothing the repo declares (`TextEncoder`, `Path`).
+    const receiverKind = (receiver: string): "type" | "function" | "value" | "unknown" => {
+      const own = ownAny.get(receiver);
+      const defs = [...(own ? [own] : []), ...corroborated(receiver, "any"), ...(exportedGroup(receiver, family, "any")?.list ?? [])];
+      if (defs.some((d) => TYPE_KINDS.has(d.kind))) return "type";
+      if (defs.some((d) => CALLABLE_KINDS.has(d.kind) && d.parent === undefined)) return "function";
+      return defs.length ? "value" : "unknown";
+    };
+    // Whether a receiver names a type by its language's convention: a
+    // capitalised name with a lowercase letter (`API`, `RED` are constants)
+    // that nothing in the repo declares as a value.
+    const namesType = (receiver: string): boolean => {
+      if (!TYPE_CASE.has(family) || !/^[A-Z]/.test(receiver) || !/[a-z]/.test(receiver)) return false;
+      const kind = receiverKind(receiver);
+      return kind === "type" || kind === "unknown" || (kind === "function" && !CAPITAL_FUNCTIONS.has(family));
+    };
+    // A receiver that is a capitalised function of the program, in a family
+    // where those are ordinary: `NewChecker(cfg).Files()`, `GetWorld()->Spawn()`
+    // is a call's result, not a value or type of that name.
+    const functionResult = (receiver: string): boolean =>
+      CAPITAL_FUNCTIONS.has(family) && /^[A-Z]/.test(receiver) && receiverKind(receiver) === "function";
     const BARE = reading("bare");
     const OUTSIDE = reading("outside");
     // A member call on something with no name: some object's method, with
@@ -826,10 +901,14 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
         if (rustModules?.has(receiver)) r = reading("module", receiver);
         else if (aliases.modules.has(receiver)) r = reading("module", receiver);
         else if (ownTypes.has(receiver)) r = self(receiver); // `Greeter.make()` next to Greeter
+        // A module of this file under its last segment (Elixir's `Worker.step()`
+        // inside `App.Worker`).
+        else if (ownTypeByLast(receiver)) r = self(ownTypeByLast(receiver));
         // Imported from outside the repo (`from pathlib import Path`): nothing
-        // here is what it calls.
-        else if (!recall && aliases.names.get(receiver)?.files === null) r = OUTSIDE;
-        else if (!recall && goFunction(receiver)) r = UNNAMED;
+        // here is what it calls. Only when resolution SAYS external — an
+        // in-repo path it could not place is not outside.
+        else if (!recall && aliases.names.get(receiver)?.external === true) r = OUTSIDE;
+        else if (!recall && functionResult(receiver)) r = UNNAMED;
         else if (!SHAPED.has(family)) {
           // A variable named after a type this file declares: `store.get()`.
           const named = typeNamedLike(receiver);
@@ -891,8 +970,12 @@ export function createCallBinder(scan: RepoScan, pairs: Set<string>, opts: CallB
       const prefer = (list: CodeSymbol[]): CodeSymbol[] => {
         if (!how.typed || recall) return preferParent(list, typeHint, receiver);
         // Ruby and C++ qualify a nested type's name (`Net::HTTPResponse`).
-        const own = list.filter((d) => d.parent === typeHint || (d.parent !== undefined && d.parent.slice(Math.max(d.parent.lastIndexOf(":"), d.parent.lastIndexOf(".")) + 1) === typeHint));
-        return own.length ? own : list.filter(inTrait);
+        const own = list.filter((d) => d.parent !== undefined && lastSegment(d.parent) === typeHint);
+        if (own.length) return own;
+        // A member the type inherits or mixes in (`Child.make()` on Base).
+        const up = typeHint !== undefined ? ancestorsOf(typeHint) : new Set<string>();
+        const inherited = list.filter((d) => d.parent !== undefined && up.has(lastSegment(d.parent)));
+        return inherited.length ? inherited : list.filter(inTrait);
       };
       if (shape === "outside") return null;
       // Rust: a tuple variant is reached through its enum (`ParseResult::Ok(…)`,

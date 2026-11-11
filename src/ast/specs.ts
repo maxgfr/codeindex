@@ -1685,6 +1685,8 @@ export const SPECS: Record<string, LangSpec> = {
     // contract's ABI, `internal`/`private` is not.
     exported: (header, name) => (/\b(public|external)\b/.test(header) ? true : /\b(internal|private)\b/.test(header) ? false : byCapital(header, name) || true),
     calls: { call_expression: "function" },
+    // `IToken(token).transfer(…)`: a cast to a contract or interface.
+    typeCalls: "plain",
     nameFrom: {
       // `uint256 public constant MAX = 5` leads with its TYPE, and `type_name`
       // ends in "name", so the generic reader's last resort would return the type.

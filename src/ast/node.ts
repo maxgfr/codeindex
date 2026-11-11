@@ -278,7 +278,9 @@ function receiverOf(start: TSNode, typeCalls: TypeCalls | undefined): string | u
     if (obj.type === "this") return thisReceiver(obj);
     const self = SELF_NODE.exec(obj.type);
     if (self) return self[1];
-    if (obj.type === "super") return "super";
+    if (/^super(?:_expression)?$/.test(obj.type)) return "super";
+    // Elixir's `__MODULE__.f()` is a call on the enclosing module.
+    if (obj.text === "__MODULE__") return "self";
     if (BASE_NODE.test(obj.type)) return undefined;
     // Ruby's `@repo`, `@@registry` and `$stdout` are leaves of their own node
     // types; a literal is a leaf with no name.
@@ -294,6 +296,8 @@ function receiverOf(start: TSNode, typeCalls: TypeCalls | undefined): string | u
     const inner = kids[0]!;
     return typeReceiver(readTypeName(inner.type === "qualified_type" ? (inner.childForFieldName("alias") ?? inner.childForFieldName("type")) : inner));
   }
+  // PHP's `\App\Models\User::find()`: its last segment.
+  if (obj.type === "qualified_name") return receiverOf(kids[kids.length - 1]!, typeCalls);
   // C#'s `s?.repo.Save()`: the access the condition leads to.
   if (obj.type === "conditional_access_expression") return receiverOf(kids[kids.length - 1]!, typeCalls);
   // Kotlin's `a.b.save()`: the last segment of the inner access.
@@ -367,12 +371,18 @@ function calledReceiver(call: TSNode, typeCalls: TypeCalls | undefined): string 
     call.namedChildren[0] ??
     null;
   if (callee?.text === "super") return "super";
-  const name = readName(callee);
+  let bare = callee;
+  while (bare && bare.type === "expression" && bare.namedChildren.length === 1) bare = bare.namedChildren[0]!;
+  // C++'s `static_cast<Repo*>(p)->save()`: a cast, written as a call.
+  if (bare?.type === "template_function" && /^(?:static|dynamic|reinterpret|const)_cast$/.test(bare.childForFieldName("name")?.text ?? "")) {
+    return castReceiver(bare.childForFieldName("arguments")?.namedChildren[0] ?? null);
+  }
+  const name = readName(bare);
   if (name === "new") {
     const owner = readReceiver(callee) ?? readReceiver(call, true);
     return owner !== undefined && TYPE_LIKE.test(owner) ? owner : UNNAMED_RECEIVER;
   }
-  if (typeCalls === undefined || (typeCalls === "plain" && callee!.namedChildren.length > 0)) return UNNAMED_RECEIVER;
+  if (typeCalls === undefined || (typeCalls === "plain" && bare!.namedChildren.length > 0)) return UNNAMED_RECEIVER;
   return name !== undefined && TYPE_LIKE.test(name) ? name : UNNAMED_RECEIVER;
 }
 
@@ -385,6 +395,8 @@ function typeReceiver(name: string | undefined): string {
 // generic's constructor, a qualified name's last segment.
 function castReceiver(type: TSNode | null): string {
   let t = type;
+  // C/C++'s `(Repo*)p` holds its type in a type_descriptor.
+  if (t?.type === "type_descriptor") t = t.childForFieldName("type");
   while (t && POINTER_TYPE.test(t.type) && t.namedChildren.length === 1) t = t.namedChildren[0]!;
   return t && NAMED_TYPE.test(t.type) ? typeReceiver(readTypeName(t)) : UNNAMED_RECEIVER;
 }
@@ -397,6 +409,8 @@ function castReceiver(type: TSNode | null): string {
 // body; other grammars' roots are not a `program`.
 function thisReceiver(node: TSNode): string {
   for (let n = node.parent; n; n = n.parent) {
+    // A function that is a property of an object literal is its method.
+    if (n.type === "function_expression" && n.parent?.type === "pair" && n.parent.parent?.type === "object") return UNNAMED_RECEIVER;
     if (THIS_OWNER.test(n.type)) return "this";
     if (n.type === "method_definition") return n.parent?.type === "class_body" ? "this" : UNNAMED_RECEIVER;
     if (n.type === "program") return UNNAMED_RECEIVER;
@@ -414,14 +428,16 @@ function isGoInstantiation(node: TSNode): boolean {
   const index = node.childForFieldName("index");
   if (!index) return false;
   if (/type/.test(index.type)) return true;
-  return index.type === "identifier" && (/^[A-Z]/.test(index.text) || GO_PREDECLARED.has(index.text));
+  // `New[*T]()`: a pointer to a type.
+  const named = index.type === "unary_expression" && index.text.startsWith("*") ? index.childForFieldName("operand") : index;
+  return named?.type === "identifier" && (/^[A-Z]/.test(named.text) || GO_PREDECLARED.has(named.text));
 }
 const GO_PREDECLARED = new Set(
   "any bool byte comparable complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr".split(" "),
 );
 
 const RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
-const TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression|try_expression)$/;
+const TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression|try_expression|expression)$/;
 // A dereference or an address of (Go/Rust unary, C/C++ pointer, Rust
 // reference), or Kotlin's `a!!`: transparent when its operator says so.
 const POINTER = /^(?:unary_expression|pointer_expression|reference_expression)$/;

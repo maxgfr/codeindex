@@ -105,10 +105,10 @@ function readGo(node: TSNode, out: ImportAlias[]): void {
   }
 }
 
-// Rust: `use crate::error::Error as ClapError` renames an item; a lowercase
-// alias (`use crate::util as u`) a module, as Rust names them. `from` is the
-// whole path, which resolution maps to the item's file. Only renames: an
-// un-renamed `use` binds the item's own name.
+// Rust: `use crate::error::Error as ClapError` renames an item or a module;
+// the binder tells them apart by where the path resolves. `from` is the whole
+// path, which resolution maps to the item's file. Only renames: an un-renamed
+// `use` binds the item's own name.
 function readRust(node: TSNode, out: ImportAlias[], prefix = ""): void {
   if (node.type === "use_declaration") {
     const arg = node.childForFieldName("argument");
@@ -120,7 +120,7 @@ function readRust(node: TSNode, out: ImportAlias[], prefix = ""): void {
     const from = prefix ? `${prefix}::${path}` : path;
     const name = from.slice(from.lastIndexOf("::") + 2);
     if (alias === name) return;
-    out.push(/^[a-z]/.test(alias) ? { local: alias, name: "*", from } : { local: alias, name, from });
+    out.push({ local: alias, name, from });
   } else if (node.type === "scoped_use_list") {
     const path = node.childForFieldName("path")?.text;
     const next = path ? (prefix ? `${prefix}::${path}` : path) : prefix;
@@ -128,6 +128,23 @@ function readRust(node: TSNode, out: ImportAlias[], prefix = ""): void {
     if (list) for (const c of list.namedChildren) readRust(c, out, next);
   } else if (node.type === "use_list") {
     for (const c of node.namedChildren) readRust(c, out, prefix);
+  }
+}
+
+// PHP: `use App\Models\User as UserModel;` renames a class.
+function readPhp(node: TSNode, out: ImportAlias[]): void {
+  if (node.type === "namespace_use_declaration") {
+    for (const c of node.namedChildren) readPhp(c, out);
+  } else if (node.type === "namespace_use_clause") {
+    const alias = node.childForFieldName("alias")?.text ?? node.namedChildren.find((c, i) => i > 0 && c.type === "name")?.text;
+    const path = node.namedChildren.find((c) => c.type === "qualified_name" || c.type === "name");
+    if (!alias || !path || path.text === alias) return;
+    const from = path.text.replace(/^\\/, "");
+    const name = from.slice(from.lastIndexOf("\\") + 1);
+    if (alias !== name) out.push({ local: alias, name, from });
+  } else if (node.type === "namespace_definition") {
+    const body = node.childForFieldName("body");
+    for (const c of body?.namedChildren ?? []) readPhp(c, out);
   }
 }
 
@@ -142,7 +159,9 @@ export function readImportAliases(root: TSNode, lang: string): ImportAlias[] {
           ? readGo
           : lang === "rust"
             ? (node: TSNode, out: ImportAlias[]) => readRust(node, out)
-            : undefined;
+            : lang === "php"
+              ? readPhp
+              : undefined;
   if (!read) return [];
   const found: ImportAlias[] = [];
   for (const node of root.namedChildren) read(node, found);
