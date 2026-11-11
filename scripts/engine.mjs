@@ -19538,7 +19538,7 @@ var init_endpoint = __esm({
     init_encode();
     init_model();
     init_embed();
-    EMBED_IMAGE_VERSION = "1.0.0";
+    EMBED_IMAGE_VERSION = "1.0.1";
     ENDPOINT_MAX_TEXT_CHARS = 8192;
     MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
     CANARY = "codeindex endpoint fingerprint: parse the request, retry on timeout";

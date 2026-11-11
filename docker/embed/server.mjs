@@ -108,6 +108,48 @@ function readBody(req) {
   });
 }
 
+// POST /embed, once a slot is held: read, validate, embed.
+async function embed(req, res) {
+  let raw;
+  try {
+    raw = await readBody(req);
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) {
+      json(res, 413, { error: e.message }, { close: true });
+    } else {
+      json(res, 400, { error: "failed to read request body" });
+    }
+    return;
+  }
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    json(res, 400, { error: "invalid JSON body" });
+    return;
+  }
+  const texts = body && body.texts;
+  if (!Array.isArray(texts) || !texts.every((t) => typeof t === "string")) {
+    json(res, 400, { error: "body must be { texts: string[] }" });
+    return;
+  }
+  if (texts.length > MAX_TEXTS) {
+    json(res, 400, { error: `texts.length exceeds the ${MAX_TEXTS} item limit` });
+    return;
+  }
+  if (texts.some((t) => t.length > MAX_TEXT_CHARS)) {
+    json(res, 400, { error: `each text must be at most ${MAX_TEXT_CHARS} characters` });
+    return;
+  }
+  if (texts.length === 0) {
+    json(res, 200, { vectors: [] });
+    return;
+  }
+  const extractor = await getExtractor();
+  const out = await extractor(texts, { pooling: "mean", normalize: true });
+  json(res, 200, { model: MODEL_ID, vectors: out.tolist() });
+}
+
 const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && (req.url === "/healthz" || req.url === "/health")) {
@@ -124,51 +166,18 @@ const server = createServer(async (req, res) => {
         json(res, 403, { error: "requests from a web page are refused" }, { close: true });
         return;
       }
+      // The slot is taken BEFORE the body is read and given back in one
+      // finally: taken only around the model call, every request whose body
+      // arrived in several reads passed the check before any had counted
+      // itself, and 23 of 24 large batches ran at once.
       if (inFlight >= MAX_IN_FLIGHT) {
         res.setHeader("retry-after", "1");
         json(res, 503, { error: `busy: ${MAX_IN_FLIGHT} requests already in flight` }, { close: true });
         return;
       }
-      let raw;
-      try {
-        raw = await readBody(req);
-      } catch (e) {
-        if (e instanceof BodyTooLargeError) {
-          json(res, 413, { error: e.message }, { close: true });
-        } else {
-          json(res, 400, { error: "failed to read request body" });
-        }
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(raw);
-      } catch {
-        json(res, 400, { error: "invalid JSON body" });
-        return;
-      }
-      const texts = body && body.texts;
-      if (!Array.isArray(texts) || !texts.every((t) => typeof t === "string")) {
-        json(res, 400, { error: "body must be { texts: string[] }" });
-        return;
-      }
-      if (texts.length > MAX_TEXTS) {
-        json(res, 400, { error: `texts.length exceeds the ${MAX_TEXTS} item limit` });
-        return;
-      }
-      if (texts.some((t) => t.length > MAX_TEXT_CHARS)) {
-        json(res, 400, { error: `each text must be at most ${MAX_TEXT_CHARS} characters` });
-        return;
-      }
-      if (texts.length === 0) {
-        json(res, 200, { vectors: [] });
-        return;
-      }
       inFlight++;
       try {
-        const extractor = await getExtractor();
-        const out = await extractor(texts, { pooling: "mean", normalize: true });
-        json(res, 200, { model: MODEL_ID, vectors: out.tolist() });
+        await embed(req, res);
       } finally {
         inFlight--;
       }

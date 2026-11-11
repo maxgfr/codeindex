@@ -74,9 +74,13 @@ try {
         const flood=await Promise.all(Array.from({length:24},()=>post({texts:Array(64).fill('a sentence long enough to take the model a moment to embed, repeated')})));
         assert.ok(flood.every(r=>r.status===200||r.status===503),'statuses under load');
         assert.ok(flood.some(r=>r.status===200),'some requests are served under load');
+        // No 503 is required here: the real model's inference holds the event
+        // loop, so requests run one after another and the bound of 8 rarely
+        // fills. tests/embed-server.test.ts proves the bound with a model that
+        // yields while it works.
         assert.equal((await fetch(base+'/missing')).status,404);
         assert.equal((await fetch(base+'/healthz')).status,200);
-        console.log('PASS embed: offline/nonroot readiness, 384 finite normalized deterministic floats, empty/malformed/limits/413, web-origin 403, bounded backlog, post-error health');
+        console.log('PASS embed: offline/nonroot readiness, 384 finite normalized deterministic floats, empty/malformed/limits/413, web-origin 403, 200/503 under load, post-error health');
       })().catch(e=>{console.error(e);process.exitCode=1;});`;
     console.log(docker(["exec", container, "node", "-e", checks]));
     const semantic = docker(["run", "--rm", "--network", `container:${container}`, "-e", "CODEINDEX_EMBED_ENDPOINT=http://127.0.0.1:8756", "-v", `${repo}:/work`, engine, "search", "greet", "--semantic", "--repo", "/work"]);

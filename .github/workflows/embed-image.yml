@@ -53,6 +53,20 @@ jobs:
 
       # Multi-arch (amd64 + arm64). The model is baked at build time, so both
       # legs download it once during their build — no runtime network needed.
+      # A version tag is published once and then stays what it was: it is what
+      # `codeindex embed serve` names. Pushing it again on every commit made
+      # `:1.0.0` mean whatever main last held, and a host that had pulled it
+      # never got the changes made under the same number. A change to the
+      # server is released by bumping docker/embed/VERSION.
+      - name: Version tag already published?
+        id: published
+        run: |
+          if docker buildx imagetools inspect "ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}" > /dev/null 2>&1; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -62,7 +76,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
           tags: |
-            ghcr.io/maxgfr/codeindex-embed:${{ steps.meta.outputs.version }}
+            ${{ steps.published.outputs.tag }}
             ghcr.io/maxgfr/codeindex-embed:latest
             ghcr.io/maxgfr/codeindex-embed:main
             ghcr.io/maxgfr/codeindex-embed:sha-${{ steps.meta.outputs.short }}
