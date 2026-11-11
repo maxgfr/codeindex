@@ -168,7 +168,10 @@ export function foldText(s: string): string {
 // `Œuvre` lost its first letter. With their combining marks: a Devanagari
 // vowel sign or virama is part of its word (`नमस्ते`), and splitting on it cut
 // the word into letters. foldText has already dropped Latin diacritics.
-const NON_WORD = /[^\p{L}\p{M}\p{N}_]+/u;
+// Not the marks that only pick how a SYMBOL is drawn — variation selectors, the
+// keycap and other enclosing marks for symbols: kept, an emoji glued itself to
+// the word after it (`⚠️Warning` read as "\ufe0fwarning").
+const NON_WORD = /(?:[^\p{L}\p{M}\p{N}_]|[\u{FE00}-\u{FE0F}\u{20D0}-\u{20FF}\u{E0100}-\u{E01EF}])+/u;
 
 export function keywords(question: string, keep?: (raw: string) => boolean): string[] {
   const seen = new Set<string>();
@@ -261,9 +264,10 @@ const ASCII_GLUE = /[^a-z0-9_]+/g;
 const ASCII_SPLIT = /[^A-Za-z0-9]+/;
 const UNICODE_CASE_1 = /([\p{Ll}\p{N}])(\p{Lu})/gu;
 const UNICODE_CASE_2 = /(\p{Lu}+)(\p{Lu}\p{Ll})/gu;
-// Marks stay inside their word, as in NON_WORD above.
-const UNICODE_GLUE = /[^\p{L}\p{M}\p{N}_]+/gu;
-const UNICODE_SPLIT = /[^\p{L}\p{M}\p{N}]+/u;
+// Marks stay inside their word, symbol presentation marks do not, as in
+// NON_WORD above.
+const UNICODE_GLUE = /(?:[^\p{L}\p{M}\p{N}_]|[\u{FE00}-\u{FE0F}\u{20D0}-\u{20FF}\u{E0100}-\u{E01EF}])+/gu;
+const UNICODE_SPLIT = /(?:[^\p{L}\p{M}\p{N}]|[\u{FE00}-\u{FE0F}\u{20D0}-\u{20FF}\u{E0100}-\u{E01EF}])+/u;
 
 export function subtokens(raw: string): string[] {
   const ascii = !NON_ASCII.test(raw);

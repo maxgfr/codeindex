@@ -151,6 +151,10 @@ describe("references and search", () => {
     expect(subtokens("नमस्ते")).toEqual(["नमस्ते"]);
     expect(subtokens("हिन्दी भाषा")).toEqual(["हिन्दी", "भाषा"]);
     expect(keywords("हिन्दी भाषा")).toEqual(["हिन्दी", "भाषा"]);
+    // A mark that only selects how a symbol is drawn is not part of a word.
+    expect(subtokens("\u26a0\ufe0fWarning")).toEqual(["warning"]);
+    expect(subtokens("1\ufe0f\u20e3First")).toEqual(["1first", "first"]);
+    expect(keywords("\u26a0\ufe0fWarning")).toEqual(["Warning"]);
     const root = repo({ "src/greet.ts": "// नमस्ते दुनिया\nexport const greet = 1;\n", "src/other.ts": "export const other = 2;\n" });
     const { results } = explainQuery(scanRepo(root), "नमस्ते");
     expect(results.map((r) => r.file)).toEqual(["src/greet.ts"]);
