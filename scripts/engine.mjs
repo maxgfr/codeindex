@@ -18692,7 +18692,13 @@ function rgBackend(root, rust2, opts, keep, max) {
     if (res.errorCode) notes.push(`ripgrep could not search ${batch.length === 1 ? batch[0] : `${batch.length} files`} (${res.errorCode})`);
     for (const line2 of res.stdout.split("\n")) {
       if (!line2.startsWith('{"type":"match"')) continue;
-      const d = JSON.parse(line2).data;
+      let d;
+      try {
+        d = JSON.parse(line2).data;
+      } catch {
+        notes.push("ripgrep returned an unreadable line; it was skipped");
+        continue;
+      }
       const bytes = d.lines.text !== void 0 ? Buffer.from(d.lines.text, "utf8") : Buffer.from(d.lines.bytes ?? "", "base64");
       const path = d.path.text ?? Buffer.from(d.path.bytes ?? "", "base64").toString("utf8");
       const full = bytes.toString("utf8").replace(/\n$/, "");
@@ -19215,6 +19221,11 @@ function deserializeEmbeddings(bytes) {
   const bodyOff = 8 + headerLen;
   const bodyLen = header.records.length * dim;
   if (bodyOff + bodyLen > bytes.byteLength) throw new Error("embeddings.bin: truncated body");
+  for (const m of header.records) {
+    if (m === null || typeof m !== "object" || typeof m.file !== "string" || m.symbol !== void 0 && typeof m.symbol !== "string" || m.line !== void 0 && !(Number.isInteger(m.line) && m.line >= 0) || m.hash !== void 0 && typeof m.hash !== "string") {
+      throw new Error("embeddings.bin: malformed record");
+    }
+  }
   const body2 = new Int8Array(bodyLen);
   body2.set(new Int8Array(bytes.buffer, bytes.byteOffset + bodyOff, bodyLen));
   const records = header.records.map((m, i2) => {
@@ -19377,10 +19388,19 @@ async function embedViaEndpoint(texts, opts = {}) {
       signal: controller.signal
     });
     if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
-    const data = await res.json();
+    const declared = Number(res.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+      throw new Error(`embedding endpoint ${url} sent ${declared} bytes, past the ${MAX_RESPONSE_BYTES} accepted`);
+    }
+    const raw = await res.text();
+    if (raw.length > MAX_RESPONSE_BYTES) throw new Error(`embedding endpoint ${url} sent more than the ${MAX_RESPONSE_BYTES} bytes accepted`);
+    const data = JSON.parse(raw);
     const vectors = data.vectors;
-    if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number"))) {
+    if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number" && Number.isFinite(x)))) {
       throw new Error(`embedding endpoint ${url} returned a malformed { vectors } payload`);
+    }
+    if (vectors.some((v) => v.length !== vectors[0].length)) {
+      throw new Error(`embedding endpoint ${url} returned vectors of different dimensions`);
     }
     return vectors;
   } finally {
@@ -19449,15 +19469,12 @@ async function buildEndpointIndex(scan2, opts = {}) {
   };
   const concurrency = opts.concurrency && opts.concurrency > 0 ? opts.concurrency : 4;
   await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
-  let dim = 0;
-  const records = units.map((u, i2) => {
-    const vec = vecs[i2];
-    if (vec.length > dim) dim = vec.length;
-    return unitRecord(u, hashes[i2], vec);
-  });
+  const dim = vecs[0]?.length ?? 0;
+  if (vecs.some((v) => v.length !== dim)) throw new Error("embedding endpoint returned vectors of different dimensions across batches");
+  const records = units.map((u, i2) => unitRecord(u, hashes[i2], vecs[i2]));
   return { embedVersion: EMBED_VERSION, modelId, dim, records };
 }
-var EMBED_IMAGE_VERSION, ENDPOINT_MAX_TEXT_CHARS, CANARY;
+var EMBED_IMAGE_VERSION, ENDPOINT_MAX_TEXT_CHARS, MAX_RESPONSE_BYTES, CANARY;
 var init_endpoint = __esm({
   "src/embed/endpoint.ts"() {
     "use strict";
@@ -19468,6 +19485,7 @@ var init_endpoint = __esm({
     init_embed();
     EMBED_IMAGE_VERSION = "1.0.0";
     ENDPOINT_MAX_TEXT_CHARS = 8192;
+    MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
     CANARY = "codeindex endpoint fingerprint: parse the request, retry on timeout";
   }
 });
@@ -19827,6 +19845,9 @@ function parseLspConfig(payload) {
     }
     if (s.args !== void 0 && (!Array.isArray(s.args) || s.args.some((a) => typeof a !== "string"))) {
       throw new Error(`lsp.json: servers[${i2}].args must be an array of strings`);
+    }
+    if (s.env !== void 0 && (s.env === null || typeof s.env !== "object" || Array.isArray(s.env) || Object.values(s.env).some((v) => typeof v !== "string"))) {
+      throw new Error(`lsp.json: servers[${i2}].env must be an object of strings`);
     }
     return {
       id,

@@ -141,6 +141,11 @@ export function parseLspConfig(payload: unknown): LspConfig {
     if (s.args !== undefined && (!Array.isArray(s.args) || s.args.some((a) => typeof a !== "string"))) {
       throw new Error(`lsp.json: servers[${i}].args must be an array of strings`);
     }
+    // An environment is strings: a number or an object there reached spawn,
+    // which coerces or rejects it far from the line that was wrong.
+    if (s.env !== undefined && (s.env === null || typeof s.env !== "object" || Array.isArray(s.env) || Object.values(s.env).some((v) => typeof v !== "string"))) {
+      throw new Error(`lsp.json: servers[${i}].env must be an object of strings`);
+    }
     return {
       id,
       languages: s.languages as string[],

@@ -168,6 +168,29 @@ describe("endpoint client — protocol contract", () => {
     await expect(embedViaEndpoint(["x"], { url: m.url })).rejects.toThrow(/malformed/);
   });
 
+  it("throws on vectors of different dimensions, or holding a non-finite value", async () => {
+    const answer = (vectors: unknown) => async () =>
+      mock((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ vectors }));
+        return true;
+      });
+    const ragged = await (await answer([[1, 0], [1, 0, 0]]))();
+    await expect(embedViaEndpoint(["a", "b"], { url: ragged.url })).rejects.toThrow(/different dimensions/);
+    // JSON has no NaN; a null in a row is the same defect.
+    const holes = await (await answer([[1, null]]))();
+    await expect(embedViaEndpoint(["a"], { url: holes.url })).rejects.toThrow(/malformed/);
+  });
+
+  it("refuses a response past what it reads into memory", async () => {
+    const m = await mock((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "content-length": String(65 * 1024 * 1024) });
+      res.end();
+      return true;
+    });
+    await expect(embedViaEndpoint(["x"], { url: m.url })).rejects.toThrow(/past the 67108864 accepted/);
+  });
+
   it("aborts on timeout", async () => {
     const m = await mock((_req, _res) => true /* never responds */);
     await expect(embedViaEndpoint(["x"], { url: m.url, timeoutMs: 150 })).rejects.toThrow();

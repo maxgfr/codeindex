@@ -385,6 +385,10 @@ describe("reusing a previous embedding index", () => {
       expect(() => deserializeEmbeddings(header('{"embedVersion":2}'))).toThrow(/malformed header/);
       expect(() => deserializeEmbeddings(header("{not json"))).toThrow();
       expect(() => deserializeEmbeddings(good.subarray(0, good.length - 1))).toThrow(/truncated body/);
+      // A record whose fields do not have the types the ranking reads.
+      for (const record of ['{"file":3}', '{"file":"a","line":"x"}', '{"file":"a","symbol":{}}', "null"]) {
+        expect(() => deserializeEmbeddings(header(`{"embedVersion":2,"modelId":"m","dim":0,"count":1,"records":[${record}]}`)), record).toThrow(/malformed record/);
+      }
       const cases: [string, Uint8Array | undefined][] = [
         ["missing.bin", undefined],
         ["garbage.bin", new TextEncoder().encode("not an index")],

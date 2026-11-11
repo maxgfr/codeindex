@@ -216,6 +216,20 @@ export function deserializeEmbeddings(bytes: Uint8Array): EmbeddingIndex {
   const bodyOff = 8 + headerLen;
   const bodyLen = header.records.length * dim;
   if (bodyOff + bodyLen > bytes.byteLength) throw new Error("embeddings.bin: truncated body");
+  // Each record names a file (and optionally a symbol, a line and a text hash)
+  // with the types the ranking reads: anything else is not this engine's file.
+  for (const m of header.records) {
+    if (
+      m === null ||
+      typeof m !== "object" ||
+      typeof m.file !== "string" ||
+      (m.symbol !== undefined && typeof m.symbol !== "string") ||
+      (m.line !== undefined && !(Number.isInteger(m.line) && m.line >= 0)) ||
+      (m.hash !== undefined && typeof m.hash !== "string")
+    ) {
+      throw new Error("embeddings.bin: malformed record");
+    }
+  }
   const body = new Int8Array(bodyLen);
   body.set(new Int8Array(bytes.buffer, bytes.byteOffset + bodyOff, bodyLen));
   const records: EmbeddingRecord[] = header.records.map((m, i) => {

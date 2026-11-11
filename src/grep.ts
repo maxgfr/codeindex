@@ -428,7 +428,15 @@ function rgBackend(
     if (res.errorCode) notes.push(`ripgrep could not search ${batch.length === 1 ? batch[0] : `${batch.length} files`} (${res.errorCode})`);
     for (const line of res.stdout.split("\n")) {
       if (!line.startsWith('{"type":"match"')) continue;
-      const d = JSON.parse(line).data as RgMatch;
+      let d: RgMatch;
+      try {
+        d = JSON.parse(line).data as RgMatch;
+      } catch {
+        // A line cut short (ripgrep killed at the buffer limit, a broken pipe)
+        // is not a hit; the rest of the answer stands, and says it is partial.
+        notes.push("ripgrep returned an unreadable line; it was skipped");
+        continue;
+      }
       const bytes = d.lines.text !== undefined ? Buffer.from(d.lines.text, "utf8") : Buffer.from(d.lines.bytes ?? "", "base64");
       const path = d.path.text ?? Buffer.from(d.path.bytes ?? "", "base64").toString("utf8");
       const full = bytes.toString("utf8").replace(/\n$/, "");

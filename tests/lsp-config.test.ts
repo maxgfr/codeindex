@@ -187,6 +187,13 @@ describe("lsp.json budgets", () => {
     }
   });
 
+  it("rejects an environment that is not an object of strings", () => {
+    for (const env of [{ PORT: 8080 }, { A: { b: 1 } }, ["A=1"], null]) {
+      expect(() => parseLspConfig(server({ env })), JSON.stringify(env)).toThrow(/servers\[0\]\.env must be an object of strings/);
+    }
+    expect(parseLspConfig(server({ env: { A: "1" } })).servers[0]).toMatchObject({ env: { A: "1" } });
+  });
+
   it("keeps a positive budget", () => {
     expect(parseLspConfig(server({ timeoutMs: 250, startupTimeoutMs: 900 })).servers[0]).toMatchObject({ timeoutMs: 250, startupTimeoutMs: 900 });
   });

@@ -82,6 +82,10 @@ export const EMBED_IMAGE_VERSION = "1.0.0";
 // so what is cut off was never embedded anyway.
 export const ENDPOINT_MAX_TEXT_CHARS = 8192;
 
+// The largest response read from an endpoint: 64 texts of 4096 float
+// dimensions as JSON is ~5 MB, and the reference model answers 384 of them.
+const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
 function capText(text: string): string {
   if (text.length <= ENDPOINT_MAX_TEXT_CHARS) return text;
   // Never end on half a surrogate pair: it would not survive JSON as itself.
@@ -108,10 +112,23 @@ export async function embedViaEndpoint(texts: string[], opts: EmbedEndpointOptio
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`embedding endpoint ${url} returned HTTP ${res.status}`);
-    const data = (await res.json()) as { vectors?: unknown };
+    // Bounded: what the endpoint sends back is read into memory whole.
+    const declared = Number(res.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+      throw new Error(`embedding endpoint ${url} sent ${declared} bytes, past the ${MAX_RESPONSE_BYTES} accepted`);
+    }
+    const raw = await res.text();
+    if (raw.length > MAX_RESPONSE_BYTES) throw new Error(`embedding endpoint ${url} sent more than the ${MAX_RESPONSE_BYTES} bytes accepted`);
+    const data = JSON.parse(raw) as { vectors?: unknown };
     const vectors = data.vectors;
-    if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number"))) {
+    if (!Array.isArray(vectors) || !vectors.every((v) => Array.isArray(v) && v.every((x) => typeof x === "number" && Number.isFinite(x)))) {
       throw new Error(`embedding endpoint ${url} returned a malformed { vectors } payload`);
+    }
+    // One model, one dimension. Rows of different lengths used to be kept, and
+    // the index took the longest as its dim: the shorter vectors were then
+    // compared against the query over dimensions they do not have.
+    if (vectors.some((v) => (v as number[]).length !== (vectors[0] as number[]).length)) {
+      throw new Error(`embedding endpoint ${url} returned vectors of different dimensions`);
     }
     return vectors as number[][];
   } finally {
@@ -214,11 +231,10 @@ export async function buildEndpointIndex(
   const concurrency = opts.concurrency && opts.concurrency > 0 ? opts.concurrency : 4;
   await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
 
-  let dim = 0;
-  const records: EmbeddingRecord[] = units.map((u, i) => {
-    const vec = vecs[i]!;
-    if (vec.length > dim) dim = vec.length;
-    return unitRecord(u, hashes[i]!, vec);
-  });
+  // Across batches too: a model swapped behind the URL mid-build, or reused
+  // vectors of another length, would mix dimensions in one index.
+  const dim = vecs[0]?.length ?? 0;
+  if (vecs.some((v) => v!.length !== dim)) throw new Error("embedding endpoint returned vectors of different dimensions across batches");
+  const records: EmbeddingRecord[] = units.map((u, i) => unitRecord(u, hashes[i]!, vecs[i]!));
   return { embedVersion: EMBED_VERSION, modelId, dim, records };
 }
