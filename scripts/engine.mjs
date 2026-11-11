@@ -25337,6 +25337,12 @@ function toScope(path) {
   if (s.split("/").some((seg) => seg === "..")) return void 0;
   return s === "" || s === "." ? "" : s;
 }
+function gitGrepUniverseIsWalks(cwd, scope) {
+  const pathspec = ["--", scope || "."];
+  const untracked = sh("git", ["-C", cwd, "ls-files", "-z", "--others", "--exclude-standard", ...pathspec]);
+  const trackedIgnored = sh("git", ["-C", cwd, "ls-files", "-z", "--cached", "--ignored", "--exclude-standard", ...pathspec]);
+  return untracked.ok && trackedIgnored.ok && untracked.stdout === "" && trackedIgnored.stdout === "";
+}
 function submodulesAround(cwd) {
   for (let dir = resolve11(cwd); ; dir = dirname8(dir)) {
     const modules = join29(dir, ".gitmodules");
@@ -25372,6 +25378,7 @@ function rewriteCommand(cmd, bin = "codeindex", cwd) {
     const root = resolve11(cwd, scope || ".");
     if (submodulesAround(cwd).some((m) => within(m, root) || within(root, m))) return void 0;
   }
+  if (cwd !== void 0 && head === "git" && !gitGrepUniverseIsWalks(cwd, scope)) return void 0;
   const upper2 = (s) => p.fixed ? s !== s.toLowerCase() : hasUpperLiteral(s);
   const ignoreCase = p.smartCase ? !p.patterns.some(upper2) : p.ignoreCase;
   const pattern = toPattern(p);

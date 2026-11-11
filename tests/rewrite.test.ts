@@ -227,6 +227,33 @@ describe("rewriteCommand — refusals (a bad rewrite is worse than none)", () =>
     expect(rewriteCommand("grep -r foo src tests")).toBeUndefined();
   });
 
+  it("rewrites git grep only where git tracks exactly the files the walk keeps", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-rewrite-gitgrep-"));
+    const put = (rel: string, body = "NEEDLE\n"): void => {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    };
+    put("src/a.ts");
+    put("docs/b.md");
+    execFileSync("git", ["init", "-q", "."], { cwd: root });
+    execFileSync("git", ["add", "-A"], { cwd: root });
+    expect(rewriteCommand("git grep -l NEEDLE", "codeindex", root)).toBe("codeindex grep NEEDLE --files-with-matches --ignore-dir .codeindex");
+    // An untracked file git grep never searches, and the engine would.
+    put("src/new.ts");
+    expect(rewriteCommand("git grep -l NEEDLE", "codeindex", root)).toBeUndefined();
+    expect(rewriteCommand("git grep -l NEEDLE -- docs", "codeindex", root)).toBe("codeindex grep NEEDLE --scope docs --files-with-matches --ignore-dir .codeindex");
+    // A tracked file a .gitignore rule matches: git grep searches it, the walk skips it.
+    execFileSync("git", ["add", "src/new.ts"], { cwd: root });
+    put(".gitignore", "*.md\n");
+    execFileSync("git", ["add", ".gitignore"], { cwd: root });
+    expect(rewriteCommand("git grep -l NEEDLE -- docs", "codeindex", root)).toBeUndefined();
+    expect(rewriteCommand("git grep -l NEEDLE -- src", "codeindex", root)).toBe("codeindex grep NEEDLE --scope src --files-with-matches --ignore-dir .codeindex");
+    // Outside a repository git cannot say: declined. Other tools are unaffected.
+    const plain = mkdtempSync(join(tmpdir(), "ci-rewrite-nogit-"));
+    expect(rewriteCommand("git grep -l NEEDLE", "codeindex", plain)).toBeUndefined();
+    expect(rewriteCommand("rg -l NEEDLE", "codeindex", plain)).toBe("codeindex grep NEEDLE --exclude '**/.*' --exclude '**/.*/**' --files-with-matches --ignore-dir .codeindex");
+  });
+
   it("refuses a missing or empty pattern", () => {
     expect(rewriteCommand("grep -r")).toBeUndefined();
     expect(rewriteCommand("")).toBeUndefined();

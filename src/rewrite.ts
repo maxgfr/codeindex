@@ -28,7 +28,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { compilePattern } from "./grep.js";
-import { escapeRegExp, shellQuote } from "./util.js";
+import { escapeRegExp, sh, shellQuote } from "./util.js";
 
 // Split on whitespace the way a POSIX shell would, or return undefined the
 // moment the line holds anything the shell would expand or interpret. Single
@@ -764,6 +764,17 @@ function toScope(path: string): string | undefined {
   return s === "" || s === "." ? "" : s;
 }
 
+// Whether, under `scope` of the repository at `cwd`, the files git tracks are
+// exactly the files the walk keeps: no untracked file the walk would search,
+// no tracked file a .gitignore rule would hide from it. False when git cannot
+// say (not a repository, git missing): the rewrite is then declined.
+function gitGrepUniverseIsWalks(cwd: string, scope: string): boolean {
+  const pathspec = ["--", scope || "."];
+  const untracked = sh("git", ["-C", cwd, "ls-files", "-z", "--others", "--exclude-standard", ...pathspec]);
+  const trackedIgnored = sh("git", ["-C", cwd, "ls-files", "-z", "--cached", "--ignored", "--exclude-standard", ...pathspec]);
+  return untracked.ok && trackedIgnored.ok && untracked.stdout === "" && trackedIgnored.stdout === "";
+}
+
 // Rewrite `cmd` to its codeindex equivalent, or return undefined to leave it
 // alone. `bin` is the codeindex executable name to emit (the host may have it
 // on PATH under a mount point of its choosing).
@@ -827,6 +838,10 @@ export function rewriteCommand(cmd: string, bin = "codeindex", cwd?: string): st
     const root = resolve(cwd, scope || ".");
     if (submodulesAround(cwd).some((m) => within(m, root) || within(root, m))) return undefined;
   }
+  // git grep searches the files git TRACKS. The engine searches the files a
+  // walk keeps: untracked ones too, and not a tracked file a .gitignore rule
+  // matches. The two agree only when the scope holds neither, which git says.
+  if (cwd !== undefined && head === "git" && !gitGrepUniverseIsWalks(cwd, scope)) return undefined;
 
   const upper = (s: string): boolean => (p.fixed ? s !== s.toLowerCase() : hasUpperLiteral(s));
   const ignoreCase = p.smartCase ? !p.patterns.some(upper) : p.ignoreCase;
