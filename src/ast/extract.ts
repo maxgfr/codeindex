@@ -314,9 +314,9 @@ function collectAll(
         // is nothing, and this site — visited first, so the inner one dedupes
         // away — would read as a bare `ensure_sync()`.
         const inner = callee && spec.calls![callee.type] === "function" ? callee.childForFieldName("function") : null;
-        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node, true));
+        addCall(readName(callee), node, readReceiver(inner ?? callee, false, spec.typeCalls) ?? readReceiver(node, true, spec.typeCalls));
       } else if (how === "member") {
-        addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
+        addCall(readName(node.childForFieldName("name")), node, readReceiver(node, false, spec.typeCalls));
       } else if (how === "constructor") {
         // TS/Java/C# expose the type under a `constructor`/`type` field; PHP's
         // object_creation_expression carries it as a bare `name` child, so fall

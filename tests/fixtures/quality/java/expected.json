@@ -138,6 +138,7 @@
         }
       ],
       "calls": [
+        "ArrayList",
         "clear",
         "dispatch",
         "size",

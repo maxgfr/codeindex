@@ -108,7 +108,13 @@ export const SCHEMA_VERSION = 5;
 // `a!.b()`.
 // v21: FileRecord.lines no longer counts the newline that ends the last line as
 // the start of another ("a\n" is 1 line, not 2).
-export const EXTRACTOR_VERSION = 21;
+// v22: a receiver is named only from an identifier, a member's last segment or
+// what a construction builds (`new Thing(c).go()` → "Thing", Python's
+// `Parser(t).parse()` → "Parser"), "?" otherwise; a C# generic call is named
+// for its method, not its type argument (`x.Get<Widget>()` → Get), a Java/C#
+// `new List<T>()` for its type; Go's `pkg.Fn[T](x)` is a call; the regex tier
+// no longer starts a call name inside a word.
+export const EXTRACTOR_VERSION = 22;
 
 // The receiver of a call made ON something that has no simple name: a literal,
 // a subscript, a parenthesised expression, the result of a constructor. It says

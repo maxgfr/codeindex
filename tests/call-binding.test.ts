@@ -471,7 +471,8 @@ describe("a receiver that has no name", () => {
     expect(UNNAMED_RECEIVER).toBe("?");
     expect(callsIn("lit.ts")).toEqual([
       { name: "K", line: 10 },
-      { name: "go", line: 10, receiver: "?" },
+      // A `new` is a call on what it builds.
+      { name: "go", line: 10, receiver: "K" },
       { name: "own", line: 11, receiver: "this" },
       { name: "run", line: 9, receiver: "?" },
       { name: "split", line: 8, receiver: "?" },
@@ -593,9 +594,70 @@ describe("receivers the binder must still read right", () => {
     expect(edgesFrom("g.rs")).toEqual([]);
   });
 
-  it("an index or a constructor call is an unnamed receiver, not the name inside it", () => {
+  it("an index is an unnamed receiver and a `new` the type it builds, not the name inside either", () => {
     expect(callsIn("i.ts")).toContainEqual({ name: "run", line: 8, receiver: "?" });
-    expect(callsIn("i.ts")).toContainEqual({ name: "go", line: 9, receiver: "?" });
-    expect(edgesFrom("i.ts")).toEqual(["i.ts#m -> i.ts#Thing"]);
+    expect(callsIn("i.ts")).toContainEqual({ name: "go", line: 9, receiver: "Thing" });
+    expect(edgesFrom("i.ts")).toEqual(["i.ts#m -> i.ts#Thing", "i.ts#m -> i.ts#Thing/go"]);
+  });
+});
+
+// The receiver shapes the second review listed, across the grammars. A
+// receiver is a name only where the source states one: an identifier, a
+// member's last segment, what a `new` (or, where the language writes a
+// construction so, a capitalised call) builds. Anything else is "?", never
+// some variable found inside it.
+describe("a receiver is named only where the source names one", () => {
+  // [file, source, [line, callee, receiver ("-" for none)][]]
+  const CASES: [string, string, [number, string, string][]][] = [
+    ["a.ts", "function m(cfg: number) {\n  new Thing(cfg).go();\n  make(cfg).go();\n  items[i].run();\n  (obj as T).cast();\n  a!.b();\n}\n", [[2, "go", "Thing"], [3, "go", "?"], [4, "run", "?"], [5, "cast", "T"], [6, "b", "a"]]],
+    ["a.py", "def run(t, p):\n    Parser(t).parse()\n    pathlib.Path(p).read_text()\n    get_parser(t).parse()\n    super().base()\n", [[2, "parse", "Parser"], [3, "read_text", "Path"], [4, "parse", "?"], [5, "base", "super"]]],
+    ["a.go", "package p\nfunc m() {\n\tT(x).M()\n\t(&T{X: y}).M()\n\tpkg.Fn[Widget](x)\n\tFn[Widget](x)\n\tobj.Method[int](x)\n\tmake2().Chain()\n\tc.Flags().VisitAll(f)\n\t_ = []byte(s)\n}\n", [[3, "M", "T"], [4, "M", "T"], [5, "Fn", "pkg"], [6, "Fn", "-"], [7, "Method", "obj"], [8, "Chain", "?"], [9, "VisitAll", "?"]]],
+    ["a.cpp", "void m(int c) {\n  Thing(c).go();\n  make(c).go();\n}\n", [[2, "go", "Thing"], [3, "go", "?"]]],
+    ["a.php", "<?php\nfunction run($cfg) {\n  (new Thing($cfg))->go();\n  make($cfg)->go();\n}\n", [[3, "go", "Thing"], [4, "go", "?"]]],
+    ["a.cs", "class A {\n  void M(B x, int cfg) {\n    new Thing { X = cfg }.Go();\n    x.Get<Widget>();\n    Make<Widget>();\n    x.Get<int>();\n    x?.Run();\n    Switcher.FromAssembly(a).Run(args);\n  }\n}\n", [[3, "Go", "Thing"], [4, "Get", "x"], [5, "Make", "-"], [6, "Get", "x"], [7, "Run", "x"], [8, "Run", "?"]]],
+    ["a.lua", "local function m(items, idx)\n  items[idx].run()\nend\n", [[2, "run", "?"]]],
+    ["a.rb", "def run(xs, a, b)\n  xs.map { |user| user }.save\n  xs.select { |u| u.active }.count\n  User.new(1).save\n  xs.map(&:id).compact\n  (a + b).f\n  user.profile.save\nend\n", [[2, "save", "?"], [3, "count", "?"], [4, "save", "User"], [5, "compact", "?"], [6, "f", "?"], [7, "save", "profile"]]],
+    ["a.java", "class A {\n  void m(int c) {\n    new Thing(c).go();\n    make(c).go();\n    new ArrayList<String>().add(s);\n  }\n}\n", [[3, "go", "Thing"], [4, "go", "?"], [5, "add", "ArrayList"]]],
+    ["a.rs", "fn m(c: u8) {\n    Thing::new(c).go();\n    make(c).go();\n    (*s).clone();\n}\n", [[2, "go", "Thing"], [3, "go", "?"], [4, "clone", "?"]]],
+  ];
+  let dir: string;
+  let local: RepoScan;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "ci-call-binding-shapes-"));
+    for (const [rel, src] of CASES) writeFileSync(join(dir, rel), src);
+    local = scanRepo(dir);
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  for (const [rel, , expected] of CASES) {
+    it(`reads each receiver in ${rel}`, () => {
+      const calls = local.files.find((f) => f.rel === rel)!.calls ?? [];
+      const got = expected.map(([line, name]) => [line, name, calls.filter((c) => c.line === line && c.name === name).map((c) => c.receiver ?? "-").join(",")]);
+      expect(got).toEqual(expected);
+    });
+  }
+
+  it("a C# generic call is named for its method, not its type argument, and a Go conversion is no call", () => {
+    const cs = local.files.find((f) => f.rel === "a.cs")!.calls!.map((c) => c.name);
+    expect(cs).not.toContain("Widget");
+    const go = local.files.find((f) => f.rel === "a.go")!.calls!.map((c) => c.name);
+    expect(go).not.toContain("byte");
+  });
+});
+
+describe("a construction call binds the method of the type it builds", () => {
+  it("Python's Parser(t).parse() reaches Parser.parse", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-call-binding-ctor-"));
+    try {
+      writeFileSync(join(dir, "p.py"), "class Parser:\n    def parse(self):\n        pass\n\ndef parse():\n    pass\n\ndef run(t):\n    return Parser(t).parse()\n");
+      const local = scanRepo(dir);
+      const edges = buildSymbolGraph(local, importPairsFor(local))
+        .edges.filter((e) => e.kind === "calls")
+        .map((e) => `${e.from} -> ${e.to}`)
+        .sort();
+      expect(edges).toEqual(["p.py#run -> p.py#Parser", "p.py#run -> p.py#Parser/parse"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

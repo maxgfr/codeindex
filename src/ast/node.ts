@@ -148,6 +148,10 @@ export function readName(node: TSNode | null): string | undefined {
   if (!node) return undefined;
   const kids = node.namedChildren;
   if (kids.length === 0) return IDENT_LEAF.test(node.type) ? node.text : undefined;
+  // A generic callee names what it applies: C#'s `x.Get<Widget>()` calls Get,
+  // Go's `pkg.Fn[Widget](x)` calls Fn — not their last type argument.
+  if (node.type === "generic_name") return readName(kids[0]!);
+  if (node.type === "generic_type") return readName(node.childForFieldName("type") ?? kids[0]!);
   const seg =
     node.childForFieldName("name") ??
     node.childForFieldName("property") ??
@@ -168,27 +172,33 @@ export function readName(node: TSNode | null): string | undefined {
 // "b"). Grammars name the object field differently — `object` (JS/TS
 // member_expression, python attribute, java method_invocation, php member call),
 // go selector_expression's `operand`, rust field_expression's `value` and
-// scoped_identifier's `path`, c# member_access_expression's `expression`, c/c++
-// field_expression's `argument`, ruby call's `receiver`, lua dot/method_index_
-// expression's `table` (scala's field_expression reuses `value`). Undefined for a
-// bare callee; "this"/"self" for a call on the enclosing instance.
+// scoped_identifier's `path`, c# member_access_expression's `expression` (and
+// conditional_access_expression's `condition`), c/c++ field_expression's
+// `argument`, ruby call's `receiver`, lua dot/method_index_expression's `table`
+// (scala's field_expression reuses `value`). Undefined for a bare callee;
+// "this"/"self" for a call on the enclosing instance.
 //
 // A receiver that IS there but has no name — a literal, a subscript, a
 // parenthesised expression (`'a,b'.split(',')`, `items[0].run()`,
 // `', '.join(parts)`) — is UNNAMED_RECEIVER, never undefined: without a
 // receiver the site read as the bare call `split()`, and bound to a same-file
-// function of that name it never calls.
+// function of that name it never calls. See receiverOf for what has a name.
 //
 // `onCallNode` is for the second read some grammars need, off the call node
 // itself (Java's method_invocation and Ruby's call carry the receiver there).
 // Only their `object`/`receiver` fields mean a receiver on such a node: a
 // shell command's `argument` is its first argument.
-export function readReceiver(node: TSNode | null, onCallNode = false): string | undefined {
+//
+// `typeCalls` says where the language's convention makes a capitalised call a
+// construction (see calledReceiver).
+export function readReceiver(node: TSNode | null, onCallNode = false, typeCalls?: TypeCalls): string | undefined {
   if (!node || node.namedChildren.length === 0) return undefined;
   // A generic callee (Rust's `xs.iter().collect::<Vec<_>>()`, Scala's
-  // `xs.map[Int](f)`) holds the member access under `function`: its receiver is
-  // that access's. Read off the wrapper, the call had none, and bound by name.
-  if (node.type === "generic_function") return readReceiver(node.childForFieldName("function"), onCallNode);
+  // `xs.map[Int](f)`, Go's `pkg.Fn[T](x)`) holds the access under `function`
+  // or `type`: its receiver is that access's. Read off the wrapper, the call
+  // had none, and bound by name.
+  if (node.type === "generic_function") return readReceiver(node.childForFieldName("function"), onCallNode, typeCalls);
+  if (node.type === "generic_type") return readReceiver(node.childForFieldName("type"), onCallNode, typeCalls);
   let obj: TSNode | null = null;
   let field = "";
   for (const candidate of RECEIVER_FIELDS) {
@@ -198,57 +208,142 @@ export function readReceiver(node: TSNode | null, onCallNode = false): string | 
       break;
     }
   }
+  if (!obj) return undefined;
+  if (onCallNode && field !== "object" && field !== "receiver") return undefined;
   // `super` and Rust's `crate` are keywords, leaves readName does not take for
   // a name. Rust's `crate::f()`/`super::f()` name a module the binder resolves
   // to a file; JS/TS/Java's `super.f()` the enclosing class's base, which the
   // binder reads off the file's `extends` relations.
-  if (obj?.type === "super" || (obj?.type === "crate" && node.type === "scoped_identifier")) return obj.type;
+  if (obj.type === "super" || (obj.type === "crate" && node.type === "scoped_identifier")) return obj.type;
   // Rust's `self::f()` is a path into the CURRENT module, not a call on the
   // instance: no receiver, the bare call it has always been.
-  if (obj?.type === "self" && node.type === "scoped_identifier") return undefined;
-  // A method called on a composite literal (Go's `addrs.Check{…}.Absolute()`)
-  // is called on the literal's type; the literal's last child is its body,
-  // whose last identifier is any field value at all.
-  if (obj?.type === "composite_literal") {
-    const type = obj.childForFieldName("type");
-    const name = type ? readTypeName(type) : undefined;
-    return name && /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
+  if (obj.type === "self" && node.type === "scoped_identifier") return undefined;
+  return receiverOf(obj, typeCalls);
+}
+
+// The fields a grammar keeps a callee's object under, in the order they are
+// tried. `condition` is C#'s `x?.Run()`; `package` Go's qualified type, the
+// callee of a generic call (`pkg.Fn[T](x)`).
+const RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "argument", "receiver", "table", "condition", "package"] as const;
+
+// What a receiver node names. A name is taken from an identifier, from the
+// last segment of a member access, through a transparent wrapper, and from
+// what a construction builds; anything else is UNNAMED_RECEIVER. It used to be
+// the other way round — any node's last name unless the node was on a list of
+// nameless shapes — and every shape missing from that list read as some
+// variable inside it: `cfg` for `new Thing { X = cfg }.Go()`, `idx` for
+// `items[idx].run()`, the block parameter for `xs.map { |user| user }.save`.
+function receiverOf(start: TSNode, typeCalls: TypeCalls | undefined): string | undefined {
+  let obj = start;
+  // Parentheses, TS's `a!` and Go's `&T{…}` are transparent: `(x).f()` is a
+  // call on x, `(&T{}).M()` one on a T.
+  for (;;) {
+    const only = obj.namedChildren.length === 1 ? obj.namedChildren[0]! : undefined;
+    if (only && TRANSPARENT.test(obj.type)) obj = only;
+    else if (obj.type === "unary_expression" && obj.childForFieldName("operand")?.type === "composite_literal") obj = obj.childForFieldName("operand")!;
+    else break;
   }
-  // Ruby's `@repo`, `@@registry` and `$stdout` are leaves of their own node
-  // types, which readName does not take for a name.
-  if (!obj) return undefined;
-  // Parentheses are transparent: `(x).f()` is a call on x.
-  while (PARENTHESIZED.test(obj.type) && obj.namedChildren.length === 1) obj = obj.namedChildren[0]!;
-  // Python's `super().f()`: the base class, as the bare keyword is elsewhere.
-  if (obj.type === "call" && obj.childForFieldName("function")?.text === "super") return "super";
-  // Something with no name of its own, whatever names sit inside it: an index
-  // (`items[i].run()`), a call or a `new` (`make(cfg).go()`, `new Thing(cfg)
-  // .go()`), a parenthesised expression. readName would return the LAST name
-  // within — `i`, `cfg` — which is not the receiver.
-  if (UNNAMED_OBJECT.test(obj.type) || (obj.childForFieldName("arguments") !== null && obj.type !== "composite_literal")) return UNNAMED_RECEIVER;
-  const name = readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : undefined);
-  const kept = receiverName(name);
-  if (kept !== undefined) return kept;
-  // The enclosing instance, written as a keyword node rather than as a name:
-  // the receiver the regex tier, Python (`self`) and PHP (`$this`) already
-  // record. Without it `this.save()` read as the bare `save()` and bound to a
-  // same-file FUNCTION of that name instead of the class's own method.
-  const self = SELF_NODE.exec(obj.type);
-  if (self) return self[1];
-  if (BASE_NODE.test(obj.type)) return undefined;
-  if (onCallNode && field !== "object" && field !== "receiver") return undefined;
+  const kids = obj.namedChildren;
+  if (kids.length === 0) {
+    // The enclosing instance, written as a keyword node rather than as a
+    // name: the receiver the regex tier, Python (`self`) and PHP (`$this`)
+    // already record. Without it `this.save()` read as the bare `save()` and
+    // bound to a same-file FUNCTION of that name instead of the class's own
+    // method. C#'s `base.f()` stays a call in the class's own scope.
+    const self = SELF_NODE.exec(obj.type);
+    if (self) return self[1];
+    if (obj.type === "super") return "super";
+    if (BASE_NODE.test(obj.type)) return undefined;
+    // Ruby's `@repo`, `@@registry` and `$stdout` are leaves of their own node
+    // types; a literal is a leaf with no name.
+    if (IDENT_LEAF.test(obj.type) || RUBY_VARIABLE.test(obj.type)) return receiverName(obj.text) ?? UNNAMED_RECEIVER;
+    return UNNAMED_RECEIVER;
+  }
+  // A method called on a composite literal (Go's `addrs.Check{…}.Absolute()`)
+  // or on a `new` is called on what it builds; the literal's last child is
+  // its body, whose last identifier is any field value at all.
+  if (obj.type === "composite_literal" || NEW_NODE.test(obj.type)) {
+    const type =
+      obj.childForFieldName("type") ??
+      obj.childForFieldName("constructor") ??
+      kids.find((c) => IDENT_LEAF.test(c.type) || /qualified|scoped/.test(c.type)) ??
+      null;
+    return typeReceiver(readTypeName(type));
+  }
+  // A generic type or name (Rust's `Vec::<u8>::new()`) names its constructor.
+  if (GENERIC.test(obj.type)) return typeReceiver(readTypeName(obj.childForFieldName("type") ?? kids[0]!));
+  // A cast names the type the value is read as: `(obj as Repo).save()`.
+  if (CAST.test(obj.type)) return typeReceiver(readTypeName(obj.childForFieldName("type") ?? kids[kids.length - 1]!));
+  if (INDEXED.test(obj.type)) return UNNAMED_RECEIVER;
+  // A Ruby call with neither arguments nor a block reads an attribute
+  // (`user.profile.save`): its method is the receiver's name.
+  const rubyRead = obj.type === "call" && obj.childForFieldName("method") !== null && obj.childForFieldName("arguments") === null && obj.childForFieldName("block") === null;
+  if (rubyRead) return receiverName(readName(obj.childForFieldName("method"))) ?? UNNAMED_RECEIVER;
+  if (CALL_NODE.test(obj.type) || obj.childForFieldName("arguments") !== null) return calledReceiver(obj, typeCalls);
+  // A member access: the name of its last segment.
+  const seg = obj.childForFieldName("name") ?? obj.childForFieldName("property") ?? obj.childForFieldName("attribute") ?? obj.childForFieldName("field");
+  if (seg) return receiverOf(seg, typeCalls) ?? UNNAMED_RECEIVER;
+  // A wrapper around one name (PHP's `$x` is a variable_name around a name).
+  if (kids.length === 1 && NAME_WRAPPER.test(obj.type)) return receiverOf(kids[0]!, typeCalls);
   return UNNAMED_RECEIVER;
 }
 
-// The fields a grammar keeps a callee's object under, in the order they are tried.
-const RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "argument", "receiver", "table"] as const;
+// Where a capitalised call constructs what it names, by the language's
+// convention: as a bare or a qualified name (`qualified`: Python's
+// `pathlib.Path(p)`), or only as a bare one (`plain`: Go's `T(x)`, whose
+// capitalised METHODS are any exported method, and C++'s `Thing(c)`).
+// Elsewhere a construction is written `new` (Java, C#, JS/TS, PHP), and a
+// capitalised call is a method: C#'s `BenchmarkSwitcher.FromAssembly(…)
+// .Run(args)` is no call on a FromAssembly.
+export type TypeCalls = "plain" | "qualified";
+
+// What a call receiver names: the type a construction call builds, where the
+// call says it is one. Python's `Parser(t).parse()`, C++'s `Thing(c).go()`,
+// Go's `T(x).M()`: a capitalised callee, where typeCalls allows it. Ruby's
+// `User.new(1).save` and Rust's `Thing::new(c).go()`: the type `new` is
+// called on. Python's `super().f()` is the base, as the bare keyword is
+// elsewhere. Any other call — `make(cfg).go()` — returns something no name
+// here says.
+function calledReceiver(call: TSNode, typeCalls: TypeCalls | undefined): string {
+  const callee =
+    call.childForFieldName("function") ??
+    call.childForFieldName("method") ??
+    call.childForFieldName("name") ??
+    call.childForFieldName("callee") ??
+    call.namedChildren[0] ??
+    null;
+  if (callee?.text === "super") return "super";
+  const name = readName(callee);
+  if (name === "new") {
+    const owner = readReceiver(callee) ?? readReceiver(call, true);
+    return owner !== undefined && TYPE_LIKE.test(owner) ? owner : UNNAMED_RECEIVER;
+  }
+  if (typeCalls === undefined || (typeCalls === "plain" && callee!.namedChildren.length > 0)) return UNNAMED_RECEIVER;
+  return name !== undefined && TYPE_LIKE.test(name) ? name : UNNAMED_RECEIVER;
+}
+
+// A type's name as a receiver, or UNNAMED_RECEIVER where it has none we keep.
+function typeReceiver(name: string | undefined): string {
+  return name !== undefined && /^[A-Za-z_$][\w$]*$/.test(name) ? name : UNNAMED_RECEIVER;
+}
+
 const RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
-// Node types of an index or a parenthesised expression, across the grammars.
-const UNNAMED_OBJECT =
-  /^(?:subscript(?:_expression)?|index_expression|indexing_expression|element_access_expression|element_reference|array_access|parenthesized_expression|parenthesized_primary_expression|binary_expression|binary_operator|await_expression|conditional_expression|ternary_expression)$/;
-const PARENTHESIZED = /^(?:parenthesized_expression|parenthesized_primary_expression)$/;
+const TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression)$/;
+const NAME_WRAPPER = /^variable_name$/;
+const GENERIC = /^generic_(?:type|name)$/;
+// Constructions, across the grammars: `new T(…)` (JS/TS, Java, C#, PHP).
+const NEW_NODE = /^(?:new_expression|object_creation_expression|instance_expression)$/;
+const CAST = /^(?:as_expression|satisfies_expression|cast_expression|type_assertion)$/;
+// An index into something: no name of its own, whatever names it holds.
+const INDEXED =
+  /^(?:subscript(?:_expression)?|index_expression|indexing_expression|element_access_expression|element_reference|array_access|bracket_index_expression|slice_expression)$/;
+// Calls, across the grammars, whether or not they carry an `arguments` field.
+const CALL_NODE =
+  /^(?:call|call_expression|function_call|function_call_expression|method_invocation|invocation_expression|member_call_expression|scoped_call_expression|nullsafe_member_call_expression|method_call_expression)$/;
+// A name that reads as a type's: capitalised.
+const TYPE_LIKE = /^[A-Z][\w$]*$/;
 // The enclosing instance as a keyword node: `this` (JS/TS, Java, C#, C++),
-// `self` (Ruby, Rust). C#'s `base.f()` stays a call in the class's own scope.
+// `self` (Ruby, Rust).
 const SELF_NODE = /^(this|self)(?:_expression)?$/;
 const BASE_NODE = /^base(?:_expression)?$/;
 

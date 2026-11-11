@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.19";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 21;
+    EXTRACTOR_VERSION = 22;
     UNNAMED_RECEIVER = "?";
   }
 });
@@ -8369,6 +8369,8 @@ function readName(node) {
   if (!node) return void 0;
   const kids = node.namedChildren;
   if (kids.length === 0) return IDENT_LEAF.test(node.type) ? node.text : void 0;
+  if (node.type === "generic_name") return readName(kids[0]);
+  if (node.type === "generic_type") return readName(node.childForFieldName("type") ?? kids[0]);
   const seg = node.childForFieldName("name") ?? node.childForFieldName("property") ?? node.childForFieldName("attribute") ?? node.childForFieldName("field") ?? // Callee wrappers that point at the real callee via a `function` field:
   // scala's generic_function (`foo[Int](x)`) and a curried/chained
   // call_expression callee (`curried(a)(b)`) — descend to the inner name
@@ -8378,9 +8380,10 @@ function readName(node) {
   const last = kids[kids.length - 1];
   return last && last !== node ? readName(last) : void 0;
 }
-function readReceiver(node, onCallNode = false) {
+function readReceiver(node, onCallNode = false, typeCalls) {
   if (!node || node.namedChildren.length === 0) return void 0;
-  if (node.type === "generic_function") return readReceiver(node.childForFieldName("function"), onCallNode);
+  if (node.type === "generic_function") return readReceiver(node.childForFieldName("function"), onCallNode, typeCalls);
+  if (node.type === "generic_type") return readReceiver(node.childForFieldName("type"), onCallNode, typeCalls);
   let obj = null;
   let field = "";
   for (const candidate of RECEIVER_FIELDS) {
@@ -8390,25 +8393,57 @@ function readReceiver(node, onCallNode = false) {
       break;
     }
   }
-  if (obj?.type === "super" || obj?.type === "crate" && node.type === "scoped_identifier") return obj.type;
-  if (obj?.type === "self" && node.type === "scoped_identifier") return void 0;
-  if (obj?.type === "composite_literal") {
-    const type = obj.childForFieldName("type");
-    const name3 = type ? readTypeName(type) : void 0;
-    return name3 && /^[A-Za-z_]\w*$/.test(name3) ? name3 : void 0;
-  }
   if (!obj) return void 0;
-  while (PARENTHESIZED.test(obj.type) && obj.namedChildren.length === 1) obj = obj.namedChildren[0];
-  if (obj.type === "call" && obj.childForFieldName("function")?.text === "super") return "super";
-  if (UNNAMED_OBJECT.test(obj.type) || obj.childForFieldName("arguments") !== null && obj.type !== "composite_literal") return UNNAMED_RECEIVER;
-  const name2 = readName(obj) ?? (obj.namedChildren.length === 0 && RUBY_VARIABLE.test(obj.type) ? obj.text : void 0);
-  const kept = receiverName(name2);
-  if (kept !== void 0) return kept;
-  const self = SELF_NODE.exec(obj.type);
-  if (self) return self[1];
-  if (BASE_NODE.test(obj.type)) return void 0;
   if (onCallNode && field !== "object" && field !== "receiver") return void 0;
+  if (obj.type === "super" || obj.type === "crate" && node.type === "scoped_identifier") return obj.type;
+  if (obj.type === "self" && node.type === "scoped_identifier") return void 0;
+  return receiverOf(obj, typeCalls);
+}
+function receiverOf(start2, typeCalls) {
+  let obj = start2;
+  for (; ; ) {
+    const only = obj.namedChildren.length === 1 ? obj.namedChildren[0] : void 0;
+    if (only && TRANSPARENT.test(obj.type)) obj = only;
+    else if (obj.type === "unary_expression" && obj.childForFieldName("operand")?.type === "composite_literal") obj = obj.childForFieldName("operand");
+    else break;
+  }
+  const kids = obj.namedChildren;
+  if (kids.length === 0) {
+    const self = SELF_NODE.exec(obj.type);
+    if (self) return self[1];
+    if (obj.type === "super") return "super";
+    if (BASE_NODE.test(obj.type)) return void 0;
+    if (IDENT_LEAF.test(obj.type) || RUBY_VARIABLE.test(obj.type)) return receiverName(obj.text) ?? UNNAMED_RECEIVER;
+    return UNNAMED_RECEIVER;
+  }
+  if (obj.type === "composite_literal" || NEW_NODE.test(obj.type)) {
+    const type = obj.childForFieldName("type") ?? obj.childForFieldName("constructor") ?? kids.find((c2) => IDENT_LEAF.test(c2.type) || /qualified|scoped/.test(c2.type)) ?? null;
+    return typeReceiver(readTypeName(type));
+  }
+  if (GENERIC.test(obj.type)) return typeReceiver(readTypeName(obj.childForFieldName("type") ?? kids[0]));
+  if (CAST.test(obj.type)) return typeReceiver(readTypeName(obj.childForFieldName("type") ?? kids[kids.length - 1]));
+  if (INDEXED.test(obj.type)) return UNNAMED_RECEIVER;
+  const rubyRead = obj.type === "call" && obj.childForFieldName("method") !== null && obj.childForFieldName("arguments") === null && obj.childForFieldName("block") === null;
+  if (rubyRead) return receiverName(readName(obj.childForFieldName("method"))) ?? UNNAMED_RECEIVER;
+  if (CALL_NODE.test(obj.type) || obj.childForFieldName("arguments") !== null) return calledReceiver(obj, typeCalls);
+  const seg = obj.childForFieldName("name") ?? obj.childForFieldName("property") ?? obj.childForFieldName("attribute") ?? obj.childForFieldName("field");
+  if (seg) return receiverOf(seg, typeCalls) ?? UNNAMED_RECEIVER;
+  if (kids.length === 1 && NAME_WRAPPER.test(obj.type)) return receiverOf(kids[0], typeCalls);
   return UNNAMED_RECEIVER;
+}
+function calledReceiver(call2, typeCalls) {
+  const callee = call2.childForFieldName("function") ?? call2.childForFieldName("method") ?? call2.childForFieldName("name") ?? call2.childForFieldName("callee") ?? call2.namedChildren[0] ?? null;
+  if (callee?.text === "super") return "super";
+  const name2 = readName(callee);
+  if (name2 === "new") {
+    const owner = readReceiver(callee) ?? readReceiver(call2, true);
+    return owner !== void 0 && TYPE_LIKE.test(owner) ? owner : UNNAMED_RECEIVER;
+  }
+  if (typeCalls === void 0 || typeCalls === "plain" && callee.namedChildren.length > 0) return UNNAMED_RECEIVER;
+  return name2 !== void 0 && TYPE_LIKE.test(name2) ? name2 : UNNAMED_RECEIVER;
+}
+function typeReceiver(name2) {
+  return name2 !== void 0 && /^[A-Za-z_$][\w$]*$/.test(name2) ? name2 : UNNAMED_RECEIVER;
 }
 function receiverName(name2) {
   if (!name2) return void 0;
@@ -8432,7 +8467,7 @@ function readTypeName(node) {
   visit(node);
   return last;
 }
-var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, RECEIVER_FIELDS, RUBY_VARIABLE, UNNAMED_OBJECT, PARENTHESIZED, SELF_NODE, BASE_NODE, TYPE_LEAF;
+var IDENT_LEAF, COMMENT_NODE, UNNAMED_CHAIN, RECEIVER_FIELDS, RUBY_VARIABLE, TRANSPARENT, NAME_WRAPPER, GENERIC, NEW_NODE, CAST, INDEXED, CALL_NODE, TYPE_LIKE, SELF_NODE, BASE_NODE, TYPE_LEAF;
 var init_node = __esm({
   "src/ast/node.ts"() {
     "use strict";
@@ -8440,10 +8475,16 @@ var init_node = __esm({
     IDENT_LEAF = /(^|_)(identifier|name|constant|word)$/;
     COMMENT_NODE = /(^|_)comment$/;
     UNNAMED_CHAIN = /* @__PURE__ */ new Set(["reference_declarator", "parenthesized_declarator"]);
-    RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "argument", "receiver", "table"];
+    RECEIVER_FIELDS = ["object", "operand", "value", "path", "expression", "argument", "receiver", "table", "condition", "package"];
     RUBY_VARIABLE = /^(?:instance|class|global)_variable$/;
-    UNNAMED_OBJECT = /^(?:subscript(?:_expression)?|index_expression|indexing_expression|element_access_expression|element_reference|array_access|parenthesized_expression|parenthesized_primary_expression|binary_expression|binary_operator|await_expression|conditional_expression|ternary_expression)$/;
-    PARENTHESIZED = /^(?:parenthesized_expression|parenthesized_primary_expression)$/;
+    TRANSPARENT = /^(?:parenthesized_expression|parenthesized_primary_expression|parenthesized_statements|non_null_expression)$/;
+    NAME_WRAPPER = /^variable_name$/;
+    GENERIC = /^generic_(?:type|name)$/;
+    NEW_NODE = /^(?:new_expression|object_creation_expression|instance_expression)$/;
+    CAST = /^(?:as_expression|satisfies_expression|cast_expression|type_assertion)$/;
+    INDEXED = /^(?:subscript(?:_expression)?|index_expression|indexing_expression|element_access_expression|element_reference|array_access|bracket_index_expression|slice_expression)$/;
+    CALL_NODE = /^(?:call|call_expression|function_call|function_call_expression|method_invocation|invocation_expression|member_call_expression|scoped_call_expression|nullsafe_member_call_expression|method_call_expression)$/;
+    TYPE_LIKE = /^[A-Z][\w$]*$/;
     SELF_NODE = /^(this|self)(?:_expression)?$/;
     BASE_NODE = /^base(?:_expression)?$/;
     TYPE_LEAF = /identifier|constant|(^|_)name$/;
@@ -8938,6 +8979,7 @@ var init_specs = __esm({
         publicNames: pythonAll,
         imports: { import_statement: "path", import_from_statement: "path" },
         calls: { call: "function" },
+        typeCalls: "qualified",
         docstring: true,
         // Python has no interfaces, so every base is an `extends`; graph resolution
         // reclassifies one that turns out to name a Protocol.
@@ -9027,7 +9069,13 @@ var init_specs = __esm({
         ]),
         exported: byCapital,
         imports: { import_declaration: "string" },
-        calls: { call_expression: "function" },
+        // A generic call (`pkg.Fn[Widget](x)`) parses as a conversion to a generic
+        // type, which no grammar rule can tell apart from one: it is read as the
+        // call it usually is, as `T(x)` is. Any other conversion (`[]byte(s)`) is
+        // not a call site.
+        calls: { call_expression: "function", type_conversion_expression: "function" },
+        typeCalls: "plain",
+        skipCall: (node) => node.type === "type_conversion_expression" && node.childForFieldName("type")?.type !== "generic_type",
         // A method's receiver is what it belongs to: `func (s *Scheduler) Start()`
         // is Scheduler.Start, not a free function named Start.
         parentFrom: {
@@ -9241,6 +9289,7 @@ var init_specs = __esm({
         ]),
         exported: byPub,
         calls: { call_expression: "function" },
+        typeCalls: "qualified",
         parentFrom: {
           // `impl Scheduler` / `impl Display for Scheduler` — the members belong to
           // the TYPE in both forms (the trait is recorded as a relation, not a parent).
@@ -9470,6 +9519,7 @@ var init_specs = __esm({
         ]),
         exported: always,
         calls: { call_expression: "function", new_expression: "constructor" },
+        typeCalls: "plain",
         kindFrom: {
           // C++ spells a member FUNCTION declaration and a data member with the same
           // node; only a function_declarator inside tells them apart. Likewise a
@@ -9555,6 +9605,7 @@ var init_specs = __esm({
         // Qualified calls are call_expression → field_expression (value/field);
         // `new Widget(...)` is an instance_expression with a bare type child.
         calls: { call_expression: "function", instance_expression: "constructor" },
+        typeCalls: "qualified",
         relationsFrom: {
           // `extends Base with A with B` — the first parent is the superclass, the
           // `with` mixins are traits, i.e. Scala's `implements`.
@@ -9610,6 +9661,7 @@ var init_specs = __esm({
         // as reachable from outside the file.
         exported: byNotPrivate,
         calls: { call_expression: "function" },
+        typeCalls: "qualified",
         kindFrom: {
           // A bare `(queue: String)` parameter is an argument, not a property; only
           // `val`/`var` (or a `data class`, where every parameter is one) declares a member.
@@ -10124,9 +10176,9 @@ function collectAll(root, spec, defNames, maxCalls) {
       if (how === "function") {
         const callee = node.childForFieldName("function") ?? node.childForFieldName("callee") ?? node.childForFieldName("method") ?? node.childForFieldName("name") ?? node.childForFieldName("target") ?? kids[0] ?? null;
         const inner = callee && spec.calls[callee.type] === "function" ? callee.childForFieldName("function") : null;
-        addCall(readName(callee), node, readReceiver(inner ?? callee) ?? readReceiver(node, true));
+        addCall(readName(callee), node, readReceiver(inner ?? callee, false, spec.typeCalls) ?? readReceiver(node, true, spec.typeCalls));
       } else if (how === "member") {
-        addCall(readName(node.childForFieldName("name")), node, readReceiver(node));
+        addCall(readName(node.childForFieldName("name")), node, readReceiver(node, false, spec.typeCalls));
       } else if (how === "constructor") {
         let t = node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.childForFieldName("name");
         for (let i2 = 0; !t && i2 < kids.length; i2++) {

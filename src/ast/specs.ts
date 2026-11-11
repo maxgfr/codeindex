@@ -12,7 +12,7 @@
 // tables cannot express. Each one exists because a real language needs it, and
 // each is documented with which.
 import type { RawRelation } from "../types.js";
-import type { TSNode } from "./node.js";
+import type { TSNode, TypeCalls } from "./node.js";
 import { findFirst, nameOf, nextDeclarator, readTypeName } from "./node.js";
 import { docCommentFor } from "./doc.js";
 
@@ -86,6 +86,8 @@ export interface LangSpec {
   // read its `name` field. "constructor": a new/object-creation node — read the
   // constructed type identifier.
   calls?: Record<string, "function" | "member" | "constructor">;
+  /** Where a capitalised call constructs the type it names (see readReceiver's TypeCalls). */
+  typeCalls?: TypeCalls;
   // Also surface top-level ASSIGNMENTS of function/class expressions —
   // `res.sendStatus = function sendStatus() {}`, `Foo.prototype.bar = () => {}`,
   // `exports.helper = function () {}` — the CommonJS definition style that
@@ -768,6 +770,7 @@ export const SPECS: Record<string, LangSpec> = {
     publicNames: pythonAll,
     imports: { import_statement: "path", import_from_statement: "path" },
     calls: { call: "function" },
+    typeCalls: "qualified",
     docstring: true,
     // Python has no interfaces, so every base is an `extends`; graph resolution
     // reclassifies one that turns out to name a Protocol.
@@ -872,7 +875,13 @@ export const SPECS: Record<string, LangSpec> = {
     ]),
     exported: byCapital,
     imports: { import_declaration: "string" },
-    calls: { call_expression: "function" },
+    // A generic call (`pkg.Fn[Widget](x)`) parses as a conversion to a generic
+    // type, which no grammar rule can tell apart from one: it is read as the
+    // call it usually is, as `T(x)` is. Any other conversion (`[]byte(s)`) is
+    // not a call site.
+    calls: { call_expression: "function", type_conversion_expression: "function" },
+    typeCalls: "plain",
+    skipCall: (node) => node.type === "type_conversion_expression" && node.childForFieldName("type")?.type !== "generic_type",
     // A method's receiver is what it belongs to: `func (s *Scheduler) Start()`
     // is Scheduler.Start, not a free function named Start.
     parentFrom: {
@@ -1102,6 +1111,7 @@ export const SPECS: Record<string, LangSpec> = {
     ]),
     exported: byPub,
     calls: { call_expression: "function" },
+    typeCalls: "qualified",
     parentFrom: {
       // `impl Scheduler` / `impl Display for Scheduler` — the members belong to
       // the TYPE in both forms (the trait is recorded as a relation, not a parent).
@@ -1338,6 +1348,7 @@ export const SPECS: Record<string, LangSpec> = {
     ]),
     exported: always,
     calls: { call_expression: "function", new_expression: "constructor" },
+    typeCalls: "plain",
     kindFrom: {
       // C++ spells a member FUNCTION declaration and a data member with the same
       // node; only a function_declarator inside tells them apart. Likewise a
@@ -1433,6 +1444,7 @@ export const SPECS: Record<string, LangSpec> = {
     // Qualified calls are call_expression → field_expression (value/field);
     // `new Widget(...)` is an instance_expression with a bare type child.
     calls: { call_expression: "function", instance_expression: "constructor" },
+    typeCalls: "qualified",
     relationsFrom: {
       // `extends Base with A with B` — the first parent is the superclass, the
       // `with` mixins are traits, i.e. Scala's `implements`.
@@ -1493,6 +1505,7 @@ export const SPECS: Record<string, LangSpec> = {
     // as reachable from outside the file.
     exported: byNotPrivate,
     calls: { call_expression: "function" },
+    typeCalls: "qualified",
     kindFrom: {
       // A bare `(queue: String)` parameter is an argument, not a property; only
       // `val`/`var` (or a `data class`, where every parameter is one) declares a member.
