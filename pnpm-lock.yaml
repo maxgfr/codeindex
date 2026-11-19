@@ -51,8 +51,8 @@ importers:
         specifier: ^0.24.1
         version: 0.24.1
       tree-sitter-c-sharp:
-        specifier: ^0.23.5
-        version: 0.23.5
+        specifier: ^0.24.0
+        version: 0.24.0
       tree-sitter-cpp:
         specifier: ^0.23.4
         version: 0.23.4
@@ -1881,8 +1881,8 @@ packages:
     resolution: {integrity: sha512-kUMbT1oBJCpgrnKoSr0o6wPtvRWT9W9UKvGLwfJYO2WuahZRHOpEyL1ckyMGgMWh0UdpmaoFqKKD29WTomNEGA==}
     engines: {node: '>=8'}
 
-  source-map-js@1.2.2:
-    resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
+  source-map-js@1.2.3:
+    resolution: {integrity: sha512-xj+WrAkyv5Qp+t7r9N5HvCBu7g1qOe6CKRNpq22X1GGcPEQADFU54v5qsPVs3/vrUFQ7XivFrcAVKA2stI0kWA==}
     engines: {node: '>=0.10.0'}
 
   source-map@0.6.1:
@@ -2048,8 +2048,8 @@ packages:
       tree-sitter:
         optional: true
 
-  tree-sitter-c-sharp@0.23.5:
-    resolution: {integrity: sha512-xJGOeXPMmld0nES5+080N/06yY6LQi+KWGWV4LfZaZe6srJPtUtfhIbRSN7EZN6IaauzW28v6W4QHFwmeUW6HQ==}
+  tree-sitter-c-sharp@0.24.0:
+    resolution: {integrity: sha512-M7VLq8mZEmPz3HNyocw484Pdai/DdSycrSlFrLqzjmhUPqhph3VellWbtx9mWcyTXgHWpNQzymFDrLt8IIna5w==}
     peerDependencies:
       tree-sitter: ^0.25.0
     peerDependenciesMeta:
@@ -3794,7 +3794,7 @@ snapshots:
     dependencies:
       nanoid: 3.3.20
       picocolors: 1.1.1
-      source-map-js: 1.2.2
+      source-map-js: 1.2.3
 
   pretty-ms@9.3.1:
     dependencies:
@@ -3981,7 +3981,7 @@ snapshots:
     dependencies:
       unicode-emoji-modifier-base: 1.0.0
 
-  source-map-js@1.2.2: {}
+  source-map-js@1.2.3: {}
 
   source-map@0.6.1: {}
 
@@ -4138,7 +4138,7 @@ snapshots:
       node-addon-api: 8.9.2
       node-gyp-build: 4.8.4
 
-  tree-sitter-c-sharp@0.23.5:
+  tree-sitter-c-sharp@0.24.0:
     dependencies:
       node-addon-api: 8.9.2
       node-gyp-build: 4.8.4
