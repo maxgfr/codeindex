@@ -11,7 +11,7 @@ import { extname, isAbsolute, join, relative, sep } from "node:path";
 import { classify } from "./classify.js";
 import { extToLang } from "./lang/registry.js";
 import { explainPathFilter, keptWalkedFiles, normalizeScope, type ScanOptions, type ScanSkip } from "./scan.js";
-import type { WalkedFile } from "./walk.js";
+import { SKILLS_LOCKFILE, type WalkedFile } from "./walk.js";
 import { byKey, byStr } from "./sort.js";
 
 const DEFAULT_MAX_BYTES = 1024 * 1024; // walk.ts's maxFileBytes default
@@ -100,6 +100,8 @@ function skipDetail(root: string, opts: ScanOptions, rel: string, skip: ScanSkip
       return { ext: extname(skip.rel).toLowerCase() };
     case "index-output":
       return { out: opts.out };
+    case "installed-skill":
+      return { lockfile: SKILLS_LOCKFILE };
     case "file-symlink":
     case "directory-symlink":
     case "symlink-outside-root":

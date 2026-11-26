@@ -848,6 +848,29 @@ function enclosingIgnoreFilter(root) {
     return dirHidden(dir) || isIgnored(chainOf(dir), rel2, false);
   };
 }
+function installedSkills(root) {
+  let lock;
+  try {
+    const text = readText(join(root, SKILLS_LOCKFILE));
+    if (!text) return NO_SKILLS;
+    lock = JSON.parse(text);
+  } catch {
+    return NO_SKILLS;
+  }
+  const skills = lock && typeof lock === "object" ? lock.skills : void 0;
+  if (!skills || typeof skills !== "object" || Array.isArray(skills)) return NO_SKILLS;
+  const names = Object.keys(skills).filter((n) => n !== "." && n !== ".." && n !== "" && !/[/\\]/.test(n));
+  return names.length ? new Set(names) : NO_SKILLS;
+}
+function isInstalledSkillPath(rel2, skills) {
+  if (!skills.size || !rel2.startsWith(".")) return false;
+  const [top, mid, name2] = rel2.split("/", 3);
+  return top !== "." && top !== ".." && mid === "skills" && name2 !== void 0 && skills.has(name2);
+}
+function installedSkillFilter(root) {
+  const skills = installedSkills(root);
+  return skills.size ? (rel2) => isInstalledSkillPath(rel2, skills) : void 0;
+}
 function walk(root, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? 1024 * 1024;
   const maxFiles = opts.maxFiles ?? Infinity;
@@ -889,6 +912,7 @@ function walk(root, opts = {}) {
     { dir: root, rel: "", rules: useGitignore ? enclosingRules(rootReal) : [] }
   ];
   const seenDirs = /* @__PURE__ */ new Set();
+  let skills = NO_SKILLS;
   walking: while (stack.length) {
     const frame = stack.pop();
     const subdirs = [];
@@ -917,6 +941,8 @@ function walk(root, opts = {}) {
       skip(frame.rel, "nested-repo", true);
       continue;
     }
+    if (!frame.rel && entries.some((e) => e.name === SKILLS_LOCKFILE && !e.isDirectory())) skills = installedSkills(root);
+    const skillsHere = skills.size > 0 && /^\.[^/]+\/skills$/.test(frame.rel);
     let rules = frame.rules;
     if (useGitignore && !frame.rel) {
       const parsed2 = parseGitignore(readInfoExclude(gitDir), "", ".git/info/exclude");
@@ -933,6 +959,10 @@ function walk(root, opts = {}) {
       const rel2 = frame.rel ? `${frame.rel}/${name2}` : name2;
       const isLink = entry2.isSymbolicLink();
       if (name2 === GIT_ENTRY) continue;
+      if (skillsHere && skills.has(name2) && (entry2.isDirectory() || isLink)) {
+        skip(rel2, "installed-skill", true);
+        continue;
+      }
       if (entry2.isDirectory() && skipsDir(name2, rel2, rules)) {
         skip(rel2, "ignore-dir", true);
         continue;
@@ -1024,7 +1054,7 @@ function isInside(rootReal, real) {
   if (real === rootReal) return true;
   return real.startsWith(rootReal.endsWith(sep) ? rootReal : rootReal + sep);
 }
-var IGNORE_DIRS, BUILD_OUTPUT_DIRS, GIT_ENTRY, INDEX_ENTRY, GITFILE_PREFIX, MAX_GITFILE_BYTES, LOCKFILES, BINARY_EXT, DEFAULT_MAX_FILES;
+var IGNORE_DIRS, BUILD_OUTPUT_DIRS, GIT_ENTRY, INDEX_ENTRY, GITFILE_PREFIX, MAX_GITFILE_BYTES, LOCKFILES, SKILLS_LOCKFILE, NO_SKILLS, BINARY_EXT, DEFAULT_MAX_FILES;
 var init_walk = __esm({
   "src/walk.ts"() {
     "use strict";
@@ -1086,8 +1116,11 @@ var init_walk = __esm({
       "flake.lock",
       "packages.lock.json",
       "podfile.lock",
-      "mix.lock"
+      "mix.lock",
+      "skills-lock.json"
     ]);
+    SKILLS_LOCKFILE = "skills-lock.json";
+    NO_SKILLS = /* @__PURE__ */ new Set();
     BINARY_EXT = /* @__PURE__ */ new Set([
       ".png",
       ".jpg",
@@ -18959,7 +18992,7 @@ function clipLine(line2, at, max) {
 function sortHits(hits) {
   return hits.sort((a, b) => byStr(a.file, b.file) || a.line - b.line);
 }
-function universeArgs(opts) {
+function universeArgs(root, opts) {
   const args2 = [
     "--no-config",
     "--no-messages",
@@ -18977,6 +19010,7 @@ function universeArgs(opts) {
   for (const d of [...dirs].sort(byStr)) args2.push("--glob", `!**/${globLiteral(d)}/**`);
   args2.push("--glob", "!**/.codeindex-edit-*/**");
   args2.push("--glob", "!**/.codeindex/**");
+  for (const name2 of [...installedSkills(root)].sort(byStr)) args2.push("--glob", `!/.*/skills/${globLiteral(name2)}/**`);
   for (const l of LOCKFILES) args2.push("--iglob", `!**/${l}`);
   for (const ext of BINARY_EXT) args2.push("--iglob", `!**/*${ext}`);
   args2.push("--iglob", "!*.min.js", "--iglob", "!*.min.css");
@@ -18988,7 +19022,7 @@ function universeArgs(opts) {
   return args2;
 }
 function rgBackend(root, rust2, opts, keep, max) {
-  const universe = universeArgs(opts);
+  const universe = universeArgs(root, opts);
   const p1 = sh("rg", [...universe, "--files-with-matches", "--null", "--regexp", rust2, "./"], {
     cwd: root,
     maxBufferBytes: RG_BUFFER
@@ -22401,9 +22435,11 @@ function computeDelta(graph, symbols, diff, depth = DEFAULT_DELTA_DEPTH) {
 function reviewFilter(repo, indexDir) {
   const idx = relative6(resolve9(repo), resolve9(repo, indexDir ?? ".codeindex")).split(sep5).join("/");
   const inIndex = idx && !idx.startsWith("..") && !isAbsolute6(idx) ? (p) => p === idx || p.startsWith(`${idx}/`) : () => false;
+  const installedSkill = installedSkillFilter(repo);
   return (path, tracked) => {
     if (inIndex(path)) return false;
     if (tracked) return true;
+    if (installedSkill?.(path)) return false;
     const dirs = path.split("/").slice(0, -1);
     return !dirs.some((d) => IGNORE_DIRS.has(d) || d.startsWith(".codeindex-edit-"));
   };
@@ -25889,6 +25925,7 @@ init_scan();
 init_classify();
 init_registry();
 init_scan();
+init_walk();
 init_sort();
 import { lstatSync as lstatSync2, realpathSync as realpathSync2 } from "fs";
 import { extname as extname2, isAbsolute as isAbsolute2, join as join3, relative as relative3, sep as sep3 } from "path";
@@ -25950,6 +25987,8 @@ function skipDetail(root, opts, rel2, skip) {
       return { ext: extname2(skip.rel).toLowerCase() };
     case "index-output":
       return { out: opts.out };
+    case "installed-skill":
+      return { lockfile: SKILLS_LOCKFILE };
     case "file-symlink":
     case "directory-symlink":
     case "symlink-outside-root":

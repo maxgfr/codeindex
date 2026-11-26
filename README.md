@@ -25,7 +25,10 @@ compares](#how-it-compares).
   Nested repositories (a subdirectory with its own `.git` — linked worktrees,
   vendored clones, submodules) are skipped like git does, and `.git` itself —
   like the engine's own `.codeindex` — is never walked even when
-  `--ignore-dir` replaces the default ignore list. No
+  `--ignore-dir` replaces the default ignore list. Agent skills installed by
+  `npx skills add` (each `.<dir>/skills/<name>/` at the root whose `<name>` a
+  root `skills-lock.json` lists) are third-party, like `vendor/`, and skipped;
+  a repo's own skills, absent from the lock, stay indexed. No
   file-count cap unless you ask for one (`--max-files`), and asking sets the
   `capped` flag — never a silent truncation.
 - **Scan** every file into a `FileRecord`: classification, language, symbols,
@@ -542,7 +545,7 @@ name, and a filter that keeps no file at all each print a warning on stderr.
 
 `scan` also counts what the walk left out, by reason (`skipped`: `gitignored`,
 `ignore-dir`, `over-max-bytes`, `binary-ext`, `lockfile`, `minified`, `filter`,
-`nested-repo`, the symlink cases and `index-output`; a skipped directory counts
+`nested-repo`, `installed-skill`, the symlink cases and `index-output`; a skipped directory counts
 once, since its contents are never listed). `scan --skipped` lists every skip,
 sorted by path, and `scan --why <path>` explains one path as `{path, indexed,
 reason, detail}`: the detail names the ignore file, line and pattern that

@@ -17,7 +17,7 @@
 import { Worker, MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { walk, enclosingIgnoreFilter, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
+import { walk, enclosingIgnoreFilter, installedSkills, IGNORE_DIRS, LOCKFILES, BINARY_EXT } from "./walk.js";
 import { compileGlobs, compileGlobFilter } from "./glob.js";
 import { sh, have } from "./util.js";
 import { byStr } from "./sort.js";
@@ -311,7 +311,7 @@ const globLiteral = (s: string): string => s.replace(/[\\*?[\]{}!]/g, (c) => `\\
 // NOT the user/global/parent/.ignore layers the walker never reads; the same
 // junk dirs, lockfiles, binary extensions and size cap; no user config file
 // (RIPGREP_CONFIG_PATH could add --smart-case or globs behind our back).
-function universeArgs(opts: GrepOptions): string[] {
+function universeArgs(root: string, opts: GrepOptions): string[] {
   const args = [
     "--no-config",
     "--no-messages",
@@ -330,6 +330,9 @@ function universeArgs(opts: GrepOptions): string[] {
   args.push("--glob", "!**/.codeindex-edit-*/**"); // walk.ts: interrupted-edit scratch dirs
   // walk.ts skips the engine's own .codeindex whatever --ignore-dir says.
   args.push("--glob", "!**/.codeindex/**");
+  // The skills the root's skills-lock.json installs,, pruned where the walk prunes
+  // them: `.<dir>/skills/<name>` at the root only.
+  for (const name of [...installedSkills(root)].sort(byStr)) args.push("--glob", `!/.*/skills/${globLiteral(name)}/**`);
   // Lockfiles match at any depth, case-insensitively (the walker lowercases).
   for (const l of LOCKFILES) args.push("--iglob", `!**/${l}`);
   for (const ext of BINARY_EXT) args.push("--iglob", `!**/*${ext}`);
@@ -374,7 +377,7 @@ function rgBackend(
   keep: ((rel: string) => boolean) | null,
   max: number,
 ): RgOutcome | { fallback: string } | undefined {
-  const universe = universeArgs(opts);
+  const universe = universeArgs(root, opts);
   const p1 = sh("rg", [...universe, "--files-with-matches", "--null", "--regexp", rust, "./"], {
     cwd: root,
     maxBufferBytes: RG_BUFFER,

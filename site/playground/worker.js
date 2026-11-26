@@ -104,8 +104,10 @@ async function indexManifest({ manifest, readBytes, maxFiles, maxBytes, verb, es
   // and the `capped` flag the UI shows is the engine's own.
   engine.mountFiles(manifest.map((file) => ({ path: `${MOUNT}${file.path}`, size: file.size })));
 
-  // The one thing walk needs real bytes for. They are tiny and few.
-  const ignores = manifest.filter((file) => file.path.endsWith("/.gitignore") || file.path === "/.gitignore");
+  // The only files walk needs real bytes for: the .gitignore files, and a root
+  // skills-lock.json naming the installed agent skills it skips. They are tiny
+  // and few.
+  const ignores = manifest.filter((file) => file.path.endsWith("/.gitignore") || file.path === "/.gitignore" || file.path === "/skills-lock.json");
   await pooled(ignores, FETCH_CONCURRENCY, async (file, signal) => {
     const bytes = await readBytes(file.path, signal);
     if (bytes) engine.setFileBytes(`${MOUNT}${file.path}`, bytes);

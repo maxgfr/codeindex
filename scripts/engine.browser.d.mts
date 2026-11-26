@@ -224,7 +224,7 @@ declare const BINARY_EXT: Set<string>;
 /** An observed exclusion. Directory contents are not enumerated. */
 interface WalkSkip {
     rel: string;
-    reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "file-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
+    reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "file-symlink" | "ignore-dir" | "nested-repo" | "installed-skill" | "filter" | "unreadable";
     directory: boolean;
     size?: number;
     /** For "gitignored": the rule that decided it — its file, 1-based line, and pattern as written. */

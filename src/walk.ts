@@ -243,8 +243,56 @@ export function enclosingIgnoreFilter(root: string): ((rel: string) => boolean) 
 export const LOCKFILES = new Set([
   "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
   "composer.lock", "cargo.lock", "poetry.lock", "pipfile.lock", "gemfile.lock", "go.sum",
-  "flake.lock", "packages.lock.json", "podfile.lock", "mix.lock",
+  "flake.lock", "packages.lock.json", "podfile.lock", "mix.lock", "skills-lock.json",
 ]);
+
+// The lock file `npx skills add <owner>/<repo>` writes at a repository root.
+// That CLI vendors each skill into `.agents/skills/<name>/`, plus a copy or a
+// symlink per agent (`.claude/skills/<name>`, `.cursor/skills/<name>`…), and
+// records it under the lock's `skills` key. Those directories are third-party
+// files versioned by the lock — the same status as vendor/ — and indexing them
+// put another project's SKILL.md, reference docs and assets into search, delta
+// reports and module maps. A skill the lock does not list is the repo's own,
+// and stays indexed.
+export const SKILLS_LOCKFILE = "skills-lock.json";
+
+const NO_SKILLS: ReadonlySet<string> = new Set();
+
+// The skill names `root`'s skills-lock.json records: the keys of its `skills`
+// object that are a single path segment. Empty when the lock is absent,
+// unreadable, not JSON, or not shaped like one — a broken lock file changes
+// nothing about the walk.
+export function installedSkills(root: string): ReadonlySet<string> {
+  let lock: unknown;
+  try {
+    const text = readText(join(root, SKILLS_LOCKFILE));
+    if (!text) return NO_SKILLS;
+    lock = JSON.parse(text);
+  } catch {
+    return NO_SKILLS;
+  }
+  const skills = lock && typeof lock === "object" ? (lock as { skills?: unknown }).skills : undefined;
+  if (!skills || typeof skills !== "object" || Array.isArray(skills)) return NO_SKILLS;
+  const names = Object.keys(skills).filter((n) => n !== "." && n !== ".." && n !== "" && !/[/\\]/.test(n));
+  return names.length ? new Set(names) : NO_SKILLS;
+}
+
+// Whether repo-relative posix `rel` is, or lies under, an installed skill's
+// directory: `.<dir>/skills/<name>` at the root, `<name>` one of `skills`.
+// Only a dot-directory at the root qualifies — where the skills CLI writes; a
+// nested package's `skills/` is first-party.
+export function isInstalledSkillPath(rel: string, skills: ReadonlySet<string>): boolean {
+  if (!skills.size || !rel.startsWith(".")) return false;
+  const [top, mid, name] = rel.split("/", 3);
+  return top !== "." && top !== ".." && mid === "skills" && name !== undefined && skills.has(name);
+}
+
+// The skills-lock matcher for a caller that did not walk (ripgrep's universe,
+// delta's untracked files): undefined when `root` records no installed skill.
+export function installedSkillFilter(root: string): ((rel: string) => boolean) | undefined {
+  const skills = installedSkills(root);
+  return skills.size ? (rel) => isInstalledSkillPath(rel, skills) : undefined;
+}
 
 // Binary / non-source extensions to skip when reading file contents.
 export const BINARY_EXT = new Set([
@@ -257,7 +305,7 @@ export const BINARY_EXT = new Set([
 /** An observed exclusion. Directory contents are not enumerated. */
 export interface WalkSkip {
   rel: string;
-  reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "file-symlink" | "ignore-dir" | "nested-repo" | "filter" | "unreadable";
+  reason: "binary-ext" | "lockfile" | "over-max-bytes" | "gitignored" | "minified" | "symlink-outside-root" | "broken-symlink" | "directory-symlink" | "file-symlink" | "ignore-dir" | "nested-repo" | "installed-skill" | "filter" | "unreadable";
   directory: boolean;
   size?: number;
   /** For "gitignored": the rule that decided it — its file, 1-based line, and pattern as written. */
@@ -408,6 +456,9 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
     { dir: root, rel: "", rules: useGitignore ? enclosingRules(rootReal) : [] },
   ];
   const seenDirs = new Set<string>(); // resolved real dirs already walked
+  // The skills the root's skills-lock.json installs, read once — and only when the
+  // root listing shows the lock file, so a repo without one pays nothing.
+  let skills = NO_SKILLS;
   walking: while (stack.length) {
     const frame = stack.pop()!;
     // This directory's subdirectories, pushed once it is listed, LAST first:
@@ -457,6 +508,10 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       skip(frame.rel, "nested-repo", true);
       continue;
     }
+    if (!frame.rel && entries.some((e) => e.name === SKILLS_LOCKFILE && !e.isDirectory())) skills = installedSkills(root);
+    // A `.<dir>/skills` directory at the root, where an installed skill's
+    // directory can be listed.
+    const skillsHere = skills.size > 0 && /^\.[^/]+\/skills$/.test(frame.rel);
     let rules = frame.rules;
     if (useGitignore && !frame.rel) {
       // `.git/info/exclude` sits BEFORE every .gitignore in git's own
@@ -480,6 +535,12 @@ export function walk(root: string, opts: WalkOptions = {}): WalkResult {
       // internals, the gitfile of a linked worktree or submodule is a one-line
       // pointer — neither is source, and git lists neither.
       if (name === GIT_ENTRY) continue;
+      // A skill skills-lock.json installed: its directory, or the per-agent
+      // symlink to it, is never listed (see SKILLS_LOCKFILE).
+      if (skillsHere && skills.has(name) && (entry.isDirectory() || isLink)) {
+        skip(rel, "installed-skill", true);
+        continue;
+      }
       // Ignored-directory boundary (node_modules, .git…): skip on the dirent
       // type alone — ZERO stat syscalls. A symlink reports isDirectory()
       // false on its dirent and falls through to the stat-based

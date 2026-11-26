@@ -12,7 +12,7 @@ import type { DiffFile, DiffSpec, Hunk } from "./git.js";
 import { NO_COMMITS_REF, emptyTreeId, isGitWorktree, resolveBaseRef, diffFiles, diffHunks, untrackedFiles } from "./git.js";
 import { buildResolveContext, resolveDocLink, resolveImport } from "./resolve.js";
 import { byStr } from "./sort.js";
-import { IGNORE_DIRS } from "./walk.js";
+import { IGNORE_DIRS, installedSkillFilter } from "./walk.js";
 import { have, sh, slugify } from "./util.js";
 import { sha1 } from "./hash.js";
 import { closureOver, dependentsIndex, reverseClosure } from "./traverse.js";
@@ -538,13 +538,16 @@ export interface DeltaDiff {
 // untracked node_modules/ as thousands. Tracked paths are kept outside the
 // index directory: a committed change is the diff's own even where the walker
 // does not look, and the panel lists it as unindexed. Untracked paths are
-// judged by the walker's default ignore set.
+// judged by the walker's default ignore set and by skills-lock.json (the
+// skills it installed are third-party, as in the walk).
 function reviewFilter(repo: string, indexDir: string | undefined): (path: string, tracked: boolean) => boolean {
   const idx = relative(resolve(repo), resolve(repo, indexDir ?? ".codeindex")).split(sep).join("/");
   const inIndex = idx && !idx.startsWith("..") && !isAbsolute(idx) ? (p: string) => p === idx || p.startsWith(`${idx}/`) : () => false;
+  const installedSkill = installedSkillFilter(repo);
   return (path, tracked) => {
     if (inIndex(path)) return false;
     if (tracked) return true;
+    if (installedSkill?.(path)) return false;
     const dirs = path.split("/").slice(0, -1);
     return !dirs.some((d) => IGNORE_DIRS.has(d) || d.startsWith(".codeindex-edit-"));
   };
