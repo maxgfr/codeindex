@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.32.0](https://github.com/maxgfr/codeindex/compare/v2.31.26...v2.32.0) (2026-11-26)
+
+### Features
+
+* **prisma:** extract models, enums, views and types as symbols ([351e74c](https://github.com/maxgfr/codeindex/commit/351e74c641932045f1c682a9cd819daf9cdbcd25)), closes [#55](https://github.com/maxgfr/codeindex/issues/55)
+
 ## [2.31.26](https://github.com/maxgfr/codeindex/compare/v2.31.25...v2.31.26) (2026-11-26)
 
 ### Bug Fixes
