@@ -1,7 +1,7 @@
 import type { CodeLiteral, CodeSymbol, ImportAlias, RawRef, RawRelation } from "../types.js";
 import { UNNAMED_RECEIVER } from "../types.js";
 import { LiteralCollector } from "./literals.js";
-import { extractSymbols } from "../lang/registry.js";
+import { extractorCalls, extractSymbols } from "../lang/registry.js";
 import { DEFAULT_MAX_CALLS, capCallSites, extractAst } from "../ast/extract.js";
 import { extractReexports, extToLang, MAX_REEXPORTS } from "../lang/common.js";
 import { extractImports, extractPackage } from "./imports.js";
@@ -353,8 +353,15 @@ export function extractCode(rel: string, ext: string, content: string, opts: { m
   // AST call sites when a grammar parsed the file; the conservative regex
   // collector otherwise, so caller indexes exist without the wasm sidecar.
   // `symbols` (this file's own regex-extracted defs) lets the collector
-  // exclude a definition's own name+line from its call candidates.
-  let calls = ast ? ast.calls : collectCallsRegex(code, symbols, opts.maxCallsPerFile);
+  // exclude a definition's own name+line from its call candidates. A language
+  // whose extractor reads its own reference sites (a Prisma field's type, see
+  // lang/prisma.ts) uses those instead, under the same cap and order.
+  const own = ast ? undefined : extractorCalls(codeExt, code);
+  let calls = ast
+    ? ast.calls
+    : own
+      ? capCallSites(own, opts.maxCallsPerFile ?? DEFAULT_MAX_CALLS)
+      : collectCallsRegex(code, symbols, opts.maxCallsPerFile);
   // A template calls what its script imports (`{{ formatDate(d) }}`,
   // `on:click={() => save(item)}`): those sites are read by the regex
   // collector from the markup and merged in, under the same cap and order.

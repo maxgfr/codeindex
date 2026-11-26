@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.26";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 23;
+    EXTRACTOR_VERSION = 24;
     UNNAMED_RECEIVER = "?";
   }
 });
@@ -2191,6 +2191,7 @@ var init_common = __esm({
       ".graphql": "graphql",
       ".gql": "graphql",
       ".proto": "protobuf",
+      ".prisma": "prisma",
       ".md": "markdown",
       ".mdx": "markdown",
       ".rst": "restructuredtext",
@@ -3574,6 +3575,164 @@ var init_dart = __esm({
   }
 });
 
+// src/lang/prisma.ts
+function docAbove2(raw, code, at) {
+  const run2 = [];
+  for (let k = at - 1; k >= 0; k--) {
+    if (code[k].trim() !== "" || !raw[k].trimStart().startsWith("///")) break;
+    run2.push(raw[k]);
+  }
+  return run2.length ? summarizeDocLines(run2.reverse().map(stripCommentMarkers)) : void 0;
+}
+function parseBlocks(content) {
+  const raw = content.split(/\r?\n/);
+  const code = maskBraced(content, { squote: "none" }).split(/\r?\n/);
+  const blocks = [];
+  let i2 = 0;
+  while (i2 < code.length) {
+    const header = HEADER.exec(code[i2]);
+    if (!header) {
+      i2++;
+      continue;
+    }
+    let openLine = i2;
+    let openAt = header.groups.open ? header.index + header[0].length : -1;
+    if (openAt === -1) {
+      if (code[i2].slice(header.index + header[0].length).trim() !== "") {
+        i2++;
+        continue;
+      }
+      let k = i2 + 1;
+      while (k < code.length && code[k].trim() === "") k++;
+      const lead = k < code.length ? /^\s*\{/.exec(code[k]) : null;
+      if (!lead) {
+        i2++;
+        continue;
+      }
+      openLine = k;
+      openAt = lead[0].length;
+    }
+    const keyword = header.groups.keyword;
+    const kind = KINDS[keyword];
+    const block = { keyword, name: header.groups.name, line: i2 + 1, members: [] };
+    let depth = 1;
+    let line2 = openLine;
+    let from = openAt;
+    for (; line2 < code.length && depth > 0; line2++, from = 0) {
+      const text = code[line2];
+      let to = text.length;
+      for (let c2 = from; c2 < text.length; c2++) {
+        const ch = text.charCodeAt(c2);
+        if (ch === 123) depth++;
+        else if (ch === 125 && --depth === 0) {
+          to = c2;
+          break;
+        }
+      }
+      if (kind) {
+        const member = readMember(raw[line2], text, from, to, line2, kind);
+        if (member) {
+          if (line2 !== openLine) {
+            const doc = docAbove2(raw, code, line2);
+            if (doc) member.doc = doc;
+          }
+          block.members.push(member);
+        }
+      }
+      if (depth === 0) break;
+    }
+    if (depth === 0) block.endLine = line2 + 1;
+    if (kind) {
+      const doc = docAbove2(raw, code, i2);
+      if (doc) block.doc = doc;
+      blocks.push(block);
+    }
+    i2 = depth === 0 ? line2 + 1 : code.length;
+  }
+  return blocks;
+}
+function readMember(raw, text, from, to, line2, kind) {
+  const segment = text.slice(from, to);
+  const start2 = from + (segment.length - segment.trimStart().length);
+  const body2 = segment.trim();
+  if (!body2 || body2.startsWith("@")) return void 0;
+  const signature = raw.slice(start2, start2 + body2.length).slice(0, SIGNATURE_CAP);
+  if (kind === "enum") {
+    const m2 = ENUM_VALUE.exec(body2);
+    return m2 ? { name: m2.groups.name, kind: "enum-member", line: line2 + 1, signature } : void 0;
+  }
+  const m = FIELD.exec(body2);
+  return m ? { name: m.groups.name, kind: "field", line: line2 + 1, signature, type: m.groups.type } : void 0;
+}
+function toSymbols(rel2, blocks) {
+  const out2 = [];
+  for (const b of blocks) {
+    out2.push({
+      name: b.name,
+      kind: KINDS[b.keyword],
+      file: rel2,
+      line: b.line,
+      ...b.endLine !== void 0 ? { endLine: b.endLine } : {},
+      signature: `${b.keyword} ${b.name}`,
+      ...b.doc !== void 0 ? { doc: b.doc } : {},
+      exported: true,
+      lang: "prisma"
+    });
+    for (const m of b.members) {
+      out2.push({
+        name: m.name,
+        kind: m.kind,
+        file: rel2,
+        line: m.line,
+        endLine: m.line,
+        parent: b.name,
+        signature: m.signature,
+        ...m.doc !== void 0 ? { doc: m.doc } : {},
+        exported: true,
+        lang: "prisma"
+      });
+    }
+  }
+  return out2;
+}
+function prismaRefs(content) {
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const b of parseBlocks(content)) {
+    for (const m of b.members) {
+      if (m.type === void 0 || SCALARS.has(m.type)) continue;
+      const key = `${m.type} ${m.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out2.push({ name: m.type, line: m.line });
+    }
+  }
+  return out2;
+}
+var SCALARS, KINDS, NAME, HEADER, FIELD, ENUM_VALUE, SIGNATURE_CAP, prisma;
+var init_prisma = __esm({
+  "src/lang/prisma.ts"() {
+    "use strict";
+    init_imports();
+    init_doc_text();
+    SCALARS = /* @__PURE__ */ new Set(["String", "Boolean", "Int", "BigInt", "Float", "Decimal", "DateTime", "Json", "Bytes", "Unsupported"]);
+    KINDS = { model: "struct", view: "struct", type: "struct", enum: "enum" };
+    NAME = String.raw`[A-Za-z_][A-Za-z0-9_]*`;
+    HEADER = new RegExp(String.raw`^\s*(?<keyword>[A-Za-z]+)\s+(?<name>${NAME})\s*(?<open>\{)?`);
+    FIELD = new RegExp(String.raw`^(?<name>${NAME})\s+(?<type>${NAME})(?:\s*\[\s*\])?\s*\??`);
+    ENUM_VALUE = new RegExp(String.raw`^(?<name>${NAME})(?![\w(])`);
+    SIGNATURE_CAP = 200;
+    prisma = {
+      lang: "prisma",
+      exts: [".prisma"],
+      extract(rel2, content) {
+        return toSymbols(rel2, parseBlocks(content));
+      },
+      calls: prismaRefs
+    };
+  }
+});
+
 // src/lang/registry.ts
 function extractSymbols(rel2, ext, content, onFailure) {
   const extractor = BY_EXT.get(ext);
@@ -3593,6 +3752,15 @@ function extractSymbols(rel2, ext, content, onFailure) {
   const known = new Set(symbols.map((s) => s.name));
   const reexports = extractReexports(rel2, content, symbols).filter((s) => !known.has(s.name));
   return reexports.length ? [...symbols, ...reexports] : symbols;
+}
+function extractorCalls(ext, content) {
+  const calls = BY_EXT.get(ext)?.calls;
+  if (!calls) return void 0;
+  try {
+    return calls(content);
+  } catch {
+    return [];
+  }
 }
 function languageOf(ext) {
   return BY_EXT.get(ext)?.lang ?? extToLang(ext);
@@ -3618,6 +3786,7 @@ var init_registry = __esm({
     init_elixir();
     init_scala();
     init_dart();
+    init_prisma();
     EXTRACTORS = [
       jsTs,
       python,
@@ -3634,7 +3803,8 @@ var init_registry = __esm({
       shell,
       elixir,
       scala,
-      dart
+      dart,
+      prisma
     ];
     BY_EXT = /* @__PURE__ */ new Map();
     for (const e of EXTRACTORS) for (const ext of e.exts) BY_EXT.set(ext, e);
@@ -11263,7 +11433,8 @@ function extractCode(rel2, ext, content, opts = {}) {
   const refs = extractImports(codeExt, code);
   const importSpecs = new Set(refs.filter((r) => !r.soft).map((r) => r.spec));
   const literals = (ast && !sfc ? ast.literals.length ? ast.literals : void 0 : collectLiteralsRegex(content))?.filter((l) => !(l.kind === "string" && importSpecs.has(l.value)));
-  let calls = ast ? ast.calls : collectCallsRegex(code, symbols, opts.maxCallsPerFile);
+  const own = ast ? void 0 : extractorCalls(codeExt, code);
+  let calls = ast ? ast.calls : own ? capCallSites(own, opts.maxCallsPerFile ?? DEFAULT_MAX_CALLS) : collectCallsRegex(code, symbols, opts.maxCallsPerFile);
   if (sfc) calls = mergeCalls(calls, collectCallsRegex(sfc.markup, [], opts.maxCallsPerFile), opts.maxCallsPerFile);
   return {
     symbols: [...symbols, ...reexports],
@@ -17248,7 +17419,8 @@ var init_edit_spans = __esm({
       "zig",
       "solidity",
       "hcl",
-      "terraform"
+      "terraform",
+      "prisma"
     ]);
     HASH_COMMENTS = /* @__PURE__ */ new Set(["python", "ruby", "shell", "elixir", "php", "hcl", "terraform"]);
     DASH_COMMENTS = /* @__PURE__ */ new Set(["lua"]);

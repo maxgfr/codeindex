@@ -211,7 +211,7 @@ function plain(quote: string): { frame: Frame; length: number } {
 
 const SLASH_COMMENTS = new Set([
   "typescript", "javascript", "java", "kotlin", "scala", "dart", "swift", "go", "rust",
-  "csharp", "c", "cpp", "php", "zig", "solidity", "hcl", "terraform",
+  "csharp", "c", "cpp", "php", "zig", "solidity", "hcl", "terraform", "prisma",
 ]);
 const HASH_COMMENTS = new Set(["python", "ruby", "shell", "elixir", "php", "hcl", "terraform"]);
 const DASH_COMMENTS = new Set(["lua"]);

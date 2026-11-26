@@ -53,7 +53,8 @@ compares](#how-it-compares).
   and graph node, but its symbols and call sites are not extracted: one-letter
   noise for the first, copies of the sources' definitions for the second.
 - **Extract symbols** via tree-sitter (15 committed grammars, plus 6 more via
-  `grammars pull`) or per-language regex rules (16 languages, always available).
+  `grammars pull`) or per-language regex rules (16 languages, always available),
+  plus a dedicated scanner for Prisma schemas.
   Each symbol carries its **complete signature** (parameters and return type,
   not the first physical line; one line, with no comment and no body — not an
   arrow's expression body, a Go interface's method list or a macro's
@@ -93,6 +94,16 @@ compares](#how-it-compares).
   braces close as a formatter puts them; otherwise the span is left out
   rather than guessed. Its signature is the declaration's first line, and it
   reports no `parent`.
+  A Prisma schema (`.prisma`, language `prisma`) is read by a scanner of its
+  own: every `model`, `view` and composite `type` is an exported `struct`,
+  every `enum` an `enum`, with their fields (`field`) and values
+  (`enum-member`) as members, each spanning its block to the closing brace and
+  documented by the `///` comment above it. `datasource` and `generator`
+  blocks declare nothing, and `//` and `/* … */` comments are masked, so a
+  commented-out model is not one. A field typed by another block
+  (`user User @relation(…)`, `items OrderItem[]`, `status Status?`) is a
+  reference site of that block, so `refs Order` lists the fields that name
+  it, across the files of a multi-file schema too.
   Each file's **summary** is the first leading comment that describes
   something: license and copyright text (MIT, BSD, Apache, GPL, MPL, the Go
   "governed by" line), linter and editor magic comments (`frozen_string_literal`,

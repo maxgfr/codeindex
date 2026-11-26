@@ -117,7 +117,12 @@ export const SCHEMA_VERSION = 5;
 // marks (a Devanagari word is one term, not its letters).
 // v23: prose terms in Han, kana or Hangul are overlapping bigrams (a lone
 // character kept as itself), where a whole unspaced CJK sentence was one term.
-export const EXTRACTOR_VERSION = 23;
+// v24: `.prisma` files are the `prisma` language, extracted by a scanner of
+// their own (lang/prisma.ts): models, views and composite types as structs,
+// enums, their fields and values as members, `///` docs, and each field typed
+// by another block as a reference site (`calls`) of that block. They were
+// `other` files with no symbols.
+export const EXTRACTOR_VERSION = 24;
 
 // The receiver of a call made ON something that has no simple name: a literal,
 // a subscript, a parenthesised expression, the result of a constructor. It says

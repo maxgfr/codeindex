@@ -289,7 +289,7 @@ const EXT_LANG: Record<string, string> = {
   ".hs": "haskell", ".dart": "dart", ".lua": "lua",
   ".sh": "shell", ".bash": "shell", ".zsh": "shell", ".ksh": "shell", ".fish": "shell",
   ".hh": "cpp", ".m": "objective-c", ".mm": "objective-c",
-  ".sql": "sql", ".graphql": "graphql", ".gql": "graphql", ".proto": "protobuf",
+  ".sql": "sql", ".graphql": "graphql", ".gql": "graphql", ".proto": "protobuf", ".prisma": "prisma",
   ".md": "markdown", ".mdx": "markdown", ".rst": "restructuredtext", ".txt": "text",
   ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".ini": "ini",
   ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue", ".svelte": "svelte",
