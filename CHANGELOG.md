@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [2.31.26](https://github.com/maxgfr/codeindex/compare/v2.31.25...v2.31.26) (2026-11-26)
+
+### Bug Fixes
+
+* **search:** segment CJK text into bigrams ([33ceba1](https://github.com/maxgfr/codeindex/commit/33ceba12a5a5c709420dddcfe4f36fd4472223f0)), closes [#54](https://github.com/maxgfr/codeindex/issues/54)
+* **walk:** skip agent skills installed from skills-lock.json ([2db1d9d](https://github.com/maxgfr/codeindex/commit/2db1d9db30487fc38cfb86e53ad569a783b68449)), closes [#53](https://github.com/maxgfr/codeindex/issues/53)
+
 ## [2.31.25](https://github.com/maxgfr/codeindex/compare/v2.31.24...v2.31.25) (2026-11-20)
 
 ### Bug Fixes

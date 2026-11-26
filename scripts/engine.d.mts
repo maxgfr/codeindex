@@ -1,4 +1,4 @@
-declare const ENGINE_VERSION = "2.31.25";
+declare const ENGINE_VERSION = "2.31.26";
 declare const SCHEMA_VERSION = 5;
 declare const EXTRACTOR_VERSION = 23;
 declare const UNNAMED_RECEIVER = "?";
@@ -629,7 +629,7 @@ declare function tagsQueryStatus(key: string): TagsQueryStatus;
  */
 declare function extractTags(ext: string, content: string): TagDefinition[];
 
-declare const DEFAULT_GRAMMARS_URL = "https://github.com/maxgfr/codeindex/releases/download/v2.31.25/grammars-2.31.25.tar.gz";
+declare const DEFAULT_GRAMMARS_URL = "https://github.com/maxgfr/codeindex/releases/download/v2.31.26/grammars-2.31.26.tar.gz";
 interface GrammarsPullTarget {
     url: string;
     sha256Url?: string;
