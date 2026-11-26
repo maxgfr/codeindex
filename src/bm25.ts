@@ -40,7 +40,7 @@ import type { RepoScan } from "./scan.js";
 // which Node ESM and esbuild both resolve safely — the same arrangement
 // callers.ts and complexity.ts already use.
 import { bm25DocsFor, bm25StemsFor, bm25TrigramsFor, importPagerankFor } from "./derived.js";
-import { droppedKeywords, foldText, keywords, stemOf, subtokens } from "./util.js";
+import { droppedKeywords, foldText, hasCjk, keywords, stemOf, subtokens } from "./util.js";
 import { isTestPath } from "./tests-map.js";
 import { byStr } from "./sort.js";
 
@@ -874,7 +874,10 @@ function explainOf(
   // token of several parts, and exists only if every part does: its first
   // part alone used to stand for it, and `README.qqqzzzmissing` read as a
   // match on README. The rarest part decides.
-  const single = !/\s/.test(query.trim());
+  // Not for CJK: an unspaced run is a word or a whole sentence and nothing
+  // tells which, so its bigrams are not the parts of one name — `如何计算遣散费`
+  // is not missing because the repo never writes `如何` ("how").
+  const single = !/\s/.test(query.trim()) && !hasCjk(query);
   const parts = single ? keywords(query, keep).map((k) => subtokens(k)[0]).filter((t): t is string => t !== undefined) : [];
   const wholeIdentifier = !single || !terms.length
     ? undefined

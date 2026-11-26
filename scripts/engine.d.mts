@@ -1,6 +1,6 @@
 declare const ENGINE_VERSION = "2.31.25";
 declare const SCHEMA_VERSION = 5;
-declare const EXTRACTOR_VERSION = 22;
+declare const EXTRACTOR_VERSION = 23;
 declare const UNNAMED_RECEIVER = "?";
 type FileKind = "code" | "doc" | "config" | "asset" | "other";
 type EdgeKind = "contains" | "doc-link" | "import" | "call" | "extends" | "implements" | "use" | "mention";

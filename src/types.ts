@@ -115,7 +115,9 @@ export const SCHEMA_VERSION = 5;
 // `new List<T>()` for its type; Go's `pkg.Fn[T](x)` is a call; the regex tier
 // no longer starts a call name inside a word; a prose word keeps its combining
 // marks (a Devanagari word is one term, not its letters).
-export const EXTRACTOR_VERSION = 22;
+// v23: prose terms in Han, kana or Hangul are overlapping bigrams (a lone
+// character kept as itself), where a whole unspaced CJK sentence was one term.
+export const EXTRACTOR_VERSION = 23;
 
 // The receiver of a call made ON something that has no simple name: a literal,
 // a subscript, a parenthesised expression, the result of a constructor. It says

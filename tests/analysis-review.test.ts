@@ -139,7 +139,7 @@ describe("references and search", () => {
 
   it("tokenizes letters of every script", () => {
     expect(subtokens("конфигурация")).toEqual(["конфигурация"]);
-    expect(subtokens("日本語")).toEqual(["日本語"]);
+    expect(subtokens("日本語")).toEqual(["日本", "本語"]); // CJK: bigrams, see util.test.ts
     expect(subtokens("Œuvre")).toEqual(["œuvre"]);
     expect(subtokens("parseÉcoleNormale")).toEqual(["parseecolenormale", "parse", "ecole", "normale"]);
     expect(keywords("où est København")).toEqual(["ou", "est", "København"]);

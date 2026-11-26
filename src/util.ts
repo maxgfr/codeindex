@@ -173,16 +173,89 @@ export function foldText(s: string): string {
 // the word after it (`⚠️Warning` read as "\ufe0fwarning").
 const NON_WORD = /(?:[^\p{L}\p{M}\p{N}_]|[\u{FE00}-\u{FE0F}\u{20D0}-\u{20FF}\u{E0100}-\u{E01EF}])+/u;
 
+// CJK: Han, Hiragana, Katakana and Hangul. Chinese and Japanese put no space
+// between words (Korean spaces phrases, but glues particles on), so NON_WORD
+// left a whole sentence as ONE token — `如何计算遣散费` — that matched nothing
+// a comment or a doc says. Without a dictionary the standard answer is the one
+// Lucene's CJKAnalyzer gives: a run of these characters becomes its overlapping
+// bigrams (`如何 何计 计算 算遣 遣散 散费`), and a run of ONE character is kept
+// as that character, since a lone ideograph is a word, not noise. Text outside
+// a run is tokenized exactly as before, so `API设计` splits at the script
+// boundary into `API` and `设计`.
+//
+// The query (keywords) and the indexed text (subtokens) both segment through
+// cjkGrams, so their bigrams meet.
+const CJK_SCRIPTS = String.raw`\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}`;
+// Whether a (folded) string can hold a run at all: the gate that keeps every
+// other string off the slower path. Code-point ranges, not script properties,
+// because it runs on every non-ASCII comment line and a range class is the
+// cheaper scan: the Hangul jamo, the CJK/kana/Hangul blocks of U+2E80–U+9FFF,
+// Hangul extended and syllables, compatibility ideographs, half-width kana and
+// Hangul, the kana supplements and the Han extension planes. A superset of what
+// CJK_RUN takes is harmless: a string with no run splits into itself and is
+// tokenized as before.
+const HAS_CJK = /[\u1100-\u11FF\u2E80-\u9FFF\uA960-\uA97F\uAC00-\uD7FF\uF900-\uFAFF\uFF66-\uFFDC\u{16FE0}-\u{16FFF}\u{1AFF0}-\u{1B2FF}\u{20000}-\u{3FFFF}]/u;
+// A run: the LETTERS and digits of those scripts — not their symbols (a Kangxi
+// radical, a circled katakana), which NON_WORD splits on, so both sides cut a
+// run at the same place — plus the prolonged sound mark ー (Script=Common) and
+// the voiced sound marks foldText's NFKD splits off a kana (が → か + U+3099).
+// Capturing, so `split` returns the runs at the odd indices, in source order.
+const CJK_RUN = new RegExp(String.raw`((?:(?=[\p{L}\p{N}])[${CJK_SCRIPTS}]|[\u30FC\u3099\u309A])+)`, "u");
+
+/** Whether `s`, once folded, holds Han, kana or Hangul — the scripts cut into bigrams. */
+export function hasCjk(s: string): boolean {
+  return NON_ASCII.test(s) && HAS_CJK.test(foldText(s));
+}
+
+// One run's bigrams, by code point (an Extension B ideograph is two UTF-16
+// units). NFC first: foldText's NFKD decomposed a voiced kana into base + mark
+// and a Hangul syllable into its jamo, and a bigram of half a syllable means
+// nothing. Both sides pass through here, so they recompose alike.
+function cjkGrams(run: string): string[] {
+  const chars = Array.from(run.normalize("NFC"));
+  if (chars.length < 2) return chars;
+  const out: string[] = [];
+  for (let i = 0; i + 1 < chars.length; i++) out.push(chars[i]! + chars[i + 1]!);
+  return out;
+}
+
+// The query's raw tokens, in order: each NON_WORD token as it is, except that a
+// token holding CJK is cut into its non-CJK pieces and its runs' bigrams. The
+// flag marks a bigram (or a lone CJK character), which the noise filters below
+// never drop.
+function queryTokens(question: string): [raw: string, cjk: boolean][] {
+  const text = foldText(question);
+  const cjk = HAS_CJK.test(text);
+  const out: [string, boolean][] = [];
+  for (const raw of text.split(NON_WORD)) {
+    if (!raw) continue;
+    if (!cjk || !HAS_CJK.test(raw)) {
+      out.push([raw, false]);
+      continue;
+    }
+    const pieces = raw.split(CJK_RUN);
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i]!;
+      if (i % 2) for (const gram of cjkGrams(piece)) out.push([gram, true]);
+      else if (piece) out.push([piece, false]);
+    }
+  }
+  return out;
+}
+
 export function keywords(question: string, keep?: (raw: string) => boolean): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const raw of foldText(question).split(NON_WORD)) {
-    if (!raw) continue;
+  for (const [raw, cjk] of queryTokens(question)) {
     const lower = raw.toLowerCase();
     // Keep identifiers as-is (camelCase/snake_case often carry the real signal),
-    // but filter generic English stopwords and 1-char noise.
-    if (raw.length < 2) continue;
-    if (STOPWORDS.has(lower) && !keep?.(raw)) continue;
+    // but filter generic English stopwords and 1-char noise. A CJK bigram is
+    // never noise, and neither is a lone CJK character: one ideograph or
+    // syllable is a word (`用`, `的`), where one Latin letter is not.
+    if (!cjk) {
+      if (raw.length < 2) continue;
+      if (STOPWORDS.has(lower) && !keep?.(raw)) continue;
+    }
     if (seen.has(lower)) continue;
     seen.add(lower);
     out.push(raw);
@@ -198,11 +271,12 @@ export function keywords(question: string, keep?: (raw: string) => boolean): str
  * token above is either a stopword or too short, so the query returns zero
  * results for a reason no caller can see from the empty array alone. Kept here
  * rather than in the search module so STOPWORDS stays defined exactly once.
+ * CJK bigrams and lone CJK characters are never dropped, so never listed.
  */
 export function droppedKeywords(question: string, keep?: (raw: string) => boolean): string[] {
   const out: string[] = [];
-  for (const raw of foldText(question).split(NON_WORD)) {
-    if (!raw) continue;
+  for (const [raw, cjk] of queryTokens(question)) {
+    if (cjk) continue;
     if (raw.length < 2 || (STOPWORDS.has(raw.toLowerCase()) && !keep?.(raw))) out.push(raw);
   }
   return out;
@@ -270,8 +344,15 @@ const UNICODE_GLUE = /(?:[^\p{L}\p{M}\p{N}_]|[\u{FE00}-\u{FE0F}\u{20D0}-\u{20FF}
 const UNICODE_SPLIT = /(?:[^\p{L}\p{M}\p{N}]|[\u{FE00}-\u{FE0F}\u{20D0}-\u{20FF}\u{E0100}-\u{E01EF}])+/u;
 
 export function subtokens(raw: string): string[] {
-  const ascii = !NON_ASCII.test(raw);
-  const text = ascii ? raw : foldText(raw);
+  if (!NON_ASCII.test(raw)) return wordSubtokens(raw, raw, true);
+  // Gated on the FOLDED text, as keywords is: folding can turn a symbol into
+  // CJK letters (half-width ｶ, the squared 🈐), and both sides must agree.
+  const text = foldText(raw);
+  return HAS_CJK.test(text) ? cjkSubtokens(text) : wordSubtokens(raw, text, false);
+}
+
+// `text` is `raw` folded; the whitespace test reads `raw`, as it always has.
+function wordSubtokens(raw: string, text: string, ascii: boolean): string[] {
   const folded = ascii
     ? text.replace(ASCII_CASE_1, "$1 $2").replace(ASCII_CASE_2, "$1 $2")
     : text.replace(UNICODE_CASE_1, "$1 $2").replace(UNICODE_CASE_2, "$1 $2");
@@ -286,6 +367,28 @@ export function subtokens(raw: string): string[] {
   // single tokens: gluing a prose heading into one mega-token would index junk.
   if (!/\s/.test(raw.trim())) push(text.toLowerCase().replace(ascii ? ASCII_GLUE : UNICODE_GLUE, ""));
   for (const part of folded.split(ascii ? ASCII_SPLIT : UNICODE_SPLIT)) push(part.toLowerCase());
+  return out;
+}
+
+// Text holding CJK: each run becomes its bigrams (see CJK_RUN), each stretch
+// between runs is subtokenized as any other text, in source order. A run has
+// no whole-identifier term: unspaced prose would glue a sentence into one, and
+// the query side never produces one to match (keywords bigrams it too). A lone
+// CJK character is kept, where wordSubtokens drops 1-char fragments: the same
+// rule keywords applies, so a one-ideograph query term survives subtokens.
+function cjkSubtokens(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const pieces = text.split(CJK_RUN);
+  for (let i = 0; i < pieces.length; i++) {
+    const piece = pieces[i]!;
+    if (!piece) continue;
+    for (const t of i % 2 ? cjkGrams(piece) : wordSubtokens(piece, piece, !NON_ASCII.test(piece))) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+  }
   return out;
 }
 

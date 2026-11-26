@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { keywords, rankedKeywords, slugify, rrf, escapeRegExp, clip, clipInline, foldText } from "../src/util.js";
+import { keywords, droppedKeywords, rankedKeywords, slugify, rrf, escapeRegExp, clip, clipInline, foldText, subtokens } from "../src/util.js";
 
 describe("keywords", () => {
   it("drops stopwords and short noise, keeps identifiers", () => {
@@ -13,6 +13,57 @@ describe("keywords", () => {
   it("dedupes case-insensitively but preserves original token", () => {
     const k = keywords("Backoff backoff BACKOFF");
     expect(k).toEqual(["Backoff"]);
+  });
+});
+
+// Chinese and Japanese put no space between words, so a whole question used to
+// be one token that matched nothing. A CJK run is cut into overlapping bigrams
+// (Lucene's CJKAnalyzer), on the query side and the indexed side alike.
+describe("keywords: CJK bigrams", () => {
+  it("cuts a Chinese question into overlapping bigrams", () => {
+    expect(keywords("如何计算遣散费")).toEqual(["如何", "何计", "计算", "算遣", "遣散", "散费"]);
+  });
+
+  it("cuts Japanese across kanji, hiragana and katakana, keeping voiced kana and ー whole", () => {
+    expect(keywords("解雇手当の計算")).toEqual(["解雇", "雇手", "手当", "当の", "の計", "計算"]);
+    // NFKD splits が into か + U+3099; the bigram must hold the composed kana.
+    expect(keywords("コーヒーが好き")).toEqual(["コー", "ーヒ", "ヒー", "ーが", "が好", "好き"]);
+    expect(keywords("ｺｰﾋｰ")).toEqual(keywords("コーヒー")); // half-width folds to full-width
+  });
+
+  it("cuts Korean into syllable bigrams, not jamo", () => {
+    expect(keywords("퇴직금 계산")).toEqual(["퇴직", "직금", "계산"]);
+    expect(keywords("퇴직금계산")).toEqual(["퇴직", "직금", "금계", "계산"]);
+  });
+
+  it("keeps a lone CJK character, which is a word, not 1-char noise", () => {
+    expect(keywords("用 API")).toEqual(["用", "API"]);
+    expect(droppedKeywords("用 a API")).toEqual(["a"]);
+  });
+
+  it("yields both kinds of token for mixed text and splits at the script boundary", () => {
+    expect(keywords("用户 login")).toEqual(["用户", "login"]);
+    expect(keywords("API设计")).toEqual(["API", "设计"]);
+    expect(keywords("the 用户 of retryRequest")).toEqual(["用户", "retryRequest"]);
+    expect(droppedKeywords("如何计算遣散费")).toEqual([]);
+  });
+
+  it("leaves text without CJK exactly as it was", () => {
+    expect(keywords("How does the retryRequest function handle a 429 status?")).toEqual(["retryRequest", "function", "429", "status"]);
+    expect(keywords("où est København")).toEqual(["ou", "est", "København"]);
+    expect(droppedKeywords("how does the default value work")).toEqual(["how", "does", "the", "default", "value", "work"]);
+  });
+
+  it("subtokens agrees with keywords, so a query bigram can hit indexed prose", () => {
+    expect(subtokens("// 计算遣散费的金额。使用 getUserName 函数")).toEqual([
+      "计算", "算遣", "遣散", "散费", "费的", "的金", "金额", "使用", "getusername", "get", "user", "name", "函数",
+    ]);
+    expect(subtokens("API设计")).toEqual(["api", "设计"]);
+    // Idempotent on its own output: extraction stores bigrams and buildDocs
+    // passes them through subtokens again; the query side does the same.
+    for (const q of ["如何计算遣散费", "コーヒーが好き", "퇴직금계산", "用"]) {
+      for (const k of keywords(q)) expect(subtokens(k)).toEqual([k]);
+    }
   });
 });
 

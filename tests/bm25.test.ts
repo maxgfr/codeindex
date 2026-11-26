@@ -462,6 +462,43 @@ describe("searchIndex: BM25F fields", () => {
   });
 });
 
+describe("searchIndex: CJK text", () => {
+  // The end-to-end case of the bigram tokenizer: an unspaced Chinese question
+  // used to be ONE query term, matching no comment, doc or heading.
+  it("finds a Chinese-commented and a Chinese-documented file by a Chinese question", () => {
+    const repo = repoWith({
+      "src/severance.ts": [
+        "// 根据工龄计算遣散费。",
+        "export function severancePay(years: number): number {",
+        "  return years * 1000;",
+        "}",
+        "",
+      ].join("\n"),
+      "docs/离职.md": "# 遣散费\n\n遣散费的计算方法与发放时间。\n",
+      "src/other.ts": "// Unrelated English comment.\nexport function other(): number {\n  return 1;\n}\n",
+    });
+    const { results, explain } = explainQuery(scanRepo(repo), "如何计算遣散费");
+    expect(results.map((r) => r.file).sort()).toEqual(["docs/离职.md", "src/severance.ts"]);
+    expect(results.find((r) => r.file === "src/severance.ts")!.matchedTerms).toEqual(["散费", "算遣", "计算", "遣散"]);
+    // `如何` ("how") appears nowhere, yet a sentence is not one identifier:
+    // the hits are real matches, not a "weak" verdict.
+    expect(explain.unresolvedTerms).toEqual(["何计", "如何"]);
+    expect(explain.wholeIdentifier).toBeUndefined();
+    expect(explain.verdict).toBe("match");
+  });
+
+  it("finds Japanese prose and still answers the English query unchanged", () => {
+    const repo = repoWith({
+      "src/pay.ts": "/** 解雇手当を計算する。 */\nexport function computePay(): number {\n  return 0;\n}\n",
+      "src/other.ts": "// Retry a request with exponential backoff.\nexport function send(): void {}\n",
+    });
+    const scan = scanRepo(repo);
+    expect(searchIndex(scan, "解雇手当はどのように計算されますか").map((r) => r.file)).toEqual(["src/pay.ts"]);
+    expect(searchIndex(scan, "exponential backoff").map((r) => r.file)).toEqual(["src/other.ts"]);
+    expect(searchIndex(scan, "compute pay").map((r) => r.file)).toEqual(["src/pay.ts"]);
+  });
+});
+
 describe("searchIndex: compound file names", () => {
   // tsconfigparsing.go, knownsymlinks.go, commandlineparser.go: no case or
   // punctuation boundary, so the name was one path token no query could hit.

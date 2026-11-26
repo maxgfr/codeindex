@@ -21,7 +21,7 @@ var init_types = __esm({
     "use strict";
     ENGINE_VERSION = "2.31.25";
     SCHEMA_VERSION = 5;
-    EXTRACTOR_VERSION = 22;
+    EXTRACTOR_VERSION = 23;
     UNNAMED_RECEIVER = "?";
   }
 });
@@ -87,14 +87,44 @@ function foldText(s) {
   if (!NON_ASCII.test(s)) return s;
   return s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
+function hasCjk(s) {
+  return NON_ASCII.test(s) && HAS_CJK.test(foldText(s));
+}
+function cjkGrams(run2) {
+  const chars = Array.from(run2.normalize("NFC"));
+  if (chars.length < 2) return chars;
+  const out2 = [];
+  for (let i2 = 0; i2 + 1 < chars.length; i2++) out2.push(chars[i2] + chars[i2 + 1]);
+  return out2;
+}
+function queryTokens(question) {
+  const text = foldText(question);
+  const cjk = HAS_CJK.test(text);
+  const out2 = [];
+  for (const raw of text.split(NON_WORD)) {
+    if (!raw) continue;
+    if (!cjk || !HAS_CJK.test(raw)) {
+      out2.push([raw, false]);
+      continue;
+    }
+    const pieces = raw.split(CJK_RUN);
+    for (let i2 = 0; i2 < pieces.length; i2++) {
+      const piece = pieces[i2];
+      if (i2 % 2) for (const gram of cjkGrams(piece)) out2.push([gram, true]);
+      else if (piece) out2.push([piece, false]);
+    }
+  }
+  return out2;
+}
 function keywords(question, keep) {
   const seen = /* @__PURE__ */ new Set();
   const out2 = [];
-  for (const raw of foldText(question).split(NON_WORD)) {
-    if (!raw) continue;
+  for (const [raw, cjk] of queryTokens(question)) {
     const lower = raw.toLowerCase();
-    if (raw.length < 2) continue;
-    if (STOPWORDS.has(lower) && !keep?.(raw)) continue;
+    if (!cjk) {
+      if (raw.length < 2) continue;
+      if (STOPWORDS.has(lower) && !keep?.(raw)) continue;
+    }
     if (seen.has(lower)) continue;
     seen.add(lower);
     out2.push(raw);
@@ -103,8 +133,8 @@ function keywords(question, keep) {
 }
 function droppedKeywords(question, keep) {
   const out2 = [];
-  for (const raw of foldText(question).split(NON_WORD)) {
-    if (!raw) continue;
+  for (const [raw, cjk] of queryTokens(question)) {
+    if (cjk) continue;
     if (raw.length < 2 || STOPWORDS.has(raw.toLowerCase()) && !keep?.(raw)) out2.push(raw);
   }
   return out2;
@@ -133,8 +163,11 @@ function rrf(lists, keyOf2, k = 60) {
   return score;
 }
 function subtokens(raw) {
-  const ascii = !NON_ASCII.test(raw);
-  const text = ascii ? raw : foldText(raw);
+  if (!NON_ASCII.test(raw)) return wordSubtokens(raw, raw, true);
+  const text = foldText(raw);
+  return HAS_CJK.test(text) ? cjkSubtokens(text) : wordSubtokens(raw, text, false);
+}
+function wordSubtokens(raw, text, ascii) {
   const folded = ascii ? text.replace(ASCII_CASE_1, "$1 $2").replace(ASCII_CASE_2, "$1 $2") : text.replace(UNICODE_CASE_1, "$1 $2").replace(UNICODE_CASE_2, "$1 $2");
   const out2 = [];
   const seen = /* @__PURE__ */ new Set();
@@ -145,6 +178,21 @@ function subtokens(raw) {
   };
   if (!/\s/.test(raw.trim())) push(text.toLowerCase().replace(ascii ? ASCII_GLUE : UNICODE_GLUE, ""));
   for (const part of folded.split(ascii ? ASCII_SPLIT : UNICODE_SPLIT)) push(part.toLowerCase());
+  return out2;
+}
+function cjkSubtokens(text) {
+  const out2 = [];
+  const seen = /* @__PURE__ */ new Set();
+  const pieces = text.split(CJK_RUN);
+  for (let i2 = 0; i2 < pieces.length; i2++) {
+    const piece = pieces[i2];
+    if (!piece) continue;
+    for (const t of i2 % 2 ? cjkGrams(piece) : wordSubtokens(piece, piece, !NON_ASCII.test(piece))) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      out2.push(t);
+    }
+  }
   return out2;
 }
 function stemOf(term) {
@@ -160,7 +208,7 @@ function stemOf(term) {
   if (t.endsWith("e") && t.length > 3) t = t.slice(0, -1);
   return t;
 }
-var GIT_LOCALE, GIT_SAFE_CONFIG, whichCache, MAX_TIMER_MS, clampTimerMs, dirOf, STOPWORDS, NON_ASCII, NON_WORD, ASCII_CASE_1, ASCII_CASE_2, ASCII_GLUE, ASCII_SPLIT, UNICODE_CASE_1, UNICODE_CASE_2, UNICODE_GLUE, UNICODE_SPLIT;
+var GIT_LOCALE, GIT_SAFE_CONFIG, whichCache, MAX_TIMER_MS, clampTimerMs, dirOf, STOPWORDS, NON_ASCII, NON_WORD, CJK_SCRIPTS, HAS_CJK, CJK_RUN, ASCII_CASE_1, ASCII_CASE_2, ASCII_GLUE, ASCII_SPLIT, UNICODE_CASE_1, UNICODE_CASE_2, UNICODE_GLUE, UNICODE_SPLIT;
 var init_util = __esm({
   "src/util.ts"() {
     "use strict";
@@ -270,6 +318,9 @@ var init_util = __esm({
     ]);
     NON_ASCII = /[^\x00-\x7F]/;
     NON_WORD = /(?:[^\p{L}\p{M}\p{N}_]|[\u{FE00}-\u{FE0F}\u{20D0}-\u{20FF}\u{E0100}-\u{E01EF}])+/u;
+    CJK_SCRIPTS = String.raw`\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}`;
+    HAS_CJK = /[\u1100-\u11FF\u2E80-\u9FFF\uA960-\uA97F\uAC00-\uD7FF\uF900-\uFAFF\uFF66-\uFFDC\u{16FE0}-\u{16FFF}\u{1AFF0}-\u{1B2FF}\u{20000}-\u{3FFFF}]/u;
+    CJK_RUN = new RegExp(String.raw`((?:(?=[\p{L}\p{N}])[${CJK_SCRIPTS}]|[\u30FC\u3099\u309A])+)`, "u");
     ASCII_CASE_1 = /([a-z0-9])([A-Z])/g;
     ASCII_CASE_2 = /([A-Z]+)([A-Z][a-z])/g;
     ASCII_GLUE = /[^a-z0-9_]+/g;
@@ -15084,7 +15135,7 @@ function explainOf(query, terms, df, fuzzyCandidates, kept, keep) {
     return { term, df: frequency, bridge: { via: candidates[0].via, to: candidates.map((c2) => c2.term), dice: candidates[0].dice } };
   });
   const unresolvedTerms = diagnostics.filter((d) => d.df === 0 && !d.bridge).map((d) => d.term).sort(byStr);
-  const single = !/\s/.test(query.trim());
+  const single = !/\s/.test(query.trim()) && !hasCjk(query);
   const parts2 = single ? keywords(query, keep).map((k) => subtokens(k)[0]).filter((t) => t !== void 0) : [];
   const wholeIdentifier = !single || !terms.length ? void 0 : parts2.length > 1 ? { term: query.trim(), df: Math.min(...parts2.map((t) => df.get(t) ?? 0)) } : { term: terms[0], df: df.get(terms[0]) ?? 0 };
   const bridgedOnlyResults = kept.filter((r) => r.bridgedOnly).length;
